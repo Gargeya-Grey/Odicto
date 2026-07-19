@@ -102,25 +102,27 @@ class TextRefiner:
         Supports local Ollama, OpenRouter, or 'none' (direct transcription bypass).
         """
         self.provider: str = Config.LLM_PROVIDER
-        self.model: str = Config.LLM_MODEL
+        self.model: str = Config.effective_llm_model()
         self.client: Optional[OpenAI] = None
         self._history_lock = threading.Lock()
         self.conversation_history: list[dict[str, str]] = []
 
         if self.provider == "ollama":
             self.client = OpenAI(
-                base_url=Config.LLM_API_BASE,
+                base_url=Config.effective_llm_api_base(),
                 api_key="ollama",  # Ollama ignores API keys but the client requires a non-empty string
                 max_retries=0,  # Fail-fast if the local server is offline
             )
         elif self.provider == "openrouter":
-            api_base: str = Config.LLM_API_BASE
-            if "localhost" in api_base or "127.0.0.1" in api_base:
-                api_base = "https://openrouter.ai/api/v1"
             self.client = OpenAI(
-                base_url=api_base,
+                base_url=Config.effective_llm_api_base(),
                 api_key=Config.OPENROUTER_API_KEY,
                 max_retries=0,
+                default_headers={
+                    # Recommended by OpenRouter for rankings / abuse attribution
+                    "HTTP-Referer": "https://github.com/odicto",
+                    "X-Title": "Odicto",
+                },
             )
         else:  # "none"
             self.client = None

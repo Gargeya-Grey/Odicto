@@ -7,7 +7,7 @@ from typing import Optional
 
 import keyboard
 from app_state import AppState
-from config import Config
+from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
 from refiner import TextRefiner
@@ -47,6 +47,11 @@ class DictationApp:
         self._record_started_at: float = 0.0
         self.use_llm: bool = False
         self.ready: bool = False
+
+        # Hold-to-talk chord bookkeeping (set during hotkey bind).
+        self._hotkey_modifiers: tuple = ()
+        self._hotkey_primary: str = ""
+        self._hotkey_physically_held: bool = False
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -116,11 +121,9 @@ class DictationApp:
             self._notify_ui()
             return
 
-        # Bind global press/release hooks for hold-to-talk.
-        # suppress=True prevents the hotkey from leaking into the focused app.
+        # Bind global press/release hooks for hold-to-talk (supports chords like alt+x).
         try:
-            keyboard.on_press_key(Config.HOTKEY, self.on_press, suppress=True)
-            keyboard.on_release_key(Config.HOTKEY, self.on_release, suppress=True)
+            self._bind_hotkeys()
         except Exception as e:
             print(f"!!! Failed to bind hotkey '{Config.HOTKEY}': {e}", file=sys.stderr)
             self.last_status = "error"
@@ -138,16 +141,81 @@ class DictationApp:
             except Exception:
                 pass
 
+        ai_chord = self._ai_chord_label()
         print("--------------------------------------------------")
         print(f"Application ready! Global Hotkey: '{Config.HOTKEY}'")
         print(
             f"  - Hold '{Config.HOTKEY}': RECORD and paste raw Whisper transcript."
         )
-        print(
-            f"  - Hold 'F12 + {Config.HOTKEY}': RECORD and paste AI-refined response."
-        )
+        if ai_chord:
+            print(
+                f"  - Hold '{ai_chord}': RECORD and paste AI-refined response."
+            )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
+
+    def _ai_chord_label(self) -> str:
+        """Human-readable AI chord, e.g. 'alt+x+z'."""
+        if not Config.AI_MODIFIER:
+            return ""
+        return f"{Config.HOTKEY}+{Config.AI_MODIFIER}"
+
+    def _modifiers_held(self) -> bool:
+        """True if every HOTKEY modifier is currently down (or no modifiers required)."""
+        if not self._hotkey_modifiers:
+            return True
+        try:
+            return all(keyboard.is_pressed(m) for m in self._hotkey_modifiers)
+        except Exception:
+            return False
+
+    def _bind_hotkeys(self) -> None:
+        """Hook the primary key with selective suppress for multi-key chords.
+
+        ``keyboard.on_press_key`` only accepts a single key name. For chords like
+        ``alt+x`` we hook ``x`` and require the modifiers to be held. The primary
+        key is suppressed only when the full chord matches, so normal typing of
+        ``x`` still works.
+        """
+        mods, primary = parse_hold_hotkey(Config.HOTKEY)
+        self._hotkey_modifiers = mods
+        self._hotkey_primary = primary
+        self._hotkey_physically_held = False
+
+        def primary_handler(event: object) -> bool:
+            event_type = getattr(event, "event_type", None)
+            if event_type == keyboard.KEY_DOWN:
+                if not self._modifiers_held():
+                    return True  # modifiers not held — allow normal typing
+                if self._hotkey_physically_held:
+                    return False  # key-repeat while held: keep suppressing
+                self._hotkey_physically_held = True
+                self.on_press()
+                return False  # suppress so the key does not leak into the focused app
+            if event_type == keyboard.KEY_UP:
+                if not self._hotkey_physically_held:
+                    return True
+                self._hotkey_physically_held = False
+                self.on_release()
+                return False
+            return True
+
+        keyboard.hook_key(primary, primary_handler, suppress=True)
+
+        # Suppress the AI modifier while HOTKEY modifiers are held so e.g. 'z'
+        # does not type into the active text field during Alt+X+Z.
+        ai_mod = Config.AI_MODIFIER
+        if ai_mod:
+
+            def ai_modifier_handler(event: object) -> bool:
+                if self._modifiers_held():
+                    return False  # suppress
+                # Also suppress while the dictation primary is already held (no-modifier hotkeys).
+                if not self._hotkey_modifiers and self._hotkey_physically_held:
+                    return False
+                return True
+
+            keyboard.hook_key(ai_mod, ai_modifier_handler, suppress=True)
 
     def _ensure_ollama_running(self) -> None:
         """Starts a local Ollama server if port 11434 is not already listening."""
@@ -259,10 +327,11 @@ class DictationApp:
                 return
 
             self.use_llm = False
-            try:
-                self.use_llm = keyboard.is_pressed("f12")
-            except Exception:
-                pass
+            if Config.AI_MODIFIER:
+                try:
+                    self.use_llm = keyboard.is_pressed(Config.AI_MODIFIER)
+                except Exception:
+                    pass
 
             self._record_started_at = now
             self.last_status = None

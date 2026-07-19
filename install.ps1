@@ -141,11 +141,20 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host @"
 
 Next steps:
-  1. Double-click  start_dictation.bat
+  1. Edit .env if needed (hotkeys, LLM provider, models)
+  2. Double-click  start_dictation.bat
      (or run_debug.bat for a console log)
-  2. Click into any text field
-  3. Hold your hotkey (default: Ctrl+Shift+Space), speak, release
-  4. Optional AI mode: hold F12 + hotkey
+  3. Click into any text field
+  4. Hold your hotkey (default: Alt+X), speak, release
+  5. Optional AI mode: hold Alt+X+Z
+
+  Switch AI backend in .env (restart after changes):
+    LLM_PROVIDER=ollama      # local; Odicto may start Ollama
+    LLM_PROVIDER=openrouter  # cloud; needs OPENROUTER_API_KEY + OPENROUTER_MODEL
+    LLM_PROVIDER=none        # raw dictation only
+
+  OpenRouter does not start Ollama. Quit the Ollama tray app separately
+  if you want to free local LLM RAM/VRAM.
 
 Stop with stop_dictation.bat
 

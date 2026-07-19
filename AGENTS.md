@@ -52,14 +52,18 @@ Flags:
 
 ## Runtime notes for agents
 
-- First Whisper load downloads model weights (~75MB for `tiny.en`).
-- First Ollama pull downloads the LLM (size depends on model).
+- Default hotkeys: hold **`Alt+X`** (raw dictation), hold **`Alt+X+Z`** (AI). Configured via `HOTKEY` / `AI_MODIFIER` in `.env`.
+- First Whisper load downloads model weights (~75MB for `tiny.en`). Whisper always loads for STT, independent of LLM provider.
+- First Ollama pull downloads the LLM (size depends on model). Odicto only starts/calls Ollama when `LLM_PROVIDER=ollama`.
+- **OpenRouter:** set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`. Localhost `LLM_API_BASE` is auto-rewritten to `OPENROUTER_API_BASE` (`https://openrouter.ai/api/v1`). Odicto will **not** spawn Ollama in this mode; a pre-existing Ollama tray/service may still use RAM until the user quits it.
+- **Provider `none`:** raw dictation only; no LLM client; Ollama not started by Odicto.
 - App may need **admin** or elevated rights only if the `keyboard` hook fails on some locked-down machines; try normal user first.
 - GPU: if CUDA is available, Whisper uses it automatically (`WHISPER_DEVICE=auto`).
 - Stop with `stop_dictation.bat` or kill PID in `dictation.pid`.
 
 ## Do not
 
-- Do not publish `.env` or API keys.
+- Do not publish `.env` or API keys (`OPENROUTER_API_KEY` especially).
 - Do not require Mac/Linux paths in install docs (unsupported).
 - Do not replace `keyboard` / paste behavior without user request.
+- Do not assume Ollama is stopped system-wide just because `LLM_PROVIDER` is not `ollama` — only Odicto’s own spawn path is skipped.

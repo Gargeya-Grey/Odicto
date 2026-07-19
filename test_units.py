@@ -9,7 +9,7 @@ mock_faster_whisper = MagicMock()
 sys.modules["faster_whisper"] = mock_faster_whisper
 
 # Now we can safely import config, recorder, transcriber, refiner, typer, main
-from config import Config
+from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
 from refiner import TextRefiner, estimate_max_tokens, should_use_full_history
@@ -24,6 +24,15 @@ class TestOdicto(unittest.TestCase):
         # Reset state/config to defaults where necessary
         Config.LLM_PROVIDER = "ollama"
         Config.LLM_MODEL = "qwen2.5:1.5b-instruct"
+
+    def test_parse_hold_hotkey(self) -> None:
+        """Hold chords split into modifiers + primary key."""
+        self.assertEqual(parse_hold_hotkey("alt+x"), (("alt",), "x"))
+        self.assertEqual(
+            parse_hold_hotkey("ctrl+shift+space"), (("ctrl", "shift"), "space")
+        )
+        self.assertEqual(parse_hold_hotkey("scroll lock"), ((), "scroll lock"))
+        self.assertEqual(parse_hold_hotkey("  ALT + X  "), (("alt",), "x"))
 
     @patch("config.Config.LLM_PROVIDER", "invalid")
     def test_config_validation_invalid_provider(self) -> None:
@@ -160,6 +169,36 @@ class TestOdicto(unittest.TestCase):
             )
         )
 
+    def test_effective_llm_model_and_api_base(self) -> None:
+        """Provider flip picks the right model id and API base without hand-editing paths."""
+        with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
+            Config, "LLM_MODEL", "phi4-mini:latest"
+        ), patch.object(Config, "OPENROUTER_MODEL", "google/gemini-2.0-flash-001"), patch.object(
+            Config, "LLM_API_BASE", "http://localhost:11434/v1"
+        ), patch.object(
+            Config, "OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"
+        ):
+            self.assertEqual(Config.effective_llm_model(), "phi4-mini:latest")
+            self.assertEqual(Config.effective_llm_api_base(), "http://localhost:11434/v1")
+
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "LLM_MODEL", "phi4-mini:latest"
+        ), patch.object(Config, "OPENROUTER_MODEL", "google/gemini-2.0-flash-001"), patch.object(
+            Config, "LLM_API_BASE", "http://localhost:11434/v1"
+        ), patch.object(
+            Config, "OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"
+        ):
+            self.assertEqual(Config.effective_llm_model(), "google/gemini-2.0-flash-001")
+            self.assertEqual(
+                Config.effective_llm_api_base(), "https://openrouter.ai/api/v1"
+            )
+
+        # Blank OPENROUTER_MODEL falls back to LLM_MODEL
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "LLM_MODEL", "some/openrouter-id"
+        ), patch.object(Config, "OPENROUTER_MODEL", ""):
+            self.assertEqual(Config.effective_llm_model(), "some/openrouter-id")
+
     @patch("refiner.OpenAI")
     def test_text_refiner_ollama(self, mock_openai: MagicMock) -> None:
         """Verifies TextRefiner correctly formats messages and calls the LLM provider."""
@@ -175,7 +214,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(result, "Hello, world!")
         mock_client.chat.completions.create.assert_called_once()
         kwargs = mock_client.chat.completions.create.call_args[1]
-        self.assertEqual(kwargs["model"], "qwen2.5:1.5b-instruct")
+        self.assertEqual(kwargs["model"], Config.effective_llm_model())
         # Short query must use a reduced token budget
         self.assertLessEqual(kwargs["max_tokens"], 64)
         messages = kwargs["messages"]
@@ -184,6 +223,35 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(messages[-1]["content"], "hello world")
         # System prompt must teach adaptive length
         self.assertIn("LENGTH RULES", messages[0]["content"])
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
+    @patch("refiner.Config.OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+    @patch("refiner.Config.LLM_API_BASE", "http://localhost:11434/v1")
+    @patch("refiner.Config.OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+    @patch("refiner.OpenAI")
+    def test_text_refiner_openrouter(self, mock_openai: MagicMock) -> None:
+        """OpenRouter uses cloud base URL + key and the OPENROUTER_MODEL slug."""
+        mock_client = mock_openai.return_value
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Cloud reply"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        refiner = TextRefiner()
+        self.assertEqual(refiner.provider, "openrouter")
+        self.assertEqual(refiner.model, "google/gemini-2.0-flash-001")
+        mock_openai.assert_called_once()
+        init_kwargs = mock_openai.call_args[1]
+        self.assertEqual(init_kwargs["base_url"], "https://openrouter.ai/api/v1")
+        self.assertEqual(init_kwargs["api_key"], "sk-or-test")
+
+        result = refiner.refine("hello from openrouter")
+        self.assertEqual(result, "Cloud reply")
+        kwargs = mock_client.chat.completions.create.call_args[1]
+        self.assertEqual(kwargs["model"], "google/gemini-2.0-flash-001")
+        # Ollama-only extra_body must not be attached for openrouter
+        self.assertNotIn("extra_body", kwargs)
 
     @patch("refiner.OpenAI")
     def test_text_refiner_conversation_history(self, mock_openai: MagicMock) -> None:
@@ -300,7 +368,7 @@ class TestOdicto(unittest.TestCase):
             app.ready = True
             self.assertEqual(app.state, AppState.IDLE)
 
-            mock_keyboard.is_pressed.return_value = True  # F12 held → AI mode
+            mock_keyboard.is_pressed.return_value = True  # AI_MODIFIER held → AI mode
 
             # 1. Transition IDLE -> RECORDING
             app.on_press()

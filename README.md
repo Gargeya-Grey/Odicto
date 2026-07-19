@@ -38,8 +38,8 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 | Mode | How | Result |
 |------|-----|--------|
-| **Dictation** | Hold hotkey, speak, release | Raw transcript pasted |
-| **AI reply** | Hold **F12 + hotkey**, speak, release | Model answer pasted |
+| **Dictation** | Hold **Alt+X**, speak, release | Raw transcript pasted |
+| **AI reply** | Hold **Alt+X+Z**, speak, release | Model answer pasted |
 | **Reset chat** | Say *“reset chat”* in AI mode | Clears multi-turn memory |
 
 ---
@@ -169,17 +169,53 @@ LLM_API_BASE=http://localhost:11434/v1
 
 ### 6. Optional: OpenRouter instead of Ollama
 
+You can keep both Ollama and OpenRouter models configured, then flip one line:
+
 ```env
 LLM_PROVIDER=openrouter
-LLM_MODEL=your/model-id
+OPENROUTER_MODEL=google/gemini-2.0-flash-001
 OPENROUTER_API_KEY=sk-or-...
 ```
+
+| Variable | Role |
+|----------|------|
+| `LLM_PROVIDER=openrouter` | Selects the cloud backend |
+| `OPENROUTER_MODEL` | OpenRouter model slug ([model list](https://openrouter.ai/models)) |
+| `OPENROUTER_API_KEY` | Required for openrouter (app refuses to start if missing) |
+| `OPENROUTER_API_BASE` | Defaults to `https://openrouter.ai/api/v1` |
+| `LLM_MODEL` / `LLM_API_BASE` | Stay as your Ollama settings for easy switch-back |
+
+Notes:
+- If `OPENROUTER_MODEL` is blank, the app falls back to `LLM_MODEL` (must be a valid OpenRouter id).
+- Localhost `LLM_API_BASE` is ignored for openrouter so you do **not** need to edit the API path by hand.
+
+### Resource use: Ollama vs OpenRouter vs Whisper
+
+| Component | When Odicto starts / uses it | RAM / GPU |
+|-----------|------------------------------|-----------|
+| **Whisper (STT)** | Always (dictation needs it) | Local — loads regardless of LLM provider |
+| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `openrouter` / `none` |
+| **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
+
+**Important:** Switching to OpenRouter stops Odicto from launching or talking to Ollama.  
+It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.
+
+```powershell
+# Optional: check whether Ollama is listening locally
+netstat -ano | findstr 11434
+# Optional: see loaded models (if the CLI is available)
+ollama ps
+```
+
+To free local LLM memory while using OpenRouter: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
 
 ### 7. Optional: raw dictation only (no LLM)
 
 ```env
 LLM_PROVIDER=none
 ```
+
+Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-text.
 
 ### 8. Verify
 
@@ -208,7 +244,7 @@ LLM_PROVIDER=none
 ### Dictate into any app
 
 1. Click into a text field (browser, Notion, VS Code, Discord, …)  
-2. **Press and hold** the hotkey (default: **`Ctrl+Shift+Space`**)  
+2. **Press and hold** the hotkey (default: **`Alt+X`**)  
 3. Speak  
 4. **Release** the key  
 5. Watch the HUD: **Listening → Transcribing → Done**  
@@ -216,7 +252,7 @@ LLM_PROVIDER=none
 
 ### Ask the local AI
 
-1. Hold **`F12` + hotkey** together  
+1. Hold **`Alt+X+Z`** together (or `HOTKEY` + `AI_MODIFIER`)  
 2. Speak your question  
 3. Release  
 4. HUD: **Listening → Thinking → Done**  
@@ -230,7 +266,7 @@ LLM_PROVIDER=none
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
 | **Clear AI memory** | In AI mode, say *“reset chat”* / *“clear conversation”* |
-| **Change hotkey** | Edit `HOTKEY=` in `.env` (e.g. `scroll lock`) then restart |
+| **Change hotkey** | Edit `HOTKEY=` / `AI_MODIFIER=` in `.env` then restart |
 | **Logs** | Use `run_debug.bat`, or check `dictation.log` when using `pythonw` |
 
 ### Stop
@@ -245,11 +281,15 @@ Copy from `.env.example`. Important knobs:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `HOTKEY` | `ctrl+shift+space` | Hold-to-talk key (see `keyboard` lib names) |
+| `HOTKEY` | `alt+x` | Hold-to-talk chord (`modifiers+primary`; see `keyboard` lib names) |
+| `AI_MODIFIER` | `z` | Extra key with `HOTKEY` for AI mode (→ `Alt+X+Z`) |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
 | `LLM_PROVIDER` | `ollama` | `ollama` · `openrouter` · `none` |
-| `LLM_MODEL` | see example | Model id for the provider |
+| `LLM_MODEL` | see example | Ollama model tag (fallback model id for openrouter if `OPENROUTER_MODEL` blank) |
+| `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
+| `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
+| `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
 | `LLM_MAX_TOKENS` | `150` | Hard cap; short questions use less automatically |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
@@ -281,9 +321,12 @@ Copy from `.env.example`. Important knobs:
 | Symptom | Fix |
 |---------|-----|
 | No HUD on hotkey | Restart with `run_debug.bat`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` in `.env`; try `run_debug.bat` as Admin |
+| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_MODIFIER` in `.env`; try `run_debug.bat` as Admin |
 | Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone) |
-| AI mode pastes raw text | Ollama not running / wrong model — `ollama list`, `ollama pull …` |
+| AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
+| AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
+| App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
+| Ollama still using RAM on OpenRouter | Odicto is not calling it; quit the Ollama tray app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors | Recreate venv and reinstall `requirements.txt` |
@@ -302,7 +345,8 @@ Copy from `.env.example`. Important knobs:
 ## Privacy
 
 - **Dictation path** can stay fully local (Whisper + paste).  
-- **AI path** stays local if you use Ollama; OpenRouter sends text to a third party.  
+- **AI path** stays local if you use Ollama; **OpenRouter sends the transcribed text to a third party**.  
+- With `LLM_PROVIDER=openrouter` or `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.  
 - No telemetry in this project.
 
 ---
