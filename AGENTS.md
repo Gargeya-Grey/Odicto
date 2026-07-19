@@ -1,4 +1,4 @@
-# Agent install guide — Personal Dictation
+# Agent install guide — Odicto
 
 This file is for coding agents (and power users) automating setup on a **fresh Windows machine**.
 

@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt" />
 </p>
 
-<h1 align="center">Personal Dictation</h1>
+<h1 align="center">Odicto</h1>
 
 <p align="center">
   <b>Hold a hotkey. Speak. Text appears where your cursor is.</b><br/>
@@ -22,7 +22,7 @@
 ## Why this exists
 
 Most dictation tools are either cloud-bound, locked to one app, or slow.  
-**Personal Dictation** is a small background service that:
+**Odicto** is a small background service that:
 
 1. Records while you **hold** a global hotkey  
 2. Transcribes with **local Whisper** (`faster-whisper`)  
@@ -59,8 +59,8 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 > Full automation notes: [`AGENTS.md`](./AGENTS.md).
 
 ```powershell
-git clone https://github.com/Gargeya-Grey/personal-dictation.git
-cd personal-dictation
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 .\.venv\Scripts\python.exe -m unittest test_units -v
 .\start_dictation.bat
@@ -109,8 +109,8 @@ Assume a **clean Windows PC** with nothing installed.
 ### 1. Clone
 
 ```powershell
-git clone https://github.com/Gargeya-Grey/personal-dictation.git
-cd personal-dictation
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
 ```
 
 ### 2. One command (recommended)

@@ -29,7 +29,7 @@ class DictationApp:
     def __init__(self) -> None:
         """Initializes the background dictation app, setting up state and loading model instances."""
         print("==================================================")
-        print("         Initializing Personal Dictation App      ")
+        print("              Initializing Odicto               ")
         print("==================================================")
 
         self.temp_dir: str = tempfile.gettempdir()

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Zero-to-one installer for Personal Dictation (Windows).
+  Zero-to-one installer for Odicto (Windows).
 
 .DESCRIPTION
   Safe for humans and coding agents. Idempotent where possible.
@@ -26,7 +26,7 @@ function Write-Ok($msg)   { Write-Host "    OK  $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    !!  $msg" -ForegroundColor Yellow }
 
 Write-Host "========================================" -ForegroundColor White
-Write-Host "  Personal Dictation — Windows Installer" -ForegroundColor White
+Write-Host "  Odicto — Windows Installer" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor White
 
 if ($env:OS -notmatch "Windows") {

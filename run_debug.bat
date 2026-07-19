@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-echo Running Personal Dictation App in DEBUG mode...
+echo Running Odicto in DEBUG mode...
 echo This console window will print any startup warnings or crash logs.
 echo Keep this window open to test. Press Ctrl+C in this window to stop.
 echo.

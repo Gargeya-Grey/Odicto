@@ -18,7 +18,7 @@ from app_state import AppState
 from main import DictationApp
 
 
-class TestPersonalDictation(unittest.TestCase):
+class TestOdicto(unittest.TestCase):
 
     def setUp(self) -> None:
         # Reset state/config to defaults where necessary

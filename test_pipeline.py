@@ -8,7 +8,7 @@ from refiner import TextRefiner
 
 def main() -> None:
     print("==================================================")
-    print("         Personal Dictation Pipeline Test         ")
+    print("              Odicto Pipeline Test                ")
     print("==================================================")
     
     # 1. Initialize models

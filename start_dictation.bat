@@ -15,5 +15,5 @@ if exist dictation.pid (
   del dictation.pid >nul 2>&1
 )
 
-start "Personal Dictation" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py"
+start "Odicto" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py"
 exit

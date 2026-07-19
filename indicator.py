@@ -1,5 +1,5 @@
 """
-Premium floating status HUD for Personal Dictation.
+Premium floating status HUD for Odicto.
 
 Quiet charcoal pill with a refined status language:
   - Left accent rail + smooth live waveform (recording)
@@ -114,7 +114,7 @@ class DictationIndicator(QWidget):
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
             self._qt_app = QApplication(sys.argv if hasattr(sys, "argv") else [])
-            self._qt_app.setApplicationName("Personal Dictation")
+            self._qt_app.setApplicationName("Odicto")
             self._qt_app.setQuitOnLastWindowClosed(False)
 
         super().__init__(None)
