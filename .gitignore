@@ -1,0 +1,35 @@
+# Secrets & local config
+.env
+*.pid
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & runtime
+dictation.log
+dictation.pid
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Temp audio / tests
+*.wav
+test_ollama.txt
+
+# Build
+dist/
+build/
