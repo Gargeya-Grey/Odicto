@@ -145,8 +145,8 @@ Next steps:
   2. Double-click  start_dictation.bat
      (or run_debug.bat for a console log)
   3. Click into any text field
-  4. Hold your hotkey (default: Alt+X), speak, release
-  5. Optional AI mode: hold Alt+X+Z
+  4. Hold your hotkey (default: Ctrl+`), speak, release
+  5. Optional AI mode: hold Ctrl+Shift+`
 
   Switch AI backend in .env (restart after changes):
     LLM_PROVIDER=ollama      # local; Odicto may start Ollama

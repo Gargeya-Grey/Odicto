@@ -38,8 +38,8 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 | Mode | How | Result |
 |------|-----|--------|
-| **Dictation** | Hold **Alt+X**, speak, release | Raw transcript pasted |
-| **AI reply** | Hold **Alt+X+Z**, speak, release | Model answer pasted |
+| **Dictation** | Hold **Ctrl+`**, speak, release | Raw transcript pasted |
+| **AI reply** | Hold **Ctrl+Shift+`**, speak, release | Model answer pasted |
 | **Reset chat** | Say *“reset chat”* in AI mode | Clears multi-turn memory |
 
 ---
@@ -243,31 +243,33 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ### Dictate into any app
 
-1. Click into a text field (browser, Notion, VS Code, Discord, …)  
-2. **Press and hold** the hotkey (default: **`Alt+X`**)  
+1. Click into a text field (browser, Notion, VS Code, Discord, ...)  
+2. **Press and hold** the hotkey (default: **Ctrl+\**)  
 3. Speak  
 4. **Release** the key  
-5. Watch the HUD: **Listening → Transcribing → Done**  
+5. Watch the HUD: **Listening -> Transcribing -> Done**  
 6. Text is pasted at the cursor  
 
 ### Ask the local AI
 
-1. Hold **`Alt+X+Z`** together (or `HOTKEY` + `AI_MODIFIER`)  
+1. Hold **Ctrl+Shift+\** (same \ key under Esc, plus **Shift**)  
 2. Speak your question  
 3. Release  
-4. HUD: **Listening → Thinking → Done**  
-5. The model’s short reply is pasted  
+4. HUD: **Listening -> Thinking -> Done**  
+5. The model's short reply is pasted  
 
 ### Tips that matter
 
 | Tip | Detail |
 |-----|--------|
-| **Hold, don’t tap** | Very short holds are ignored (anti-accidental) |
+| **Hold, don't tap** | Very short holds are ignored (anti-accidental) |
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
-| **Clear AI memory** | In AI mode, say *“reset chat”* / *“clear conversation”* |
-| **Change hotkey** | Edit `HOTKEY=` / `AI_MODIFIER=` in `.env` then restart |
-| **Logs** | Use `run_debug.bat`, or check `dictation.log` when using `pythonw` |
+| **Clear AI memory** | In AI mode, say *reset chat* / *clear conversation* |
+| **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
+| **VS Code note** | Ctrl+\ toggles the terminal there -- while Odicto runs it steals that chord |
+| **Change hotkey** | Edit \HOTKEY=\ / \AI_HOTKEY=\ in \.env\ then restart |
+| **Logs** | Use un_debug.bat\, or check \dictation.log\ when using \pythonw\ |
 
 ### Stop
 
@@ -281,8 +283,9 @@ Copy from `.env.example`. Important knobs:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `HOTKEY` | `alt+x` | Hold-to-talk chord (`modifiers+primary`; see `keyboard` lib names) |
-| `AI_MODIFIER` | `z` | Extra key with `HOTKEY` for AI mode (→ `Alt+X+Z`) |
+| `HOTKEY` | `ctrl+grave` | Dictation chord (`grave` = the `` ` `` key) |
+| `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
+| `AI_MODIFIER` | *(empty)* | Legacy third-key AI trigger; leave blank when using `AI_HOTKEY` |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
 | `LLM_PROVIDER` | `ollama` | `ollama` · `openrouter` · `none` |
@@ -321,7 +324,9 @@ Copy from `.env.example`. Important knobs:
 | Symptom | Fix |
 |---------|-----|
 | No HUD on hotkey | Restart with `run_debug.bat`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_MODIFIER` in `.env`; try `run_debug.bat` as Admin |
+| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; try `run_debug.bat` as Admin |
+| Old hotkeys still work / both modes feel wrong | Multiple instances — run `stop_dictation.bat` (kills all), then start once. Check log for `Hotkeys bound: …` |
+| Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
 | Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
 | AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |

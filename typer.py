@@ -4,6 +4,42 @@ import keyboard
 from config import Config
 
 
+def get_selected_text() -> str:
+    """Copies the currently selected text and returns it.
+
+    Sends Ctrl+C to copy the selection to the clipboard, reads it, then
+    restores the original clipboard content. Returns an empty string when
+    nothing was selected (clipboard unchanged).
+
+    Returns:
+        str: The selected text, or "" if no selection was active.
+    """
+    try:
+        original_clipboard: str = pyperclip.paste()
+    except Exception as e:
+        print(f"Warning: Failed to read clipboard for backup: {e}")
+        original_clipboard = ""
+
+    try:
+        keyboard.send("ctrl+c")
+        # Brief settle so the OS clipboard has the new payload before reading.
+        time.sleep(0.05)
+        selected = pyperclip.paste()
+    except Exception as e:
+        print(f"Error: Failed to copy selection: {e}")
+        selected = ""
+    finally:
+        try:
+            pyperclip.copy(original_clipboard)
+        except Exception as e:
+            print(f"Warning: Failed to restore original clipboard: {e}")
+
+    # If the clipboard didn't change, nothing meaningful was selected.
+    if selected == original_clipboard:
+        return ""
+    return selected
+
+
 def paste_text(text: str) -> None:
     """Injects text at the current active cursor position using clipboard emulation.
 

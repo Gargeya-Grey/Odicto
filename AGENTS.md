@@ -52,7 +52,7 @@ Flags:
 
 ## Runtime notes for agents
 
-- Default hotkeys: hold **`Alt+X`** (raw dictation), hold **`Alt+X+Z`** (AI). Configured via `HOTKEY` / `AI_MODIFIER` in `.env`.
+- Default hotkeys: hold **Ctrl+`** (`HOTKEY=ctrl+grave`) for raw dictation; hold **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for AI. Keyboard lib name for `` ` `` is `grave`. Avoid Alt chords (browser focus loss on Alt release).
 - First Whisper load downloads model weights (~75MB for `tiny.en`). Whisper always loads for STT, independent of LLM provider.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **OpenRouter:** set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL`. Localhost `LLM_API_BASE` is auto-rewritten to `OPENROUTER_API_BASE` (`https://openrouter.ai/api/v1`). Odicto will **not** spawn Ollama in this mode; a pre-existing Ollama tray/service may still use RAM until the user quits it.

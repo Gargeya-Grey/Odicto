@@ -3,23 +3,45 @@ import re
 from typing import Literal, Tuple
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file (override system env vars so the
+# project's .env takes precedence over Windows user/system environment).
+load_dotenv(override=True)
 
 
 def _env_bool(name: str, default: str = "true") -> bool:
     return os.getenv(name, default).lower() in ("true", "1", "yes")
 
 
+# keyboard lib name for the US `~ key (top-left, under Esc).
+_KEY_ALIASES = {
+    "`": "grave",
+    "backtick": "grave",
+    "back-tick": "grave",
+    "back quote": "grave",
+    "backquote": "grave",
+}
+
+
+def normalize_key_name(key: str) -> str:
+    """Canonicalize a single key token for the keyboard library."""
+    k = key.strip().lower()
+    return _KEY_ALIASES.get(k, k)
+
+
 def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
     """Split a hold-to-talk chord into (modifiers, primary_key).
 
     Examples:
-        "alt+x"        -> (("alt",), "x")
-        "ctrl+shift+space" -> (("ctrl", "shift"), "space")
-        "scroll lock"  -> ((), "scroll lock")
+        "ctrl+grave"       -> (("ctrl",), "grave")
+        "ctrl+shift+grave" -> (("ctrl", "shift"), "grave")
+        "ctrl+`"           -> (("ctrl",), "grave")
+        "scroll lock"      -> ((), "scroll lock")
     """
-    parts = [p.strip().lower() for p in re.split(r"\s*\+\s*", hotkey.strip()) if p.strip()]
+    parts = [
+        normalize_key_name(p)
+        for p in re.split(r"\s*\+\s*", hotkey.strip())
+        if p.strip()
+    ]
     if not parts:
         raise ValueError(f"HOTKEY is empty or invalid: {hotkey!r}")
     if len(parts) == 1:
@@ -28,11 +50,14 @@ def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
 
 
 class Config:
-    # Hotkey config
-    # Hold-to-talk chord (modifiers + primary). Primary is press/release; modifiers must be held.
-    HOTKEY: str = os.getenv("HOTKEY", "alt+x")
-    # Extra key held with HOTKEY to enable AI refinement (e.g. z → Alt+X+Z).
-    AI_MODIFIER: str = os.getenv("AI_MODIFIER", "z").strip().lower()
+    # Hotkey config — two full chords sharing one primary key is preferred:
+    #   HOTKEY=ctrl+grave          → raw dictation
+    #   AI_HOTKEY=ctrl+shift+grave → AI reply
+    # (keyboard lib name for ` is "grave")
+    HOTKEY: str = os.getenv("HOTKEY", "ctrl+grave")
+    AI_HOTKEY: str = os.getenv("AI_HOTKEY", "ctrl+shift+grave").strip()
+    # Legacy optional third key (unused when AI_HOTKEY is set). Prefer AI_HOTKEY.
+    AI_MODIFIER: str = os.getenv("AI_MODIFIER", "").strip().lower()
 
     # Audio config
     SAMPLE_RATE: int = int(os.getenv("SAMPLE_RATE", "16000"))
@@ -115,10 +140,21 @@ class Config:
         if cls.LLM_NUM_CTX < 256:
             raise ValueError(f"LLM_NUM_CTX must be >= 256, got {cls.LLM_NUM_CTX}")
 
-        # Validate hotkey parses (and that AI modifier is not the primary key).
-        mods, primary = parse_hold_hotkey(cls.HOTKEY)
+        dict_mods, dict_primary = parse_hold_hotkey(cls.HOTKEY)
+        if cls.AI_HOTKEY:
+            ai_mods, ai_primary = parse_hold_hotkey(cls.AI_HOTKEY)
+            if ai_primary != dict_primary:
+                raise ValueError(
+                    f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
+                    f"'{dict_primary}' (both chords share one hold key)"
+                )
+            if set(ai_mods) == set(dict_mods):
+                raise ValueError(
+                    "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
+                    "so dictation and AI are distinguishable)"
+                )
         if cls.AI_MODIFIER:
-            if cls.AI_MODIFIER == primary or cls.AI_MODIFIER in mods:
+            if cls.AI_MODIFIER == dict_primary or cls.AI_MODIFIER in dict_mods:
                 raise ValueError(
                     f"AI_MODIFIER '{cls.AI_MODIFIER}' must be distinct from HOTKEY parts "
                     f"({cls.HOTKEY})"

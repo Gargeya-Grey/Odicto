@@ -159,13 +159,15 @@ class TextRefiner:
 
         threading.Thread(target=_load, daemon=True, name="llm-preload").start()
 
-    def refine(self, text: str) -> str:
+    def refine(self, text: str, context: str = "") -> str:
         """Queries the LLM for a response to the spoken query, keeping multi-turn history.
 
         On provider='none' or API failure, returns the raw transcript so dictation never fails.
 
         Args:
             text: The raw transcribed voice query.
+            context: Optional selected text from the active document to prepend
+                as context for the LLM (e.g. content to refactor).
 
         Returns:
             str: The LLM's response (or raw text on bypass/failure).
@@ -193,8 +195,15 @@ class TextRefiner:
                 f"max_tokens={max_tokens} for LLM response..."
             )
 
+            # Build the user message, optionally prepending selected-text context.
+            if context:
+                user_message = f"Context:\n{context}\n\nQuery: {text}"
+                print(f"Context: \"{context[:80]}{'...' if len(context) > 80 else ''}\"")
+            else:
+                user_message = text
+
             with self._history_lock:
-                self.conversation_history.append({"role": "user", "content": text})
+                self.conversation_history.append({"role": "user", "content": user_message})
                 # Cap history: last 16 messages ≈ 8 turns
                 if len(self.conversation_history) > 16:
                     self.conversation_history = self.conversation_history[-16:]
@@ -204,7 +213,7 @@ class TextRefiner:
             if should_use_full_history(text):
                 turn_messages = history_snapshot
             else:
-                turn_messages = [{"role": "user", "content": text}]
+                turn_messages = [{"role": "user", "content": user_message}]
 
             messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
             messages.extend(turn_messages)

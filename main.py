@@ -3,7 +3,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import keyboard
 from app_state import AppState
@@ -11,7 +11,7 @@ from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
 from refiner import TextRefiner
-from typer import paste_text
+from typer import paste_text, get_selected_text
 
 # Redirect stdout/stderr to a log file if running under pythonw.exe (no console)
 if sys.stdout is None:
@@ -23,6 +23,48 @@ if sys.stdout is None:
         sys.stderr = sys.stdout
     except Exception:
         pass
+
+
+# The `keyboard` library aliases side-specific modifiers onto both sides
+# (e.g. "right ctrl" scan codes include left ctrl's 29). That makes
+# is_pressed("right ctrl") true whenever *either* Ctrl is down — breaking AI mode.
+_SIDE_COUNTERPARTS = {
+    "right ctrl": "left ctrl",
+    "right control": "left ctrl",
+    "left ctrl": "right ctrl",
+    "left control": "right ctrl",
+    "right shift": "left shift",
+    "left shift": "right shift",
+    "right alt": "left alt",
+    "left alt": "right alt",
+}
+
+
+def side_exclusive_scan_codes(key: str) -> Tuple[int, ...]:
+    """Scan codes for a key with left/right modifier aliases stripped when possible."""
+    key_n = key.strip().lower()
+    codes = set(keyboard.key_to_scan_codes(key_n))
+    other = _SIDE_COUNTERPARTS.get(key_n)
+    if other is None:
+        return tuple(codes)
+    other_codes = set(keyboard.key_to_scan_codes(other))
+    exclusive = codes - other_codes
+    # Left-side keys are often a subset of the aliased right mapping; keep them as-is.
+    return tuple(exclusive if exclusive else codes)
+
+
+def is_pressed_exclusive(key: str) -> bool:
+    """Like keyboard.is_pressed, but distinguishes left vs right Ctrl/Shift/Alt."""
+    try:
+        codes = side_exclusive_scan_codes(key)
+        if not codes:
+            return bool(keyboard.is_pressed(key))
+        return any(keyboard.is_pressed(code) for code in codes)
+    except Exception:
+        try:
+            return bool(keyboard.is_pressed(key))
+        except Exception:
+            return False
 
 
 class DictationApp:
@@ -49,7 +91,9 @@ class DictationApp:
         self.ready: bool = False
 
         # Hold-to-talk chord bookkeeping (set during hotkey bind).
+        # Dictation chord (HOTKEY) and optional AI chord (AI_HOTKEY) share one primary key.
         self._hotkey_modifiers: tuple = ()
+        self._ai_hotkey_modifiers: tuple = ()
         self._hotkey_primary: str = ""
         self._hotkey_physically_held: bool = False
 
@@ -98,6 +142,9 @@ class DictationApp:
     # ------------------------------------------------------------------ boot
     def initialize_app(self) -> None:
         """Runs the slow model loading and server initialization in a background thread."""
+        # Check for stale PID and kill the old process to prevent duplicate keyboard hooks.
+        self._kill_stale_instance()
+
         try:
             with open(self.pid_file, "w") as f:
                 f.write(str(os.getpid()))
@@ -121,7 +168,7 @@ class DictationApp:
             self._notify_ui()
             return
 
-        # Bind global press/release hooks for hold-to-talk (supports chords like alt+x).
+        # Bind global press/release hooks for hold-to-talk (ctrl+grave / ctrl+shift+grave).
         try:
             self._bind_hotkeys()
         except Exception as e:
@@ -141,57 +188,89 @@ class DictationApp:
             except Exception:
                 pass
 
-        ai_chord = self._ai_chord_label()
         print("--------------------------------------------------")
         print(f"Application ready! Global Hotkey: '{Config.HOTKEY}'")
         print(
             f"  - Hold '{Config.HOTKEY}': RECORD and paste raw Whisper transcript."
         )
-        if ai_chord:
+        if Config.AI_HOTKEY:
             print(
-                f"  - Hold '{ai_chord}': RECORD and paste AI-refined response."
+                f"  - Hold '{Config.AI_HOTKEY}': RECORD and paste AI-refined response."
+            )
+        elif Config.AI_MODIFIER:
+            print(
+                f"  - Hold '{Config.HOTKEY}+{Config.AI_MODIFIER}': "
+                "RECORD and paste AI-refined response."
             )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
 
-    def _ai_chord_label(self) -> str:
-        """Human-readable AI chord, e.g. 'alt+x+z'."""
-        if not Config.AI_MODIFIER:
-            return ""
-        return f"{Config.HOTKEY}+{Config.AI_MODIFIER}"
-
-    def _modifiers_held(self) -> bool:
-        """True if every HOTKEY modifier is currently down (or no modifiers required)."""
-        if not self._hotkey_modifiers:
+    def _mods_held(self, mods: tuple) -> bool:
+        """True if every listed modifier is currently down (empty mods → True)."""
+        if not mods:
             return True
         try:
-            return all(keyboard.is_pressed(m) for m in self._hotkey_modifiers)
+            return all(keyboard.is_pressed(m) for m in mods)
         except Exception:
             return False
 
-    def _bind_hotkeys(self) -> None:
-        """Hook the primary key with selective suppress for multi-key chords.
+    def _match_active_chord(self) -> Optional[bool]:
+        """Which hold-to-talk chord is active at primary-key press time.
 
-        ``keyboard.on_press_key`` only accepts a single key name. For chords like
-        ``alt+x`` we hook ``x`` and require the modifiers to be held. The primary
-        key is suppressed only when the full chord matches, so normal typing of
-        ``x`` still works.
+        Returns:
+            True  → AI chord (AI_HOTKEY or HOTKEY+AI_MODIFIER)
+            False → dictation chord (HOTKEY)
+            None  → no chord; let the key through for normal typing
         """
-        mods, primary = parse_hold_hotkey(Config.HOTKEY)
-        self._hotkey_modifiers = mods
+        # Prefer the more-specific AI chord when both could match
+        # (e.g. ctrl+shift+grave vs ctrl+grave — shift+ctrl also satisfies ctrl).
+        if self._ai_hotkey_modifiers:
+            if self._mods_held(self._ai_hotkey_modifiers):
+                return True
+            if self._mods_held(self._hotkey_modifiers):
+                return False
+            return None
+
+        # Legacy: HOTKEY + optional AI_MODIFIER extra key
+        if not self._mods_held(self._hotkey_modifiers):
+            return None
+        if Config.AI_MODIFIER and is_pressed_exclusive(Config.AI_MODIFIER):
+            return True
+        return False
+
+    def _bind_hotkeys(self) -> None:
+        """Hook the primary key; mode is chosen by which modifier chord is held.
+
+        For chords like ``ctrl+grave`` / ``ctrl+shift+grave`` we hook ``grave``
+        (the `` ` `` key) and require the matching modifiers. The key is only
+        suppressed when a chord matches, so bare `` ` `` still types normally.
+        """
+        dict_mods, primary = parse_hold_hotkey(Config.HOTKEY)
+        self._hotkey_modifiers = dict_mods
         self._hotkey_primary = primary
         self._hotkey_physically_held = False
+
+        if Config.AI_HOTKEY:
+            ai_mods, ai_primary = parse_hold_hotkey(Config.AI_HOTKEY)
+            if ai_primary != primary:
+                raise ValueError(
+                    f"AI_HOTKEY primary '{ai_primary}' != HOTKEY primary '{primary}'"
+                )
+            self._ai_hotkey_modifiers = ai_mods
+        else:
+            self._ai_hotkey_modifiers = ()
 
         def primary_handler(event: object) -> bool:
             event_type = getattr(event, "event_type", None)
             if event_type == keyboard.KEY_DOWN:
-                if not self._modifiers_held():
-                    return True  # modifiers not held — allow normal typing
+                match = self._match_active_chord()
+                if match is None:
+                    return True  # no chord — allow normal typing (e.g. bare `)
                 if self._hotkey_physically_held:
-                    return False  # key-repeat while held: keep suppressing
+                    return False  # key-repeat while held
                 self._hotkey_physically_held = True
-                self.on_press()
-                return False  # suppress so the key does not leak into the focused app
+                self.on_press(use_llm=match)
+                return False  # suppress so ` does not leak into the focused app
             if event_type == keyboard.KEY_UP:
                 if not self._hotkey_physically_held:
                     return True
@@ -202,20 +281,42 @@ class DictationApp:
 
         keyboard.hook_key(primary, primary_handler, suppress=True)
 
-        # Suppress the AI modifier while HOTKEY modifiers are held so e.g. 'z'
-        # does not type into the active text field during Alt+X+Z.
-        ai_mod = Config.AI_MODIFIER
-        if ai_mod:
+        print(
+            f"Hotkeys bound: primary='{primary}' "
+            f"dictation_mods={list(dict_mods) or '(none)'} "
+            f"ai_mods={list(self._ai_hotkey_modifiers) or Config.AI_MODIFIER or '(none)'}",
+            flush=True,
+        )
 
-            def ai_modifier_handler(event: object) -> bool:
-                if self._modifiers_held():
-                    return False  # suppress
-                # Also suppress while the dictation primary is already held (no-modifier hotkeys).
-                if not self._hotkey_modifiers and self._hotkey_physically_held:
-                    return False
-                return True
+    def _kill_stale_instance(self) -> None:
+        """Kills a previously running Odicto process using the PID file.
 
-            keyboard.hook_key(ai_mod, ai_modifier_handler, suppress=True)
+        Prevents duplicate keyboard hooks from stacking up when the app is
+        started again without the old process being properly terminated.
+        """
+        if not os.path.exists(self.pid_file):
+            return
+        try:
+            with open(self.pid_file) as f:
+                old_pid = int(f.read().strip())
+            # Don't kill ourselves.
+            if old_pid == os.getpid():
+                return
+            print(f"Killing stale Odicto instance (PID {old_pid})...")
+            import subprocess
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(old_pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,
+            )
+        except Exception as e:
+            print(f"Warning: Could not kill stale instance: {e}")
+        finally:
+            try:
+                os.remove(self.pid_file)
+            except Exception:
+                pass
 
     def _ensure_ollama_running(self) -> None:
         """Starts a local Ollama server if port 11434 is not already listening."""
@@ -311,8 +412,13 @@ class DictationApp:
                 print(f"Warning: Failed to clean up temporary audio file: {e}")
 
     # ----------------------------------------------------------- hotkey handlers
-    def on_press(self, event: object = None) -> None:
-        """Handler triggered when the hotkey is physically pressed down."""
+    def on_press(self, event: object = None, use_llm: Optional[bool] = None) -> None:
+        """Handler triggered when the hold-to-talk primary key goes down.
+
+        Args:
+            use_llm: When provided by the chord matcher, selects AI vs raw mode.
+                     When None (tests / legacy), falls back to live modifier checks.
+        """
         if not self.ready or self.recorder is None:
             return
 
@@ -326,12 +432,11 @@ class DictationApp:
             if now - self._last_cycle_end < cooldown_s:
                 return
 
-            self.use_llm = False
-            if Config.AI_MODIFIER:
-                try:
-                    self.use_llm = keyboard.is_pressed(Config.AI_MODIFIER)
-                except Exception:
-                    pass
+            if use_llm is None:
+                matched = self._match_active_chord()
+                self.use_llm = bool(matched) if matched is not None else False
+            else:
+                self.use_llm = bool(use_llm)
 
             self._record_started_at = now
             self.last_status = None
@@ -431,7 +536,10 @@ class DictationApp:
                 return
 
             if use_llm and self.refiner is not None:
-                refined_text: str = self.refiner.refine(raw_text)
+                # Capture any selected text as context for the LLM (e.g. to refactor
+                # content the user has highlighted in any app).
+                context = get_selected_text()
+                refined_text: str = self.refiner.refine(raw_text, context=context)
                 print(f'Refined Text (AI):   "{refined_text}"')
             else:
                 refined_text = raw_text

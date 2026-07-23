@@ -13,9 +13,9 @@ from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
 from refiner import TextRefiner, estimate_max_tokens, should_use_full_history
-from typer import paste_text
+from typer import paste_text, get_selected_text
 from app_state import AppState
-from main import DictationApp
+from main import DictationApp, is_pressed_exclusive, side_exclusive_scan_codes
 
 
 class TestOdicto(unittest.TestCase):
@@ -25,14 +25,78 @@ class TestOdicto(unittest.TestCase):
         Config.LLM_PROVIDER = "ollama"
         Config.LLM_MODEL = "qwen2.5:1.5b-instruct"
 
+    def test_side_exclusive_scan_codes_right_ctrl(self) -> None:
+        """right ctrl must not share the left-ctrl-only scan code used by is_pressed bugs."""
+        import keyboard as kb
+
+        left = set(kb.key_to_scan_codes("left ctrl"))
+        right_exclusive = set(side_exclusive_scan_codes("right ctrl"))
+        self.assertTrue(right_exclusive, "expected exclusive right-ctrl codes")
+        self.assertFalse(
+            right_exclusive & left,
+            "exclusive right ctrl must not include left ctrl scan codes",
+        )
+
+    @patch("main.keyboard.is_pressed")
+    def test_is_pressed_exclusive_right_ctrl(
+        self, mock_is_pressed: MagicMock
+    ) -> None:
+        """Left ctrl alone must not count as right ctrl for AI mode."""
+        exclusive = side_exclusive_scan_codes("right ctrl")
+        left_only = 29  # standard left-ctrl scan code on Windows
+
+        def side_effect(key):
+            # Simulate only left ctrl held (code 29 down; exclusive right codes up).
+            if key == left_only:
+                return True
+            if isinstance(key, int) and key in exclusive:
+                return False
+            if key in ("ctrl", "left ctrl"):
+                return True
+            if key in ("right ctrl", "right control"):
+                # Naïve library behavior — our helper must not rely on this path alone.
+                return True
+            return False
+
+        mock_is_pressed.side_effect = side_effect
+        self.assertFalse(is_pressed_exclusive("right ctrl"))
+
+        def right_down(key):
+            if isinstance(key, int) and key in exclusive:
+                return True
+            return False
+
+        mock_is_pressed.side_effect = right_down
+        self.assertTrue(is_pressed_exclusive("right ctrl"))
+
     def test_parse_hold_hotkey(self) -> None:
         """Hold chords split into modifiers + primary key."""
         self.assertEqual(parse_hold_hotkey("alt+x"), (("alt",), "x"))
+        self.assertEqual(parse_hold_hotkey("ctrl+space"), (("ctrl",), "space"))
         self.assertEqual(
             parse_hold_hotkey("ctrl+shift+space"), (("ctrl", "shift"), "space")
         )
         self.assertEqual(parse_hold_hotkey("scroll lock"), ((), "scroll lock"))
         self.assertEqual(parse_hold_hotkey("  ALT + X  "), (("alt",), "x"))
+        # ` is aliased to "grave" for the keyboard library
+        self.assertEqual(parse_hold_hotkey("ctrl+grave"), (("ctrl",), "grave"))
+        self.assertEqual(
+            parse_hold_hotkey("ctrl+shift+grave"), (("ctrl", "shift"), "grave")
+        )
+        self.assertEqual(parse_hold_hotkey("ctrl+`"), (("ctrl",), "grave"))
+
+    def test_match_active_chord_prefers_ai_when_shift_held(self) -> None:
+        """Ctrl+Shift+grave is AI; Ctrl+grave alone is raw dictation."""
+        app = DictationApp.__new__(DictationApp)
+        app._hotkey_modifiers = ("ctrl",)
+        app._ai_hotkey_modifiers = ("ctrl", "shift")
+        with patch("main.keyboard.is_pressed") as mock_pressed:
+            mock_pressed.side_effect = lambda m: m in ("ctrl", "shift")
+            self.assertTrue(app._match_active_chord())
+            mock_pressed.side_effect = lambda m: m == "ctrl"
+            self.assertFalse(app._match_active_chord())
+            mock_pressed.side_effect = lambda m: False
+            self.assertIsNone(app._match_active_chord())
 
     @patch("config.Config.LLM_PROVIDER", "invalid")
     def test_config_validation_invalid_provider(self) -> None:
@@ -328,6 +392,45 @@ class TestOdicto(unittest.TestCase):
         result = refiner.refine("raw transcript text")
         self.assertEqual(result, "raw transcript text")
 
+    @patch("refiner.OpenAI")
+    def test_text_refiner_with_context(self, mock_openai: MagicMock) -> None:
+        """Context is prepended to the user message when provided."""
+        mock_client = mock_openai.return_value
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Refactored response"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        refiner = TextRefiner()
+        result = refiner.refine("make this better", context="Hello world")
+        self.assertEqual(result, "Refactored response")
+
+        kwargs = mock_client.chat.completions.create.call_args[1]
+        messages = kwargs["messages"]
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        self.assertEqual(len(user_msgs), 1)
+        user_content = user_msgs[0]["content"]
+        self.assertIn("Hello world", user_content)
+        self.assertIn("make this better", user_content)
+        self.assertIn("Context:", user_content)
+
+    @patch("refiner.OpenAI")
+    def test_text_refiner_without_context(self, mock_openai: MagicMock) -> None:
+        """Without context, the user message is just the raw query."""
+        mock_client = mock_openai.return_value
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Reply"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        refiner = TextRefiner()
+        refiner.refine("hello world")
+
+        kwargs = mock_client.chat.completions.create.call_args[1]
+        user_msgs = [m for m in kwargs["messages"] if m["role"] == "user"]
+        self.assertEqual(len(user_msgs), 1)
+        self.assertEqual(user_msgs[0]["content"], "hello world")
+
     @patch("typer.pyperclip")
     @patch("typer.keyboard")
     def test_paste_text_flow(
@@ -342,17 +445,59 @@ class TestOdicto(unittest.TestCase):
         mock_keyboard.send.assert_called_once_with("ctrl+v")
         mock_pyperclip.copy.assert_any_call("original clipboard data")
 
+    @patch("typer.pyperclip")
+    @patch("typer.keyboard")
+    def test_get_selected_text_with_selection(
+        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+    ) -> None:
+        """get_selected_text copies selection, returns it, and restores clipboard."""
+        mock_pyperclip.paste.side_effect = ["original content", "selected text"]
+
+        result = get_selected_text()
+
+        self.assertEqual(result, "selected text")
+        mock_keyboard.send.assert_called_once_with("ctrl+c")
+        # Clipboard restored to original
+        mock_pyperclip.copy.assert_called_with("original content")
+
+    @patch("typer.pyperclip")
+    @patch("typer.keyboard")
+    def test_get_selected_text_no_selection(
+        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+    ) -> None:
+        """get_selected_text returns empty string when nothing was selected."""
+        mock_pyperclip.paste.side_effect = ["original", "original"]
+
+        result = get_selected_text()
+
+        self.assertEqual(result, "")
+        mock_keyboard.send.assert_called_once_with("ctrl+c")
+
+    @patch("typer.pyperclip")
+    @patch("typer.keyboard")
+    def test_get_selected_text_paste_error(
+        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+    ) -> None:
+        """get_selected_text returns empty string on clipboard read failure."""
+        mock_pyperclip.paste.side_effect = Exception("clipboard error")
+
+        result = get_selected_text()
+
+        self.assertEqual(result, "")
+
     @patch("socket.socket")
     @patch("main.AudioRecorder")
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
     @patch("main.paste_text")
+    @patch("main.get_selected_text")
     @patch("main.keyboard")
     @patch("main.play_beep")
     def test_dictation_app_state_machine(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
         mock_paste_text: MagicMock,
         mock_refiner: MagicMock,
         mock_transcriber: MagicMock,
@@ -369,6 +514,7 @@ class TestOdicto(unittest.TestCase):
             self.assertEqual(app.state, AppState.IDLE)
 
             mock_keyboard.is_pressed.return_value = True  # AI_MODIFIER held → AI mode
+            mock_get_selected_text.return_value = ""  # no selected text
 
             # 1. Transition IDLE -> RECORDING
             app.on_press()
@@ -404,10 +550,42 @@ class TestOdicto(unittest.TestCase):
                 target_function(*worker_args)
 
                 app.transcriber.transcribe.assert_called_once()
-                app.refiner.refine.assert_called_once_with("raw speech text")
+                app.refiner.refine.assert_called_once_with("raw speech text", context="")
                 mock_paste_text.assert_called_once_with("Polished speech text.")
                 self.assertEqual(app.state, AppState.IDLE)
                 self.assertEqual(app.last_status, "success")
+
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.keyboard")
+    @patch("main.play_beep")
+    def test_dictation_app_ai_via_use_llm_arg(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """Chord matcher passes use_llm=True for the AI hotkey."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("threading.Thread"):
+            app = DictationApp()
+            app.initialize_app()
+            app.ready = True
+            app.on_press(use_llm=True)
+            self.assertTrue(app.use_llm)
+            app._set_state(AppState.IDLE)
+            app.on_press(use_llm=False)
+            self.assertFalse(app.use_llm)
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
