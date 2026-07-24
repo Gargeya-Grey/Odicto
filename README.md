@@ -326,6 +326,7 @@ Copy from `.env.example`. Important knobs:
 | No HUD on hotkey | Restart with `run_debug.bat`; look for `HUD enabled` and `[HUD] → RECORDING` |
 | Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; try `run_debug.bat` as Admin |
 | Old hotkeys still work / both modes feel wrong | Multiple instances — run `stop_dictation.bat` (kills all), then start once. Check log for `Hotkeys bound: …` |
+| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook (hooks run even when idle, not only during dictation). Run `stop_dictation.bat`, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
 | Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
 | Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |

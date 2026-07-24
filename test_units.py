@@ -15,7 +15,12 @@ from transcriber import WhisperTranscriber
 from refiner import TextRefiner, estimate_max_tokens, should_use_full_history
 from typer import paste_text, get_selected_text
 from app_state import AppState
-from main import DictationApp, is_pressed_exclusive, side_exclusive_scan_codes
+from main import (
+    DictationApp,
+    is_pressed_exclusive,
+    side_exclusive_scan_codes,
+    _mutex_name_for_install,
+)
 
 
 class TestOdicto(unittest.TestCase):
@@ -97,6 +102,36 @@ class TestOdicto(unittest.TestCase):
             self.assertFalse(app._match_active_chord())
             mock_pressed.side_effect = lambda m: False
             self.assertIsNone(app._match_active_chord())
+
+    def test_mutex_name_is_install_scoped(self) -> None:
+        """Single-instance mutex must be stable and namespaced per install path."""
+        name = _mutex_name_for_install()
+        self.assertTrue(
+            name.startswith("Global\\Odicto_SingleInstance_")
+            or name.startswith("Local\\Odicto_SingleInstance_"),
+            name,
+        )
+        self.assertEqual(name, _mutex_name_for_install())
+
+    def test_bind_hotkeys_refuses_without_single_instance_lock(self) -> None:
+        """STRICT: never install system-wide hooks unless the mutex is held."""
+        import main as main_mod
+
+        app = DictationApp.__new__(DictationApp)
+        app._hotkey_physically_held = False
+        was_held = main_mod._INSTANCE_LOCK_HELD
+        was_mutex = main_mod._INSTANCE_MUTEX_HANDLE
+        was_file = main_mod._INSTANCE_LOCK_FILE
+        try:
+            main_mod._INSTANCE_LOCK_HELD = False
+            main_mod._INSTANCE_MUTEX_HANDLE = None
+            main_mod._INSTANCE_LOCK_FILE = None
+            with self.assertRaises(RuntimeError):
+                app._bind_hotkeys()
+        finally:
+            main_mod._INSTANCE_LOCK_HELD = was_held
+            main_mod._INSTANCE_MUTEX_HANDLE = was_mutex
+            main_mod._INSTANCE_LOCK_FILE = was_file
 
     @patch("config.Config.LLM_PROVIDER", "invalid")
     def test_config_validation_invalid_provider(self) -> None:
