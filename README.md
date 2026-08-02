@@ -293,7 +293,7 @@ Copy from `.env.example`. Important knobs:
 | `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
 | `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
 | `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
-| `LLM_MAX_TOKENS` | `512` | Hard cap on reply length |
+| `LLM_MAX_TOKENS` | `1536` | Hard cap on reply length |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
