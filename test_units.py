@@ -9,10 +9,10 @@ mock_faster_whisper = MagicMock()
 sys.modules["faster_whisper"] = mock_faster_whisper
 
 # Now we can safely import config, recorder, transcriber, refiner, typer, main
-from config import Config, parse_hold_hotkey
+from config import Config, parse_hold_hotkey, _sanitize_model_id
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
-from refiner import TextRefiner, estimate_max_tokens, should_use_full_history
+from refiner import TextRefiner
 from typer import paste_text, get_selected_text
 from app_state import AppState
 from main import (
@@ -21,6 +21,7 @@ from main import (
     side_exclusive_scan_codes,
     _mutex_name_for_install,
 )
+import main as main_mod
 
 
 class TestOdicto(unittest.TestCase):
@@ -29,6 +30,14 @@ class TestOdicto(unittest.TestCase):
         # Reset state/config to defaults where necessary
         Config.LLM_PROVIDER = "ollama"
         Config.LLM_MODEL = "qwen2.5:1.5b-instruct"
+        # CRITICAL: never run the real single-instance lock or orphan killer in tests.
+        # initialize_app() acquires it when not held — that would taskkill a live
+        # Odicto and take the Global mutex for the duration of the test run.
+        self._real_lock_held = main_mod._INSTANCE_LOCK_HELD
+        main_mod._INSTANCE_LOCK_HELD = True  # bypass lock acquisition + orphan kill in initialize_app
+
+    def tearDown(self) -> None:
+        main_mod._INSTANCE_LOCK_HELD = self._real_lock_held
 
     def test_side_exclusive_scan_codes_right_ctrl(self) -> None:
         """right ctrl must not share the left-ctrl-only scan code used by is_pressed bugs."""
@@ -73,6 +82,14 @@ class TestOdicto(unittest.TestCase):
 
         mock_is_pressed.side_effect = right_down
         self.assertTrue(is_pressed_exclusive("right ctrl"))
+
+    def test_sanitize_model_id_strips_accidental_hash_tail(self) -> None:
+        """Mid-value #old-model must not become part of the OpenRouter id."""
+        self.assertEqual(
+            _sanitize_model_id("minimax/minimax-m2.7#nvidia/old:free"),
+            "minimax/minimax-m2.7",
+        )
+        self.assertEqual(_sanitize_model_id("google/gemini-2.0-flash-001"), "google/gemini-2.0-flash-001")
 
     def test_parse_hold_hotkey(self) -> None:
         """Hold chords split into modifiers + primary key."""
@@ -194,6 +211,24 @@ class TestOdicto(unittest.TestCase):
         mock_sf_write.assert_not_called()
         self.assertIsNotNone(recorder.last_audio_array)
 
+    @patch("recorder.sd.InputStream")
+    @patch("recorder.sf.write")
+    def test_audio_recorder_mixdown_stereo_to_mono(
+        self, mock_sf_write: MagicMock, mock_input_stream: MagicMock
+    ) -> None:
+        """CHANNELS=2 captures must be mixed to mono, not squeezed into a 2D array."""
+        recorder = AudioRecorder(sample_rate=16000, channels=2)
+        recorder.start()
+        chunk = np.array([[0.1, 0.3], [0.2, 0.4]], dtype=np.float32)
+        recorder._callback(chunk, len(chunk), None, None)
+        success = recorder.stop(filepath=None)
+        self.assertTrue(success)
+        self.assertEqual(recorder.last_audio_array.ndim, 1)
+        # mean([0.1,0.3])=0.2 ; mean([0.2,0.4])=0.3
+        np.testing.assert_allclose(
+            recorder.last_audio_array, np.array([0.2, 0.3], dtype=np.float32)
+        )
+
     @patch("transcriber.WhisperModel")
     def test_whisper_transcriber_loading_fallback(
         self, mock_whisper_model: MagicMock
@@ -247,27 +282,6 @@ class TestOdicto(unittest.TestCase):
         result = transcriber.transcribe(audio)
         self.assertEqual(result, "from memory")
 
-    def test_adaptive_max_tokens(self) -> None:
-        """Short questions get a tight token budget; complex ones use more."""
-        self.assertLessEqual(estimate_max_tokens("Are you working?", 150), 40)
-        self.assertLessEqual(estimate_max_tokens("hello", 150), 40)
-        self.assertGreaterEqual(
-            estimate_max_tokens(
-                "Please explain in detail how transformers work step by step "
-                "with attention mechanisms and positional encodings thoroughly.",
-                150,
-            ),
-            140,
-        )
-        self.assertFalse(should_use_full_history("relations"))
-        self.assertTrue(should_use_full_history("what about the earlier plan"))
-        self.assertTrue(
-            should_use_full_history(
-                "Can you summarize the tradeoffs between microservices and a monolith "
-                "for a mid-size team with limited DevOps capacity?"
-            )
-        )
-
     def test_effective_llm_model_and_api_base(self) -> None:
         """Provider flip picks the right model id and API base without hand-editing paths."""
         with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
@@ -298,9 +312,10 @@ class TestOdicto(unittest.TestCase):
         ), patch.object(Config, "OPENROUTER_MODEL", ""):
             self.assertEqual(Config.effective_llm_model(), "some/openrouter-id")
 
+    @patch("refiner.Config.LLM_MAX_TOKENS", 512)
     @patch("refiner.OpenAI")
     def test_text_refiner_ollama(self, mock_openai: MagicMock) -> None:
-        """Verifies TextRefiner correctly formats messages and calls the LLM provider."""
+        """Verifies TextRefiner correctly formats messages and uses fixed max_tokens."""
         mock_client = mock_openai.return_value
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -314,14 +329,13 @@ class TestOdicto(unittest.TestCase):
         mock_client.chat.completions.create.assert_called_once()
         kwargs = mock_client.chat.completions.create.call_args[1]
         self.assertEqual(kwargs["model"], Config.effective_llm_model())
-        # Short query must use a reduced token budget
-        self.assertLessEqual(kwargs["max_tokens"], 64)
+        # No adaptive budgets — always Config.LLM_MAX_TOKENS
+        self.assertEqual(kwargs["max_tokens"], 512)
         messages = kwargs["messages"]
         self.assertEqual(messages[0]["role"], "system")
         self.assertEqual(messages[-1]["role"], "user")
         self.assertEqual(messages[-1]["content"], "hello world")
-        # System prompt must teach adaptive length
-        self.assertIn("LENGTH RULES", messages[0]["content"])
+        self.assertNotIn("LENGTH RULES", messages[0]["content"])
 
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
     @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
@@ -403,10 +417,6 @@ class TestOdicto(unittest.TestCase):
         self.assertIn("My name is Assistant.", contents)
         self.assertIn("Repeat what I did.", contents)
 
-        res_reset = refiner.refine("reset chat")
-        self.assertEqual(res_reset, "Conversation history cleared.")
-        self.assertEqual(refiner.conversation_history, [])
-
     @patch("refiner.OpenAI")
     def test_text_refiner_exception_fallback(self, mock_openai: MagicMock) -> None:
         """Verifies that TextRefiner gracefully returns raw text if API call fails."""
@@ -418,6 +428,34 @@ class TestOdicto(unittest.TestCase):
         refiner = TextRefiner()
         result = refiner.refine("raw transcript text")
         self.assertEqual(result, "raw transcript text")
+        self.assertEqual(refiner.conversation_history, [])
+
+    @patch("refiner.OpenAI")
+    def test_text_refiner_reset_chat_clears_history(self, mock_openai: MagicMock) -> None:
+        """Speaking 'reset chat' clears multi-turn memory without an LLM call."""
+        mock_client = mock_openai.return_value
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "Hello, I am Assistant."
+        mock_client.chat.completions.create.side_effect = [mock_resp, mock_resp]
+
+        refiner = TextRefiner()
+
+        # Build some history via normal queries.
+        refiner.refine("What is your name?")
+        self.assertEqual(len(refiner.conversation_history), 2)
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+
+        # Reset clears history and does NOT call the LLM.
+        result = refiner.refine("reset chat")
+        self.assertEqual(result, "Chat memory cleared. Starting fresh.")
+        self.assertEqual(refiner.conversation_history, [])
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+
+        # Case/punctuation variants also reset.
+        refiner.refine("What is your name?")
+        self.assertEqual(len(refiner.conversation_history), 2)
+        refiner.refine("Clear the conversation!")
         self.assertEqual(refiner.conversation_history, [])
 
     @patch("refiner.Config.LLM_PROVIDER", "none")
@@ -737,7 +775,8 @@ class TestDictationIndicator(unittest.TestCase):
 
         self.assertEqual(status_label(GuiState.BOOTING), "Starting")
         self.assertEqual(status_label(GuiState.RECORDING, use_llm=False), "Listening")
-        self.assertEqual(status_label(GuiState.RECORDING, use_llm=True), "Listening · AI")
+        # AI mode uses the same label; a separate violet "AI" chip is drawn in the HUD
+        self.assertEqual(status_label(GuiState.RECORDING, use_llm=True), "Listening")
         self.assertEqual(status_label(GuiState.PROCESSING, use_llm=False), "Transcribing")
         self.assertEqual(status_label(GuiState.PROCESSING, use_llm=True), "Thinking")
         self.assertEqual(status_label(GuiState.SUCCESS), "Done")

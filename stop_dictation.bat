@@ -3,15 +3,23 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 echo Stopping all Odicto instances...
 
-REM 1) PID file (fast path).
+REM 1) PID file (fast path). Safe if the process is already gone.
 if exist dictation.pid (
   set /p PID=<dictation.pid
-  echo   PID file: %PID%
-  taskkill /F /T /PID %PID% >nul 2>&1
+  echo   PID file points to: %PID%
+  REM Only kill if the PID is actually a python/pythonw running THIS install's main.py.
+  REM A stale pid file can point at an unrelated process after Windows reuses the PID.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$p = Get-Process -Id %PID% -ErrorAction SilentlyContinue; " ^
+    "if ($p -and ($p.ProcessName -eq 'python' -or $p.ProcessName -eq 'pythonw') -and " ^
+    "($p.Path -like '%~dp0*')) { taskkill /F /T /PID %PID% | Out-Null; '  Stopped PID %PID%' } " ^
+    "else { '  (PID %PID% is not an Odicto process - left alone)' }"
   del dictation.pid >nul 2>&1
 )
 
-REM 2) Kill every python/pythonw running THIS install's main.py.
+REM 2) Kill any remaining python/pythonw running THIS install's main.py.
+REM    Seeing a second PID here means a real orphan was still running (good that we kill it).
+REM    Seeing only step 1 is normal for a clean single instance.
 REM
 REM    BUG HISTORY: the previous loop was:
 REM      for /f "tokens=2 delims== " %%P in ('wmic ... /format:csv ^| findstr main.py')

@@ -12,6 +12,34 @@ def _env_bool(name: str, default: str = "true") -> bool:
     return os.getenv(name, default).lower() in ("true", "1", "yes")
 
 
+def _sanitize_model_id(raw: str) -> str:
+    """Clean a model slug from .env.
+
+    python-dotenv only treats ``#`` as a comment when there is whitespace before it.
+    A common mistake is::
+
+        OPENROUTER_MODEL=new-model#old-model:free
+
+    which becomes one invalid OpenRouter id. If ``#`` appears mid-value and the
+    right side looks like another model, keep only the left side and warn.
+    """
+    value = raw.strip().strip('"').strip("'")
+    if not value or "#" not in value:
+        return value
+    left, right = value.split("#", 1)
+    left = left.strip()
+    right = right.strip()
+    # Accidental dual-model / inline "comment" without a leading space
+    if left and right and ("/" in right or ":" in right or " " not in right):
+        print(
+            f"Warning: model id contained '#...' ({value!r}). "
+            f"Using {left!r} only. Put old models on a separate commented line.",
+            flush=True,
+        )
+        return left
+    return value
+
+
 # keyboard lib name for the US `~ key (top-left, under Esc).
 _KEY_ALIASES = {
     "`": "grave",
@@ -73,16 +101,18 @@ class Config:
         "LLM_PROVIDER", "ollama"
     ).lower()  # type: ignore
     # Ollama model tag (also used as fallback model id for openrouter if OPENROUTER_MODEL is blank)
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:1.5b-instruct")
+    LLM_MODEL: str = _sanitize_model_id(
+        os.getenv("LLM_MODEL", "qwen2.5:1.5b-instruct")
+    )
     # OpenRouter-only model slug (e.g. google/gemini-2.0-flash-001). Preferred when provider=openrouter.
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "").strip()
+    OPENROUTER_MODEL: str = _sanitize_model_id(os.getenv("OPENROUTER_MODEL", ""))
     # Ollama OpenAI-compatible base. For openrouter, localhost is auto-rewritten in TextRefiner.
     LLM_API_BASE: str = os.getenv("LLM_API_BASE", "http://localhost:11434/v1")
     # Canonical OpenRouter OpenAI-compatible endpoint (used when provider=openrouter)
     OPENROUTER_API_BASE: str = os.getenv(
         "OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"
     ).strip()
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "150"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "512"))
     LLM_NUM_CTX: int = int(os.getenv("LLM_NUM_CTX", "2048"))
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
@@ -141,6 +171,11 @@ class Config:
             raise ValueError(f"LLM_NUM_CTX must be >= 256, got {cls.LLM_NUM_CTX}")
 
         dict_mods, dict_primary = parse_hold_hotkey(cls.HOTKEY)
+        if not dict_mods:
+            raise ValueError(
+                f"HOTKEY '{cls.HOTKEY}' needs at least one modifier. A bare primary "
+                "would be globally suppressed (the key could never be typed in any app)."
+            )
         if cls.AI_HOTKEY:
             ai_mods, ai_primary = parse_hold_hotkey(cls.AI_HOTKEY)
             if ai_primary != dict_primary:

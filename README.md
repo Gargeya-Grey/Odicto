@@ -244,7 +244,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 ### Dictate into any app
 
 1. Click into a text field (browser, Notion, VS Code, Discord, ...)  
-2. **Press and hold** the hotkey (default: **Ctrl+\**)  
+2. **Press and hold** the hotkey (default: **Ctrl+`**)  
 3. Speak  
 4. **Release** the key  
 5. Watch the HUD: **Listening -> Transcribing -> Done**  
@@ -252,7 +252,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ### Ask the local AI
 
-1. Hold **Ctrl+Shift+\** (same \ key under Esc, plus **Shift**)  
+1. Hold **Ctrl+Shift+`** (same ` key under Esc, plus **Shift**)  
 2. Speak your question  
 3. Release  
 4. HUD: **Listening -> Thinking -> Done**  
@@ -265,11 +265,11 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 | **Hold, don't tap** | Very short holds are ignored (anti-accidental) |
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
-| **Clear AI memory** | In AI mode, say *reset chat* / *clear conversation* |
+| **Clear AI memory** | Say *reset chat* / *clear conversation* in AI mode to clear multi-turn history |
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
-| **VS Code note** | Ctrl+\ toggles the terminal there -- while Odicto runs it steals that chord |
-| **Change hotkey** | Edit \HOTKEY=\ / \AI_HOTKEY=\ in \.env\ then restart |
-| **Logs** | Use un_debug.bat\, or check \dictation.log\ when using \pythonw\ |
+| **VS Code note** | Ctrl+` toggles the terminal there -- while Odicto runs it steals that chord |
+| **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
+| **Logs** | Use `run_debug.bat`, or check `dictation.log` when using `pythonw` |
 
 ### Stop
 
@@ -293,7 +293,7 @@ Copy from `.env.example`. Important knobs:
 | `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
 | `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
 | `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
-| `LLM_MAX_TOKENS` | `150` | Hard cap; short questions use less automatically |
+| `LLM_MAX_TOKENS` | `512` | Hard cap on reply length |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |

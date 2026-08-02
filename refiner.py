@@ -1,4 +1,3 @@
-import re
 import sys
 import threading
 from typing import Optional
@@ -6,93 +5,51 @@ from openai import OpenAI
 from config import Config
 
 
-# Voice commands that wipe multi-turn memory without hitting the LLM.
-_RESET_COMMANDS = frozenset(
-    {
-        "clear conversation",
-        "reset conversation",
-        "clear history",
-        "reset history",
-        "forget everything",
-        "clear chat",
-        "reset chat",
-    }
-)
-
-# Phrases / words that usually continue a prior turn (keep history).
-_FOLLOW_UP_RE = re.compile(
-    r"^(and|also|what about|how about|why|then|yes|yeah|yep|no|nope|ok|okay|"
-    r"continue|go on|more|explain|elaborate|same|repeat|again)\b"
-    r"|\b(it|that|this|those|these|them|earlier|previous|before|you said|my name)\b",
-    re.IGNORECASE,
-)
-
+# Hard constraints — output is pasted verbatim into the user's document/chat box.
+# max_tokens (Config.LLM_MAX_TOKENS) is the hard ceiling.
 _SYSTEM_PROMPT = (
-    "You are a helpful AI assistant. Your reply is pasted at the user's text cursor, "
-    "so be disciplined about length.\n"
+    "You are a precise AI assistant for dictation. Your reply is pasted VERBATIM "
+    "into the user's text cursor position (a document, editor, or chat box).\n"
     "\n"
-    "LENGTH RULES (critical):\n"
-    "- Match reply length to the complexity of the user's latest message.\n"
-    "- Tiny / yes-no / status / greeting (e.g. 'are you working?', 'hello'): "
-    "ONE short sentence. No extras.\n"
-    "- Simple factual questions: 1–2 sentences max.\n"
-    "- Medium questions: a short paragraph or a few tight bullets.\n"
-    "- Only go long for clearly complex multi-part requests.\n"
+    "HARD FORMAT RULES (never break these):\n"
+    "- Output PLAIN HUMAN-READABLE TEXT ONLY. Absolutely no Markdown of any kind.\n"
+    "- Never use: # headings, **bold**, *italics*, `code`, ``` fences, [links](url), "
+    "tables, or HTML.\n"
+    "- Lists: use simple lines with a leading dash and a space (\"- item\"), or plain "
+    "numbered lines (\"1. item\"). No other markup, no bullets that are not plain text.\n"
+    "- Do not wrap the answer in quotes, backticks, or any decorative delimiters.\n"
+    "- Write exactly as if typing into Notepad or a chat box that renders nothing "
+    "but plain text.\n"
     "\n"
-    "STYLE RULES:\n"
-    "- Answer the latest user message directly. Do not pad.\n"
-    "- No capability lists, no 'happy to help', no 'let me know if…', no markdown fluff.\n"
-    "- Do not drag in unrelated topics from earlier turns unless the user clearly refers to them.\n"
-    "- Prefer plain text. Be accurate and useful, not chatty."
+    "LENGTH:\n"
+    "- Be concise by default. Prefer short scannable bullets over long paragraphs. "
+    "Lead with the answer; add only needed detail. Expand only when the question "
+    "clearly needs depth. Never pad, never ramble, never cut mid-thought.\n"
+    "\n"
+    "SELECTED-TEXT CONTEXT:\n"
+    "- The user message may include a \"Context:\" section containing text the user "
+    "selected in their active app. That selection is the PRIMARY subject.\n"
+    "- The \"Query:\" is what the user wants done WITH that selection (summarize, "
+    "rewrite, fix grammar, translate, explain, etc.).\n"
+    "- Base your reply on the selection. Do NOT re-quote or echo the entire selection "
+    "back unless explicitly asked. Directly produce the requested result.\n"
+    "- If no Context section is present, answer the query directly and naturally."
 )
 
-
-def estimate_max_tokens(text: str, hard_cap: int) -> int:
-    """Pick a token budget from query complexity so small questions stay short."""
-    words = len(text.split())
-    lower = text.strip().lower()
-
-    # Very short status / greeting / confirmation style
-    if words <= 6:
-        budget = 32
-    elif words <= 14:
-        budget = 64
-    elif words <= 30:
-        budget = 100
-    elif words <= 60:
-        budget = 140
-    else:
-        budget = hard_cap
-
-    # Explicit "brief/short" requests
-    if any(k in lower for k in ("briefly", "in one sentence", "short answer", "tl;dr", "tldr")):
-        budget = min(budget, 40)
-
-    # Explicit "detailed/explain" requests can use more of the cap
-    if any(
-        k in lower
-        for k in (
-            "in detail",
-            "explain fully",
-            "step by step",
-            "thoroughly",
-            "long answer",
-            "comprehensive",
-        )
-    ):
-        budget = hard_cap
-
-    return max(16, min(hard_cap, budget))
-
-
-def should_use_full_history(text: str) -> bool:
-    """Avoid topic bleed: short standalone phrases should not inherit old context."""
-    words = len(text.split())
-    if words > 12:
-        return True
-    if _FOLLOW_UP_RE.search(text.strip()):
-        return True
-    return False
+# Spoken reset phrases — clear multi-turn memory without an LLM call.
+_RESET_PHRASES = {
+    "reset chat",
+    "reset the chat",
+    "clear chat",
+    "clear the chat",
+    "clear conversation",
+    "clear the conversation",
+    "clear memory",
+    "clear the memory",
+    "reset conversation",
+    "reset the conversation",
+}
+_RESET_REPLY = "Chat memory cleared. Starting fresh."
 
 
 class TextRefiner:
@@ -105,6 +62,7 @@ class TextRefiner:
         self.model: str = Config.effective_llm_model()
         self.client: Optional[OpenAI] = None
         self._history_lock = threading.Lock()
+        # Simple multi-turn memory (no keyword rules for when to include it).
         self.conversation_history: list[dict[str, str]] = []
 
         if self.provider == "ollama":
@@ -160,17 +118,13 @@ class TextRefiner:
         threading.Thread(target=_load, daemon=True, name="llm-preload").start()
 
     def refine(self, text: str, context: str = "") -> str:
-        """Queries the LLM for a response to the spoken query, keeping multi-turn history.
+        """Queries the LLM for a normal reply to the spoken query.
+
+        Uses Config.LLM_MAX_TOKENS as the only output limit.
+        Optional ``context`` is selected text from the focused app (if any).
+        Multi-turn history is always sent (capped by length for the API).
 
         On provider='none' or API failure, returns the raw transcript so dictation never fails.
-
-        Args:
-            text: The raw transcribed voice query.
-            context: Optional selected text from the active document to prepend
-                as context for the LLM (e.g. content to refactor).
-
-        Returns:
-            str: The LLM's response (or raw text on bypass/failure).
         """
         if not text.strip():
             return ""
@@ -182,49 +136,46 @@ class TextRefiner:
         if self.provider == "none" or not self.client:
             return text
 
-        clean_text = text.strip().lower().rstrip(".!?")
-        if clean_text in _RESET_COMMANDS:
+        # Spoken reset: clear the multi-turn memory and confirm. Never calls the LLM.
+        normalized = text.strip().lower().strip(".,!?")
+        if normalized in _RESET_PHRASES:
             with self._history_lock:
-                self.conversation_history = []
-            return "Conversation history cleared."
+                self.conversation_history.clear()
+            print(">>> Chat memory cleared (reset chat).", flush=True)
+            return _RESET_REPLY
 
         try:
-            max_tokens = estimate_max_tokens(text, Config.LLM_MAX_TOKENS)
+            max_tokens = max(1, int(Config.LLM_MAX_TOKENS))
             print(
                 f"Sending query to {self.provider} ({self.model}) "
                 f"max_tokens={max_tokens} for LLM response..."
             )
 
-            # Build the user message, optionally prepending selected-text context.
+            # Selected text from the active app, if the user had something highlighted.
             if context:
                 user_message = f"Context:\n{context}\n\nQuery: {text}"
-                print(f"Context: \"{context[:80]}{'...' if len(context) > 80 else ''}\"")
+                print(
+                    f'Context: "{context[:80]}{"..." if len(context) > 80 else ""}"'
+                )
             else:
                 user_message = text
 
             with self._history_lock:
-                self.conversation_history.append({"role": "user", "content": user_message})
+                self.conversation_history.append(
+                    {"role": "user", "content": user_message}
+                )
                 # Cap history: last 16 messages ≈ 8 turns
                 if len(self.conversation_history) > 16:
                     self.conversation_history = self.conversation_history[-16:]
                 history_snapshot = list(self.conversation_history)
 
-            # Short standalone phrases: don't inherit old topics (prevents rambling bleed).
-            if should_use_full_history(text):
-                turn_messages = history_snapshot
-            else:
-                turn_messages = [{"role": "user", "content": user_message}]
-
             messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
-            messages.extend(turn_messages)
-
-            # Slightly lower temperature for short budgets → less waffle
-            temperature = 0.4 if max_tokens <= 48 else 0.6 if max_tokens <= 100 else 0.7
+            messages.extend(history_snapshot)
 
             kwargs = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": temperature,
+                "temperature": 0.7,
                 "max_tokens": max_tokens,
             }
 
@@ -233,8 +184,6 @@ class TextRefiner:
                     "options": {
                         "num_ctx": Config.LLM_NUM_CTX,
                         "num_predict": max_tokens,
-                        # Mildly discourage fluff without hurting complex answers
-                        "repeat_penalty": 1.1,
                     },
                     "keep_alive": -1,
                 }
@@ -247,7 +196,6 @@ class TextRefiner:
             if refined_text:
                 refined_text = refined_text.strip()
                 with self._history_lock:
-                    # Only keep history that matches what we stored as the user turn
                     self.conversation_history.append(
                         {"role": "assistant", "content": refined_text}
                     )
@@ -270,7 +218,10 @@ class TextRefiner:
                 ):
                     self.conversation_history.pop()
             print(
-                f"Warning: LLM generation failed ({e}). Pasting raw transcription instead.",
+                f"!!! AI mode FAILED for model '{self.model}' ({self.provider}): {e}\n"
+                f"    Pasting raw Whisper transcript instead. "
+                f"Check OPENROUTER_MODEL / LLM_MODEL in .env and restart.",
                 file=sys.stderr,
+                flush=True,
             )
             return text

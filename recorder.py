@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import List, Optional
 import numpy as np
 import sounddevice as sd
@@ -22,12 +23,23 @@ class AudioRecorder:
         self._lock: threading.Lock = threading.Lock()
         # Smoothed peak level 0..1 for the live UI waveform (updated from audio callback).
         self._level: float = 0.0
+        # Last time a stream status warning was logged — callback prints are throttled
+        # because I/O in the real-time audio thread can cause dropouts/clicks.
+        self._last_status_log: float = 0.0
+        self._STATUS_LOG_MIN_INTERVAL = 5.0
+
+    def _log_status_throttled(self, status: object) -> None:
+        """Log a stream status warning at most once per interval (callback-safe)."""
+        now = time.monotonic()
+        if now - self._last_status_log >= self._STATUS_LOG_MIN_INTERVAL:
+            self._last_status_log = now
+            print(f"SoundDevice status warning: {status}", flush=True)
 
     def _callback(self, indata: np.ndarray, frames: int, time: object, status: object) -> None:
         """Internal callback for sounddevice input stream to capture audio chunks."""
         if status:
             # Minor buffer underflows are non-fatal; keep capturing.
-            print(f"SoundDevice status warning: {status}")
+            self._log_status_throttled(status)
         # Live meter (outside lock first for RMS compute, then short lock for store).
         try:
             peak = float(np.max(np.abs(indata))) if indata.size else 0.0
@@ -114,7 +126,12 @@ class AudioRecorder:
             self.audio_data = []
 
         # Flatten to 1D float32 for faster-whisper (skips disk write/read).
-        self.last_audio_array = np.ascontiguousarray(np.squeeze(data), dtype=np.float32)
+        # Mix down multi-channel captures (CHANNELS=2) to mono instead of np.squeeze,
+        # which would leave a 2D (N,2) array and break faster-whisper.
+        arr = np.asarray(data, dtype=np.float32)
+        if arr.ndim == 2 and arr.shape[1] > 1:
+            arr = np.mean(arr, axis=1)
+        self.last_audio_array = np.ascontiguousarray(arr, dtype=np.float32)
 
         if filepath:
             try:

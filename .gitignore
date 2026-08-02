@@ -31,6 +31,9 @@ Desktop.ini
 *.wav
 test_ollama.txt
 
+# Agent / editor bookkeeping
+.commandcode/
+
 # Build
 dist/
 build/

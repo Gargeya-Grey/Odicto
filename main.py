@@ -122,11 +122,13 @@ def _lock_file_path() -> str:
     return os.path.join(_install_root(), "dictation.lock")
 
 
-def _enumerate_odicto_pids() -> set:
+def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
     """PIDs of python/pythonw running this install's main.py (excludes self)."""
     import subprocess
 
     my_pid = os.getpid()
+    if exclude_pid is None:
+        exclude_pid = my_pid
     root_fwd = os.path.normcase(os.path.normpath(_install_root())).replace("\\", "/")
     found: set = set()
 
@@ -170,7 +172,7 @@ def _enumerate_odicto_pids() -> set:
             if not pid_s.isdigit():
                 continue
             pid = int(pid_s)
-            if pid == my_pid:
+            if pid == exclude_pid:
                 continue
             cmd_n = os.path.normcase(cmd.replace('"', "").replace("\\", "/"))
             if "main.py" in cmd_n and root_fwd in cmd_n:
@@ -511,8 +513,9 @@ class DictationApp:
                 self._notify_ui()
                 return
         else:
-            # Belt-and-suspenders: kill any orphan main.py that appeared mid-boot.
-            self._kill_stale_instance()
+            # __main__ already killed orphans + acquired the lock before constructing
+            # this app, so there is nothing left to clean up here.
+            pass
 
         try:
             with open(self.pid_file, "w") as f:
@@ -835,6 +838,9 @@ class DictationApp:
                     self.recorder.clear()
                 self.last_status = None
                 self._set_state(AppState.IDLE)
+                # Debounce rapid accidental taps too: stamp the cycle end here so
+                # RETRIGGER_COOLDOWN_MS applies even when no pipeline ever ran.
+                self._last_cycle_end = time.monotonic()
                 print(">>> Hold too short; ignored.")
                 return
 
@@ -890,12 +896,13 @@ class DictationApp:
                 return
 
             if use_llm and self.refiner is not None:
-                # Capture any selected text as context for the LLM (e.g. to refactor
-                # content the user has highlighted in any app).
+                # AI mode only: selection is read as LLM context (Ctrl+C probe).
+                # Raw dictation never calls this — paste below just replaces selection.
                 context = get_selected_text()
                 refined_text: str = self.refiner.refine(raw_text, context=context)
                 print(f'Refined Text (AI):   "{refined_text}"')
             else:
+                # Raw dictation: transcript only; no selection probe / no LLM.
                 refined_text = raw_text
                 print(f'Raw Text (Bypass):  "{refined_text}"')
 
@@ -903,6 +910,7 @@ class DictationApp:
                 self.last_status = "empty"
                 return
 
+            # Ctrl+V: if text was selected, the target app replaces it with this payload.
             paste_text(refined_text)
 
             elapsed: float = time.time() - start_time
