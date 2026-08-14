@@ -26,15 +26,19 @@ From the repository root.
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Flags: `-SkipOllama`, `-OllamaModel qwen2.5:1.5b-instruct`,
-`-WhisperModel tiny.en`.
+Flags: `-Ollama` (opt-in: install Ollama + pull the default local model),
+`-OllamaModel qwen2.5:1.5b-instruct`, `-WhisperModel tiny.en`.
 
 ### macOS / Linux
 
 ```bash
 bash install.sh
-# or: bash install.sh -SkipOllama
+# or: bash install.sh -Ollama
 ```
+
+Ollama + its model are **opt-in** (`-Ollama`); without the flag nothing
+local-AI related downloads. The setup page has a "Download local model"
+button that pulls the model only when the user picks Ollama as provider.
 
 ## Manual checklist (if the script fails)
 

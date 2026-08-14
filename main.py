@@ -747,6 +747,12 @@ if __name__ == "__main__":
         print(f"Warning: Could not write PID file early: {e}", flush=True)
 
     try:
+        Config.validate()
+    except Exception as e:
+        print(f"Config error: {e}", file=sys.stderr, flush=True)
+        sys.exit(2)
+
+    try:
         app = DictationApp()
         app.run()
     finally:

@@ -257,5 +257,7 @@ class Config:
                 )
 
 
-# Validate config at module load time to catch misconfigurations early
-Config.validate()
+# NOTE: no import-time Config.validate() here. Validating on import would fire
+# when the setup web page or CLI imports this module (before the user has even
+# saved a key), printing a confusing "META_API_KEY is empty" warning. The app
+# entry point (main.py) validates explicitly at startup.

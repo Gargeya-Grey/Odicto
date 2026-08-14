@@ -10,10 +10,11 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\install.ps1
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipOllama
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
 #>
 param(
-    [switch]$SkipOllama,
+    [switch]$Ollama,
+    [switch]$SkipOllama,  # deprecated no-op: Ollama is now skipped by default
     [string]$OllamaModel = "qwen2.5:1.5b-instruct",
     [string]$WhisperModel = "tiny.en"
 )
@@ -122,8 +123,8 @@ if ($envText -match "WHISPER_MODEL_SIZE=") {
     # only set if user hasn't customized heavily - leave as-is if file existed
 }
 
-# --- Optional: Ollama ---
-if (-not $SkipOllama) {
+# --- Optional: Ollama (opt-in with -Ollama) ---
+if ($Ollama) {
     Write-Step "Checking Ollama"
     $ollama = Get-Command ollama -ErrorAction SilentlyContinue
     if (-not $ollama) {
@@ -153,7 +154,7 @@ if (-not $SkipOllama) {
         Write-Ok "Model ready: $OllamaModel"
     }
 } else {
-    Write-Warn "Skipping Ollama (-SkipOllama). Raw dictation still works; AI mode will not."
+    Write-Ok "Ollama skipped. Pick Ollama in the setup page later if you want a local LLM; the model downloads on demand."
 }
 
 # --- Warm Whisper weights ---

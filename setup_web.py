@@ -12,6 +12,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import subprocess
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +47,12 @@ EDITABLE_KEYS = {
 }
 
 _MASKED = "••••••••••••••••"
+
+# Background "ollama pull" state (started on demand from the setup page).
+_PULL_LOCK = threading.Lock()
+_PULL_PROC = None
+_PULL_LOG = ""
+_PULL_DONE = False
 
 
 def _mask_key(key: str) -> bool:
@@ -140,6 +147,61 @@ def reset_env() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(example)
     os.replace(tmp, ENV_PATH)
+
+
+def start_ollama_pull(model: str) -> str:
+    """Kick off `ollama pull <model>` in the background (idempotent).
+
+    Returns an error string if the pull cannot start; otherwise "".
+    """
+    global _PULL_PROC, _PULL_LOG, _PULL_DONE
+    with _PULL_LOCK:
+        if _PULL_PROC is not None and _PULL_PROC.poll() is None:
+            return ""  # already pulling
+        _PULL_LOG = ""
+        _PULL_DONE = False
+        try:
+            _PULL_PROC = subprocess.Popen(
+                ["ollama", "pull", model],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            return "Ollama is not installed. Install it from https://ollama.com/download, then retry."
+        except Exception as e:  # pragma: no cover
+            return f"Could not start ollama pull: {e}"
+
+    threading.Thread(target=_drain_pull_output, daemon=True).start()
+    return ""
+
+
+def _drain_pull_output() -> None:
+    global _PULL_LOG, _PULL_DONE
+    proc = _PULL_PROC
+    if proc is None or proc.stdout is None:
+        return
+    for line in proc.stdout:
+        _PULL_LOG += line
+        # keep the log bounded; progress bars spam carriage returns
+        if len(_PULL_LOG) > 6000:
+            _PULL_LOG = _PULL_LOG[-4000:]
+    proc.wait()
+    with _PULL_LOCK:
+        _PULL_DONE = True
+
+
+def pull_status() -> dict:
+    """Snapshot of the background pull for the /pull-status endpoint."""
+    with _PULL_LOCK:
+        running = _PULL_PROC is not None and _PULL_PROC.poll() is None
+        return {
+            "running": running,
+            "done": _PULL_DONE,
+            "exit_code": _PULL_PROC.poll() if _PULL_PROC is not None else None,
+            "log": _PULL_LOG[-1500:],
+        }
 
 
 def _page(message: str = "", message_kind: str = "neutral") -> str:
@@ -412,6 +474,27 @@ button:disabled {{ opacity: 0.55; cursor: default; }}
   display: inline-block;
 }}
 @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+.pull-row {{
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}}
+.pull-row .secondary {{ flex: 0 0 auto; padding: 0.45rem 0.8rem; }}
+.pull-row .hint {{ font-size: 0.78rem; color: var(--muted); }}
+.pull-status {{
+  margin-top: 0.7rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+}}
 details {{ margin-top: 1.5rem; }}
 summary {{ cursor: pointer; font-weight: 480; color: var(--muted); font-size: 0.92rem; }}
 code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 6px; }}
@@ -461,6 +544,11 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       <input type="text" name="LLM_MODEL" value="{html.escape(llm_model)}">
       <label>Ollama API base</label>
       <input type="text" name="LLM_API_BASE" value="{html.escape(ollama_base)}">
+      <div class="pull-row">
+        <button type="button" id="pull_button" class="secondary" onclick="startPull()">Download local model</button>
+        <span class="hint">only downloads when you choose local AI</span>
+      </div>
+      <div id="pull_status" class="pull-status" hidden></div>
     </div>
 
     <details>
@@ -507,6 +595,54 @@ var PROVIDER_LABELS = {{
   ollama: 'Ollama',
   none: 'None'
 }};
+
+var _pullTimer = null;
+
+function pollPullStatus() {{
+  fetch('/pull-status').then(function(r) {{ return r.json(); }}).then(function(s) {{
+    var el = document.getElementById('pull_status');
+    if (s.running || s.done) {{
+      el.hidden = false;
+      el.textContent = s.log || 'Preparing...';
+    }}
+    if (s.running) {{
+      _pullTimer = setTimeout(pollPullStatus, 800);
+    }} else if (s.done) {{
+      clearTimeout(_pullTimer);
+      var btn = document.getElementById('pull_button');
+      btn.disabled = false;
+      btn.textContent = s.exit_code === 0 ? 'Download complete' : 'Download failed - retry';
+      el.textContent = (s.log ? s.log + '\n' : '') + (s.exit_code === 0 ? 'Done. The model is ready for local AI.' : 'The download failed. Check that Ollama is running and retry.');
+    }}
+  }}).catch(function() {{ /* server may be busy; keep polling */ _pullTimer = setTimeout(pollPullStatus, 1500); }});
+}}
+
+async function startPull() {{
+  var btn = document.getElementById('pull_button');
+  var el = document.getElementById('pull_status');
+  btn.disabled = true;
+  el.hidden = false;
+  el.textContent = 'Starting download...';
+  try {{
+    var resp = await fetch('/pull-ollama', {{
+      method: 'POST',
+      body: new URLSearchParams({{ LLM_MODEL: document.querySelector('input[name="LLM_MODEL"]').value || 'qwen2.5:1.5b-instruct' }}),
+      headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }}
+    }});
+    var data = await resp.json();
+    if (!data.ok) {{
+      btn.disabled = false;
+      el.textContent = data.message;
+      return;
+    }}
+    btn.textContent = 'Downloading...';
+    clearTimeout(_pullTimer);
+    _pullTimer = setTimeout(pollPullStatus, 600);
+  }} catch (e) {{
+    btn.disabled = false;
+    el.textContent = 'Could not reach the local server.';
+  }}
+}}
 
 function initCustomSelect() {{
   var trigger = document.getElementById('provider_trigger');
@@ -664,8 +800,16 @@ async function testConnection() {{
   var btn = document.getElementById('test_button');
   btn.disabled = true;
   setStatus('neutral', '<span class="spinner"></span> Testing connection...');
+  var controller = new AbortController();
+  var timer = setTimeout(function() {{ controller.abort(); }}, 30000);
   try {{
-    var resp = await fetch('/test', {{ method: 'POST', body: new FormData(document.getElementById('setupForm')) }});
+    var body = new URLSearchParams(new FormData(document.getElementById('setupForm')));
+    var resp = await fetch('/test', {{
+      method: 'POST',
+      body: body,
+      signal: controller.signal,
+      headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }}
+    }});
     var data = await resp.json();
     if (data.ok) {{
       setStatus('ok', '&#10003; ' + data.message);
@@ -673,8 +817,13 @@ async function testConnection() {{
       setStatus('err', '&#9888; ' + data.message);
     }}
   }} catch (e) {{
-    setStatus('err', '&#9888; Could not reach the local server.');
+    if (e && e.name === 'AbortError') {{
+      setStatus('err', '&#9888; Test timed out after 30s. Check your network and key, then try again.');
+    }} else {{
+      setStatus('err', '&#9888; Could not reach the local server.');
+    }}
   }} finally {{
+    clearTimeout(timer);
     btn.disabled = (document.getElementById('LLM_PROVIDER').value === 'none');
   }}
 }}
@@ -712,6 +861,9 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "OdictoSetup/1.0"
 
     def do_GET(self) -> None:
+        if self.path == "/pull-status":
+            self._send_json(pull_status())
+            return
         if self.path != "/":
             self.send_error(404)
             return
@@ -722,6 +874,18 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8")
         form = parse_qs(raw)
+
+        if self.path == "/pull-ollama":
+            model = (form.get("LLM_MODEL") or ["qwen2.5:1.5b-instruct"])[0].strip()
+            if not model:
+                self._send_json({"ok": False, "message": "Enter an Ollama model first."})
+                return
+            err = start_ollama_pull(model)
+            if err:
+                self._send_json({"ok": False, "message": err})
+            else:
+                self._send_json({"ok": True, "message": f"Downloading {model} in the background..."})
+            return
 
         if self.path == "/test":
             self._handle_test(form)
@@ -798,12 +962,26 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         merge_env(updates)
-        try:
-            Config.validate()
-        except Exception as e:
-            body = _page(f"Saved, but config is invalid: {e}", "err").encode("utf-8")
+        # Validate against the freshly merged .env, not the import-time Config
+        # (Config class attributes are loaded once at server start and would
+        # print a stale "META_API_KEY is empty" warning after a successful save).
+        merged = read_env_raw()
+        provider = (
+            updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "meta"
+        ).strip().lower()
+        if provider not in ("meta", "ollama", "openrouter", "none"):
+            body = _page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err").encode("utf-8")
             self._send(body)
             return
+        if provider == "openrouter":
+            key = updates.get("OPENROUTER_API_KEY") or merged.get("OPENROUTER_API_KEY", "")
+            if not key:
+                body = _page(
+                    "Saved, but OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter.",
+                    "err",
+                ).encode("utf-8")
+                self._send(body)
+                return
         body = _page("Settings saved. Restart Odicto to apply.", "ok").encode("utf-8")
         self._send(body)
 

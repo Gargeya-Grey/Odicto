@@ -111,20 +111,25 @@ The installer will (when possible):
 | 2 | Create **`.venv`** |
 | 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
 | 4 | Copy **`.env.example` → `.env`** |
-| 5 | Install **Ollama** (optional path) + `ollama pull` default model |
-| 6 | Pre-download **Whisper** weights (`tiny.en` by default) |
+| 5 | Pre-download **Whisper** weights (`tiny.en` by default) |
+| 6 | *(opt-in `-Ollama`)* Install Ollama + `ollama pull` default model |
 
 Optional flags:
 
 ```powershell
-# Windows: dictation only (no local LLM)
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipOllama
+# Windows: also install Ollama + pull the default local model
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
 ```
 
 ```bash
-# macOS / Linux: dictation only (no local LLM)
-bash install.sh -SkipOllama
+# macOS / Linux: also install Ollama + pull the default local model
+bash install.sh -Ollama
 ```
+
+Ollama and its model are **opt-in**: without the flag, nothing local-AI
+related is downloaded. If you pick Ollama on the setup page later, the page
+offers a **Download local model** button that pulls exactly the model you
+entered — and only then.
 
 ---
 
@@ -207,8 +212,8 @@ cp .env.example .env
 |-------|------|--------------|---------|
 | **Whisper `tiny.en`** (default) | First transcribe / install warm-up | ~75 MB | English STT (fast) |
 | **Whisper `base.en` / `small.en`** | If you change `.env` | larger | Better accuracy, slower |
-| **Ollama `qwen2.5:1.5b-instruct`** (default example) | `ollama pull` / install script | ~1 GB class | Local AI replies |
-| Your chosen Ollama/OpenRouter model | When configured | varies | AI mode |
+| **Ollama model** (default example `qwen2.5:1.5b-instruct`) | Only when you pick Ollama (setup page **Download local model** button, or `-Ollama` installer flag) | ~1 GB class | Local AI replies |
+| Your chosen OpenRouter/Meta model | Cloud — nothing downloads | — | AI mode |
 
 Whisper cache is managed by `faster-whisper` / Hugging Face cache on the machine.  
 Ollama stores models in its own library (`ollama list` to inspect).

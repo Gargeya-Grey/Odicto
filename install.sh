@@ -4,12 +4,14 @@
 set -euo pipefail
 
 SKIP_OLLAMA=0
+WITH_OLLAMA=0
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
 WHISPER_MODEL="${WHISPER_MODEL:-tiny.en}"
 
 for arg in "$@"; do
   case "$arg" in
-    -SkipOllama|--skip-ollama) SKIP_OLLAMA=1 ;;
+    -Ollama|--ollama) WITH_OLLAMA=1 ;;
+    -SkipOllama|--skip-ollama) SKIP_OLLAMA=1 ;;  # deprecated no-op: skipped by default
     *) echo "Unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
@@ -101,7 +103,7 @@ else
   echo "    .env already present (left unchanged)"
 fi
 
-if [ "$SKIP_OLLAMA" = "0" ]; then
+if [ "$WITH_OLLAMA" = "1" ]; then
   echo "==> Checking Ollama"
   if ! command -v ollama >/dev/null 2>&1; then
     if [ "$PLATFORM" = macos ] && command -v brew >/dev/null 2>&1; then
@@ -114,7 +116,7 @@ if [ "$SKIP_OLLAMA" = "0" ]; then
   echo "==> Pulling LLM model: $OLLAMA_MODEL"
   ollama pull "$OLLAMA_MODEL" || true
 else
-  echo "    Skipping Ollama (-SkipOllama). Raw dictation still works."
+  echo "    Ollama skipped. Pick Ollama in the setup page later if you want a local LLM; the model downloads on demand."
 fi
 
 echo "==> Pre-downloading Whisper model ($WHISPER_MODEL)"
