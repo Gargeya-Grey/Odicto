@@ -67,19 +67,31 @@ set "PYW=%~dp0.venv\Scripts\pythonw.exe"
 REM Launch fresh (pythonw = no console).
 start "" /MIN "%PYW%" "%~dp0main.py"
 
-REM Wait up to 10s for dictation.pid (written immediately after single-instance lock).
-REM PowerShell Start-Sleep works under redirected stdin / non-console hosts.
+REM Wait up to 30s for dictation.pid (written right after the single-instance
+REM lock). Cold starts are slow: PySide6/Whisper/keyboard imports plus antivirus
+REM scanning can take longer than older 10s waits, so poll generously.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$pidFile = Join-Path '%~dp0' 'dictation.pid'; " ^
-  "$deadline = (Get-Date).AddSeconds(10); " ^
+  "$deadline = (Get-Date).AddSeconds(30); " ^
   "while ((Get-Date) -lt $deadline) { " ^
   "  if (Test-Path -LiteralPath $pidFile) { exit 0 }; " ^
-  "  Start-Sleep -Milliseconds 250 " ^
+  "  Start-Sleep -Milliseconds 500 " ^
   "}; exit 1"
 if errorlevel 1 (
-  echo FAILED to start - no dictation.pid appeared. Check dictation.log and .env.
-  pause
-  exit /b 1
+  REM No PID file after 30s. If an Odicto process is still alive it is just
+  REM booting slowly; do not report a false failure - the HUD shows when ready.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$rootN = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\').ToLowerInvariant(); " ^
+    "$alive = @(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" -ErrorAction SilentlyContinue | " ^
+    "  Where-Object { $_.CommandLine -and ($_.CommandLine -match 'main\.py') -and ($_.CommandLine.ToLowerInvariant().Contains($rootN)) }); " ^
+    "if ($alive.Count -gt 0) { exit 0 } else { exit 1 }"
+  if errorlevel 1 (
+    echo FAILED to start - no dictation.pid appeared and no Odicto process is running. Check dictation.log and .env.
+    pause
+    exit /b 1
+  )
+  echo Started - boot still in progress. The HUD pill appears when Whisper is ready.
+) else (
+  echo Started (dictation.pid present)
 )
-echo Started (dictation.pid present)
 exit /b 0
