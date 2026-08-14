@@ -112,13 +112,13 @@ class TestOdicto(unittest.TestCase):
         app = DictationApp.__new__(DictationApp)
         app._hotkey_modifiers = ("ctrl",)
         app._ai_hotkey_modifiers = ("ctrl", "shift")
-        with patch("main.keyboard.is_pressed") as mock_pressed:
-            mock_pressed.side_effect = lambda m: m in ("ctrl", "shift")
-            self.assertTrue(app._match_active_chord())
-            mock_pressed.side_effect = lambda m: m == "ctrl"
-            self.assertFalse(app._match_active_chord())
-            mock_pressed.side_effect = lambda m: False
-            self.assertIsNone(app._match_active_chord())
+        # The chord matcher now reads the press-time modifier snapshot.
+        app._pressed_mods_at_press = ("ctrl", "shift")
+        self.assertTrue(app._match_active_chord())
+        app._pressed_mods_at_press = ("ctrl",)
+        self.assertFalse(app._match_active_chord())
+        app._pressed_mods_at_press = ()
+        self.assertIsNone(app._match_active_chord())
 
     def test_mutex_name_is_install_scoped(self) -> None:
         """Single-instance mutex must be stable and namespaced per install path."""
@@ -161,15 +161,18 @@ class TestOdicto(unittest.TestCase):
     def test_audio_recorder_lifecycle(
         self, mock_sf_write: MagicMock, mock_input_stream: MagicMock
     ) -> None:
-        """Verifies the audio recording start, callback buffer appending, and stop/save lifecycle."""
+        """Verifies the persistent stream lifecycle: open once, capture, stop, save."""
+        mock_input_stream.return_value.start.return_value = None
         recorder = AudioRecorder(sample_rate=16000, channels=1)
         self.assertFalse(recorder.recording)
+        # Stream is opened and started exactly once at construction.
+        mock_input_stream.assert_called_once()
+        mock_input_stream.return_value.start.assert_called_once()
 
-        # Start recording
+        # Start recording (no re-open; just flips the capture flag).
         recorder.start()
         self.assertTrue(recorder.recording)
         mock_input_stream.assert_called_once()
-        mock_input_stream.return_value.start.assert_called_once()
 
         # Simulate audio buffer stream inputs via callback
         chunk1 = np.array([[0.1], [0.2]], dtype=np.float32)
@@ -183,17 +186,23 @@ class TestOdicto(unittest.TestCase):
 
         self.assertTrue(success)
         self.assertFalse(recorder.recording)
-        mock_input_stream.return_value.stop.assert_called_once()
-        mock_input_stream.return_value.close.assert_called_once()
+        # Persistent stream is NOT closed on stop (only on close()).
+        mock_input_stream.return_value.stop.assert_not_called()
+        mock_input_stream.return_value.close.assert_not_called()
         self.assertIsNotNone(recorder.last_audio_array)
 
         # Verify sf.write was called with correct concatenated data
         mock_sf_write.assert_called_once()
         args, kwargs = mock_sf_write.call_args
         self.assertEqual(args[0], test_filepath)
-        expected_data = np.concatenate([chunk1, chunk2], axis=0)
+        # Session chunks are flattened to 1D mono.
+        expected_data = np.concatenate([chunk1, chunk2], axis=0).reshape(-1)
         np.testing.assert_array_equal(args[1], expected_data)
         self.assertEqual(args[2], 16000)
+
+        recorder.close()
+        mock_input_stream.return_value.stop.assert_called_once()
+        mock_input_stream.return_value.close.assert_called_once()
 
     @patch("recorder.sd.InputStream")
     @patch("recorder.sf.write")
@@ -210,6 +219,7 @@ class TestOdicto(unittest.TestCase):
         self.assertTrue(success)
         mock_sf_write.assert_not_called()
         self.assertIsNotNone(recorder.last_audio_array)
+        recorder.close()
 
     @patch("recorder.sd.InputStream")
     @patch("recorder.sf.write")
@@ -228,6 +238,29 @@ class TestOdicto(unittest.TestCase):
         np.testing.assert_allclose(
             recorder.last_audio_array, np.array([0.2, 0.3], dtype=np.float32)
         )
+        recorder.close()
+
+    @patch("recorder.sd.InputStream")
+    @patch("recorder.sf.write")
+    def test_audio_recorder_pre_roll_seeds_session(
+        self, mock_sf_write: MagicMock, mock_input_stream: MagicMock
+    ) -> None:
+        """Audio captured before start() (ring buffer) seeds the session, so the
+        first spoken syllable is not clipped by stream start latency."""
+        recorder = AudioRecorder(sample_rate=16000, channels=1)
+        pre = np.array([[0.5], [0.6]], dtype=np.float32)
+        recorder._callback(pre, len(pre), None, None)
+        recorder.start()
+        live = np.array([[0.7], [0.8]], dtype=np.float32)
+        recorder._callback(live, len(live), None, None)
+        success = recorder.stop(filepath=None)
+        self.assertTrue(success)
+        # Pre-roll + live capture, in order.
+        np.testing.assert_allclose(
+            recorder.last_audio_array,
+            np.array([0.5, 0.6, 0.7, 0.8], dtype=np.float32),
+        )
+        recorder.close()
 
     @patch("transcriber.WhisperModel")
     def test_whisper_transcriber_loading_fallback(
@@ -511,52 +544,158 @@ class TestOdicto(unittest.TestCase):
     ) -> None:
         """Verifies clipboard injection backup, paste command execution, and clipboard restore."""
         mock_pyperclip.paste.return_value = "original clipboard data"
+        mock_keyboard.is_pressed.return_value = False
 
         paste_text("injected text")
 
         mock_pyperclip.copy.assert_any_call("injected text")
-        mock_keyboard.send.assert_called_once_with("ctrl+v")
+        # Prefer explicit press/release; send("ctrl+v") is fallback only.
+        self.assertTrue(
+            mock_keyboard.press.called or mock_keyboard.send.called,
+            "expected Ctrl+V via press/release or send",
+        )
         mock_pyperclip.copy.assert_any_call("original clipboard data")
 
+    @patch("typer._wm_copy_foreground", return_value=False)
     @patch("typer.pyperclip")
     @patch("typer.keyboard")
     def test_get_selected_text_with_selection(
-        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+        self,
+        mock_keyboard: MagicMock,
+        mock_pyperclip: MagicMock,
+        _mock_wm: MagicMock,
     ) -> None:
-        """get_selected_text copies selection, returns it, and restores clipboard."""
-        mock_pyperclip.paste.side_effect = ["original content", "selected text"]
+        """get_selected_text detects selection via sentinel change and restores clipboard."""
+        mock_keyboard.is_pressed.return_value = False
+        # paste order: backup original, then polls after Ctrl+C, then any extras.
+        # First paste() = original; subsequent paste() after copy attempts return selection.
+        state = {"n": 0}
 
-        result = get_selected_text()
+        def fake_paste() -> str:
+            state["n"] += 1
+            # After sentinel is written (copy call #1), later pastes see selection.
+            if state["n"] == 1:
+                return "original content"
+            return "selected text"
+
+        mock_pyperclip.paste.side_effect = fake_paste
+
+        result = get_selected_text(timeout=0.15)
 
         self.assertEqual(result, "selected text")
-        mock_keyboard.send.assert_called_once_with("ctrl+c")
-        # Clipboard restored to original
-        mock_pyperclip.copy.assert_called_with("original content")
+        # First copy is the sentinel, last restore is original content.
+        copy_args = [c.args[0] for c in mock_pyperclip.copy.call_args_list if c.args]
+        self.assertTrue(any("odicto-sel-" in str(a) for a in copy_args), copy_args)
+        self.assertEqual(copy_args[-1], "original content")
+        # Must attempt a keyboard copy path when WM_COPY is disabled in this test.
+        self.assertTrue(
+            mock_keyboard.press.called
+            or mock_keyboard.send.called
+            or mock_keyboard.press_and_release.called
+        )
 
+    @patch("typer._wm_copy_foreground", return_value=False)
     @patch("typer.pyperclip")
     @patch("typer.keyboard")
     def test_get_selected_text_no_selection(
-        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+        self,
+        mock_keyboard: MagicMock,
+        mock_pyperclip: MagicMock,
+        _mock_wm: MagicMock,
     ) -> None:
-        """get_selected_text returns empty string when nothing was selected."""
-        mock_pyperclip.paste.side_effect = ["original", "original"]
+        """get_selected_text returns empty when clipboard never leaves the sentinel."""
+        mock_keyboard.is_pressed.return_value = False
+        # Always return whatever was last written (sentinel sticks = no selection).
+        last_written = {"v": ""}
 
-        result = get_selected_text()
+        def fake_copy(v: str) -> None:
+            last_written["v"] = v
+
+        def fake_paste() -> str:
+            return last_written["v"] or "original"
+
+        mock_pyperclip.copy.side_effect = fake_copy
+        mock_pyperclip.paste.side_effect = fake_paste
+
+        result = get_selected_text(timeout=0.12)
 
         self.assertEqual(result, "")
-        mock_keyboard.send.assert_called_once_with("ctrl+c")
 
+    @patch("typer._wm_copy_foreground", return_value=True)
+    @patch("typer.pyperclip")
+    @patch("typer.keyboard")
+    def test_get_selected_text_via_wm_copy(
+        self,
+        mock_keyboard: MagicMock,
+        mock_pyperclip: MagicMock,
+        mock_wm: MagicMock,
+    ) -> None:
+        """WM_COPY path captures selection without needing Ctrl+C when it works."""
+        mock_keyboard.is_pressed.return_value = False
+        last_written = {"v": ""}
+
+        def fake_copy(v: str) -> None:
+            last_written["v"] = v
+
+        def fake_paste() -> str:
+            # After WM_COPY "succeeds", app puts selection on clipboard.
+            if "odicto-sel-" in last_written["v"]:
+                return "highlighted paragraph"
+            return last_written["v"]
+
+        mock_pyperclip.copy.side_effect = fake_copy
+        mock_pyperclip.paste.side_effect = fake_paste
+
+        result = get_selected_text(timeout=0.15)
+
+        self.assertEqual(result, "highlighted paragraph")
+        mock_wm.assert_called()
+
+    @patch("typer._wm_copy_foreground", return_value=False)
     @patch("typer.pyperclip")
     @patch("typer.keyboard")
     def test_get_selected_text_paste_error(
-        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+        self,
+        mock_keyboard: MagicMock,
+        mock_pyperclip: MagicMock,
+        _mock_wm: MagicMock,
     ) -> None:
         """get_selected_text returns empty string on clipboard read failure."""
+        mock_keyboard.is_pressed.return_value = False
         mock_pyperclip.paste.side_effect = Exception("clipboard error")
+        mock_pyperclip.copy.side_effect = Exception("clipboard error")
 
-        result = get_selected_text()
+        result = get_selected_text(timeout=0.1)
 
         self.assertEqual(result, "")
+
+    @patch("typer._wm_copy_foreground", return_value=False)
+    @patch("typer.pyperclip")
+    @patch("typer.keyboard")
+    def test_get_selected_text_same_as_prior_clipboard(
+        self,
+        mock_keyboard: MagicMock,
+        mock_pyperclip: MagicMock,
+        _mock_wm: MagicMock,
+    ) -> None:
+        """Selection equal to prior clipboard is still captured (sentinel trick)."""
+        mock_keyboard.is_pressed.return_value = False
+        last_written = {"v": ""}
+
+        def fake_copy(v: str) -> None:
+            last_written["v"] = v
+
+        def fake_paste() -> str:
+            # "App" copies selection that happens to equal the prior clipboard.
+            if "odicto-sel-" in (last_written["v"] or ""):
+                return "same text as before"
+            return last_written["v"] or "same text as before"
+
+        mock_pyperclip.copy.side_effect = fake_copy
+        mock_pyperclip.paste.side_effect = fake_paste
+
+        result = get_selected_text(timeout=0.15)
+        self.assertEqual(result, "same text as before")
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
@@ -588,6 +727,9 @@ class TestOdicto(unittest.TestCase):
 
             mock_keyboard.is_pressed.return_value = True  # AI_MODIFIER held → AI mode
             mock_get_selected_text.return_value = ""  # no selected text
+            # on_press() without a chord argument reads the press-time modifier
+            # snapshot; emulate the hotkey handler populating it.
+            app._pressed_mods_at_press = ("ctrl", "shift")
 
             # 1. Transition IDLE -> RECORDING
             app.on_press()
@@ -610,23 +752,79 @@ class TestOdicto(unittest.TestCase):
                 app.recorder.stop.assert_called_once_with(filepath=None)
                 self.assertEqual(app.state, AppState.PROCESSING)
 
+                # Run the pipeline worker synchronously (single worker thread).
                 mock_thread.assert_called_once()
-                target_function = mock_thread.call_args[1]["target"]
-                args = mock_thread.call_args[1].get("args") or mock_thread.call_args[0][1:]
-                if not args:
-                    # args may be positional in call_args[0]
-                    args = mock_thread.call_args[0][1:] if len(mock_thread.call_args[0]) > 1 else mock_thread.call_args[1].get("args", ())
-
-                # Execute worker pipeline synchronously with captured args
-                call_kwargs = mock_thread.call_args[1]
-                worker_args = call_kwargs.get("args", ())
-                target_function(*worker_args)
+                pipeline_call = mock_thread.call_args
+                pipeline_target = (
+                    pipeline_call[1].get("target")
+                    if "target" in pipeline_call[1]
+                    else pipeline_call[0][0]
+                )
+                pipeline_args = (
+                    pipeline_call[1].get("args") or pipeline_call[0][1:]
+                )
+                pipeline_target(*pipeline_args)
 
                 app.transcriber.transcribe.assert_called_once()
                 app.refiner.refine.assert_called_once_with("raw speech text", context="")
                 mock_paste_text.assert_called_once_with("Polished speech text.")
                 self.assertEqual(app.state, AppState.IDLE)
                 self.assertEqual(app.last_status, "success")
+                # Selection probe runs on the worker thread (not the hook thread).
+                mock_get_selected_text.assert_called()
+
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.keyboard")
+    @patch("main.play_beep")
+    def test_dictation_app_passes_selection_as_context(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """Selected text is captured off-hook and passed to refine as context."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("threading.Thread"), patch("main.time.sleep"):
+            app = DictationApp()
+            app.initialize_app()
+            app.ready = True
+            mock_get_selected_text.return_value = "highlighted draft paragraph"
+            app._pressed_mods_at_press = ("ctrl", "shift")
+            app.on_press(use_llm=True)
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(100, dtype=np.float32)
+            app.transcriber.transcribe.return_value = "make this better"
+            app.refiner.refine.return_value = "Improved draft."
+            app._record_started_at = 0.0
+
+            with patch("threading.Thread") as mock_thread:
+                app.on_release()
+                pipeline_call = mock_thread.call_args
+                pipeline_target = (
+                    pipeline_call[1].get("target")
+                    if "target" in pipeline_call[1]
+                    else pipeline_call[0][0]
+                )
+                pipeline_args = (
+                    pipeline_call[1].get("args") or pipeline_call[0][1:]
+                )
+                pipeline_target(*pipeline_args)
+
+            app.refiner.refine.assert_called_once_with(
+                "make this better", context="highlighted draft paragraph"
+            )
+            mock_paste_text.assert_called_once_with("Improved draft.")
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
@@ -766,6 +964,138 @@ class TestOdicto(unittest.TestCase):
             self.assertEqual(app.state, AppState.IDLE)
             app.transcriber.transcribe.assert_not_called()
 
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.keyboard")
+    @patch("main.play_beep")
+    def test_dictation_app_f6_force_fresh_ai(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """Holding F6 (CTRL_FORCE_FRESH_KEYS) while pressing the AI chord forces
+        a fresh-context AI reply: memory is wiped and use_llm stays True."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("main.Config.CTRL_FORCE_FRESH_KEYS", ("f6",)):
+            app = DictationApp()
+            app.initialize_app()
+            app.ready = True
+
+            # User holds the AI chord (ctrl+shift) AND f6.
+            app._pressed_mods_at_press = ("ctrl", "shift", "f6")
+            app.on_press(use_llm=True)
+            self.assertTrue(app.use_llm)
+            self.assertIsNone(app._capture_mode_override)
+            mock_refiner.return_value.reset_context.assert_called_once()
+
+            app._set_state(AppState.RECORDING)
+            app._record_started_at = 0.0
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(50, dtype=np.float32)
+            app.transcriber.transcribe.return_value = "draft"
+            with patch("threading.Thread") as mock_thread:
+                app.on_release()
+                # Run the pipeline worker synchronously.
+                pipeline_call = mock_thread.call_args
+                pipeline_target = (
+                    pipeline_call[1].get("target")
+                    if "target" in pipeline_call[1]
+                    else pipeline_call[0][0]
+                )
+                pipeline_args = (
+                    pipeline_call[1].get("args") or pipeline_call[0][1:]
+                )
+                pipeline_target(*pipeline_args)
+            self.assertEqual(app.state, AppState.IDLE)
+
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.keyboard")
+    @patch("main.play_beep")
+    def test_dictation_app_reset_context_hotkey(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """RESET_CONTEXT_HOTKEY (F5) clears refiner history without recording.
+
+        The reset is bound via hook_key (add_hotkey fails for plain single keys
+        in the keyboard library), so this simulates the KEY_UP event through the
+        bound handler.
+        """
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("main.Config.RESET_CONTEXT_HOTKEY", "f5"):
+            # Simulate a fully-held single-instance lock so _bind_hotkeys
+            # (which requires the mutex handle + lockfile) can register hooks.
+            import main as main_mod
+
+            was_held = main_mod._INSTANCE_LOCK_HELD
+            was_mutex = main_mod._INSTANCE_MUTEX_HANDLE
+            was_file = main_mod._INSTANCE_LOCK_FILE
+            main_mod._INSTANCE_LOCK_HELD = True
+            main_mod._INSTANCE_MUTEX_HANDLE = 12345
+            main_mod._INSTANCE_LOCK_FILE = object()
+            # The reset handler compares against keyboard.KEY_UP ("up" in the
+            # real library); make the mocked keyboard match.
+            mock_keyboard.KEY_UP = "up"
+            mock_keyboard.KEY_DOWN = "down"
+            try:
+                app = DictationApp()
+                app.initialize_app()
+                app.ready = True
+
+                # Capture the handler that _bind_hotkeys registered for F5.
+                # hook_key registers one callback per scan code, so find the F5
+                # binding by key name rather than asserting an exact count.
+                f5_binds = [
+                    c
+                    for c in mock_keyboard.hook_key.call_args_list
+                    if c[0][0] == "f5"
+                ]
+                self.assertTrue(f5_binds, "F5 reset key not bound via hook_key")
+                reset_handler = f5_binds[0][0][1]
+                self.assertIsNotNone(reset_handler)
+
+                # Simulate a physical F5 release (KEY_UP) → reset fires.
+                reset_handler(type("Evt", (), {"event_type": "up"})())
+                mock_refiner.return_value.reset_context.assert_called_once()
+
+                # KEY_DOWN alone must not fire (fires on release).
+                reset_handler(type("Evt", (), {"event_type": "down"})())
+                self.assertEqual(
+                    mock_refiner.return_value.reset_context.call_count, 1
+                )
+            finally:
+                main_mod._INSTANCE_LOCK_HELD = was_held
+                main_mod._INSTANCE_MUTEX_HANDLE = was_mutex
+                main_mod._INSTANCE_LOCK_FILE = was_file
+
+    def test_indicator_reset_label(self) -> None:
+        """F5 reset shows a distinct HUD label."""
+        from indicator import GuiState, status_label
+
+        self.assertEqual(status_label(GuiState.RESET), "Context cleared")
+
 
 class TestDictationIndicator(unittest.TestCase):
     """Premium Qt HUD — pure helpers + lightweight widget state machine tests."""
@@ -786,6 +1116,7 @@ class TestDictationIndicator(unittest.TestCase):
         self.assertEqual(
             status_label(GuiState.ERROR, last_status="error"), "Failed"
         )
+        self.assertEqual(status_label(GuiState.RESET), "Context cleared")
 
     def test_indicator_state_machine(self) -> None:
         """Create a real offscreen QWidget and drive state transitions."""

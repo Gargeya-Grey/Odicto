@@ -159,8 +159,8 @@ def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
             ],
             capture_output=True,
             text=True,
-            timeout=12,
-            creationflags=0x08000000,
+            timeout=8,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
         if result.returncode != 0 or not result.stdout:
             return found
@@ -452,6 +452,14 @@ class DictationApp:
         self._ai_hotkey_modifiers: tuple = ()
         self._hotkey_primary: str = ""
         self._hotkey_physically_held: bool = False
+        # Modifiers physically held at the moment the primary key went down, so the
+        # mode decision is stable for the whole capture (releases mid-hold don't
+        # flip it). Raw chord modifiers are stored so legacy AI_MODIFIER probing
+        # can be re-checked against the held set.
+        self._pressed_mods_at_press: tuple = ()
+        # Per-capture override: True → force AI mode, False → force raw dictation,
+        # None → decided by chord at press time.
+        self._capture_mode_override: Optional[bool] = None
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -586,8 +594,17 @@ class DictationApp:
         except Exception:
             return False
 
+    def _mods_in_snapshot(self, mods: tuple) -> bool:
+        """True if every modifier was physically down at primary-key press time."""
+        if not mods:
+            return True
+        return all(m in self._pressed_mods_at_press for m in mods)
+
     def _match_active_chord(self) -> Optional[bool]:
         """Which hold-to-talk chord is active at primary-key press time.
+
+        Uses the modifiers that were physically held when the key went down, so a
+        mid-hold release can't flip the mode mid-capture.
 
         Returns:
             True  → AI chord (AI_HOTKEY or HOTKEY+AI_MODIFIER)
@@ -597,14 +614,14 @@ class DictationApp:
         # Prefer the more-specific AI chord when both could match
         # (e.g. ctrl+shift+grave vs ctrl+grave — shift+ctrl also satisfies ctrl).
         if self._ai_hotkey_modifiers:
-            if self._mods_held(self._ai_hotkey_modifiers):
+            if self._mods_in_snapshot(self._ai_hotkey_modifiers):
                 return True
-            if self._mods_held(self._hotkey_modifiers):
+            if self._mods_in_snapshot(self._hotkey_modifiers):
                 return False
             return None
 
         # Legacy: HOTKEY + optional AI_MODIFIER extra key
-        if not self._mods_held(self._hotkey_modifiers):
+        if not self._mods_in_snapshot(self._hotkey_modifiers):
             return None
         if Config.AI_MODIFIER and is_pressed_exclusive(Config.AI_MODIFIER):
             return True
@@ -637,6 +654,20 @@ class DictationApp:
         def primary_handler(event: object) -> bool:
             event_type = getattr(event, "event_type", None)
             if event_type == keyboard.KEY_DOWN:
+                # Freeze the modifiers AND any override keys at the exact instant
+                # the key went down so mid-hold releases don't flip the mode.
+                snapshot = [
+                    m
+                    for m in ("ctrl", "shift", "alt", "cmd")
+                    if keyboard.is_pressed(m)
+                ]
+                for fresh in Config.CTRL_FORCE_FRESH_KEYS:
+                    try:
+                        if fresh and keyboard.is_pressed(fresh):
+                            snapshot.append(fresh)
+                    except Exception:
+                        pass
+                self._pressed_mods_at_press = tuple(snapshot)
                 match = self._match_active_chord()
                 if match is None:
                     return True  # no chord — allow normal typing (e.g. bare `)
@@ -656,6 +687,25 @@ class DictationApp:
         # suppress=True installs a system-wide LL keyboard hook (all keys, all apps).
         # Only one process may do this — guarded by _INSTANCE_LOCK_HELD above.
         keyboard.hook_key(primary, primary_handler, suppress=True)
+
+        # Persistent reset: a direct key hook (not add_hotkey) that clears the AI
+        # multi-turn memory immediately, no recording needed. add_hotkey fails to
+        # fire for a plain single key in the keyboard library (0.13.5), so we hook
+        # the scan code directly like the dictation chord.
+        reset_key: str = (Config.RESET_CONTEXT_HOTKEY or "").strip().lower()
+        if reset_key:
+            def reset_handler(event: object) -> bool:
+                if getattr(event, "event_type", None) == keyboard.KEY_UP:
+                    # Fire on release so a quick tap still registers exactly once.
+                    self._reset_context_via_hotkey()
+                return True  # never suppress; F5 keeps its normal app behavior
+
+            keyboard.hook_key(reset_key, reset_handler, suppress=False)
+            print(
+                f"Reset-context hotkey bound: '{reset_key}' "
+                f"(clears AI multi-turn memory)",
+                flush=True,
+            )
 
         print(
             f"Hotkeys bound: primary='{primary}' "
@@ -727,8 +777,8 @@ class DictationApp:
         """Release resources, keyboard hooks, PID file, and any Ollama we spawned."""
         self.ready = False
         try:
-            if self.recorder is not None and self.recorder.recording:
-                self.recorder.stop()
+            if self.recorder is not None:
+                self.recorder.close()
         except Exception:
             pass
 
@@ -768,6 +818,38 @@ class DictationApp:
             except Exception as e:
                 print(f"Warning: Failed to clean up temporary audio file: {e}")
 
+    def _reset_context_via_hotkey(self) -> None:
+        """Hotkey handler: clear AI multi-turn memory without a recording."""
+        if self.refiner is not None:
+            self.refiner.reset_context()
+        if self.indicator is not None:
+            try:
+                self.indicator.flash_reset_notice()
+            except Exception:
+                pass
+
+    def _apply_chord_overrides(self) -> None:
+        """Read hold-time modifier chords for one-shot mode overrides.
+
+        F6 (or any key in Config.CTRL_FORCE_FRESH_KEYS) held while the primary key
+        goes down forces a FRESH AI reply (memory wiped first) for that capture
+        only. Plain F6 alone does nothing.
+
+        The press-time snapshot (taken by the key-down handler) already includes
+        the fresh keys, so this is a pure set intersection — deterministic and
+        testable.
+        """
+        self._capture_mode_override = None
+        fresh_keys = set(Config.CTRL_FORCE_FRESH_KEYS)
+        fresh_keys.discard("")
+        if not fresh_keys:
+            return
+
+        if any(k in fresh_keys for k in self._pressed_mods_at_press):
+            self._capture_mode_override = True
+            if self.refiner is not None:
+                self.refiner.reset_context()
+
     # ----------------------------------------------------------- hotkey handlers
     def on_press(self, event: object = None, use_llm: Optional[bool] = None) -> None:
         """Handler triggered when the hold-to-talk primary key goes down.
@@ -794,6 +876,12 @@ class DictationApp:
                 self.use_llm = bool(matched) if matched is not None else False
             else:
                 self.use_llm = bool(use_llm)
+
+            # Per-capture override wins: e.g. holding F6 forces a fresh AI reply.
+            self._apply_chord_overrides()
+            if self._capture_mode_override is not None:
+                self.use_llm = self._capture_mode_override
+                self._capture_mode_override = None
 
             self._record_started_at = now
             self.last_status = None
@@ -863,6 +951,12 @@ class DictationApp:
             use_llm = self.use_llm
             audio = self.recorder.last_audio_array
 
+            # IMPORTANT: do NOT call get_selected_text() here on the keyboard-hook
+            # thread. Synthetic Ctrl+C / SendInput from inside WH_KEYBOARD_LL is
+            # unreliable, and AI mode still has Ctrl+Shift physically held on
+            # primary-key release — which turns Ctrl+C into Ctrl+Shift+C.
+            # Selection is captured first thing in the pipeline worker instead.
+
             print(">>> Processing transcription and refinement...")
             threading.Thread(
                 target=self.process_and_paste,
@@ -872,15 +966,40 @@ class DictationApp:
             ).start()
 
     def process_and_paste(
-        self, audio, use_llm: bool
+        self, audio, use_llm: bool, pre_context: str = ""
     ) -> None:
-        """Worker: STT → optional LLM → clipboard paste at the active cursor."""
+        """Worker: capture selection (AI) → STT → optional LLM → paste."""
         self.last_status = None
         try:
             if self.transcriber is None:
                 raise RuntimeError("Transcriber not initialized")
 
             start_time: float = time.time()
+
+            # Capture selection OFF the keyboard-hook thread, before STT, while the
+            # user's highlight is still intact. Tiny settle lets the hook return
+            # and any physical modifier key-ups finish.
+            context = (pre_context or "").strip()
+            if use_llm and self.refiner is not None and not context:
+                time.sleep(0.06)
+                try:
+                    context = get_selected_text(timeout=0.55)
+                except Exception as e:
+                    print(f"Warning: selection capture failed: {e}", flush=True)
+                    context = ""
+                if context and len(context) > 12000:
+                    context = context[:12000]
+                if context:
+                    print(
+                        f'Context captured: {len(context)} chars — '
+                        f'"{context[:80]}{"..." if len(context) > 80 else ""}"',
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "Context: (none — no text was selected, or copy failed)",
+                        flush=True,
+                    )
 
             # Prefer the in-memory buffer; fall back to disk only if missing.
             audio_source = audio
@@ -896,10 +1015,26 @@ class DictationApp:
                 return
 
             if use_llm and self.refiner is not None:
-                # AI mode only: selection is read as LLM context (Ctrl+C probe).
-                # Raw dictation never calls this — paste below just replaces selection.
-                context = get_selected_text()
-                refined_text: str = self.refiner.refine(raw_text, context=context)
+                # One more probe only if the early capture missed (rare: slow apps).
+                if not context:
+                    try:
+                        context = get_selected_text(timeout=0.35)
+                    except Exception:
+                        context = ""
+                    if context and len(context) > 12000:
+                        context = context[:12000]
+                    if context:
+                        print(
+                            f'Context captured (retry): {len(context)} chars — '
+                            f'"{context[:80]}{"..." if len(context) > 80 else ""}"',
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            "Context: (none — no text was selected, or copy failed)",
+                            flush=True,
+                        )
+                refined_text = self.refiner.refine(raw_text, context=context)
                 print(f'Refined Text (AI):   "{refined_text}"')
             else:
                 # Raw dictation: transcript only; no selection probe / no LLM.
@@ -921,13 +1056,20 @@ class DictationApp:
             print(f"!!! Pipeline Error: {e}", file=sys.stderr)
             self.last_status = "error"
         finally:
+            self._finish_cycle()
+
+    def _finish_cycle(self) -> None:
+        """Idempotent cycle teardown shared by raw and AI pipeline workers."""
+        try:
             if self.recorder is not None:
                 self.recorder.clear()
             self._cleanup_temp_file()
-            self._last_cycle_end = time.monotonic()
-            with self.state_lock:
-                self._set_state(AppState.IDLE)
-                print("System Idle. Ready.")
+        except Exception:
+            pass
+        self._last_cycle_end = time.monotonic()
+        with self.state_lock:
+            self._set_state(AppState.IDLE)
+            print("System Idle. Ready.")
 
 
 if __name__ == "__main__":
@@ -939,9 +1081,18 @@ if __name__ == "__main__":
 
     # STRICT single-instance: kill orphans, take mutex, only then construct the app
     # (which binds a system-wide keyboard hook). Never skip this gate.
-    kill_other_odicto_processes(os.path.join(_install_root(), "dictation.pid"))
+    _pid_path = os.path.join(_install_root(), "dictation.pid")
+    kill_other_odicto_processes(_pid_path)
     if not acquire_single_instance_lock():
         sys.exit(2)
+
+    # Write PID as soon as we own the install so start_dictation.bat can confirm
+    # launch without waiting for Whisper load / initialize_app.
+    try:
+        with open(_pid_path, "w", encoding="ascii") as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        print(f"Warning: Could not write PID file early: {e}", flush=True)
 
     try:
         app = DictationApp()

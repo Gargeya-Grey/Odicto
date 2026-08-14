@@ -103,9 +103,14 @@ class WhisperTranscriber:
             temperature=0.0,
             vad_filter=True,
             vad_parameters={
-                # Aggressive enough to drop silence quickly without clipping short words.
-                "min_silence_duration_ms": 250,
-                "speech_pad_ms": 120,
+                # Keep pre-roll so the first syllable after a hotkey press is not
+                # treated as VAD noise and dropped. speech_pad_ms pads the leading
+                # edge of detected speech; the threshold is set slightly below the
+                # silero default so quieter starts still trigger. (faster-whisper
+                # 1.2.x VadOptions does not support start_of_speech_probability.)
+                "threshold": 0.4,
+                "min_silence_duration_ms": 300,
+                "speech_pad_ms": 300,
             },
             condition_on_previous_text=False,
             without_timestamps=True,

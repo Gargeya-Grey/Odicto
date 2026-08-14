@@ -149,11 +149,13 @@ Next steps:
   5. Optional AI mode: hold Ctrl+Shift+`
 
   Switch AI backend in .env (restart after changes):
+    LLM_PROVIDER=meta        # default; cloud Meta API  POST /v1/responses  needs META_API_KEY (MODEL_API_KEY also works)
     LLM_PROVIDER=ollama      # local; Odicto may start Ollama
     LLM_PROVIDER=openrouter  # cloud; needs OPENROUTER_API_KEY + OPENROUTER_MODEL
     LLM_PROVIDER=none        # raw dictation only
+  Aliases for meta: meta, meta-api, meta_api
 
-  OpenRouter does not start Ollama. Quit the Ollama tray app separately
+  Meta/OpenRouter do not start Ollama. Quit the Ollama tray app separately
   if you want to free local LLM RAM/VRAM.
 
 Stop with stop_dictation.bat

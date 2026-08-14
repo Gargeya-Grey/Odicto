@@ -1,50 +1,59 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 echo Stopping all Odicto instances...
+
+set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=python"
 
 REM 1) PID file (fast path). Safe if the process is already gone.
 if exist dictation.pid (
   set /p PID=<dictation.pid
-  echo   PID file points to: %PID%
-  REM Only kill if the PID is actually a python/pythonw running THIS install's main.py.
+  echo   PID file points to: !PID!
+  REM Only kill if the PID is actually a python/pythonw running THIS install.
   REM A stale pid file can point at an unrelated process after Windows reuses the PID.
+  REM Do not name the PowerShell variable $pid — that is reserved (current process).
+  REM taskkill /T kills venv launcher stub + real interpreter child together.
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$p = Get-Process -Id %PID% -ErrorAction SilentlyContinue; " ^
-    "if ($p -and ($p.ProcessName -eq 'python' -or $p.ProcessName -eq 'pythonw') -and " ^
-    "($p.Path -like '%~dp0*')) { taskkill /F /T /PID %PID% | Out-Null; '  Stopped PID %PID%' } " ^
-    "else { '  (PID %PID% is not an Odicto process - left alone)' }"
+    "$targetPid = [int]'!PID!'; " ^
+    "$root = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\'); " ^
+    "$p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue; " ^
+    "if ($null -eq $p) { Write-Output '  (PID !PID! already gone)'; exit 0 }; " ^
+    "if ($p.ProcessName -ne 'python' -and $p.ProcessName -ne 'pythonw') { Write-Output '  (PID !PID! is not python/pythonw - left alone)'; exit 0 }; " ^
+    "$okPath = $false; " ^
+    "try { if ($p.Path -and $p.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $okPath = $true } } catch {}; " ^
+    "if (-not $okPath) { " ^
+    "  $c = (Get-CimInstance Win32_Process -Filter \"ProcessId = $targetPid\" -ErrorAction SilentlyContinue).CommandLine; " ^
+    "  if ($c -and $c.ToLowerInvariant().Contains($root.ToLowerInvariant()) -and ($c -match 'main\.py')) { $okPath = $true } " ^
+    "}; " ^
+    "if ($okPath) { " ^
+    "  Start-Process -FilePath taskkill.exe -ArgumentList @('/F','/T','/PID',\"$targetPid\") -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue; " ^
+    "  Write-Output '  Stopped PID !PID! (process tree)' " ^
+    "} else { Write-Output '  (PID !PID! is not an Odicto process - left alone)' }"
   del dictation.pid >nul 2>&1
 )
 
 REM 2) Kill any remaining python/pythonw running THIS install's main.py.
-REM    Seeing a second PID here means a real orphan was still running (good that we kill it).
-REM    Seeing only step 1 is normal for a clean single instance.
+REM    Filter at WMI (python* only). Conda/venv often shows TWO processes with the
+REM    same command line (Scripts\pythonw launcher + base pythonw). Use taskkill /T.
 REM
-REM    BUG HISTORY: the previous loop was:
-REM      for /f "tokens=2 delims== " %%P in ('wmic ... /format:csv ^| findstr main.py')
-REM    WMIC CSV looks like:  Node,CommandLine,ProcessId
-REM    With delims== and space, token 2 is a fragment of CommandLine — never the PID.
-REM    So orphan kill was a no-op. Starting again left the old process alive → two
-REM    system-wide keyboard hooks → every letter typed twice.
+REM    BUG HISTORY: wmic CSV + "tokens=2 delims== " never extracted ProcessId, so
+REM    orphan kill was a no-op and stacked hooks doubled every typed character.
 REM
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$rootN = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\').ToLowerInvariant(); " ^
-  "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " ^
-  "Where-Object { " ^
-  "  ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and " ^
-  "  $_.CommandLine -and " ^
-  "  ($_.CommandLine -match 'main\.py') -and " ^
-  "  ($_.CommandLine.ToLowerInvariant().Contains($rootN)) " ^
-  "} | ForEach-Object { " ^
-  "  Write-Host ('   Killing orphan PID ' + $_.ProcessId); " ^
-  "  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue " ^
+  "$pids = @(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" -ErrorAction SilentlyContinue | " ^
+  "  Where-Object { $_.CommandLine -and ($_.CommandLine -match 'main\.py') -and ($_.CommandLine.ToLowerInvariant().Contains($rootN)) } | " ^
+  "  ForEach-Object { [int]$_.ProcessId } | Sort-Object -Unique); " ^
+  "foreach ($procId in $pids) { " ^
+  "  Write-Host ('   Killing orphan PID ' + $procId + ' (tree)'); " ^
+  "  Start-Process -FilePath taskkill.exe -ArgumentList @('/F','/T','/PID',\"$procId\") -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue " ^
   "}"
 
 if exist dictation.pid del dictation.pid >nul 2>&1
-REM Lock file is released when the process dies; remove leftover name for clarity.
 if exist dictation.lock del dictation.lock >nul 2>&1
 echo Done.
 
-if /I "%~1"=="/nopause" goto :eof
-timeout /t 2 >nul
+if /I "%~1"=="/nopause" exit /b 0
+ping -n 2 127.0.0.1 >nul
+exit /b 0
