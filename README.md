@@ -40,8 +40,8 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 | Mode | How | Result |
 |------|-----|--------|
-| **Dictation** | Hold **Ctrl+`**, speak, release | Raw transcript pasted |
-| **AI reply** | Hold **Ctrl+Shift+`**, speak, release | Model answer pasted |
+| **Dictation** | Hold **Ctrl+\`**, speak, release | Raw transcript pasted |
+| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Model answer pasted |
 | **Reset chat** | Say *“reset chat”* in AI mode | Clears multi-turn memory |
 
 ---
@@ -340,7 +340,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 ### Dictate into any app
 
 1. Click into a text field (browser, Notion, VS Code, Discord, ...)  
-2. **Press and hold** the hotkey (default: **Ctrl+`**)  
+2. **Press and hold** the hotkey (default: **Ctrl+\`**)  
 3. Speak  
 4. **Release** the key  
 5. Watch the HUD: **Listening -> Transcribing -> Done**  
@@ -348,7 +348,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ### Ask the local AI
 
-1. Hold **Ctrl+Shift+`** (same ` key under Esc, plus **Shift**)  
+1. Hold **Ctrl+Shift+\`** (the backtick key under Esc, plus **Shift**)  
 2. Speak your question  
 3. Release  
 4. HUD: **Listening -> Thinking -> Done**  
@@ -364,7 +364,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 | **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in AI mode — both wipe the multi-turn history |
 | **Fresh one-shot AI** | Hold **F6** while using the AI chord: that capture gets a context-free reply (memory wiped first) |
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
-| **VS Code note** | Ctrl+` toggles the terminal there -- while Odicto runs it steals that chord |
+| **VS Code note** | Ctrl+\` toggles the terminal there -- while Odicto runs it steals that chord |
 | **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
 | **Logs** | Use `run_debug.bat` / `./run_debug.sh`, or check `dictation.log` when using the no-console launcher |
 
