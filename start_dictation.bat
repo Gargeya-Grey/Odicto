@@ -25,7 +25,7 @@ if "%~1"=="/nostartup" (
   exit /b 0
 )
 
-REM Direct double-click / manual start — full-featured path.
+REM Direct double-click / manual start - full-featured path.
 if "%~1"=="" goto :fullstart
 if /I "%~1"=="/min" goto :fullstart
 goto :eof
@@ -45,7 +45,7 @@ if errorlevel 1 (
 REM Stop every previous instance (PID file + any leftover main.py for this folder).
 call "%~dp0stop_dictation.bat" /nopause
 
-REM Lightweight orphan re-check via PowerShell only. Do not import main.py here —
+REM Lightweight orphan re-check via PowerShell only. Do not import main.py here -
 REM that would load keyboard/Whisper/Qt just for a PID scan and slow login start.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$rootN = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\').ToLowerInvariant(); " ^
@@ -55,7 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 if errorlevel 1 (
   echo WARNING: stale Odicto python processes still running - trying one more stop...
   call "%~dp0stop_dictation.bat" /nopause
-  REM ~2s settle — ping works when stdin is redirected; timeout.exe often does not.
+  REM ~2s settle - ping works when stdin is redirected; timeout.exe often does not.
   ping -n 3 127.0.0.1 >nul
 )
 

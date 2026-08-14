@@ -26,7 +26,7 @@ function Write-Ok($msg)   { Write-Host "    OK  $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    !!  $msg" -ForegroundColor Yellow }
 
 Write-Host "========================================" -ForegroundColor White
-Write-Host "  Odicto — Installer" -ForegroundColor White
+Write-Host "  Odicto - Installer" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor White
 
 # --- Python ---
@@ -37,7 +37,7 @@ foreach ($candidate in @("py", "python", "python3")) {
         $ver = & $candidate --version 2>&1
         if ($LASTEXITCODE -eq 0 -or $ver -match "Python 3\.") {
             $py = $candidate
-            Write-Ok "$candidate → $ver"
+            Write-Ok "$candidate -> $ver"
             break
         }
     } catch { }
@@ -76,7 +76,7 @@ Write-Ok "requirements.txt installed"
 Write-Step "Preparing .env"
 if (-not (Test-Path ".\.env")) {
     Copy-Item ".\.env.example" ".\.env"
-    Write-Ok "Copied .env.example → .env"
+    Write-Ok "Copied .env.example -> .env"
 } else {
     Write-Ok ".env already present (left unchanged)"
 }
@@ -84,7 +84,7 @@ if (-not (Test-Path ".\.env")) {
 # Ensure model names match installer choices when still on example defaults
 $envText = Get-Content ".\.env" -Raw
 if ($envText -match "WHISPER_MODEL_SIZE=") {
-    # only set if user hasn't customized heavily — leave as-is if file existed
+    # only set if user hasn't customized heavily - leave as-is if file existed
 }
 
 # --- Optional: Ollama ---

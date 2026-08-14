@@ -12,7 +12,7 @@ if exist dictation.pid (
   echo   PID file points to: !PID!
   REM Only kill if the PID is actually a python/pythonw running THIS install.
   REM A stale pid file can point at an unrelated process after Windows reuses the PID.
-  REM Do not name the PowerShell variable $pid — that is reserved (current process).
+  REM Do not name the PowerShell variable $pid - that is reserved (current process).
   REM taskkill /T kills venv launcher stub + real interpreter child together.
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetPid = [int]'!PID!'; " ^
