@@ -24,41 +24,74 @@ esac
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
-echo "==> Detecting Python 3.10+"
-PY=""
-for candidate in python3 python; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-      PY="$candidate"
-      break
-    fi
+echo "==> Detecting uv (fast, hash-verified package manager)"
+UV=""
+if command -v uv >/dev/null 2>&1; then
+  UV="$(command -v uv)"
+else
+  echo "    uv not found. Installing the standalone uv binary..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- https://astral.sh/uv/install.sh | sh || true
   fi
-done
-
-if [ -z "$PY" ]; then
-  echo "    Python 3.10+ not found."
-  if [ "$PLATFORM" = macos ] && command -v brew >/dev/null 2>&1; then
-    echo "    Installing Python via Homebrew..."
-    brew install python@3.12
-    PY="$(brew --prefix python@3.12)/bin/python3"
-  else
-    echo "    Install Python 3.10+ and re-run this script." >&2
-    exit 1
+  if [ -x "$HOME/.local/bin/uv" ]; then
+    UV="$HOME/.local/bin/uv"
+  elif [ -x "$HOME/.cargo/bin/uv" ]; then
+    UV="$HOME/.cargo/bin/uv"
+  elif command -v uv >/dev/null 2>&1; then
+    UV="$(command -v uv)"
   fi
 fi
-echo "    Using $PY"
+if [ -n "$UV" ]; then
+  echo "    uv found: $UV"
+else
+  echo "    Could not install uv; will fall back to pip (slower)."
+fi
+
+PY=""
+if [ -z "$UV" ]; then
+  echo "==> Detecting Python 3.10+ (needed only for the pip fallback)"
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+        PY="$candidate"
+        break
+      fi
+    fi
+  done
+
+  if [ -z "$PY" ]; then
+    echo "    Python 3.10+ not found."
+    if [ "$PLATFORM" = macos ] && command -v brew >/dev/null 2>&1; then
+      echo "    Installing Python via Homebrew..."
+      brew install python@3.12
+      PY="$(brew --prefix python@3.12)/bin/python3"
+    else
+      echo "    Install Python 3.10+ and re-run this script." >&2
+      exit 1
+    fi
+  fi
+  echo "    Using $PY"
+fi
 
 echo "==> Creating virtual environment"
 if [ ! -x ".venv/bin/python" ]; then
-  "$PY" -m venv .venv
+  if [ -n "$UV" ]; then
+    "$UV" venv .venv
+  else
+    "$PY" -m venv .venv
+  fi
 fi
 VENV_PY=".venv/bin/python"
 
-echo "==> Upgrading pip / wheel"
-"$VENV_PY" -m pip install --upgrade pip wheel setuptools
-
 echo "==> Installing Python requirements"
-"$VENV_PY" -m pip install -r requirements.txt
+if [ -n "$UV" ]; then
+  "$UV" pip install --python "$VENV_PY" -r requirements.txt
+else
+  "$VENV_PY" -m pip install --upgrade pip wheel setuptools
+  "$VENV_PY" -m pip install -r requirements.txt
+fi
 
 echo "==> Preparing .env"
 if [ ! -f ".env" ]; then

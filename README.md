@@ -107,9 +107,9 @@ The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **Python 3.10+** |
+| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10+**) |
 | 2 | Create **`.venv`** |
-| 3 | `pip install -r requirements.txt` |
+| 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
 | 4 | Copy **`.env.example` → `.env`** |
 | 5 | Install **Ollama** (optional path) + `ollama pull` default model |
 | 6 | Pre-download **Whisper** weights (`tiny.en` by default) |
@@ -137,7 +137,8 @@ Pick your OS below, or use the one-command installers above.
 | Tool | Why | How to get it |
 |------|-----|----------------|
 | **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
-| **Python 3.10+** | Runtime | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **uv** (recommended) | Fast, hash-verified dependency install | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) — the installers fetch it automatically when missing |
+| **Python 3.10+** | Runtime (needed only for the pip fallback; uv can fetch its own) | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
 | **Microphone** | Capture speech | Working default input device in system sound settings |
 | **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
 | **(Optional) Meta API key** | Cloud AI replies (default backend) | Use `odicto.py setup` or paste `META_API_KEY` into `.env` |
@@ -174,6 +175,11 @@ bash install.sh
 **Or** do it by hand (Windows shows `.venv\Scripts`, macOS/Linux use `.venv/bin`):
 
 ```bash
+# uv path (recommended)
+uv venv .venv
+uv pip install --python .venv -r requirements.txt
+
+# pip path (fallback)
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip wheel
 .venv/bin/python -m pip install -r requirements.txt
@@ -416,8 +422,8 @@ Copy from `.env.example`. Important knobs:
 | `indicator.py` | PySide6 glass HUD |
 | `config.py` | Env-backed settings |
 | `app_state.py` | Shared state enum (import-safe) |
-| `install.ps1` | Zero-to-one Windows installer |
-| `install.sh` | Zero-to-one macOS/Linux installer |
+| `install.ps1` | Zero-to-one Windows installer (uv-first, pip fallback) |
+| `install.sh` | Zero-to-one macOS/Linux installer (uv-first, pip fallback) |
 | `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
 | `setup_web.py` | Local setup web page (provider + key config) |
 | `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
@@ -442,7 +448,7 @@ Copy from `.env.example`. Important knobs:
 | Ollama still using RAM on Meta/OpenRouter | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
-| Import errors | Recreate venv and reinstall `requirements.txt` |
+| Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
 | Linux hotkey/paste doesn't work | Run as root or add your user to the `input` group; on Wayland prefer X11 |
 

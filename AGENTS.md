@@ -13,6 +13,8 @@ Whisper weights, `.env`, then verify with unit tests / a dry launch.
 - Never commit `.env` (may contain API keys).
 - Prefer the project installer (`install.ps1` on Windows, `install.sh` on
   macOS/Linux) over ad-hoc steps.
+- Installers are **uv-first** (fast, hash-verified, no system Python needed);
+  they fall back to pip when uv cannot be obtained.
 
 ## One-shot install (preferred)
 
@@ -38,39 +40,39 @@ bash install.sh
 
 ### Windows
 
-1. Install **Python 3.10+** (`winget install Python.Python.3.12`).
-2. `py -3 -m venv .venv`
-3. `.\.venv\Scripts\python.exe -m pip install -U pip wheel`
-4. `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
-5. `copy .env.example .env`
-6. Optional AI: install [Ollama](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
-7. Warm Whisper: `.\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-8. Tests: `.\.venv\Scripts\python.exe -m unittest test_units -v`
-9. Start: `.\start_dictation.bat` or `.\run_debug.bat`
+1. Install **uv** (`winget install astral-sh.uv`), or install **Python 3.10+**
+   (`winget install Python.Python.3.12`) for the pip path.
+2. uv path: `uv venv .venv` then `uv pip install --python .venv -r requirements.txt`
+   pip path: `py -3 -m venv .venv`, `.\.venv\Scripts\python.exe -m pip install -U pip wheel`, `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
+3. `copy .env.example .env`
+4. Optional AI: install [Ollama](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
+5. Warm Whisper: `.\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
+6. Tests: `.\.venv\Scripts\python.exe -m unittest test_units -v`
+7. Start: `.\start_dictation.bat` or `.\run_debug.bat`
 
 ### macOS
 
-1. Install **Python 3.10+** (`brew install python`).
-2. `python3 -m venv .venv`
-3. `.venv/bin/python -m pip install -U pip wheel`
-4. `.venv/bin/python -m pip install -r requirements.txt`
-5. `cp .env.example .env`
-6. Optional AI: `brew install ollama && ollama pull qwen2.5:1.5b-instruct`
-7. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-8. Tests: `.venv/bin/python -m unittest test_units -v`
-9. Start: `./run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
+1. Install **uv** (`curl -LsSf https://astral.sh/uv/install.sh | sh`), or install
+   **Python 3.10+** (`brew install python`) for the pip path.
+2. uv path: `uv venv .venv` then `uv pip install --python .venv -r requirements.txt`
+   pip path: `python3 -m venv .venv`, `.venv/bin/python -m pip install -U pip wheel`, `.venv/bin/python -m pip install -r requirements.txt`
+3. `cp .env.example .env`
+4. Optional AI: `brew install ollama && ollama pull qwen2.5:1.5b-instruct`
+5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
+6. Tests: `.venv/bin/python -m unittest test_units -v`
+7. Start: `./run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
 
 ### Linux
 
-1. Install **Python 3.10+** with your distro package manager.
-2. `python3 -m venv .venv`
-3. `.venv/bin/python -m pip install -U pip wheel`
-4. `.venv/bin/python -m pip install -r requirements.txt`
-5. `cp .env.example .env`
-6. Optional AI: install Ollama from [ollama.com/download](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
-7. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-8. Tests: `.venv/bin/python -m unittest test_units -v`
-9. Start: `./run_debug.sh` (run as root or with `input` group; prefer X11)
+1. Install **uv** (`curl -LsSf https://astral.sh/uv/install.sh | sh`), or install
+   **Python 3.10+** with your distro package manager for the pip path.
+2. uv path: `uv venv .venv` then `uv pip install --python .venv -r requirements.txt`
+   pip path: `python3 -m venv .venv`, `.venv/bin/python -m pip install -U pip wheel`, `.venv/bin/python -m pip install -r requirements.txt`
+3. `cp .env.example .env`
+4. Optional AI: install Ollama from [ollama.com/download](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
+5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
+6. Tests: `.venv/bin/python -m unittest test_units -v`
+7. Start: `./run_debug.sh` (run as root or with `input` group; prefer X11)
 
 ## Verify success
 

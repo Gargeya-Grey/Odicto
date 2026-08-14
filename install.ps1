@@ -29,30 +29,64 @@ Write-Host "========================================" -ForegroundColor White
 Write-Host "  Odicto - Installer" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor White
 
-# --- Python ---
-Write-Step "Locating Python 3.10+"
-$py = $null
-foreach ($candidate in @("py", "python", "python3")) {
-    try {
-        $ver = & $candidate --version 2>&1
-        if ($LASTEXITCODE -eq 0 -or $ver -match "Python 3\.") {
-            $py = $candidate
-            Write-Ok "$candidate -> $ver"
-            break
-        }
-    } catch { }
+# --- uv (fast, hash-verified package manager) ---
+Write-Step "Locating uv"
+function Get-UvPath {
+    $cmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $links = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\uv.exe"
+    if (Test-Path $links) { return $links }
+    return $null
 }
-if (-not $py) {
-    Write-Warn "Python not found. Attempting winget install of Python 3.12..."
-    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
-    $py = "py"
-    & $py --version | Out-Host
+
+$uvPath = Get-UvPath
+if (-not $uvPath) {
+    Write-Warn "uv not found. Attempting winget install..."
+    try {
+        winget install -e --id astral-sh.uv --accept-package-agreements --accept-source-agreements
+        $uvPath = Get-UvPath
+    } catch {
+        $uvPath = $null
+    }
+    if ($uvPath) {
+        Write-Ok "uv installed: $uvPath"
+    } else {
+        Write-Warn "Could not install uv. Falling back to pip (slower)."
+    }
+} else {
+    Write-Ok "uv found: $uvPath"
+}
+
+# --- Python (needed only for the pip fallback; uv can fetch its own) ---
+$py = $null
+if (-not $uvPath) {
+    Write-Step "Locating Python 3.10+"
+    foreach ($candidate in @("py", "python", "python3")) {
+        try {
+            $ver = & $candidate --version 2>&1
+            if ($LASTEXITCODE -eq 0 -or $ver -match "Python 3\.") {
+                $py = $candidate
+                Write-Ok "$candidate -> $ver"
+                break
+            }
+        } catch { }
+    }
+    if (-not $py) {
+        Write-Warn "Python not found. Attempting winget install of Python 3.12..."
+        winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        $py = "py"
+        & $py --version | Out-Host
+    }
+} else {
+    Write-Ok "uv manages Python; no system Python needed"
 }
 
 # --- venv ---
 Write-Step "Creating virtual environment (.venv)"
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-    if ($py -eq "py") {
+    if ($uvPath) {
+        & $uvPath venv .venv
+    } elseif ($py -eq "py") {
         & py -3 -m venv .venv
     } else {
         & $py -m venv .venv
@@ -63,13 +97,14 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
 }
 
 $venvPy = ".\.venv\Scripts\python.exe"
-$venvPip = ".\.venv\Scripts\python.exe"
-
-Write-Step "Upgrading pip / wheel"
-& $venvPy -m pip install --upgrade pip wheel setuptools | Out-Host
 
 Write-Step "Installing Python requirements"
-& $venvPy -m pip install -r requirements.txt | Out-Host
+if ($uvPath) {
+    & $uvPath pip install --python $venvPy -r requirements.txt | Out-Host
+} else {
+    & $venvPy -m pip install --upgrade pip wheel setuptools | Out-Host
+    & $venvPy -m pip install -r requirements.txt | Out-Host
+}
 Write-Ok "requirements.txt installed"
 
 # --- .env ---
