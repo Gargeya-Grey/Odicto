@@ -101,7 +101,7 @@ def _require_pynput():
 def _key_token(key) -> str:
     if key is None:
         return ""
-    if isinstance(key, _pynput.keyboard.KeyCode):
+    if isinstance(key, _pynput.KeyCode):
         ch = key.char
         if not ch:
             return ""
@@ -161,7 +161,7 @@ def hook_key(key: str, handler, suppress: bool) -> None:
     with _listener_lock:
         _hooks[token] = {"handler": handler, "suppress": bool(suppress)}
         if _listener is None:
-            _listener = pynput.keyboard.Listener(
+            _listener = pynput.Listener(
                 on_press=_on_press,
                 on_release=_on_release,
                 darwin_intercept=_intercept,
@@ -208,11 +208,11 @@ def wait() -> None:
 
 def force_release_modifiers() -> None:
     pynput = _require_pynput()
-    controller = pynput.keyboard.Controller()
+    controller = pynput.Controller()
     for token in ("ctrl", "shift", "alt", "cmd"):
         if token in _pressed_tokens:
             try:
-                controller.release(getattr(pynput.keyboard.Key, token))
+                controller.release(getattr(pynput.Key, token))
             except Exception:
                 pass
     time.sleep(0.04)
@@ -224,8 +224,8 @@ def wm_copy_foreground() -> bool:
 
 def copy_chord() -> None:
     pynput = _require_pynput()
-    controller = pynput.keyboard.Controller()
-    cmd = pynput.keyboard.Key.cmd
+    controller = pynput.Controller()
+    cmd = pynput.Key.cmd
     controller.press(cmd)
     time.sleep(0.01)
     controller.press("c")
@@ -236,8 +236,8 @@ def copy_chord() -> None:
 
 def paste_chord() -> None:
     pynput = _require_pynput()
-    controller = pynput.keyboard.Controller()
-    cmd = pynput.keyboard.Key.cmd
+    controller = pynput.Controller()
+    cmd = pynput.Key.cmd
     controller.press(cmd)
     time.sleep(0.01)
     controller.press("v")
@@ -255,7 +255,7 @@ def send(chord: str) -> None:
         return paste_chord()
     if parts:
         pynput = _require_pynput()
-        controller = pynput.keyboard.Controller()
+        controller = pynput.Controller()
         try:
             controller.press(parts[-1])
             controller.release(parts[-1])

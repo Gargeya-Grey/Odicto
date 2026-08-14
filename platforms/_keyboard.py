@@ -10,10 +10,23 @@ import sys
 import time
 from typing import Tuple
 
-import keyboard
+try:
+    import keyboard
+except ImportError:  # Linux requires root/input group; keep import safe for tests
+    keyboard = None
 
-KEY_DOWN = keyboard.KEY_DOWN
-KEY_UP = keyboard.KEY_UP
+KEY_DOWN = keyboard.KEY_DOWN if keyboard is not None else "down"
+KEY_UP = keyboard.KEY_UP if keyboard is not None else "up"
+
+
+def _require_keyboard():
+    if keyboard is None:
+        raise RuntimeError(
+            "keyboard library is unavailable on this platform without root or "
+            "input-group access. On Linux, run as root or add your user to the "
+            "'input' group."
+        )
+    return keyboard
 
 # The `keyboard` library aliases side-specific modifiers onto both sides
 # (e.g. "right ctrl" scan codes include left ctrl's 29). That makes
@@ -45,23 +58,29 @@ _MODIFIER_KEYS = (
 
 
 def is_pressed(key: str) -> bool:
+    kb = keyboard
+    if kb is None:
+        return False
     try:
-        return bool(keyboard.is_pressed(key))
+        return bool(kb.is_pressed(key))
     except Exception:
         return False
 
 
 def side_exclusive_scan_codes(key: str) -> Tuple[int, ...]:
+    kb = keyboard
+    if kb is None:
+        return ()
     key_n = key.strip().lower()
     try:
-        codes = set(keyboard.key_to_scan_codes(key_n))
+        codes = set(kb.key_to_scan_codes(key_n))
     except Exception:
         return ()
     other = _SIDE_COUNTERPARTS.get(key_n)
     if other is None:
         return tuple(codes)
     try:
-        other_codes = set(keyboard.key_to_scan_codes(other))
+        other_codes = set(kb.key_to_scan_codes(other))
     except Exception:
         return tuple(codes)
     exclusive = codes - other_codes
@@ -79,45 +98,49 @@ def is_pressed_exclusive(key: str) -> bool:
 
 
 def hook_key(key: str, handler, suppress: bool) -> None:
-    keyboard.hook_key(key, handler, suppress=suppress)
+    _require_keyboard().hook_key(key, handler, suppress=suppress)
 
 
 def unhook_all() -> None:
     try:
-        keyboard.unhook_all()
+        if keyboard is not None:
+            keyboard.unhook_all()
     except Exception:
         pass
 
 
 def wait() -> None:
-    keyboard.wait()
+    _require_keyboard().wait()
 
 
 def press(key: str) -> None:
-    keyboard.press(key)
+    _require_keyboard().press(key)
 
 
 def release(key: str) -> None:
-    keyboard.release(key)
+    _require_keyboard().release(key)
 
 
 def press_and_release(key: str) -> None:
-    keyboard.press_and_release(key)
+    _require_keyboard().press_and_release(key)
 
 
 def send(chord: str) -> None:
-    keyboard.send(chord)
+    _require_keyboard().send(chord)
 
 
 def force_release_modifiers() -> None:
     """Synthesize key-ups for modifiers that may still be physically held."""
+    kb = keyboard
+    if kb is None:
+        return
     for key in _MODIFIER_KEYS:
         try:
-            if keyboard.is_pressed(key):
-                keyboard.release(key)
+            if kb.is_pressed(key):
+                kb.release(key)
         except Exception:
             try:
-                keyboard.release(key)
+                kb.release(key)
             except Exception:
                 pass
     time.sleep(0.04)

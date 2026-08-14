@@ -40,6 +40,7 @@ class TestOdicto(unittest.TestCase):
     def tearDown(self) -> None:
         main_mod._INSTANCE_LOCK_HELD = self._real_lock_held
 
+    @skipUnless(sys.platform == "win32", "keyboard scan codes are Windows-specific")
     def test_side_exclusive_scan_codes_right_ctrl(self) -> None:
         """right ctrl must not share the left-ctrl-only scan code used by is_pressed bugs."""
         import keyboard as kb
