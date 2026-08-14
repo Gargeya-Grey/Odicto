@@ -2,6 +2,7 @@ import sys
 import os
 import unittest
 from unittest.mock import patch, MagicMock
+from unittest import skipUnless
 import numpy as np
 
 # 1. Mock faster_whisper to avoid downloading/loading the Whisper model on test import
@@ -51,7 +52,8 @@ class TestOdicto(unittest.TestCase):
             "exclusive right ctrl must not include left ctrl scan codes",
         )
 
-    @patch("main.keyboard.is_pressed")
+    @skipUnless(sys.platform == "win32", "Windows scan-code disambiguation")
+    @patch("platforms._keyboard.is_pressed")
     def test_is_pressed_exclusive_right_ctrl(
         self, mock_is_pressed: MagicMock
     ) -> None:
@@ -137,18 +139,12 @@ class TestOdicto(unittest.TestCase):
         app = DictationApp.__new__(DictationApp)
         app._hotkey_physically_held = False
         was_held = main_mod._INSTANCE_LOCK_HELD
-        was_mutex = main_mod._INSTANCE_MUTEX_HANDLE
-        was_file = main_mod._INSTANCE_LOCK_FILE
         try:
             main_mod._INSTANCE_LOCK_HELD = False
-            main_mod._INSTANCE_MUTEX_HANDLE = None
-            main_mod._INSTANCE_LOCK_FILE = None
             with self.assertRaises(RuntimeError):
                 app._bind_hotkeys()
         finally:
             main_mod._INSTANCE_LOCK_HELD = was_held
-            main_mod._INSTANCE_MUTEX_HANDLE = was_mutex
-            main_mod._INSTANCE_LOCK_FILE = was_file
 
     @patch("config.Config.LLM_PROVIDER", "invalid")
     def test_config_validation_invalid_provider(self) -> None:
@@ -537,162 +533,177 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(len(user_msgs), 1)
         self.assertEqual(user_msgs[0]["content"], "hello world")
 
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.send_paste")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_paste_text_flow(
-        self, mock_keyboard: MagicMock, mock_pyperclip: MagicMock
+        self,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_paste: MagicMock,
     ) -> None:
         """Verifies clipboard injection backup, paste command execution, and clipboard restore."""
-        mock_pyperclip.paste.return_value = "original clipboard data"
-        mock_keyboard.is_pressed.return_value = False
+        mock_clipboard_read.return_value = "original clipboard data"
+        mock_clipboard_write.return_value = True
 
         paste_text("injected text")
 
-        mock_pyperclip.copy.assert_any_call("injected text")
-        # Prefer explicit press/release; send("ctrl+v") is fallback only.
-        self.assertTrue(
-            mock_keyboard.press.called or mock_keyboard.send.called,
-            "expected Ctrl+V via press/release or send",
-        )
-        mock_pyperclip.copy.assert_any_call("original clipboard data")
+        mock_clipboard_write.assert_any_call("injected text")
+        mock_send_paste.assert_called()
+        mock_clipboard_write.assert_any_call("original clipboard data")
 
-    @patch("typer._wm_copy_foreground", return_value=False)
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=False)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_get_selected_text_with_selection(
         self,
-        mock_keyboard: MagicMock,
-        mock_pyperclip: MagicMock,
-        _mock_wm: MagicMock,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
     ) -> None:
         """get_selected_text detects selection via sentinel change and restores clipboard."""
-        mock_keyboard.is_pressed.return_value = False
-        # paste order: backup original, then polls after Ctrl+C, then any extras.
-        # First paste() = original; subsequent paste() after copy attempts return selection.
+        # paste order: backup original, then polls after copy, then any extras.
         state = {"n": 0}
 
-        def fake_paste() -> str:
+        def fake_read() -> str:
             state["n"] += 1
-            # After sentinel is written (copy call #1), later pastes see selection.
+            # After sentinel is written (copy call #1), later reads see selection.
             if state["n"] == 1:
                 return "original content"
             return "selected text"
 
-        mock_pyperclip.paste.side_effect = fake_paste
+        mock_clipboard_read.side_effect = fake_read
+        mock_clipboard_write.return_value = True
 
         result = get_selected_text(timeout=0.15)
 
         self.assertEqual(result, "selected text")
-        # First copy is the sentinel, last restore is original content.
-        copy_args = [c.args[0] for c in mock_pyperclip.copy.call_args_list if c.args]
-        self.assertTrue(any("odicto-sel-" in str(a) for a in copy_args), copy_args)
-        self.assertEqual(copy_args[-1], "original content")
+        # First write is the sentinel, last restore is original content.
+        write_args = [c.args[0] for c in mock_clipboard_write.call_args_list if c.args]
+        self.assertTrue(any("odicto-sel-" in str(a) for a in write_args), write_args)
+        self.assertEqual(write_args[-1], "original content")
         # Must attempt a keyboard copy path when WM_COPY is disabled in this test.
-        self.assertTrue(
-            mock_keyboard.press.called
-            or mock_keyboard.send.called
-            or mock_keyboard.press_and_release.called
-        )
+        mock_send_copy.assert_called()
 
-    @patch("typer._wm_copy_foreground", return_value=False)
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=False)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_get_selected_text_no_selection(
         self,
-        mock_keyboard: MagicMock,
-        mock_pyperclip: MagicMock,
-        _mock_wm: MagicMock,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
     ) -> None:
         """get_selected_text returns empty when clipboard never leaves the sentinel."""
-        mock_keyboard.is_pressed.return_value = False
         # Always return whatever was last written (sentinel sticks = no selection).
         last_written = {"v": ""}
 
-        def fake_copy(v: str) -> None:
+        def fake_write(v: str) -> bool:
             last_written["v"] = v
+            return True
 
-        def fake_paste() -> str:
+        def fake_read() -> str:
             return last_written["v"] or "original"
 
-        mock_pyperclip.copy.side_effect = fake_copy
-        mock_pyperclip.paste.side_effect = fake_paste
+        mock_clipboard_write.side_effect = fake_write
+        mock_clipboard_read.side_effect = fake_read
 
         result = get_selected_text(timeout=0.12)
 
         self.assertEqual(result, "")
 
-    @patch("typer._wm_copy_foreground", return_value=True)
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=True)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_get_selected_text_via_wm_copy(
         self,
-        mock_keyboard: MagicMock,
-        mock_pyperclip: MagicMock,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
         mock_wm: MagicMock,
+        mock_release: MagicMock,
     ) -> None:
-        """WM_COPY path captures selection without needing Ctrl+C when it works."""
-        mock_keyboard.is_pressed.return_value = False
+        """WM_COPY path captures selection without needing a synthetic copy chord when it works."""
         last_written = {"v": ""}
 
-        def fake_copy(v: str) -> None:
+        def fake_write(v: str) -> bool:
             last_written["v"] = v
+            return True
 
-        def fake_paste() -> str:
+        def fake_read() -> str:
             # After WM_COPY "succeeds", app puts selection on clipboard.
             if "odicto-sel-" in last_written["v"]:
                 return "highlighted paragraph"
             return last_written["v"]
 
-        mock_pyperclip.copy.side_effect = fake_copy
-        mock_pyperclip.paste.side_effect = fake_paste
+        mock_clipboard_write.side_effect = fake_write
+        mock_clipboard_read.side_effect = fake_read
 
         result = get_selected_text(timeout=0.15)
 
         self.assertEqual(result, "highlighted paragraph")
         mock_wm.assert_called()
+        mock_send_copy.assert_not_called()
 
-    @patch("typer._wm_copy_foreground", return_value=False)
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=False)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_get_selected_text_paste_error(
         self,
-        mock_keyboard: MagicMock,
-        mock_pyperclip: MagicMock,
-        _mock_wm: MagicMock,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
     ) -> None:
         """get_selected_text returns empty string on clipboard read failure."""
-        mock_keyboard.is_pressed.return_value = False
-        mock_pyperclip.paste.side_effect = Exception("clipboard error")
-        mock_pyperclip.copy.side_effect = Exception("clipboard error")
+        mock_clipboard_read.side_effect = Exception("clipboard error")
+        mock_clipboard_write.side_effect = Exception("clipboard error")
 
         result = get_selected_text(timeout=0.1)
 
         self.assertEqual(result, "")
 
-    @patch("typer._wm_copy_foreground", return_value=False)
-    @patch("typer.pyperclip")
-    @patch("typer.keyboard")
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=False)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
     def test_get_selected_text_same_as_prior_clipboard(
         self,
-        mock_keyboard: MagicMock,
-        mock_pyperclip: MagicMock,
-        _mock_wm: MagicMock,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
     ) -> None:
         """Selection equal to prior clipboard is still captured (sentinel trick)."""
-        mock_keyboard.is_pressed.return_value = False
         last_written = {"v": ""}
 
-        def fake_copy(v: str) -> None:
+        def fake_write(v: str) -> bool:
             last_written["v"] = v
+            return True
 
-        def fake_paste() -> str:
+        def fake_read() -> str:
             # "App" copies selection that happens to equal the prior clipboard.
             if "odicto-sel-" in (last_written["v"] or ""):
                 return "same text as before"
             return last_written["v"] or "same text as before"
 
-        mock_pyperclip.copy.side_effect = fake_copy
-        mock_pyperclip.paste.side_effect = fake_paste
+        mock_clipboard_write.side_effect = fake_write
+        mock_clipboard_read.side_effect = fake_read
 
         result = get_selected_text(timeout=0.15)
         self.assertEqual(result, "same text as before")
@@ -703,7 +714,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.TextRefiner")
     @patch("main.paste_text")
     @patch("main.get_selected_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_state_machine(
         self,
@@ -779,7 +790,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.TextRefiner")
     @patch("main.paste_text")
     @patch("main.get_selected_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_passes_selection_as_context(
         self,
@@ -832,7 +843,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.TextRefiner")
     @patch("main.paste_text")
     @patch("main.get_selected_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_ai_via_use_llm_arg(
         self,
@@ -863,7 +874,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
     @patch("main.paste_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_bypass_llm(
         self,
@@ -908,7 +919,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
     @patch("main.paste_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_ignores_hotkey_before_ready(
         self,
@@ -936,7 +947,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
     @patch("main.paste_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_short_hold_ignored(
         self,
@@ -970,7 +981,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.TextRefiner")
     @patch("main.paste_text")
     @patch("main.get_selected_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_f6_force_fresh_ai(
         self,
@@ -1024,7 +1035,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
     @patch("main.paste_text")
-    @patch("main.keyboard")
+    @patch("main.platforms")
     @patch("main.play_beep")
     def test_dictation_app_reset_context_hotkey(
         self,
@@ -1050,13 +1061,9 @@ class TestOdicto(unittest.TestCase):
             import main as main_mod
 
             was_held = main_mod._INSTANCE_LOCK_HELD
-            was_mutex = main_mod._INSTANCE_MUTEX_HANDLE
-            was_file = main_mod._INSTANCE_LOCK_FILE
             main_mod._INSTANCE_LOCK_HELD = True
-            main_mod._INSTANCE_MUTEX_HANDLE = 12345
-            main_mod._INSTANCE_LOCK_FILE = object()
-            # The reset handler compares against keyboard.KEY_UP ("up" in the
-            # real library); make the mocked keyboard match.
+            # The reset handler compares against KEY_UP ("up" in the
+            # real library); make the mocked platform module match.
             mock_keyboard.KEY_UP = "up"
             mock_keyboard.KEY_DOWN = "down"
             try:
@@ -1087,8 +1094,6 @@ class TestOdicto(unittest.TestCase):
                 )
             finally:
                 main_mod._INSTANCE_LOCK_HELD = was_held
-                main_mod._INSTANCE_MUTEX_HANDLE = was_mutex
-                main_mod._INSTANCE_LOCK_FILE = was_file
 
     def test_indicator_reset_label(self) -> None:
         """F5 reset shows a distinct HUD label."""
@@ -1174,6 +1179,111 @@ class TestDictationIndicator(unittest.TestCase):
         indicator._tick.stop()
         indicator.close()
         # Keep qt app alive for other tests; do not quit.
+
+
+class TestCrossPlatform(unittest.TestCase):
+    """Facade dispatch, env merge, and provider-test helpers."""
+
+    def test_keyboard_backend_normalizes_aliases(self) -> None:
+        from config import normalize_key_name
+
+        self.assertEqual(normalize_key_name("`"), "grave")
+        self.assertEqual(normalize_key_name("backtick"), "grave")
+        self.assertEqual(normalize_key_name("ctrl"), "ctrl")
+        self.assertEqual(normalize_key_name("Ctrl"), "ctrl")
+
+    def test_validate_hotkey_pair_rejects_bare_primary(self) -> None:
+        from config import validate_hotkey_pair
+
+        with self.assertRaises(ValueError):
+            validate_hotkey_pair("a", "ctrl+a")
+
+    def test_validate_hotkey_pair_rejects_mismatched_primary(self) -> None:
+        from config import validate_hotkey_pair
+
+        with self.assertRaises(ValueError):
+            validate_hotkey_pair("ctrl+a", "ctrl+b")
+
+    def test_validate_hotkey_pair_rejects_identical_mods(self) -> None:
+        from config import validate_hotkey_pair
+
+        with self.assertRaises(ValueError):
+            validate_hotkey_pair("ctrl+a", "ctrl+a")
+
+    def test_validate_hotkey_pair_accepts_valid(self) -> None:
+        from config import validate_hotkey_pair
+
+        validate_hotkey_pair("ctrl+a", "ctrl+shift+a")
+
+    @patch("platforms.base.pyperclip")
+    def test_base_clipboard_write_masks_none(self, mock_pyperclip: MagicMock) -> None:
+        from platforms import base
+
+        self.assertTrue(base.clipboard_write("x"))
+        mock_pyperclip.copy.assert_called_once_with("x")
+
+    def test_setup_web_parse_and_mask(self) -> None:
+        from setup_web import _parse_env_text, _mask_key
+
+        parsed = _parse_env_text("LLM_PROVIDER=meta\nMETA_API_KEY=abc\n# comment\n")
+        self.assertEqual(parsed["LLM_PROVIDER"], "meta")
+        self.assertEqual(parsed["META_API_KEY"], "abc")
+        self.assertTrue(_mask_key("META_API_KEY"))
+        self.assertFalse(_mask_key("LLM_PROVIDER"))
+
+    def test_setup_web_merge_env_preserves_and_updates(self) -> None:
+        import setup_web
+
+        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")):
+            try:
+                with open(setup_web.ENV_PATH, "w") as f:
+                    f.write("# keep me\nLLM_PROVIDER=meta\nCUSTOM_KEY=keep\n")
+                setup_web.merge_env({"LLM_PROVIDER": "openrouter", "OPENROUTER_API_KEY": "sk-or-test"})
+                with open(setup_web.ENV_PATH) as f:
+                    text = f.read()
+                self.assertIn("LLM_PROVIDER=openrouter", text)
+                self.assertIn("OPENROUTER_API_KEY=sk-or-test", text)
+                self.assertIn("CUSTOM_KEY=keep", text)
+                self.assertIn("# keep me", text)
+            finally:
+                try:
+                    os.remove(setup_web.ENV_PATH)
+                except Exception:
+                    pass
+
+    def test_setup_web_reset_env_writes_example(self) -> None:
+        import setup_web
+
+        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")), \
+             patch.object(setup_web, "ENV_EXAMPLE_PATH", new=os.path.join(os.getcwd(), ".env.example")):
+            try:
+                with open(setup_web.ENV_PATH, "w") as f:
+                    f.write("LLM_PROVIDER=openrouter\nOPENROUTER_API_KEY=sk-or-test\n")
+                setup_web.reset_env()
+                with open(setup_web.ENV_PATH) as f:
+                    text = f.read()
+                self.assertNotIn("sk-or-test", text)
+                self.assertIn("LLM_PROVIDER=", text)
+            finally:
+                try:
+                    os.remove(setup_web.ENV_PATH)
+                except Exception:
+                    pass
+
+    def test_refiner_test_provider_none(self) -> None:
+        from refiner import test_provider
+
+        self.assertEqual(test_provider("none", "", "", ""), "ok")
+
+    def test_refiner_test_provider_unknown(self) -> None:
+        from refiner import test_provider
+
+        self.assertIn("Unknown provider", test_provider("bogus", "", "", ""))
+
+    def test_odicto_status_reports_backend(self) -> None:
+        import platforms
+
+        self.assertIn(platforms.hotkey_backend_name(), ("keyboard", "pynput"))
 
 
 if __name__ == "__main__":

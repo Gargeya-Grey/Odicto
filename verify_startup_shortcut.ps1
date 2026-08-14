@@ -18,4 +18,5 @@ try {
   } else { Write-Output "Task Exists: False (Startup shortcut is the fallback)" }
 } catch { Write-Output "Task Exists: unknown ($($_.Exception.Message))" }
 Write-Output "---"
-if (Test-Path 'W:\AI-Projects\Odicto\dictation.pid') { Write-Output "Running PID: $(Get-Content W:\AI-Projects\Odicto\dictation.pid)"; } else { Write-Output "Running: not detected (dictation.pid missing)" }
+$repo = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (Test-Path (Join-Path $repo 'dictation.pid')) { Write-Output "Running PID: $(Get-Content (Join-Path $repo 'dictation.pid'))"; } else { Write-Output "Running: not detected (dictation.pid missing)" }

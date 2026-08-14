@@ -77,6 +77,32 @@ def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
     return tuple(parts[:-1]), parts[-1]
 
 
+def validate_hotkey_pair(hotkey: str, ai_hotkey: str = "") -> None:
+    """Validate a proposed HOTKEY / AI_HOTKEY pair without touching live config.
+
+    Raises ValueError when the chord would be unsafe (bare primary key) or the
+    AI chord would be indistinguishable from the dictation chord.
+    """
+    dict_mods, dict_primary = parse_hold_hotkey(hotkey)
+    if not dict_mods:
+        raise ValueError(
+            f"HOTKEY '{hotkey}' needs at least one modifier. A bare primary "
+            "would be globally suppressed (the key could never be typed in any app)."
+        )
+    if ai_hotkey:
+        ai_mods, ai_primary = parse_hold_hotkey(ai_hotkey)
+        if ai_primary != dict_primary:
+            raise ValueError(
+                f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
+                f"'{dict_primary}' (both chords share one hold key)"
+            )
+        if set(ai_mods) == set(dict_mods):
+            raise ValueError(
+                "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
+                "so dictation and AI are distinguishable)"
+            )
+
+
 class Config:
     # Hotkey config — two full chords sharing one primary key is preferred:
     #   HOTKEY=ctrl+grave          → raw dictation
@@ -222,17 +248,7 @@ class Config:
                     f"the dictation primary key '{dict_primary}'"
                 )
         if cls.AI_HOTKEY:
-            ai_mods, ai_primary = parse_hold_hotkey(cls.AI_HOTKEY)
-            if ai_primary != dict_primary:
-                raise ValueError(
-                    f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
-                    f"'{dict_primary}' (both chords share one hold key)"
-                )
-            if set(ai_mods) == set(dict_mods):
-                raise ValueError(
-                    "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
-                    "so dictation and AI are distinguishable)"
-                )
+            validate_hotkey_pair(cls.HOTKEY, cls.AI_HOTKEY)
         if cls.AI_MODIFIER:
             if cls.AI_MODIFIER == dict_primary or cls.AI_MODIFIER in dict_mods:
                 raise ValueError(

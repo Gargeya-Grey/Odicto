@@ -1,5 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
+  <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
+  <img src="https://img.shields.io/badge/Linux-X11%2FWayland-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-faster--whisper-00C853?style=for-the-badge" alt="Whisper" />
   <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter-FF6F00?style=for-the-badge" alt="LLM" />
@@ -10,7 +12,7 @@
 
 <p align="center">
   <b>Hold a hotkey. Speak. Text appears where your cursor is.</b><br/>
-  Local speech-to-text on Windows — optional AI replies — quiet glass HUD — no cloud required.
+  Local speech-to-text on Windows, macOS, and Linux — optional AI replies — quiet glass HUD — no cloud required.
 </p>
 
 <p align="center">
@@ -44,33 +46,68 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 ---
 
-## Supported platform
+## Supported platforms
 
 | OS | Status |
 |----|--------|
 | **Windows 10 / 11** | Supported |
-| macOS / Linux | Not supported (hotkey + paste stack is Windows-oriented) |
+| **macOS 12+** | Supported (Accessibility + Input Monitoring permissions required) |
+| **Linux (X11 recommended)** | Supported (root or `input` group for global hooks) |
+
+Notes:
+- **macOS** runs Whisper on CPU by default. `faster-whisper` does not currently
+  expose an Apple Silicon Metal device, so `WHISPER_DEVICE=auto` falls back to
+  `cpu` (int8).
+- **Linux Wayland** needs `wl-clipboard` and may have compositor-specific
+  synthetic-keyboard limits; an X11 session is the most reliable target.
 
 ---
 
-## For coding agents (install from zero)
+## Quick start
 
-> **If you are an AI agent:** clone this repo on Windows, run the installer, verify tests, then start the app.  
-> Full automation notes: [`AGENTS.md`](./AGENTS.md).
+### Windows
 
 ```powershell
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\.venv\Scripts\python.exe -m unittest test_units -v
+.\.venv\Scripts\python.exe odicto.py setup   # pick provider + paste key
 .\start_dictation.bat
 ```
+
+### macOS
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+bash install.sh
+.venv/bin/python odicto.py setup
+./run_debug.sh
+# Grant Accessibility + Input Monitoring when macOS prompts, then restart the app.
+```
+
+### Linux (X11 recommended)
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+sudo bash install.sh   # or run as a user with access to /dev/input
+.venv/bin/python odicto.py setup
+./run_debug.sh
+```
+
+---
+
+## For coding agents (install from zero)
+
+> **If you are an AI agent:** clone this repo, run the installer for the OS,
+> verify tests, then start the app. Full automation notes: [`AGENTS.md`](./AGENTS.md).
 
 The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **Python 3.10+** (via `winget` if missing) |
+| 1 | Locate or install **Python 3.10+** |
 | 2 | Create **`.venv`** |
 | 3 | `pip install -r requirements.txt` |
 | 4 | Copy **`.env.example` → `.env`** |
@@ -80,36 +117,44 @@ The installer will (when possible):
 Optional flags:
 
 ```powershell
-# Dictation only (no local LLM)
+# Windows: dictation only (no local LLM)
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipOllama
+```
 
-# Choose models
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -OllamaModel "phi4-mini:latest" -WhisperModel "base.en"
+```bash
+# macOS / Linux: dictation only (no local LLM)
+bash install.sh -SkipOllama
 ```
 
 ---
 
 ## Manual install (human, step-by-step)
 
-Assume a **clean Windows PC** with nothing installed.
+Pick your OS below, or use the one-command installers above.
 
 ### 0. Prerequisites you may need first
 
 | Tool | Why | How to get it |
 |------|-----|----------------|
-| **Git** | Clone the repo | [git-scm.com](https://git-scm.com/download/win) or `winget install Git.Git` |
-| **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) or `winget install Python.Python.3.12` — enable **“Add python.exe to PATH”** |
-| **Microphone** | Capture speech | Working default input device in Windows Sound settings |
-| **(Optional) NVIDIA GPU + CUDA** | Faster Whisper | Drivers from NVIDIA; `faster-whisper` will use CUDA when available |
-| **(Optional) Meta API key** | Cloud AI replies (default backend) | Paste `META_API_KEY` into `.env` (`MODEL_API_KEY` also works) |
-| **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `winget install Ollama.Ollama` |
+| **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
+| **Python 3.10+** | Runtime | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Microphone** | Capture speech | Working default input device in system sound settings |
+| **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
+| **(Optional) Meta API key** | Cloud AI replies (default backend) | Use `odicto.py setup` or paste `META_API_KEY` into `.env` |
+| **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `brew install ollama` |
 | **(Optional) OpenRouter key** | Cloud LLM instead of Meta/Ollama | [openrouter.ai](https://openrouter.ai/) |
 
-> Admin rights: usually **not** required. If the global hotkey fails on a locked-down PC, try running the terminal as Administrator once.
+Permissions:
+- **Windows**: admin usually **not** required. If global hotkeys fail on a
+  locked-down PC, try running the terminal as Administrator once.
+- **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
+  System Settings → Privacy & Security when prompted.
+- **Linux**: run as root, or add your user to the `input` group. X11 is
+  recommended; on Wayland install `wl-clipboard`.
 
 ### 1. Clone
 
-```powershell
+```bash
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 ```
@@ -117,16 +162,22 @@ cd Odicto
 ### 2. One command (recommended)
 
 ```powershell
+# Windows
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-**Or** do it by hand:
+```bash
+# macOS / Linux
+bash install.sh
+```
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip wheel
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-copy .env.example .env
+**Or** do it by hand (Windows shows `.venv\Scripts`, macOS/Linux use `.venv/bin`):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip wheel
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
 ### 3. Python packages installed (from `requirements.txt`)
@@ -135,12 +186,14 @@ copy .env.example .env
 |---------|------|
 | `faster-whisper` | Local speech-to-text (downloads model weights on first use) |
 | `sounddevice` / `soundfile` / `numpy` | Microphone capture + audio buffers |
-| `keyboard` | Global hotkey hold-to-talk |
+| `keyboard` | Global hotkey hold-to-talk (Windows/Linux) |
+| `pynput` | Global hotkey hold-to-talk (macOS) |
 | `pyperclip` | Clipboard paste injection |
 | `openai` | OpenAI-compatible client for Ollama / OpenRouter |
 | `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
 | `python-dotenv` | Load `.env` |
 | `PySide6` | Always-on-top HUD overlay |
+| `psutil` | Cross-platform process enumeration |
 
 ### 4. Models that get downloaded
 
@@ -256,16 +309,23 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 ### 9. Verify
 
 ```powershell
+# Windows
 .\.venv\Scripts\python.exe -m unittest test_units -v
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest test_units -v
 ```
 
 ### 10. Run
 
-| Action | File |
-|--------|------|
-| Start (background, no console) | `start_dictation.bat` |
-| Start (console logs) | `run_debug.bat` |
-| Stop | `stop_dictation.bat` |
+| Action | Windows | macOS / Linux |
+|--------|---------|---------------|
+| Configure provider | `.venv\Scripts\python.exe odicto.py setup` | `.venv/bin/python odicto.py setup` |
+| Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
+| Start (console logs) | `run_debug.bat` | `./run_debug.sh` |
+| Stop | `stop_dictation.bat` | `./stop_dictation.sh` |
 
 ---
 
@@ -273,7 +333,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ### Start your day
 
-1. Double-click **`start_dictation.bat`**  
+1. Start Odicto with your OS's start script (see table above)  
 2. Wait a few seconds for models to load (first run is slower)  
 3. You’ll briefly see a **Starting** pill at the bottom center, then it fades  
 
@@ -306,11 +366,11 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
 | **VS Code note** | Ctrl+` toggles the terminal there -- while Odicto runs it steals that chord |
 | **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
-| **Logs** | Use `run_debug.bat`, or check `dictation.log` when using `pythonw` |
+| **Logs** | Use `run_debug.bat` / `./run_debug.sh`, or check `dictation.log` when using the no-console launcher |
 
 ### Stop
 
-Double-click **`stop_dictation.bat`** (or close the debug console with Ctrl+C).
+Run your OS's stop script (see table above), or close the debug console with Ctrl+C.
 
 ---
 
@@ -357,6 +417,10 @@ Copy from `.env.example`. Important knobs:
 | `config.py` | Env-backed settings |
 | `app_state.py` | Shared state enum (import-safe) |
 | `install.ps1` | Zero-to-one Windows installer |
+| `install.sh` | Zero-to-one macOS/Linux installer |
+| `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
+| `setup_web.py` | Local setup web page (provider + key config) |
+| `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---
@@ -365,28 +429,37 @@ Copy from `.env.example`. Important knobs:
 
 | Symptom | Fix |
 |---------|-----|
-| No HUD on hotkey | Restart with `run_debug.bat`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; try `run_debug.bat` as Admin |
-| Old hotkeys still work / both modes feel wrong | Multiple instances — run `stop_dictation.bat` (kills all), then start once. Check log for `Hotkeys bound: …` |
-| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook (hooks run even when idle, not only during dictation). Run `stop_dictation.bat`, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
+| No HUD on hotkey | Restart with `run_debug.bat` / `./run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
+| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux try root |
+| Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
+| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
 | Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
-| Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone) |
+| Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone; macOS → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
 | AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
 | AI mode pastes raw text (Meta) | Check `META_API_KEY` / `MODEL_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
 | App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
-| Ollama still using RAM on Meta/OpenRouter | Odicto is not calling it; quit the Ollama tray app / service separately (see resource section above) |
+| Ollama still using RAM on Meta/OpenRouter | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors | Recreate venv and reinstall `requirements.txt` |
+| macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
+| Linux hotkey/paste doesn't work | Run as root or add your user to the `input` group; on Wayland prefer X11 |
 
 ---
 
 ## Development
 
 ```powershell
+# Windows
 .\.venv\Scripts\python.exe -m unittest test_units -v
 .\run_debug.bat
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest test_units -v
+./run_debug.sh
 ```
 
 ---

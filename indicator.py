@@ -12,8 +12,8 @@ Design language:
 from __future__ import annotations
 
 import math
+import os
 import sys
-import ctypes
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -25,10 +25,12 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QFont,
     QFontDatabase,
     QGuiApplication,
+    QIcon,
     QPainter,
     QPainterPath,
     QPen,
@@ -37,7 +39,9 @@ from PySide6.QtGui import (
     QPaintEvent,
     QFontMetrics,
 )
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+
+from platforms import apply_window_exstyles
 
 
 class GuiState(Enum):
@@ -176,6 +180,7 @@ class DictationIndicator(QWidget):
         self._setup_window()
         self._setup_font()
         self._fit_pill_to_labels()
+        self._setup_tray()
 
         self._wake.connect(self._sync_from_app, Qt.ConnectionType.QueuedConnection)
         self._hide_req.connect(self._do_hide, Qt.ConnectionType.QueuedConnection)
@@ -198,6 +203,67 @@ class DictationIndicator(QWidget):
         self.raise_()
 
     # ------------------------------------------------------------------ window
+    def _setup_tray(self) -> None:
+        """Minimal tray/status menu for macOS/Linux background control.
+
+        Kept deliberately light and optional — if the system has no tray
+        (some Linux desktops), the HUD-only behavior is unchanged.
+        """
+        self._tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon = QIcon()
+        pixmap = self._make_tray_icon()
+        if pixmap.isNull():
+            return
+        icon.addPixmap(pixmap)
+        self._tray = QSystemTrayIcon(icon, self)
+        menu = QMenu()
+
+        setup_action = QAction("Setup…", self)
+        setup_action.triggered.connect(self._open_setup_page)
+        menu.addAction(setup_action)
+
+        menu.addSeparator()
+
+        quit_action = QAction("Quit Odicto", self)
+        quit_action.triggered.connect(self._quit_app)
+        menu.addAction(quit_action)
+
+        self._tray.setContextMenu(menu)
+        self._tray.setToolTip("Odicto")
+        self._tray.show()
+
+    def _make_tray_icon(self):
+        from PySide6.QtGui import QPixmap
+
+        pm = QPixmap(24, 24)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(108, 168, 128))
+        painter.drawRoundedRect(QRectF(4, 4, 16, 16), 5, 5)
+        painter.end()
+        return pm
+
+    def _open_setup_page(self) -> None:
+        try:
+            import subprocess
+            import sys
+
+            subprocess.Popen(
+                [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "odicto.py"), "setup"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"Warning: could not open setup page: {e}", flush=True)
+
+    def _quit_app(self) -> None:
+        self._tray.hide() if self._tray is not None else None
+        self._qt_app.quit()
+
     def _setup_window(self) -> None:
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -219,8 +285,11 @@ class DictationIndicator(QWidget):
             "Segoe UI Variable Display",
             "Segoe UI Variable",
             "Segoe UI",
-            "Inter",
             "SF Pro Display",
+            "Inter",
+            "Ubuntu",
+            "Noto Sans",
+            "DejaVu Sans",
         ):
             if name in families:
                 family = name
@@ -273,37 +342,8 @@ class DictationIndicator(QWidget):
         self.move(x, y)
 
     def _apply_win32_exstyles(self) -> None:
-        """Keep the HUD topmost and non-activating without breaking Qt alpha."""
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            GWL_EXSTYLE = -20
-            WS_EX_NOACTIVATE = 0x08000000
-            WS_EX_TOOLWINDOW = 0x00000080
-            WS_EX_TRANSPARENT = 0x00000020
-            user32 = ctypes.windll.user32
-
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style = (style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) & ~WS_EX_TRANSPARENT
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-
-            HWND_TOPMOST = -1
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOACTIVATE = 0x0010
-            SWP_SHOWWINDOW = 0x0040
-            user32.SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
-        except Exception as e:
-            print(f"Warning: could not apply Win32 exstyles: {e}")
+        """Apply platform-specific window styles (topmost/non-activating)."""
+        apply_window_exstyles(self)
 
     # -------------------------------------------------------------- public API
     def notify_state_changed(self) -> None:

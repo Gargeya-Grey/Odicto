@@ -446,3 +446,65 @@ class TextRefiner:
                 flush=True,
             )
             return text
+
+
+def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -> str:
+    """Ping a provider using explicit values, without touching the running Config.
+
+    Returns ``"ok"`` on success or a human-readable error string.
+    """
+    provider = provider.strip().lower().replace("-", "_")
+    if provider in ("meta", "meta_api"):
+        provider = "meta"
+
+    try:
+        if provider == "none":
+            return "ok"
+        if provider == "ollama":
+            if OpenAI is None:
+                return "openai package not installed"
+            base = api_base.strip() or "http://localhost:11434/v1"
+            client = OpenAI(base_url=base, api_key="ollama", max_retries=0)
+            client.chat.completions.create(
+                model=model or "qwen2.5:1.5b-instruct",
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                timeout=(3.0, 10.0),
+            )
+            return "ok"
+        if provider == "openrouter":
+            if OpenAI is None:
+                return "openai package not installed"
+            if not api_key.strip():
+                return "OPENROUTER_API_KEY is required"
+            base = api_base.strip() or "https://openrouter.ai/api/v1"
+            client = OpenAI(
+                base_url=base,
+                api_key=api_key.strip(),
+                max_retries=0,
+                default_headers={
+                    "HTTP-Referer": "https://github.com/odicto",
+                    "X-Title": "Odicto",
+                },
+            )
+            client.chat.completions.create(
+                model=model or "google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                timeout=(3.0, 10.0),
+            )
+            return "ok"
+        if provider == "meta":
+            if not api_key.strip():
+                return "META_API_KEY (or MODEL_API_KEY) is required"
+            base = api_base.strip() or "https://api.meta.ai/v1"
+            client = _MetaClient(
+                api_key=api_key.strip(),
+                base_url=base,
+                model=model or "muse-spark-1.2-contributor",
+            )
+            client.ping()
+            return "ok"
+        return f"Unknown provider: {provider}"
+    except Exception as e:
+        return str(e)

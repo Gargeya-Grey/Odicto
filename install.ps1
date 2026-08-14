@@ -26,12 +26,8 @@ function Write-Ok($msg)   { Write-Host "    OK  $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    !!  $msg" -ForegroundColor Yellow }
 
 Write-Host "========================================" -ForegroundColor White
-Write-Host "  Odicto — Windows Installer" -ForegroundColor White
+Write-Host "  Odicto — Installer" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor White
-
-if ($env:OS -notmatch "Windows") {
-    throw "This project currently supports Windows only."
-}
 
 # --- Python ---
 Write-Step "Locating Python 3.10+"
@@ -141,8 +137,10 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host @"
 
 Next steps:
-  1. Edit .env if needed (hotkeys, LLM provider, models)
-  2. Double-click  start_dictation.bat
+  1. Open the setup page to pick a provider and paste its key:
+     .\.venv\Scripts\python.exe odicto.py setup
+  2. Start the app:
+     .\start_dictation.bat
      (or run_debug.bat for a console log)
   3. Click into any text field
   4. Hold your hotkey (default: Ctrl+`), speak, release
