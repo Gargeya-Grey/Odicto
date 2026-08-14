@@ -1,8 +1,10 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
+  <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
+  <img src="https://img.shields.io/badge/Linux-X11%2FWayland-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-faster--whisper-00C853?style=for-the-badge" alt="Whisper" />
-  <img src="https://img.shields.io/badge/LLM-Ollama%20%7C%20OpenRouter-FF6F00?style=for-the-badge" alt="LLM" />
+  <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter-FF6F00?style=for-the-badge" alt="LLM" />
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt" />
 </p>
 
@@ -10,7 +12,7 @@
 
 <p align="center">
   <b>Hold a hotkey. Speak. Text appears where your cursor is.</b><br/>
-  Local speech-to-text on Windows — optional AI replies — quiet glass HUD — no cloud required.
+  Local speech-to-text on Windows, macOS, and Linux — optional AI replies — quiet glass HUD — no cloud required.
 </p>
 
 <p align="center">
@@ -27,7 +29,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 1. Records while you **hold** a global hotkey  
 2. Transcribes with **local Whisper** (`faster-whisper`)  
 3. Pastes into the focused field via clipboard  
-4. Optionally answers with a **local Ollama** (or OpenRouter) model  
+4. Optionally answers with **Meta API** (default), local Ollama, or OpenRouter  
 5. Shows a slim **bottom-center HUD** while it works  
 
 ```text
@@ -44,33 +46,68 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 ---
 
-## Supported platform
+## Supported platforms
 
 | OS | Status |
 |----|--------|
 | **Windows 10 / 11** | Supported |
-| macOS / Linux | Not supported (hotkey + paste stack is Windows-oriented) |
+| **macOS 12+** | Supported (Accessibility + Input Monitoring permissions required) |
+| **Linux (X11 recommended)** | Supported (root or `input` group for global hooks) |
+
+Notes:
+- **macOS** runs Whisper on CPU by default. `faster-whisper` does not currently
+  expose an Apple Silicon Metal device, so `WHISPER_DEVICE=auto` falls back to
+  `cpu` (int8).
+- **Linux Wayland** needs `wl-clipboard` and may have compositor-specific
+  synthetic-keyboard limits; an X11 session is the most reliable target.
 
 ---
 
-## For coding agents (install from zero)
+## Quick start
 
-> **If you are an AI agent:** clone this repo on Windows, run the installer, verify tests, then start the app.  
-> Full automation notes: [`AGENTS.md`](./AGENTS.md).
+### Windows
 
 ```powershell
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\.venv\Scripts\python.exe -m unittest test_units -v
+.\.venv\Scripts\python.exe odicto.py setup   # pick provider + paste key
 .\start_dictation.bat
 ```
+
+### macOS
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+bash install.sh
+.venv/bin/python odicto.py setup
+./run_debug.sh
+# Grant Accessibility + Input Monitoring when macOS prompts, then restart the app.
+```
+
+### Linux (X11 recommended)
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+sudo bash install.sh   # or run as a user with access to /dev/input
+.venv/bin/python odicto.py setup
+./run_debug.sh
+```
+
+---
+
+## For coding agents (install from zero)
+
+> **If you are an AI agent:** clone this repo, run the installer for the OS,
+> verify tests, then start the app. Full automation notes: [`AGENTS.md`](./AGENTS.md).
 
 The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **Python 3.10+** (via `winget` if missing) |
+| 1 | Locate or install **Python 3.10+** |
 | 2 | Create **`.venv`** |
 | 3 | `pip install -r requirements.txt` |
 | 4 | Copy **`.env.example` → `.env`** |
@@ -80,35 +117,44 @@ The installer will (when possible):
 Optional flags:
 
 ```powershell
-# Dictation only (no local LLM)
+# Windows: dictation only (no local LLM)
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipOllama
+```
 
-# Choose models
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -OllamaModel "phi4-mini:latest" -WhisperModel "base.en"
+```bash
+# macOS / Linux: dictation only (no local LLM)
+bash install.sh -SkipOllama
 ```
 
 ---
 
 ## Manual install (human, step-by-step)
 
-Assume a **clean Windows PC** with nothing installed.
+Pick your OS below, or use the one-command installers above.
 
 ### 0. Prerequisites you may need first
 
 | Tool | Why | How to get it |
 |------|-----|----------------|
-| **Git** | Clone the repo | [git-scm.com](https://git-scm.com/download/win) or `winget install Git.Git` |
-| **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) or `winget install Python.Python.3.12` — enable **“Add python.exe to PATH”** |
-| **Microphone** | Capture speech | Working default input device in Windows Sound settings |
-| **(Optional) NVIDIA GPU + CUDA** | Faster Whisper | Drivers from NVIDIA; `faster-whisper` will use CUDA when available |
-| **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `winget install Ollama.Ollama` |
-| **(Optional) OpenRouter key** | Cloud LLM instead of Ollama | [openrouter.ai](https://openrouter.ai/) |
+| **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
+| **Python 3.10+** | Runtime | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Microphone** | Capture speech | Working default input device in system sound settings |
+| **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
+| **(Optional) Meta API key** | Cloud AI replies (default backend) | Use `odicto.py setup` or paste `META_API_KEY` into `.env` |
+| **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `brew install ollama` |
+| **(Optional) OpenRouter key** | Cloud LLM instead of Meta/Ollama | [openrouter.ai](https://openrouter.ai/) |
 
-> Admin rights: usually **not** required. If the global hotkey fails on a locked-down PC, try running the terminal as Administrator once.
+Permissions:
+- **Windows**: admin usually **not** required. If global hotkeys fail on a
+  locked-down PC, try running the terminal as Administrator once.
+- **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
+  System Settings → Privacy & Security when prompted.
+- **Linux**: run as root, or add your user to the `input` group. X11 is
+  recommended; on Wayland install `wl-clipboard`.
 
 ### 1. Clone
 
-```powershell
+```bash
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 ```
@@ -116,16 +162,22 @@ cd Odicto
 ### 2. One command (recommended)
 
 ```powershell
+# Windows
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-**Or** do it by hand:
+```bash
+# macOS / Linux
+bash install.sh
+```
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip wheel
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-copy .env.example .env
+**Or** do it by hand (Windows shows `.venv\Scripts`, macOS/Linux use `.venv/bin`):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip wheel
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
 ### 3. Python packages installed (from `requirements.txt`)
@@ -134,11 +186,14 @@ copy .env.example .env
 |---------|------|
 | `faster-whisper` | Local speech-to-text (downloads model weights on first use) |
 | `sounddevice` / `soundfile` / `numpy` | Microphone capture + audio buffers |
-| `keyboard` | Global hotkey hold-to-talk |
+| `keyboard` | Global hotkey hold-to-talk (Windows/Linux) |
+| `pynput` | Global hotkey hold-to-talk (macOS) |
 | `pyperclip` | Clipboard paste injection |
 | `openai` | OpenAI-compatible client for Ollama / OpenRouter |
+| `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
 | `python-dotenv` | Load `.env` |
 | `PySide6` | Always-on-top HUD overlay |
+| `psutil` | Cross-platform process enumeration |
 
 ### 4. Models that get downloaded
 
@@ -167,9 +222,39 @@ LLM_MODEL=qwen2.5:1.5b-instruct
 LLM_API_BASE=http://localhost:11434/v1
 ```
 
-### 6. Optional: OpenRouter instead of Ollama
+### 6. Optional: Meta API (default) — flip with one line
 
-You can keep both Ollama and OpenRouter models configured, then flip one line:
+Meta is the default. Your example payload:
+
+```
+POST https://api.meta.ai/v1/responses
+Headers: Authorization: Bearer $META_API_KEY
+Body: { "model": "muse-spark-1.2-contributor", "input": [{"role":"user","content":[{"type":"input_text","text":"..."}]}], "stream": false }
+```
+
+```env
+# Default — no extra step if you already set META_API_KEY
+LLM_PROVIDER=meta
+META_API_KEY=sk-meta-...
+META_MODEL=muse-spark-1.2-contributor
+META_API_BASE=https://api.meta.ai/v1
+# Alias that also works: MODEL_API_KEY, META_API_MODEL
+```
+
+Single-switch `.env` between the three:
+
+```env
+LLM_PROVIDER=meta        # or: meta-api / meta_api (aliases)
+# LLM_PROVIDER=ollama
+# LLM_PROVIDER=openrouter
+# LLM_PROVIDER=none      # raw dictation only
+```
+
+Leave unused keys blank — only the active provider's key is required. Switching does not require editing API bases.
+
+### 7. Optional: OpenRouter instead of Meta/Ollama
+
+You can keep all three backends configured, then flip one line:
 
 ```env
 LLM_PROVIDER=openrouter
@@ -184,20 +269,24 @@ OPENROUTER_API_KEY=sk-or-...
 | `OPENROUTER_API_KEY` | Required for openrouter (app refuses to start if missing) |
 | `OPENROUTER_API_BASE` | Defaults to `https://openrouter.ai/api/v1` |
 | `LLM_MODEL` / `LLM_API_BASE` | Stay as your Ollama settings for easy switch-back |
+| `META_API_KEY` / `MODEL_API_KEY` | Placeholder for Meta — paste real key in `.env` (never commit it) |
+| `META_MODEL` | Meta model id (default `muse-spark-1.2-contributor`) |
 
 Notes:
 - If `OPENROUTER_MODEL` is blank, the app falls back to `LLM_MODEL` (must be a valid OpenRouter id).
+- For `meta`, `META_MODEL` is used; `LLM_MODEL` stays as the Ollama fallback when meta keys are not set.
 - Localhost `LLM_API_BASE` is ignored for openrouter so you do **not** need to edit the API path by hand.
 
-### Resource use: Ollama vs OpenRouter vs Whisper
+### Resource use: Ollama vs OpenRouter vs Meta vs Whisper
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
 | **Whisper (STT)** | Always (dictation needs it) | Local — loads regardless of LLM provider |
-| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `openrouter` / `none` |
+| **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
+| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
 
-**Important:** Switching to OpenRouter stops Odicto from launching or talking to Ollama.  
+**Important:** Switching to Meta or OpenRouter stops Odicto from launching or talking to Ollama.  
 It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.
 
 ```powershell
@@ -207,9 +296,9 @@ netstat -ano | findstr 11434
 ollama ps
 ```
 
-To free local LLM memory while using OpenRouter: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
+To free local LLM memory while using Meta/OpenRouter: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
 
-### 7. Optional: raw dictation only (no LLM)
+### 8. Optional: raw dictation only (no LLM)
 
 ```env
 LLM_PROVIDER=none
@@ -217,19 +306,26 @@ LLM_PROVIDER=none
 
 Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-text.
 
-### 8. Verify
+### 9. Verify
 
 ```powershell
+# Windows
 .\.venv\Scripts\python.exe -m unittest test_units -v
 ```
 
-### 9. Run
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest test_units -v
+```
 
-| Action | File |
-|--------|------|
-| Start (background, no console) | `start_dictation.bat` |
-| Start (console logs) | `run_debug.bat` |
-| Stop | `stop_dictation.bat` |
+### 10. Run
+
+| Action | Windows | macOS / Linux |
+|--------|---------|---------------|
+| Configure provider | `.venv\Scripts\python.exe odicto.py setup` | `.venv/bin/python odicto.py setup` |
+| Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
+| Start (console logs) | `run_debug.bat` | `./run_debug.sh` |
+| Stop | `stop_dictation.bat` | `./stop_dictation.sh` |
 
 ---
 
@@ -237,7 +333,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ### Start your day
 
-1. Double-click **`start_dictation.bat`**  
+1. Start Odicto with your OS's start script (see table above)  
 2. Wait a few seconds for models to load (first run is slower)  
 3. You’ll briefly see a **Starting** pill at the bottom center, then it fades  
 
@@ -265,15 +361,16 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 | **Hold, don't tap** | Very short holds are ignored (anti-accidental) |
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
-| **Clear AI memory** | Say *reset chat* / *clear conversation* in AI mode to clear multi-turn history |
+| **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in AI mode — both wipe the multi-turn history |
+| **Fresh one-shot AI** | Hold **F6** while using the AI chord: that capture gets a context-free reply (memory wiped first) |
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
 | **VS Code note** | Ctrl+` toggles the terminal there -- while Odicto runs it steals that chord |
 | **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
-| **Logs** | Use `run_debug.bat`, or check `dictation.log` when using `pythonw` |
+| **Logs** | Use `run_debug.bat` / `./run_debug.sh`, or check `dictation.log` when using the no-console launcher |
 
 ### Stop
 
-Double-click **`stop_dictation.bat`** (or close the debug console with Ctrl+C).
+Run your OS's stop script (see table above), or close the debug console with Ctrl+C.
 
 ---
 
@@ -286,10 +383,15 @@ Copy from `.env.example`. Important knobs:
 | `HOTKEY` | `ctrl+grave` | Dictation chord (`grave` = the `` ` `` key) |
 | `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
 | `AI_MODIFIER` | *(empty)* | Legacy third-key AI trigger; leave blank when using `AI_HOTKEY` |
+| `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
+| `CTRL_FORCE_FRESH_KEYS` | `f6` | Key held during a capture forces a fresh, context-free AI reply |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
-| `LLM_PROVIDER` | `ollama` | `ollama` · `openrouter` · `none` |
-| `LLM_MODEL` | see example | Ollama model tag (fallback model id for openrouter if `OPENROUTER_MODEL` blank) |
+| `LLM_PROVIDER` | `meta` | `meta` (also `meta-api`, `meta_api`) · `ollama` · `openrouter` · `none` |
+| `META_API_KEY` | *(empty)* | Meta API key (`MODEL_API_KEY` also accepted) — paste real key in `.env` |
+| `META_API_BASE` | `https://api.meta.ai/v1` | Meta API root |
+| `META_MODEL` | `muse-spark-1.2-contributor` | Meta model id (also `META_API_MODEL`) |
+| `LLM_MODEL` | see example | Ollama model tag (fallback when `OPENROUTER_MODEL`/`META_MODEL` blank) |
 | `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
 | `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
 | `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
@@ -315,6 +417,10 @@ Copy from `.env.example`. Important knobs:
 | `config.py` | Env-backed settings |
 | `app_state.py` | Shared state enum (import-safe) |
 | `install.ps1` | Zero-to-one Windows installer |
+| `install.sh` | Zero-to-one macOS/Linux installer |
+| `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
+| `setup_web.py` | Local setup web page (provider + key config) |
+| `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---
@@ -323,27 +429,37 @@ Copy from `.env.example`. Important knobs:
 
 | Symptom | Fix |
 |---------|-----|
-| No HUD on hotkey | Restart with `run_debug.bat`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; try `run_debug.bat` as Admin |
-| Old hotkeys still work / both modes feel wrong | Multiple instances — run `stop_dictation.bat` (kills all), then start once. Check log for `Hotkeys bound: …` |
-| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook (hooks run even when idle, not only during dictation). Run `stop_dictation.bat`, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
+| No HUD on hotkey | Restart with `run_debug.bat` / `./run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
+| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux try root |
+| Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
+| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
 | Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
-| Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone) |
+| Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone; macOS → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
 | AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Meta) | Check `META_API_KEY` / `MODEL_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
 | App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
-| Ollama still using RAM on OpenRouter | Odicto is not calling it; quit the Ollama tray app / service separately (see resource section above) |
+| Ollama still using RAM on Meta/OpenRouter | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors | Recreate venv and reinstall `requirements.txt` |
+| macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
+| Linux hotkey/paste doesn't work | Run as root or add your user to the `input` group; on Wayland prefer X11 |
 
 ---
 
 ## Development
 
 ```powershell
+# Windows
 .\.venv\Scripts\python.exe -m unittest test_units -v
 .\run_debug.bat
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest test_units -v
+./run_debug.sh
 ```
 
 ---
@@ -351,8 +467,9 @@ Copy from `.env.example`. Important knobs:
 ## Privacy
 
 - **Dictation path** can stay fully local (Whisper + paste).  
-- **AI path** stays local if you use Ollama; **OpenRouter sends the transcribed text to a third party**.  
-- With `LLM_PROVIDER=openrouter` or `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.  
+- **AI path** stays local if you use Ollama; **Meta / OpenRouter send the transcribed text to a third party**.  
+- With `LLM_PROVIDER=meta` / `openrouter` / `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.  
+- Never commit `.env` (may contain `META_API_KEY` / `MODEL_API_KEY` / `OPENROUTER_API_KEY`).
 - No telemetry in this project.
 
 ---

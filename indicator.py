@@ -12,8 +12,8 @@ Design language:
 from __future__ import annotations
 
 import math
+import os
 import sys
-import ctypes
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -25,10 +25,12 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QFont,
     QFontDatabase,
     QGuiApplication,
+    QIcon,
     QPainter,
     QPainterPath,
     QPen,
@@ -37,7 +39,9 @@ from PySide6.QtGui import (
     QPaintEvent,
     QFontMetrics,
 )
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+
+from platforms import apply_window_exstyles
 
 
 class GuiState(Enum):
@@ -47,6 +51,7 @@ class GuiState(Enum):
     PROCESSING = auto()
     SUCCESS = auto()
     ERROR = auto()
+    RESET = auto()
 
 
 # --------------------------------------------------------------------------- theme
@@ -92,6 +97,8 @@ def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[s
         if last_status == "empty":
             return "No speech"
         return "Failed"
+    if state == GuiState.RESET:
+        return "Context cleared"
     return ""
 
 
@@ -110,6 +117,7 @@ def _all_status_labels() -> list[str]:
         status_label(GuiState.SUCCESS),
         status_label(GuiState.ERROR, last_status="empty"),
         status_label(GuiState.ERROR, last_status="error"),
+        status_label(GuiState.RESET),
     ]
 
 
@@ -119,6 +127,7 @@ class DictationIndicator(QWidget):
     # Thread-safe wake-ups from keyboard / worker threads
     _wake = Signal()
     _hide_req = Signal()
+    _reset_flash = Signal()
 
     def __init__(self, app: Any) -> None:
         # Ensure a single QApplication exists before any QWidget.
@@ -146,8 +155,11 @@ class DictationIndicator(QWidget):
         self._level_smooth: float = 0.0
         self._appear: float = 0.0  # 0..1 opacity only (never scale)
         self._appear_target: float = 1.0
+        self._rise: float = 0.0    # 0..1 rise offset for the entrance (no scale)
         self._check_progress: float = 0.0
         self._content_fade: float = 1.0
+        self._glyph_fade: float = 1.0  # 0..1 cross-fade between state glyphs
+        self._last_glyph_state: GuiState = GuiState.BOOTING
 
         # --- Geometry (8px rhythm) ---
         self._pad = 14                 # shadow bleed only (no glow halo)
@@ -168,9 +180,13 @@ class DictationIndicator(QWidget):
         self._setup_window()
         self._setup_font()
         self._fit_pill_to_labels()
+        self._setup_tray()
 
         self._wake.connect(self._sync_from_app, Qt.ConnectionType.QueuedConnection)
         self._hide_req.connect(self._do_hide, Qt.ConnectionType.QueuedConnection)
+        self._reset_flash.connect(
+            self._do_flash_reset, Qt.ConnectionType.QueuedConnection
+        )
 
         self._tick = QTimer(self)
         self._tick.setInterval(16)  # ~60 FPS
@@ -187,6 +203,67 @@ class DictationIndicator(QWidget):
         self.raise_()
 
     # ------------------------------------------------------------------ window
+    def _setup_tray(self) -> None:
+        """Minimal tray/status menu for macOS/Linux background control.
+
+        Kept deliberately light and optional — if the system has no tray
+        (some Linux desktops), the HUD-only behavior is unchanged.
+        """
+        self._tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon = QIcon()
+        pixmap = self._make_tray_icon()
+        if pixmap.isNull():
+            return
+        icon.addPixmap(pixmap)
+        self._tray = QSystemTrayIcon(icon, self)
+        menu = QMenu()
+
+        setup_action = QAction("Setup…", self)
+        setup_action.triggered.connect(self._open_setup_page)
+        menu.addAction(setup_action)
+
+        menu.addSeparator()
+
+        quit_action = QAction("Quit Odicto", self)
+        quit_action.triggered.connect(self._quit_app)
+        menu.addAction(quit_action)
+
+        self._tray.setContextMenu(menu)
+        self._tray.setToolTip("Odicto")
+        self._tray.show()
+
+    def _make_tray_icon(self):
+        from PySide6.QtGui import QPixmap
+
+        pm = QPixmap(24, 24)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(108, 168, 128))
+        painter.drawRoundedRect(QRectF(4, 4, 16, 16), 5, 5)
+        painter.end()
+        return pm
+
+    def _open_setup_page(self) -> None:
+        try:
+            import subprocess
+            import sys
+
+            subprocess.Popen(
+                [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "odicto.py"), "setup"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"Warning: could not open setup page: {e}", flush=True)
+
+    def _quit_app(self) -> None:
+        self._tray.hide() if self._tray is not None else None
+        self._qt_app.quit()
+
     def _setup_window(self) -> None:
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -208,8 +285,11 @@ class DictationIndicator(QWidget):
             "Segoe UI Variable Display",
             "Segoe UI Variable",
             "Segoe UI",
-            "Inter",
             "SF Pro Display",
+            "Inter",
+            "Ubuntu",
+            "Noto Sans",
+            "DejaVu Sans",
         ):
             if name in families:
                 family = name
@@ -242,8 +322,10 @@ class DictationIndicator(QWidget):
         left = float(self._inset_x + self._glyph_slot + self._gap_glyph_text)
         right = float(self._inset_x)
         chip = self._gap_text_chip + self._chip_width()
-        # Always reserve chip width so AI ↔ raw doesn't resize the capsule mid-session
-        self._pill_w = int(math.ceil(left + max_text + chip + right + 4.0))
+        # Always reserve chip width so AI ↔ raw doesn't resize the capsule mid-session.
+        # Shave 8% off the auto-fit width for a tighter, quieter capsule. The longest
+        # label still fits because the 4px padding + glyph gap absorb the difference.
+        self._pill_w = int(math.ceil((left + max_text + chip + right + 4.0) * 0.92))
         self._canvas_w = self._pill_w + self._pad * 2
         self._canvas_h = self._pill_h + self._pad * 2
         self.setFixedSize(self._canvas_w, self._canvas_h)
@@ -260,37 +342,8 @@ class DictationIndicator(QWidget):
         self.move(x, y)
 
     def _apply_win32_exstyles(self) -> None:
-        """Keep the HUD topmost and non-activating without breaking Qt alpha."""
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            GWL_EXSTYLE = -20
-            WS_EX_NOACTIVATE = 0x08000000
-            WS_EX_TOOLWINDOW = 0x00000080
-            WS_EX_TRANSPARENT = 0x00000020
-            user32 = ctypes.windll.user32
-
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style = (style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) & ~WS_EX_TRANSPARENT
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-
-            HWND_TOPMOST = -1
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOACTIVATE = 0x0010
-            SWP_SHOWWINDOW = 0x0040
-            user32.SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
-        except Exception as e:
-            print(f"Warning: could not apply Win32 exstyles: {e}")
+        """Apply platform-specific window styles (topmost/non-activating)."""
+        apply_window_exstyles(self)
 
     # -------------------------------------------------------------- public API
     def notify_state_changed(self) -> None:
@@ -300,6 +353,24 @@ class DictationIndicator(QWidget):
     def hide_indicator(self) -> None:
         """Fade the HUD out (thread-safe; may be called from worker threads)."""
         self._hide_req.emit()
+
+    def flash_reset_notice(self) -> None:
+        """Thread-safe: briefly show a 'Context cleared' notice (hotkey reset)."""
+        self._reset_flash.emit()
+
+    def _do_flash_reset(self) -> None:
+        self.gui_state = GuiState.RESET
+        self._appear_target = 1.0
+        self._appear = max(self._appear, 0.9)
+        self._content_fade = 0.8
+        self._reposition_bottom_center()
+        self.setWindowOpacity(1.0)
+        self.show()
+        self._apply_win32_exstyles()
+        self.raise_()
+        self._hide_timer.start(1200)
+        self._sync_tick()
+        print("[HUD] Context cleared", flush=True)
 
     def _do_hide(self) -> None:
         self._appear_target = 0.0
@@ -382,6 +453,13 @@ class DictationIndicator(QWidget):
         self._t = 0.0
         if new_state in (GuiState.SUCCESS, GuiState.ERROR):
             self._check_progress = 0.0
+        if new_state == GuiState.RESET:
+            self._hide_timer.start(1200)
+
+        # Cross-fade the glyph when the drawn state changes (not on same-state noise).
+        if new_state != prev:
+            self._glyph_fade = 0.0
+        self._rise = 0.0  # entrance rise runs on every transition in
 
         if new_state in (GuiState.RECORDING, GuiState.PROCESSING):
             self._appear = 1.0
@@ -405,10 +483,10 @@ class DictationIndicator(QWidget):
         self._apply_win32_exstyles()
         self.raise_()
 
-        if new_state == GuiState.SUCCESS:
+        if new_state in (GuiState.SUCCESS, GuiState.ERROR):
+            self._hide_timer.start(1200 if new_state == GuiState.SUCCESS else 1500)
+        elif new_state == GuiState.RESET:
             self._hide_timer.start(1200)
-        elif new_state == GuiState.ERROR:
-            self._hide_timer.start(1500)
 
         self._sync_tick()
         print(f"[HUD] -> {new_state.name}", flush=True)
@@ -447,6 +525,17 @@ class DictationIndicator(QWidget):
                 self.hide()
             if self.gui_state == GuiState.HIDDEN:
                 self._sync_tick()
+
+        # Entrance rise — quick settle, no scale (avoids blur on translucent windows).
+        self._rise = min(1.0, self._rise + 0.14)
+        # Glyph cross-fade — ~150ms to full.
+        self._glyph_fade = min(1.0, self._glyph_fade + 0.2)
+
+        # Processing fill clock — a full ring represents one "working" sweep.
+        if self.gui_state == GuiState.PROCESSING:
+            self._proc_fill = (getattr(self, "_proc_fill", 0.0) + 0.016 / 2.5) % 1.0
+            if self._proc_fill < 0.001:
+                pass  # loop: indeterminate working sweep
 
         if self._content_fade < 1.0:
             self._content_fade = min(1.0, self._content_fade + 0.16)
@@ -500,7 +589,10 @@ class DictationIndicator(QWidget):
         self._paint_border(p, pill)
         self._paint_top_rim(p, pill)
 
+        # Entrance rise: translate the content up as it fades in (no scale → no blur).
+        rise_px = (1.0 - self._ease_out_cubic(self._rise)) * 4.0
         p.save()
+        p.translate(0.0, rise_px)
         p.setOpacity(max(0.0, min(1.0, self._appear * self._content_fade)))
         self._paint_content(p, pill, accent, use_llm)
         p.restore()
@@ -523,11 +615,13 @@ class DictationIndicator(QWidget):
             return _Theme.success
         if self.gui_state == GuiState.ERROR:
             return _Theme.error
+        if self.gui_state == GuiState.RESET:
+            return _Theme.ai
         return _Theme.process
 
     def _paint_shadow(self, p: QPainter, pill: QRectF) -> None:
-        """Neutral drop only — no colored hue under the capsule."""
-        for dy, expand, alpha in ((5, 2, 32), (2, 0, 44)):
+        """Neutral drop — slightly grounded so the capsule reads on bright screens."""
+        for dy, expand, alpha in ((6, 3, 40), (3, 0, 52)):
             r = QRectF(pill).adjusted(-expand, dy * 0.35, expand, dy)
             path = QPainterPath()
             path.addRoundedRect(r, self._radius + 1, self._radius + 1)
@@ -575,18 +669,14 @@ class DictationIndicator(QWidget):
         glyph_cx = left + self._glyph_slot * 0.5
         glyph_cy = pill.center().y() + self._text_optical_y
 
-        if self.gui_state == GuiState.RECORDING:
-            self._draw_eq_bars(p, glyph_cx, glyph_cy, accent)
-        elif self.gui_state == GuiState.PROCESSING:
-            self._draw_dual_ring(p, glyph_cx, glyph_cy, accent)
-        elif self.gui_state == GuiState.BOOTING:
-            self._draw_dual_ring(p, glyph_cx, glyph_cy, accent, slow=True)
-        elif self.gui_state == GuiState.SUCCESS:
-            self._draw_check(p, glyph_cx, glyph_cy, accent)
-        elif self.gui_state == GuiState.ERROR:
-            self._draw_error(p, glyph_cx, glyph_cy, accent)
-        else:
-            self._draw_dot(p, glyph_cx, glyph_cy, accent)
+        if self._glyph_fade < 1.0:
+            # Cross-fade: draw the previous state's glyph beneath at low opacity.
+            p.save()
+            p.setOpacity(max(0.0, 1.0 - self._glyph_fade))
+            self._draw_glyph(p, self._last_glyph_state, glyph_cx, glyph_cy, accent)
+            p.restore()
+        self._draw_glyph(p, self.gui_state, glyph_cx, glyph_cy, accent)
+        self._last_glyph_state = self.gui_state
 
         # Hairline divider
         div_x = left + self._glyph_slot + self._gap_glyph_text * 0.4
@@ -673,6 +763,48 @@ class DictationIndicator(QWidget):
             c = QColor(accent)
             c.setAlpha(int(100 + 100 * v))
             p.fillPath(path, c)
+
+    def _draw_glyph(
+        self, p: QPainter, state: GuiState, cx: float, cy: float, accent: QColor
+    ) -> None:
+        """Route a GuiState to its glyph draw function (used for cross-fades too)."""
+        if state == GuiState.RECORDING:
+            self._draw_eq_bars(p, cx, cy, accent)
+        elif state == GuiState.PROCESSING:
+            self._draw_fill_ring(p, cx, cy, accent)
+        elif state == GuiState.BOOTING:
+            self._draw_dual_ring(p, cx, cy, accent, slow=True)
+        elif state in (GuiState.SUCCESS, GuiState.RESET):
+            self._draw_check(p, cx, cy, accent)
+        elif state == GuiState.ERROR:
+            self._draw_error(p, cx, cy, accent)
+        else:
+            self._draw_dot(p, cx, cy, accent)
+
+    def _draw_fill_ring(
+        self, p: QPainter, cx: float, cy: float, accent: QColor
+    ) -> None:
+        """Indeterminate 'working' ring: a fine arc fills over ~2.5s, then loops.
+
+        More informative than a decorative spinner — you feel the pipeline work.
+        """
+        radius = 6.4
+        width = 1.35
+        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
+
+        track = QPen(QColor(255, 255, 255, 16))
+        track.setWidthF(width)
+        p.setPen(track)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(rect)
+
+        pen = QPen(QColor(accent.red(), accent.green(), accent.blue(), 200))
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        sweep = getattr(self, "_proc_fill", 0.0)
+        start = int(math.degrees(-90.0) * 16)
+        p.drawArc(rect, start, int(-360.0 * 16 * sweep))
 
     def _draw_dual_ring(
         self, p: QPainter, cx: float, cy: float, accent: QColor, slow: bool = False

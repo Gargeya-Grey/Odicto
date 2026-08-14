@@ -77,6 +77,32 @@ def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
     return tuple(parts[:-1]), parts[-1]
 
 
+def validate_hotkey_pair(hotkey: str, ai_hotkey: str = "") -> None:
+    """Validate a proposed HOTKEY / AI_HOTKEY pair without touching live config.
+
+    Raises ValueError when the chord would be unsafe (bare primary key) or the
+    AI chord would be indistinguishable from the dictation chord.
+    """
+    dict_mods, dict_primary = parse_hold_hotkey(hotkey)
+    if not dict_mods:
+        raise ValueError(
+            f"HOTKEY '{hotkey}' needs at least one modifier. A bare primary "
+            "would be globally suppressed (the key could never be typed in any app)."
+        )
+    if ai_hotkey:
+        ai_mods, ai_primary = parse_hold_hotkey(ai_hotkey)
+        if ai_primary != dict_primary:
+            raise ValueError(
+                f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
+                f"'{dict_primary}' (both chords share one hold key)"
+            )
+        if set(ai_mods) == set(dict_mods):
+            raise ValueError(
+                "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
+                "so dictation and AI are distinguishable)"
+            )
+
+
 class Config:
     # Hotkey config — two full chords sharing one primary key is preferred:
     #   HOTKEY=ctrl+grave          → raw dictation
@@ -86,6 +112,16 @@ class Config:
     AI_HOTKEY: str = os.getenv("AI_HOTKEY", "ctrl+shift+grave").strip()
     # Legacy optional third key (unused when AI_HOTKEY is set). Prefer AI_HOTKEY.
     AI_MODIFIER: str = os.getenv("AI_MODIFIER", "").strip().lower()
+    # Plain hotkey (no modifiers required) that clears the AI multi-turn memory
+    # immediately, without a recording. Empty = disabled. 'f5' is the default.
+    RESET_CONTEXT_HOTKEY: str = os.getenv("RESET_CONTEXT_HOTKEY", "f5").strip().lower()
+    # Extra keys held during a capture force a FRESH AI reply (memory wiped first,
+    # one-shot only). E.g. holding F6 while using the AI chord. Empty = disabled.
+    CTRL_FORCE_FRESH_KEYS: tuple = tuple(
+        k.strip().lower()
+        for k in os.getenv("CTRL_FORCE_FRESH_KEYS", "f6").split(",")
+        if k.strip()
+    )
 
     # Audio config
     SAMPLE_RATE: int = int(os.getenv("SAMPLE_RATE", "16000"))
@@ -96,10 +132,12 @@ class Config:
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "auto")
 
     # LLM config
-    # Flip LLM_PROVIDER between ollama / openrouter / none to switch backends.
-    LLM_PROVIDER: Literal["ollama", "openrouter", "none"] = os.getenv(
-        "LLM_PROVIDER", "ollama"
-    ).lower()  # type: ignore
+    # Flip LLM_PROVIDER between ollama / openrouter / meta / none to switch backends.
+    # Aliases: meta-api, meta_api -> meta
+    _raw_provider = os.getenv("LLM_PROVIDER", "meta").strip().lower().replace("-", "_")
+    LLM_PROVIDER: Literal["ollama", "openrouter", "meta", "none"] = (
+        "meta" if _raw_provider in ("meta", "meta_api") else _raw_provider  # type: ignore
+    )
     # Ollama model tag (also used as fallback model id for openrouter if OPENROUTER_MODEL is blank)
     LLM_MODEL: str = _sanitize_model_id(
         os.getenv("LLM_MODEL", "qwen2.5:1.5b-instruct")
@@ -115,12 +153,26 @@ class Config:
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "512"))
     LLM_NUM_CTX: int = int(os.getenv("LLM_NUM_CTX", "2048"))
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    # Meta API (https://api.meta.ai/v1) — default provider
+    META_API_KEY: str = os.getenv(
+        "META_API_KEY", os.getenv("MODEL_API_KEY", "")
+    ).strip()
+    META_API_BASE: str = os.getenv(
+        "META_API_BASE", "https://api.meta.ai/v1"
+    ).strip().rstrip("/")
+    META_MODEL: str = _sanitize_model_id(
+        os.getenv("META_MODEL", os.getenv("META_API_MODEL", "muse-spark-1.2-contributor"))
+    )
+    META_REASONING_EFFORT: str = os.getenv("META_REASONING_EFFORT", "low").strip().lower()
+    META_MAX_OUTPUT_TOKENS: int = int(os.getenv("META_MAX_OUTPUT_TOKENS", "4096"))
 
     @classmethod
     def effective_llm_model(cls) -> str:
-        """Model id for the active provider (OPENROUTER_MODEL wins when set)."""
+        """Model id for the active provider (provider-specific model wins when set)."""
         if cls.LLM_PROVIDER == "openrouter" and cls.OPENROUTER_MODEL:
             return cls.OPENROUTER_MODEL
+        if cls.LLM_PROVIDER == "meta" and cls.META_MODEL:
+            return cls.META_MODEL
         return cls.LLM_MODEL
 
     @classmethod
@@ -132,6 +184,8 @@ class Config:
             if "localhost" in base or "127.0.0.1" in base or not base:
                 return cls.OPENROUTER_API_BASE or "https://openrouter.ai/api/v1"
             return base
+        if cls.LLM_PROVIDER == "meta":
+            return cls.META_API_BASE or "https://api.meta.ai/v1"
         return cls.LLM_API_BASE
 
     # Timing & Feedback
@@ -150,7 +204,7 @@ class Config:
         Raises:
             ValueError: If a configuration value is invalid.
         """
-        valid_providers = {"ollama", "openrouter", "none"}
+        valid_providers = {"ollama", "openrouter", "meta", "none"}
         if cls.LLM_PROVIDER not in valid_providers:
             raise ValueError(
                 f"LLM_PROVIDER must be one of {valid_providers}, got '{cls.LLM_PROVIDER}'"
@@ -160,6 +214,16 @@ class Config:
             raise ValueError(
                 "OPENROUTER_API_KEY is required when LLM_PROVIDER is 'openrouter'"
             )
+        if cls.LLM_PROVIDER == "meta" and not cls.META_API_KEY:
+            print(
+                "Warning: META_API_KEY (or MODEL_API_KEY) is empty while LLM_PROVIDER='meta'. "
+                "AI mode will fall back to raw transcript until a key is set in .env.",
+                flush=True,
+            )
+        if cls.META_REASONING_EFFORT not in ("low", "medium", "high", "none", ""):
+            raise ValueError(f"META_REASONING_EFFORT must be low|medium|high|none, got {cls.META_REASONING_EFFORT!r}")
+        if cls.META_MAX_OUTPUT_TOKENS < 64:
+            raise ValueError(f"META_MAX_OUTPUT_TOKENS must be >= 64, got {cls.META_MAX_OUTPUT_TOKENS}")
 
         if cls.SAMPLE_RATE <= 0:
             raise ValueError(f"SAMPLE_RATE must be positive, got {cls.SAMPLE_RATE}")
@@ -176,18 +240,15 @@ class Config:
                 f"HOTKEY '{cls.HOTKEY}' needs at least one modifier. A bare primary "
                 "would be globally suppressed (the key could never be typed in any app)."
             )
+        if cls.RESET_CONTEXT_HOTKEY:
+            reset_key = cls.RESET_CONTEXT_HOTKEY.split("+")[-1].strip()
+            if reset_key == dict_primary:
+                raise ValueError(
+                    f"RESET_CONTEXT_HOTKEY '{cls.RESET_CONTEXT_HOTKEY}' must not use "
+                    f"the dictation primary key '{dict_primary}'"
+                )
         if cls.AI_HOTKEY:
-            ai_mods, ai_primary = parse_hold_hotkey(cls.AI_HOTKEY)
-            if ai_primary != dict_primary:
-                raise ValueError(
-                    f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
-                    f"'{dict_primary}' (both chords share one hold key)"
-                )
-            if set(ai_mods) == set(dict_mods):
-                raise ValueError(
-                    "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
-                    "so dictation and AI are distinguishable)"
-                )
+            validate_hotkey_pair(cls.HOTKEY, cls.AI_HOTKEY)
         if cls.AI_MODIFIER:
             if cls.AI_MODIFIER == dict_primary or cls.AI_MODIFIER in dict_mods:
                 raise ValueError(
