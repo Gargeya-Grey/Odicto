@@ -612,7 +612,7 @@ function pollPullStatus() {{
       var btn = document.getElementById('pull_button');
       btn.disabled = false;
       btn.textContent = s.exit_code === 0 ? 'Download complete' : 'Download failed - retry';
-      el.textContent = (s.log ? s.log + '\n' : '') + (s.exit_code === 0 ? 'Done. The model is ready for local AI.' : 'The download failed. Check that Ollama is running and retry.');
+      el.textContent = (s.log ? s.log + '\\n' : '') + (s.exit_code === 0 ? 'Done. The model is ready for local AI.' : 'The download failed. Check that Ollama is running and retry.');
     }}
   }}).catch(function() {{ /* server may be busy; keep polling */ _pullTimer = setTimeout(pollPullStatus, 1500); }});
 }}

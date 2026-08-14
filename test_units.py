@@ -1276,6 +1276,45 @@ class TestCrossPlatform(unittest.TestCase):
 
         self.assertEqual(test_provider("none", "", "", ""), "ok")
 
+    def test_setup_web_page_js_parses(self) -> None:
+        """The rendered page's JS must be valid. A Python f-string escape
+        bug once emitted a raw newline inside a string literal, breaking the
+        whole script: the provider dropdown died and the key fields stayed
+        hidden."""
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        import setup_web
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available for JS syntax check")
+
+        page = setup_web._page()
+        match = re.search(r"<script>(.*?)</script>", page, re.S)
+        self.assertIsNotNone(match, "page must contain a script block")
+        js = match.group(1)
+        self.assertIn("initCustomSelect();", js)
+        self.assertIn("function showProvider", js)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(js)
+            path = f.name
+        try:
+            result = subprocess.run(
+                [node, "--check", path], capture_output=True, text=True
+            )
+            self.assertEqual(
+                result.returncode, 0, f"JS syntax error: {result.stderr}"
+            )
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
     def test_refiner_test_provider_unknown(self) -> None:
         from refiner import test_provider
 
