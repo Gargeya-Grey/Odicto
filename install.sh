@@ -125,6 +125,6 @@ echo "==> Pre-downloading Whisper model ($WHISPER_MODEL)"
 echo
 echo "Install complete."
 echo "Next:"
-echo "  1. Run:  .venv/bin/python odicto.py setup   (pick provider + paste key)"
+echo "  1. Run:  ./setup.sh   (pick provider + paste key)"
 echo "  2. Run:  ./run_debug.sh                     (grant permissions if asked)"
 echo "  3. Stop:  .venv/bin/python odicto.py stop"

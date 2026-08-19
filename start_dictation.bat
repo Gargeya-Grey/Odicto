@@ -11,7 +11,7 @@ if not exist "%~dp0.venv\Scripts\pythonw.exe" (
 )
 
 if not exist "%~dp0.env" (
-  echo ERROR: .env not found - copy .env.example to .env and set META_API_KEY.
+  echo ERROR: .env not found - copy .env.example to .env and set a provider API key.
   if "%~1"=="/nostartup" exit /b 1
   pause
   exit /b 1
@@ -35,7 +35,7 @@ set "PY=%~dp0.venv\Scripts\python.exe"
 REM Config validation. IMPORTANT: do not use Python percent-formatting in this
 REM one-liner. cmd.exe expands percent-sequences before Python runs, which broke
 REM older starts with TypeError: str object is not callable. Use an f-string.
-"%PY%" -c "from config import Config; print(f'LLM_PROVIDER={Config.LLM_PROVIDER} META_MODEL={Config.META_MODEL}')" 2>&1
+"%PY%" -c "from config import Config; print(f'LLM_PROVIDER={Config.LLM_PROVIDER} model={Config.effective_llm_model()}')" 2>&1
 if errorlevel 1 (
   echo Config validation failed - fix .env then rerun.
   pause

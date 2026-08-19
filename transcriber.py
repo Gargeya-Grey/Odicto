@@ -96,28 +96,33 @@ class WhisperTranscriber:
 
         is_english_model = Config.WHISPER_MODEL_SIZE.endswith(".en")
 
-        segments, _info = self.model.transcribe(
-            audio,
-            beam_size=1,
-            best_of=1,
-            temperature=0.0,
-            vad_filter=True,
-            vad_parameters={
-                # Keep pre-roll so the first syllable after a hotkey press is not
-                # treated as VAD noise and dropped. speech_pad_ms pads the leading
-                # edge of detected speech; the threshold is set slightly below the
-                # silero default so quieter starts still trigger. (faster-whisper
-                # 1.2.x VadOptions does not support start_of_speech_probability.)
+        # Hold-to-talk already bounds the utterance. Silero VAD on short clips
+        # costs extra CPU and can clip the first syllable; skip it unless the
+        # clip is long enough that silence-trimming pays off, or the user
+        # forced WHISPER_VAD=true.
+        use_vad = bool(Config.WHISPER_VAD)
+        if not use_vad and isinstance(audio, np.ndarray) and audio.size:
+            duration_s = float(audio.size) / float(Config.SAMPLE_RATE or 16000)
+            use_vad = duration_s >= 8.0
+
+        transcribe_kwargs = {
+            "beam_size": 1,
+            "best_of": 1,
+            "temperature": 0.0,
+            "vad_filter": use_vad,
+            "condition_on_previous_text": False,
+            "without_timestamps": True,
+            "language": "en" if is_english_model else None,
+            "word_timestamps": False,
+        }
+        if use_vad:
+            transcribe_kwargs["vad_parameters"] = {
                 "threshold": 0.4,
                 "min_silence_duration_ms": 300,
                 "speech_pad_ms": 300,
-            },
-            condition_on_previous_text=False,
-            without_timestamps=True,
-            language="en" if is_english_model else None,
-            # Skip expensive alignment work we never use.
-            word_timestamps=False,
-        )
+            }
+
+        segments, _info = self.model.transcribe(audio, **transcribe_kwargs)
 
         # Consume generator promptly; join without intermediate list growth for tiny clips.
         parts: List[str] = []

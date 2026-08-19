@@ -115,11 +115,17 @@ class Config:
     # Plain hotkey (no modifiers required) that clears the AI multi-turn memory
     # immediately, without a recording. Empty = disabled. 'f5' is the default.
     RESET_CONTEXT_HOTKEY: str = os.getenv("RESET_CONTEXT_HOTKEY", "f5").strip().lower()
-    # Extra keys held during a capture force a FRESH AI reply (memory wiped first,
-    # one-shot only). E.g. holding F6 while using the AI chord. Empty = disabled.
-    CTRL_FORCE_FRESH_KEYS: tuple = tuple(
+    # Extra keys held during a capture keep AI multi-turn memory (opt-in).
+    # Default AI chord is always a fresh one-shot. Hold F6 with Ctrl+` (or the
+    # AI chord) to continue the previous F6 conversation. Empty = disabled.
+    # CTRL_FORCE_FRESH_KEYS is a leftover name from the inverted behavior; if
+    # CTRL_KEEP_CONTEXT_KEYS is unset we still read it so old .env files work.
+    CTRL_KEEP_CONTEXT_KEYS: tuple = tuple(
         k.strip().lower()
-        for k in os.getenv("CTRL_FORCE_FRESH_KEYS", "f6").split(",")
+        for k in os.getenv(
+            "CTRL_KEEP_CONTEXT_KEYS",
+            os.getenv("CTRL_FORCE_FRESH_KEYS", "f6"),
+        ).split(",")
         if k.strip()
     )
 
@@ -130,13 +136,21 @@ class Config:
     # Whisper config
     WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "tiny.en")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "auto")
+    # Silero VAD before decode. Off by default: hold-to-talk clips are already
+    # bounded, and VAD adds latency plus a risk of clipping the first syllable.
+    # Forced on for recordings >= 8s in transcriber.py, or set WHISPER_VAD=true.
+    WHISPER_VAD: bool = _env_bool("WHISPER_VAD", "false")
 
     # LLM config
-    # Flip LLM_PROVIDER between ollama / openrouter / meta / none to switch backends.
-    # Aliases: meta-api, meta_api -> meta
+    # Flip LLM_PROVIDER between ollama / openrouter / meta / gemini / none to switch backends.
+    # Aliases: meta-api, meta_api -> meta ; google, gemini-api -> gemini
     _raw_provider = os.getenv("LLM_PROVIDER", "meta").strip().lower().replace("-", "_")
-    LLM_PROVIDER: Literal["ollama", "openrouter", "meta", "none"] = (
-        "meta" if _raw_provider in ("meta", "meta_api") else _raw_provider  # type: ignore
+    LLM_PROVIDER: Literal["ollama", "openrouter", "meta", "gemini", "none"] = (  # type: ignore
+        "meta"
+        if _raw_provider in ("meta", "meta_api")
+        else "gemini"
+        if _raw_provider in ("gemini", "gemini_api", "google", "google_api")
+        else _raw_provider
     )
     # Ollama model tag (also used as fallback model id for openrouter if OPENROUTER_MODEL is blank)
     LLM_MODEL: str = _sanitize_model_id(
@@ -150,7 +164,7 @@ class Config:
     OPENROUTER_API_BASE: str = os.getenv(
         "OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"
     ).strip()
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "512"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
     LLM_NUM_CTX: int = int(os.getenv("LLM_NUM_CTX", "2048"))
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     # Meta API (https://api.meta.ai/v1) — default provider
@@ -165,6 +179,16 @@ class Config:
     )
     META_REASONING_EFFORT: str = os.getenv("META_REASONING_EFFORT", "low").strip().lower()
     META_MAX_OUTPUT_TOKENS: int = int(os.getenv("META_MAX_OUTPUT_TOKENS", "4096"))
+    # Google Gemini API (https://ai.google.dev/gemini-api) — Interactions API via google-genai SDK.
+    # GEMINI_API_KEY is also accepted as alias for GOOGLE_API_KEY.
+    GEMINI_API_KEY: str = os.getenv(
+        "GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")
+    ).strip()
+    GEMINI_MODEL: str = _sanitize_model_id(
+        os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    )
+    GEMINI_THINKING_LEVEL: str = os.getenv("GEMINI_THINKING_LEVEL", "minimal").strip().lower()
+    GEMINI_MAX_OUTPUT_TOKENS: int = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
 
     @classmethod
     def effective_llm_model(cls) -> str:
@@ -173,6 +197,8 @@ class Config:
             return cls.OPENROUTER_MODEL
         if cls.LLM_PROVIDER == "meta" and cls.META_MODEL:
             return cls.META_MODEL
+        if cls.LLM_PROVIDER == "gemini" and cls.GEMINI_MODEL:
+            return cls.GEMINI_MODEL
         return cls.LLM_MODEL
 
     @classmethod
@@ -186,6 +212,10 @@ class Config:
             return base
         if cls.LLM_PROVIDER == "meta":
             return cls.META_API_BASE or "https://api.meta.ai/v1"
+        if cls.LLM_PROVIDER == "gemini":
+            # Gemini uses the google-genai SDK with the official endpoint;
+            # no OpenAI-compatible base is involved.
+            return "https://generativelanguage.googleapis.com"
         return cls.LLM_API_BASE
 
     # Timing & Feedback
@@ -204,7 +234,7 @@ class Config:
         Raises:
             ValueError: If a configuration value is invalid.
         """
-        valid_providers = {"ollama", "openrouter", "meta", "none"}
+        valid_providers = {"ollama", "openrouter", "meta", "gemini", "none"}
         if cls.LLM_PROVIDER not in valid_providers:
             raise ValueError(
                 f"LLM_PROVIDER must be one of {valid_providers}, got '{cls.LLM_PROVIDER}'"
@@ -220,10 +250,22 @@ class Config:
                 "AI mode will fall back to raw transcript until a key is set in .env.",
                 flush=True,
             )
+        if cls.LLM_PROVIDER == "gemini" and not cls.GEMINI_API_KEY:
+            print(
+                "Warning: GEMINI_API_KEY (or GOOGLE_API_KEY) is empty while LLM_PROVIDER='gemini'. "
+                "AI mode will fall back to raw transcript until a key is set in .env.",
+                flush=True,
+            )
         if cls.META_REASONING_EFFORT not in ("low", "medium", "high", "none", ""):
             raise ValueError(f"META_REASONING_EFFORT must be low|medium|high|none, got {cls.META_REASONING_EFFORT!r}")
         if cls.META_MAX_OUTPUT_TOKENS < 64:
             raise ValueError(f"META_MAX_OUTPUT_TOKENS must be >= 64, got {cls.META_MAX_OUTPUT_TOKENS}")
+        if cls.GEMINI_THINKING_LEVEL not in ("minimal", "low", "medium", "high", ""):
+            raise ValueError(
+                f"GEMINI_THINKING_LEVEL must be minimal|low|medium|high, got {cls.GEMINI_THINKING_LEVEL!r}"
+            )
+        if cls.GEMINI_MAX_OUTPUT_TOKENS < 64:
+            raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 64, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
 
         if cls.SAMPLE_RATE <= 0:
             raise ValueError(f"SAMPLE_RATE must be positive, got {cls.SAMPLE_RATE}")

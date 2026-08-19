@@ -174,7 +174,7 @@ Write-Host @"
 
 Next steps:
   1. Open the setup page to pick a provider and paste its key:
-     .\.venv\Scripts\python.exe odicto.py setup
+     .\setup.bat
   2. Start the app:
      .\start_dictation.bat
      (or run_debug.bat for a console log)
@@ -186,11 +186,13 @@ Next steps:
     LLM_PROVIDER=meta        # default; cloud Meta API  POST /v1/responses  needs META_API_KEY (MODEL_API_KEY also works)
     LLM_PROVIDER=ollama      # local; Odicto may start Ollama
     LLM_PROVIDER=openrouter  # cloud; needs OPENROUTER_API_KEY + OPENROUTER_MODEL
+    LLM_PROVIDER=gemini      # cloud; Google Gemini needs GEMINI_API_KEY (GOOGLE_API_KEY also works)
     LLM_PROVIDER=none        # raw dictation only
   Aliases for meta: meta, meta-api, meta_api
+  Aliases for gemini: gemini, google, google-api
 
-  Meta/OpenRouter do not start Ollama. Quit the Ollama tray app separately
-  if you want to free local LLM RAM/VRAM.
+  Meta/OpenRouter/Gemini do not start Ollama. Quit the Ollama tray app
+  separately if you want to free local LLM RAM/VRAM.
 
 Stop with stop_dictation.bat
 

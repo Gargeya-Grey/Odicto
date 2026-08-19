@@ -93,10 +93,12 @@ After install, configure a provider and API key without hand-editing `.env`:
 
 ```bash
 # Windows
-.\.venv\Scripts\python.exe odicto.py setup
+.\setup.bat
+# or: .\.venv\Scripts\python.exe odicto.py setup
 
 # macOS / Linux
-.venv/bin/python odicto.py setup
+./setup.sh
+# or: .venv/bin/python odicto.py setup
 ```
 
 The page writes `.env` atomically, preserves unsubmitted keys, and can test the
@@ -105,8 +107,10 @@ selected provider before saving.
 ## Runtime notes for agents
 
 - Default hotkeys: hold **Ctrl+`** (`HOTKEY=ctrl+grave`) for raw dictation;
-  hold **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for AI. Keyboard lib name
-  for `` ` `` is `grave`. Avoid Alt chords (browser focus loss on Alt release).
+  hold **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for a **fresh** AI reply
+  (no previous conversation). Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
+  to keep / continue AI memory. Keyboard lib name for `` ` `` is `grave`.
+  Avoid Alt chords (browser focus loss on Alt release).
 - First Whisper load downloads model weights (~75MB for `tiny.en`). Whisper
   always loads for STT, independent of LLM provider.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
@@ -117,6 +121,11 @@ selected provider before saving.
 - **Meta:** set `META_API_KEY` (or `MODEL_API_KEY`) and `META_MODEL`. Default
   model is `muse-spark-1.2-contributor` — do not silently fall back to the
   base `muse-spark-1.2` SKU.
+- **Gemini:** set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`),
+  and `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Uses the GA Interactions API
+  via the `google-genai` SDK (`client.interactions.create`). Optional
+  `GEMINI_THINKING_LEVEL` (`minimal|low|medium|high`, default `minimal`).
+  Odicto will **not** spawn Ollama in this mode.
 - **Provider `none`:** raw dictation only; no LLM client; Ollama not started.
 - macOS requires **Accessibility** and **Input Monitoring** permissions for
   `pynput` global hooks and synthetic copy/paste.

@@ -291,13 +291,15 @@ class TestOdicto(unittest.TestCase):
         )
 
         transcriber = WhisperTranscriber()
-        result = transcriber.transcribe("fake_audio.wav")
+        with patch("transcriber.Config.WHISPER_VAD", False):
+            result = transcriber.transcribe("fake_audio.wav")
         self.assertEqual(result, "Hello world")
 
         # Ensure speed flags are applied
         kwargs = mock_model_instance.transcribe.call_args[1]
         self.assertTrue(kwargs.get("without_timestamps"))
         self.assertEqual(kwargs.get("beam_size"), 1)
+        self.assertFalse(kwargs.get("vad_filter"))
 
     @patch("transcriber.WhisperModel")
     def test_whisper_transcribe_numpy(self, mock_whisper_model: MagicMock) -> None:
@@ -309,8 +311,28 @@ class TestOdicto(unittest.TestCase):
 
         transcriber = WhisperTranscriber()
         audio = np.zeros(1600, dtype=np.float32)
-        result = transcriber.transcribe(audio)
+        with patch("transcriber.Config.WHISPER_VAD", False):
+            result = transcriber.transcribe(audio)
         self.assertEqual(result, "from memory")
+        kwargs = mock_model_instance.transcribe.call_args[1]
+        self.assertFalse(kwargs.get("vad_filter"))
+
+    @patch("transcriber.WhisperModel")
+    def test_whisper_vad_on_long_clips(self, mock_whisper_model: MagicMock) -> None:
+        """Clips >= 8s turn VAD back on so long silence is trimmed."""
+        mock_segment = MagicMock()
+        mock_segment.text = "long"
+        mock_model_instance = mock_whisper_model.return_value
+        mock_model_instance.transcribe.return_value = ([mock_segment], MagicMock())
+
+        transcriber = WhisperTranscriber()
+        audio = np.zeros(16000 * 9, dtype=np.float32)
+        with patch("transcriber.Config.WHISPER_VAD", False), patch(
+            "transcriber.Config.SAMPLE_RATE", 16000
+        ):
+            transcriber.transcribe(audio)
+        kwargs = mock_model_instance.transcribe.call_args[1]
+        self.assertTrue(kwargs.get("vad_filter"))
 
     def test_effective_llm_model_and_api_base(self) -> None:
         """Provider flip picks the right model id and API base without hand-editing paths."""
@@ -341,6 +363,16 @@ class TestOdicto(unittest.TestCase):
             Config, "LLM_MODEL", "some/openrouter-id"
         ), patch.object(Config, "OPENROUTER_MODEL", ""):
             self.assertEqual(Config.effective_llm_model(), "some/openrouter-id")
+
+        # Gemini uses GEMINI_MODEL and the google-genai endpoint
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_MODEL", "gemini-3.7-flash"
+        ):
+            self.assertEqual(Config.effective_llm_model(), "gemini-3.7-flash")
+            self.assertIn(
+                "generativelanguage.googleapis.com",
+                Config.effective_llm_api_base(),
+            )
 
     @patch("refiner.Config.LLM_MAX_TOKENS", 512)
     @patch("refiner.OpenAI")
@@ -396,6 +428,62 @@ class TestOdicto(unittest.TestCase):
         # Ollama-only extra_body must not be attached for openrouter
         self.assertNotIn("extra_body", kwargs)
 
+    @patch("refiner.Config.LLM_PROVIDER", "gemini")
+    @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
+    @patch("refiner.Config.GEMINI_MODEL", "gemini-3.7-flash")
+    @patch("refiner.Config.GEMINI_THINKING_LEVEL", "low")
+    @patch("refiner.Config.GEMINI_MAX_OUTPUT_TOKENS", 4096)
+    def test_text_refiner_gemini(self) -> None:
+        """Gemini uses the google-genai Interactions API with the system prompt."""
+        import refiner
+
+        fake_interaction = MagicMock()
+        fake_interaction.output_text = "Gemini reply"
+        fake_interaction.id = "v1_abc123"
+        mock_client = MagicMock()
+        mock_client.interactions.create.return_value = fake_interaction
+
+        with patch.object(refiner, "google_genai") as mock_genai:
+            mock_genai.Client.return_value = mock_client
+            r = TextRefiner()
+            self.assertEqual(r.provider, "gemini")
+            self.assertEqual(r.model, "gemini-3.7-flash")
+            mock_genai.Client.assert_called_once_with(api_key="AIza-test")
+
+            result = r.refine("hello from gemini", keep_history=True)
+            self.assertEqual(result, "Gemini reply")
+
+            result2 = r.refine("follow up question", keep_history=True)
+            self.assertEqual(result2, "Gemini reply")
+
+        first_kwargs = mock_client.interactions.create.call_args_list[0][1]
+        self.assertEqual(first_kwargs["model"], "gemini-3.7-flash")
+        self.assertEqual(first_kwargs["input"], "hello from gemini")
+        self.assertIn("PLAIN HUMAN-READABLE TEXT", first_kwargs["system_instruction"])
+        self.assertEqual(first_kwargs["generation_config"]["thinking_level"], "low")
+        # First turn has no previous_interaction_id; the second turn chains
+        # onto the stored id from the first reply.
+        self.assertNotIn("previous_interaction_id", first_kwargs)
+        self.assertEqual(
+            mock_client.interactions.create.call_args_list[1][1]["previous_interaction_id"],
+            "v1_abc123",
+        )
+
+    @patch("refiner.Config.LLM_PROVIDER", "gemini")
+    @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
+    def test_text_refiner_gemini_reset_clears_server_state(self) -> None:
+        """reset chat must also drop the server-side previous_interaction_id."""
+        import refiner
+
+        with patch.object(refiner, "google_genai") as mock_genai:
+            mock_client = MagicMock()
+            mock_genai.Client.return_value = mock_client
+            r = TextRefiner()
+            r.client._last_interaction_id = "v1_old"
+            r.refine("reset chat")
+            self.assertIsNone(r.client._last_interaction_id)
+            self.assertEqual(r.conversation_history, [])
+
     @patch("refiner.OpenAI")
     def test_text_refiner_conversation_history(self, mock_openai: MagicMock) -> None:
         """Verifies that TextRefiner correctly maintains and updates conversation history."""
@@ -413,7 +501,7 @@ class TestOdicto(unittest.TestCase):
 
         refiner = TextRefiner()
 
-        res1 = refiner.refine("What is your name?")
+        res1 = refiner.refine("What is your name?", keep_history=True)
         self.assertEqual(res1, "My name is Assistant.")
         self.assertEqual(len(refiner.conversation_history), 2)
         self.assertEqual(
@@ -425,7 +513,7 @@ class TestOdicto(unittest.TestCase):
             {"role": "assistant", "content": "My name is Assistant."},
         )
 
-        res2 = refiner.refine("Repeat what I did.")
+        res2 = refiner.refine("Repeat what I did.", keep_history=True)
         self.assertEqual(res2, "You said hello.")
         self.assertEqual(len(refiner.conversation_history), 4)
 
@@ -446,6 +534,26 @@ class TestOdicto(unittest.TestCase):
         self.assertIn("What is your name?", contents)
         self.assertIn("My name is Assistant.", contents)
         self.assertIn("Repeat what I did.", contents)
+
+    @patch("refiner.OpenAI")
+    def test_text_refiner_fresh_does_not_keep_history(self, mock_openai: MagicMock) -> None:
+        """Default refine is a one-shot: no history written, later F6 turns stay empty."""
+        mock_client = mock_openai.return_value
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "One shot"
+        mock_client.chat.completions.create.return_value = mock_resp
+
+        refiner = TextRefiner()
+        refiner.refine("task A")
+        self.assertEqual(refiner.conversation_history, [])
+
+        refiner.refine("task B")
+        messages_b = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
+        contents = [m["content"] for m in messages_b]
+        self.assertIn("task B", contents)
+        self.assertNotIn("task A", contents)
+        self.assertEqual(refiner.conversation_history, [])
 
     @patch("refiner.OpenAI")
     def test_text_refiner_exception_fallback(self, mock_openai: MagicMock) -> None:
@@ -471,8 +579,8 @@ class TestOdicto(unittest.TestCase):
 
         refiner = TextRefiner()
 
-        # Build some history via normal queries.
-        refiner.refine("What is your name?")
+        # Build some history via keep-history queries.
+        refiner.refine("What is your name?", keep_history=True)
         self.assertEqual(len(refiner.conversation_history), 2)
         self.assertEqual(mock_client.chat.completions.create.call_count, 1)
 
@@ -483,7 +591,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(mock_client.chat.completions.create.call_count, 1)
 
         # Case/punctuation variants also reset.
-        refiner.refine("What is your name?")
+        refiner.refine("What is your name?", keep_history=True)
         self.assertEqual(len(refiner.conversation_history), 2)
         refiner.refine("Clear the conversation!")
         self.assertEqual(refiner.conversation_history, [])
@@ -731,9 +839,10 @@ class TestOdicto(unittest.TestCase):
         """Verifies the global hotkey state machine flow and processing pipeline trigger."""
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
-        ), patch("threading.Thread"):
-            app = DictationApp()
-            app.initialize_app()
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
             app.ready = True
             self.assertEqual(app.state, AppState.IDLE)
 
@@ -763,8 +872,6 @@ class TestOdicto(unittest.TestCase):
                 app.on_release()
                 app.recorder.stop.assert_called_once_with(filepath=None)
                 self.assertEqual(app.state, AppState.PROCESSING)
-
-                # Run the pipeline worker synchronously (single worker thread).
                 mock_thread.assert_called_once()
                 pipeline_call = mock_thread.call_args
                 pipeline_target = (
@@ -775,15 +882,18 @@ class TestOdicto(unittest.TestCase):
                 pipeline_args = (
                     pipeline_call[1].get("args") or pipeline_call[0][1:]
                 )
-                pipeline_target(*pipeline_args)
+            # Run the worker with real threads so STT/selection overlap works.
+            pipeline_target(*pipeline_args)
 
-                app.transcriber.transcribe.assert_called_once()
-                app.refiner.refine.assert_called_once_with("raw speech text", context="")
-                mock_paste_text.assert_called_once_with("Polished speech text.")
-                self.assertEqual(app.state, AppState.IDLE)
-                self.assertEqual(app.last_status, "success")
-                # Selection probe runs on the worker thread (not the hook thread).
-                mock_get_selected_text.assert_called()
+            app.transcriber.transcribe.assert_called_once()
+            app.refiner.refine.assert_called_once_with(
+                "raw speech text", context="", keep_history=False
+            )
+            mock_paste_text.assert_called_once_with("Polished speech text.")
+            self.assertEqual(app.state, AppState.IDLE)
+            self.assertEqual(app.last_status, "success")
+            # Selection probe overlaps Whisper (not the hook thread).
+            mock_get_selected_text.assert_called()
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
@@ -807,9 +917,10 @@ class TestOdicto(unittest.TestCase):
         """Selected text is captured off-hook and passed to refine as context."""
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
-        ), patch("threading.Thread"), patch("main.time.sleep"):
-            app = DictationApp()
-            app.initialize_app()
+        ), patch("main.time.sleep"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
             app.ready = True
             mock_get_selected_text.return_value = "highlighted draft paragraph"
             app._pressed_mods_at_press = ("ctrl", "shift")
@@ -831,10 +942,12 @@ class TestOdicto(unittest.TestCase):
                 pipeline_args = (
                     pipeline_call[1].get("args") or pipeline_call[0][1:]
                 )
-                pipeline_target(*pipeline_args)
+            pipeline_target(*pipeline_args)
 
             app.refiner.refine.assert_called_once_with(
-                "make this better", context="highlighted draft paragraph"
+                "make this better",
+                context="highlighted draft paragraph",
+                keep_history=False,
             )
             mock_paste_text.assert_called_once_with("Improved draft.")
 
@@ -984,7 +1097,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.get_selected_text")
     @patch("main.platforms")
     @patch("main.play_beep")
-    def test_dictation_app_f6_force_fresh_ai(
+    def test_dictation_app_f6_keeps_conversation(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
@@ -995,30 +1108,45 @@ class TestOdicto(unittest.TestCase):
         mock_recorder: MagicMock,
         mock_socket: MagicMock,
     ) -> None:
-        """Holding F6 (CTRL_FORCE_FRESH_KEYS) while pressing the AI chord forces
-        a fresh-context AI reply: memory is wiped and use_llm stays True."""
+        """Holding F6 (CTRL_KEEP_CONTEXT_KEYS) with Ctrl+` (or the AI chord)
+        runs AI with conversation memory. Without F6, AI is a fresh one-shot."""
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
-        ), patch("main.Config.CTRL_FORCE_FRESH_KEYS", ("f6",)):
+        ), patch("main.Config.CTRL_KEEP_CONTEXT_KEYS", ("f6",)), patch(
+            "main.time.sleep"
+        ):
+            mock_get_selected_text.return_value = ""
             app = DictationApp()
             app.initialize_app()
             app.ready = True
 
-            # User holds the AI chord (ctrl+shift) AND f6.
-            app._pressed_mods_at_press = ("ctrl", "shift", "f6")
+            # Fresh AI chord: no F6 → keep_history stays False, memory not wiped
+            # at press (fresh is handled inside refine, not by resetting first).
+            app._pressed_mods_at_press = ("ctrl", "shift")
             app.on_press(use_llm=True)
             self.assertTrue(app.use_llm)
+            self.assertFalse(app._keep_history)
+            mock_refiner.return_value.reset_context.assert_not_called()
+
+            app._set_state(AppState.IDLE)
+            app._last_cycle_end = 0.0
+
+            # User holds F6 + Ctrl (dictation chord) → AI + keep memory.
+            app._pressed_mods_at_press = ("ctrl", "f6")
+            app.on_press(use_llm=False)
+            self.assertTrue(app.use_llm)
+            self.assertTrue(app._keep_history)
             self.assertIsNone(app._capture_mode_override)
-            mock_refiner.return_value.reset_context.assert_called_once()
+            mock_refiner.return_value.reset_context.assert_not_called()
 
             app._set_state(AppState.RECORDING)
             app._record_started_at = 0.0
             app.recorder.stop.return_value = True
             app.recorder.last_audio_array = np.zeros(50, dtype=np.float32)
             app.transcriber.transcribe.return_value = "draft"
+            app.refiner.refine.return_value = "Draft reply"
             with patch("threading.Thread") as mock_thread:
                 app.on_release()
-                # Run the pipeline worker synchronously.
                 pipeline_call = mock_thread.call_args
                 pipeline_target = (
                     pipeline_call[1].get("target")
@@ -1028,8 +1156,11 @@ class TestOdicto(unittest.TestCase):
                 pipeline_args = (
                     pipeline_call[1].get("args") or pipeline_call[0][1:]
                 )
-                pipeline_target(*pipeline_args)
+            pipeline_target(*pipeline_args)
             self.assertEqual(app.state, AppState.IDLE)
+            app.refiner.refine.assert_called_once_with(
+                "draft", context="", keep_history=True
+            )
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
@@ -1230,6 +1361,8 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertEqual(parsed["LLM_PROVIDER"], "meta")
         self.assertEqual(parsed["META_API_KEY"], "abc")
         self.assertTrue(_mask_key("META_API_KEY"))
+        self.assertTrue(_mask_key("GEMINI_API_KEY"))
+        self.assertTrue(_mask_key("GOOGLE_API_KEY"))
         self.assertFalse(_mask_key("LLM_PROVIDER"))
 
     def test_setup_web_merge_env_preserves_and_updates(self) -> None:
@@ -1275,6 +1408,11 @@ class TestCrossPlatform(unittest.TestCase):
         from refiner import test_provider
 
         self.assertEqual(test_provider("none", "", "", ""), "ok")
+
+    def test_refiner_test_provider_gemini_needs_key(self) -> None:
+        from refiner import test_provider
+
+        self.assertIn("GEMINI_API_KEY", test_provider("gemini", "", "gemini-3.7-flash", ""))
 
     def test_setup_web_page_js_parses(self) -> None:
         """The rendered page's JS must be valid. A Python f-string escape

@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Linux-X11%2FWayland-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-faster--whisper-00C853?style=for-the-badge" alt="Whisper" />
-  <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter-FF6F00?style=for-the-badge" alt="LLM" />
+  <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter%20%7C%20Gemini-FF6F00?style=for-the-badge" alt="LLM" />
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt" />
 </p>
 
@@ -29,7 +29,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 1. Records while you **hold** a global hotkey  
 2. Transcribes with **local Whisper** (`faster-whisper`)  
 3. Pastes into the focused field via clipboard  
-4. Optionally answers with **Meta API** (default), local Ollama, or OpenRouter  
+4. Optionally answers with **Meta API** (default), local Ollama, OpenRouter, or **Google Gemini**  
 5. Shows a slim **bottom-center HUD** while it works  
 
 ```text
@@ -41,8 +41,9 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 | Mode | How | Result |
 |------|-----|--------|
 | **Dictation** | Hold **Ctrl+\`**, speak, release | Raw transcript pasted |
-| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Model answer pasted |
-| **Reset chat** | Say *“reset chat”* in AI mode | Clears multi-turn memory |
+| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Fresh model answer (no prior turns) |
+| **AI with memory** | Hold **F6** + **Ctrl+\`**, speak, release | Continues the F6 conversation |
+| **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
 ---
 
@@ -71,7 +72,7 @@ Notes:
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\.venv\Scripts\python.exe odicto.py setup   # pick provider + paste key
+.\setup.bat   # pick provider + paste key (or: python odicto.py setup)
 .\start_dictation.bat
 ```
 
@@ -81,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh
-.venv/bin/python odicto.py setup
+./setup.sh
 ./run_debug.sh
 # Grant Accessibility + Input Monitoring when macOS prompts, then restart the app.
 ```
@@ -92,7 +93,7 @@ bash install.sh
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 sudo bash install.sh   # or run as a user with access to /dev/input
-.venv/bin/python odicto.py setup
+./setup.sh
 ./run_debug.sh
 ```
 
@@ -149,6 +150,7 @@ Pick your OS below, or use the one-command installers above.
 | **(Optional) Meta API key** | Cloud AI replies (default backend) | Use `odicto.py setup` or paste `META_API_KEY` into `.env` |
 | **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `brew install ollama` |
 | **(Optional) OpenRouter key** | Cloud LLM instead of Meta/Ollama | [openrouter.ai](https://openrouter.ai/) |
+| **(Optional) Gemini API key** | Cloud LLM via Google Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 
 Permissions:
 - **Windows**: admin usually **not** required. If global hotkeys fail on a
@@ -201,6 +203,7 @@ cp .env.example .env
 | `pynput` | Global hotkey hold-to-talk (macOS) |
 | `pyperclip` | Clipboard paste injection |
 | `openai` | OpenAI-compatible client for Ollama / OpenRouter |
+| `google-genai` | Official Google Gen AI SDK for Gemini (Interactions API) |
 | `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
 | `python-dotenv` | Load `.env` |
 | `PySide6` | Always-on-top HUD overlay |
@@ -213,7 +216,7 @@ cp .env.example .env
 | **Whisper `tiny.en`** (default) | First transcribe / install warm-up | ~75 MB | English STT (fast) |
 | **Whisper `base.en` / `small.en`** | If you change `.env` | larger | Better accuracy, slower |
 | **Ollama model** (default example `qwen2.5:1.5b-instruct`) | Only when you pick Ollama (setup page **Download local model** button, or `-Ollama` installer flag) | ~1 GB class | Local AI replies |
-| Your chosen OpenRouter/Meta model | Cloud — nothing downloads | — | AI mode |
+| Your chosen OpenRouter/Meta/Gemini model | Cloud — nothing downloads | — | AI mode |
 
 Whisper cache is managed by `faster-whisper` / Hugging Face cache on the machine.  
 Ollama stores models in its own library (`ollama list` to inspect).
@@ -252,12 +255,13 @@ META_API_BASE=https://api.meta.ai/v1
 # Alias that also works: MODEL_API_KEY, META_API_MODEL
 ```
 
-Single-switch `.env` between the three:
+Single-switch `.env` between the backends:
 
 ```env
 LLM_PROVIDER=meta        # or: meta-api / meta_api (aliases)
 # LLM_PROVIDER=ollama
 # LLM_PROVIDER=openrouter
+# LLM_PROVIDER=gemini    # or: google / google-api (aliases)
 # LLM_PROVIDER=none      # raw dictation only
 ```
 
@@ -288,16 +292,43 @@ Notes:
 - For `meta`, `META_MODEL` is used; `LLM_MODEL` stays as the Ollama fallback when meta keys are not set.
 - Localhost `LLM_API_BASE` is ignored for openrouter so you do **not** need to edit the API path by hand.
 
-### Resource use: Ollama vs OpenRouter vs Meta vs Whisper
+### 7b. Optional: Google Gemini instead of Meta/Ollama
+
+Gemini uses the official `google-genai` SDK and the GA **Interactions API**
+(`client.interactions.create`), the same call Google recommends for new code:
+
+```env
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=AIza...     # from https://aistudio.google.com/apikey
+GEMINI_MODEL=gemini-3.5-flash-lite
+# Optional: GEMINI_THINKING_LEVEL=minimal   (minimal|low|medium|high)
+```
+
+| Variable | Role |
+|----------|------|
+| `LLM_PROVIDER=gemini` | Selects the Gemini backend (`google` / `google-api` also work) |
+| `GEMINI_API_KEY` | Required (app refuses to start if missing); `GOOGLE_API_KEY` is an accepted alias |
+| `GEMINI_MODEL` | Gemini model id (default `gemini-3.5-flash-lite` — the fast, non-reasoning pick for dictation; `gemini-3.7-flash` is available for heavier questions) |
+| `GEMINI_THINKING_LEVEL` | Thinking budget: `minimal` / `low` / `medium` / `high` (default `minimal`) |
+| `GEMINI_MAX_OUTPUT_TOKENS` | Output budget floor (default `4096`) |
+
+Notes:
+- Multi-turn chat (F6 chord only) uses Gemini **server-side state**
+  (`previous_interaction_id`), which reuses cached context across those turns.
+- Ctrl+Shift+\` AI is always a fresh one-shot (no previous_interaction_id).
+- Speaking “reset chat” (or pressing `RESET_CONTEXT_HOTKEY`) starts a fresh conversation.
+
+### Resource use: Ollama vs OpenRouter vs Meta vs Gemini vs Whisper
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
 | **Whisper (STT)** | Always (dictation needs it) | Local — loads regardless of LLM provider |
 | **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
-| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `none` |
+| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
+| **Google Gemini** | Only if `LLM_PROVIDER=gemini` | Cloud — no local LLM VRAM from Odicto |
 
-**Important:** Switching to Meta or OpenRouter stops Odicto from launching or talking to Ollama.  
+**Important:** Switching to Meta, OpenRouter, or Gemini stops Odicto from launching or talking to Ollama.  
 It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.
 
 ```powershell
@@ -307,7 +338,7 @@ netstat -ano | findstr 11434
 ollama ps
 ```
 
-To free local LLM memory while using Meta/OpenRouter: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
+To free local LLM memory while using Meta/OpenRouter/Gemini: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
 
 ### 8. Optional: raw dictation only (no LLM)
 
@@ -333,7 +364,7 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 | Action | Windows | macOS / Linux |
 |--------|---------|---------------|
-| Configure provider | `.venv\Scripts\python.exe odicto.py setup` | `.venv/bin/python odicto.py setup` |
+| Configure provider | `setup.bat` or `.venv\Scripts\python.exe odicto.py setup` | `./setup.sh` or `.venv/bin/python odicto.py setup` |
 | Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
 | Start (console logs) | `run_debug.bat` | `./run_debug.sh` |
 | Stop | `stop_dictation.bat` | `./stop_dictation.sh` |
@@ -357,13 +388,15 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 5. Watch the HUD: **Listening -> Transcribing -> Done**  
 6. Text is pasted at the cursor  
 
-### Ask the local AI
+### Ask the AI
 
 1. Hold **Ctrl+Shift+\`** (the backtick key under Esc, plus **Shift**)  
 2. Speak your question  
 3. Release  
 4. HUD: **Listening -> Thinking -> Done**  
-5. The model's short reply is pasted  
+5. The model's short reply is pasted — this is always a **fresh** run (no previous task)
+
+To keep talking about the same task, hold **F6** together with **Ctrl+\`** (or with the AI chord). Only those captures share conversation memory. Press **F5** to wipe that memory.  
 
 ### Tips that matter
 
@@ -372,8 +405,8 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 | **Hold, don't tap** | Very short holds are ignored (anti-accidental) |
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
-| **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in AI mode — both wipe the multi-turn history |
-| **Fresh one-shot AI** | Hold **F6** while using the AI chord: that capture gets a context-free reply (memory wiped first) |
+| **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in F6/AI mode — both wipe the multi-turn history |
+| **Continue a conversation** | Hold **F6** + **Ctrl+\`** (or F6 + the AI chord): that capture keeps / continues AI memory. Ctrl+Shift+\` alone is always a fresh one-shot |
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
 | **VS Code note** | Ctrl+\` toggles the terminal there -- while Odicto runs it steals that chord |
 | **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
@@ -382,6 +415,14 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 ### Stop
 
 Run your OS's stop script (see table above), or close the debug console with Ctrl+C.
+
+### Keeping it fast
+
+- Raw dictation never waits on the clipboard or the LLM.
+- AI mode runs Whisper and selection-copy **at the same time**, so clipboard wait does not sit in front of STT.
+- Short hold-to-talk clips skip Silero VAD (set `WHISPER_VAD=true` if you want it always on).
+- AI replies are capped by `LLM_MAX_TOKENS` (default 1024, enough for a mid-length social post). Raise it only if you need long essays.
+- Gemini thinking stays at `minimal` unless you change it; higher thinking levels are slower.
 
 ---
 
@@ -395,18 +436,23 @@ Copy from `.env.example`. Important knobs:
 | `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
 | `AI_MODIFIER` | *(empty)* | Legacy third-key AI trigger; leave blank when using `AI_HOTKEY` |
 | `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
-| `CTRL_FORCE_FRESH_KEYS` | `f6` | Key held during a capture forces a fresh, context-free AI reply |
+| `CTRL_KEEP_CONTEXT_KEYS` | `f6` | Key held during a capture keeps AI conversation memory (default AI is always fresh) |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
-| `LLM_PROVIDER` | `meta` | `meta` (also `meta-api`, `meta_api`) · `ollama` · `openrouter` · `none` |
+| `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
+| `LLM_PROVIDER` | `meta` | `meta` (also `meta-api`, `meta_api`) · `ollama` · `openrouter` · `gemini` (also `google`, `google-api`) · `none` |
 | `META_API_KEY` | *(empty)* | Meta API key (`MODEL_API_KEY` also accepted) — paste real key in `.env` |
 | `META_API_BASE` | `https://api.meta.ai/v1` | Meta API root |
 | `META_MODEL` | `muse-spark-1.2-contributor` | Meta model id (also `META_API_MODEL`) |
+| `GEMINI_API_KEY` | *(empty)* | Gemini API key (`GOOGLE_API_KEY` also accepted) — get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model id (fast non-reasoning default; `gemini-3.7-flash` for heavier questions) |
+| `GEMINI_THINKING_LEVEL` | `minimal` | `minimal` · `low` · `medium` · `high` |
+| `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Output token ceiling for Gemini |
 | `LLM_MODEL` | see example | Ollama model tag (fallback when `OPENROUTER_MODEL`/`META_MODEL` blank) |
 | `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
 | `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
 | `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
-| `LLM_MAX_TOKENS` | `1536` | Hard cap on reply length |
+| `LLM_MAX_TOKENS` | `1024` | Hard cap on pasted reply length (~750 words; raise for long essays) |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
@@ -422,7 +468,7 @@ Copy from `.env.example`. Important knobs:
 | `main.py` | App lifecycle, hotkeys, pipeline orchestration |
 | `recorder.py` | Low-latency mic capture + level meter |
 | `transcriber.py` | `faster-whisper` STT |
-| `refiner.py` | Adaptive-length LLM replies + history |
+| `refiner.py` | LLM replies (fresh by default; F6 keeps history) |
 | `typer.py` | Clipboard paste |
 | `indicator.py` | PySide6 glass HUD |
 | `config.py` | Env-backed settings |
@@ -431,6 +477,7 @@ Copy from `.env.example`. Important knobs:
 | `install.sh` | Zero-to-one macOS/Linux installer (uv-first, pip fallback) |
 | `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
 | `setup_web.py` | Local setup web page (provider + key config) |
+| `setup.bat` / `setup.sh` | Double-click / shell launcher for the setup page |
 | `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
 | `AGENTS.md` | Agent-oriented install contract |
 
@@ -449,8 +496,10 @@ Copy from `.env.example`. Important knobs:
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
 | AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
 | AI mode pastes raw text (Meta) | Check `META_API_KEY` / `MODEL_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Gemini) | Check `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `GEMINI_MODEL`, and network; restart after `.env` edits |
 | App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
-| Ollama still using RAM on Meta/OpenRouter | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
+| App refuses to start on gemini | `GEMINI_API_KEY` is required when `LLM_PROVIDER=gemini` |
+| Ollama still using RAM on Meta/OpenRouter/Gemini | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
@@ -478,9 +527,9 @@ Copy from `.env.example`. Important knobs:
 ## Privacy
 
 - **Dictation path** can stay fully local (Whisper + paste).  
-- **AI path** stays local if you use Ollama; **Meta / OpenRouter send the transcribed text to a third party**.  
-- With `LLM_PROVIDER=meta` / `openrouter` / `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.  
-- Never commit `.env` (may contain `META_API_KEY` / `MODEL_API_KEY` / `OPENROUTER_API_KEY`).
+- **AI path** stays local if you use Ollama; **Meta / OpenRouter / Gemini send the transcribed text to a third party**.  
+- With `LLM_PROVIDER=meta` / `openrouter` / `gemini` / `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.  
+- Never commit `.env` (may contain `META_API_KEY` / `MODEL_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY`).
 - No telemetry in this project.
 
 ---

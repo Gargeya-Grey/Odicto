@@ -3,6 +3,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from app_state import AppState
@@ -132,6 +133,8 @@ class DictationApp:
         # Per-capture override: True → force AI mode, False → force raw dictation,
         # None → decided by chord at press time.
         self._capture_mode_override: Optional[bool] = None
+        # F6 (CTRL_KEEP_CONTEXT_KEYS): opt-in multi-turn memory for this capture.
+        self._keep_history: bool = False
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -247,12 +250,19 @@ class DictationApp:
         )
         if Config.AI_HOTKEY:
             print(
-                f"  - Hold '{Config.AI_HOTKEY}': RECORD and paste AI-refined response."
+                f"  - Hold '{Config.AI_HOTKEY}': RECORD and paste a fresh AI reply "
+                "(no previous conversation)."
             )
         elif Config.AI_MODIFIER:
             print(
                 f"  - Hold '{Config.HOTKEY}+{Config.AI_MODIFIER}': "
-                "RECORD and paste AI-refined response."
+                "RECORD and paste a fresh AI reply (no previous conversation)."
+            )
+        keep_keys = ", ".join(k for k in Config.CTRL_KEEP_CONTEXT_KEYS if k)
+        if keep_keys:
+            print(
+                f"  - Hold {keep_keys.upper()} + '{Config.HOTKEY}' (or the AI chord): "
+                "same AI reply, but keep / continue conversation memory."
             )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
@@ -333,10 +343,10 @@ class DictationApp:
                     for m in ("ctrl", "shift", "alt", "cmd")
                     if platforms.is_pressed(m)
                 ]
-                for fresh in Config.CTRL_FORCE_FRESH_KEYS:
+                for keep_key in Config.CTRL_KEEP_CONTEXT_KEYS:
                     try:
-                        if fresh and platforms.is_pressed(fresh):
-                            snapshot.append(fresh)
+                        if keep_key and platforms.is_pressed(keep_key):
+                            snapshot.append(keep_key)
                     except Exception:
                         pass
                 self._pressed_mods_at_press = tuple(snapshot)
@@ -483,24 +493,23 @@ class DictationApp:
     def _apply_chord_overrides(self) -> None:
         """Read hold-time modifier chords for one-shot mode overrides.
 
-        F6 (or any key in Config.CTRL_FORCE_FRESH_KEYS) held while the primary key
-        goes down forces a FRESH AI reply (memory wiped first) for that capture
-        only. Plain F6 alone does nothing.
+        F6 (or any key in Config.CTRL_KEEP_CONTEXT_KEYS) held while the primary
+        key goes down forces AI mode AND keeps conversation memory for that
+        capture. Plain F6 alone does nothing. Without F6, AI replies are fresh.
 
         The press-time snapshot (taken by the key-down handler) already includes
-        the fresh keys, so this is a pure set intersection — deterministic and
-        testable.
+        the keep-context keys, so this is a pure set intersection.
         """
         self._capture_mode_override = None
-        fresh_keys = set(Config.CTRL_FORCE_FRESH_KEYS)
-        fresh_keys.discard("")
-        if not fresh_keys:
+        self._keep_history = False
+        keep_keys = set(Config.CTRL_KEEP_CONTEXT_KEYS)
+        keep_keys.discard("")
+        if not keep_keys:
             return
 
-        if any(k in fresh_keys for k in self._pressed_mods_at_press):
+        if any(k in keep_keys for k in self._pressed_mods_at_press):
             self._capture_mode_override = True
-            if self.refiner is not None:
-                self.refiner.reset_context()
+            self._keep_history = True
 
     # ----------------------------------------------------------- hotkey handlers
     def on_press(self, event: object = None, use_llm: Optional[bool] = None) -> None:
@@ -529,7 +538,7 @@ class DictationApp:
             else:
                 self.use_llm = bool(use_llm)
 
-            # Per-capture override wins: e.g. holding F6 forces a fresh AI reply.
+            # Per-capture override wins: e.g. holding F6 forces AI + keep memory.
             self._apply_chord_overrides()
             if self._capture_mode_override is not None:
                 self.use_llm = self._capture_mode_override
@@ -599,8 +608,9 @@ class DictationApp:
                 self._set_state(AppState.IDLE)
                 return
 
-            # Snapshot mode flag for the worker so a future press can't flip it mid-flight.
+            # Snapshot mode flags for the worker so a future press can't flip them mid-flight.
             use_llm = self.use_llm
+            keep_history = self._keep_history
             audio = self.recorder.last_audio_array
 
             # IMPORTANT: do NOT call get_selected_text() here on the keyboard-hook
@@ -612,35 +622,66 @@ class DictationApp:
             print(">>> Processing transcription and refinement...")
             threading.Thread(
                 target=self.process_and_paste,
-                args=(audio, use_llm),
+                args=(audio, use_llm, "", keep_history),
                 daemon=True,
                 name="dictation-pipeline",
             ).start()
 
+    @staticmethod
+    def _capture_selection(pre_context: str = "") -> str:
+        """Copy highlighted text off the hook thread. Empty if nothing selected."""
+        context = (pre_context or "").strip()
+        if context:
+            return context[:12000]
+        # Brief settle so physical modifier key-ups finish after the chord.
+        time.sleep(0.04)
+        try:
+            context = get_selected_text(timeout=0.35)
+        except Exception as e:
+            print(f"Warning: selection capture failed: {e}", flush=True)
+            return ""
+        if context and len(context) > 12000:
+            context = context[:12000]
+        return context
+
     def process_and_paste(
-        self, audio, use_llm: bool, pre_context: str = ""
+        self,
+        audio,
+        use_llm: bool,
+        pre_context: str = "",
+        keep_history: bool = False,
     ) -> None:
-        """Worker: capture selection (AI) → STT → optional LLM → paste."""
+        """Worker: STT (and selection, in parallel for AI) → optional LLM → paste."""
         self.last_status = None
+        sel_pool: Optional[ThreadPoolExecutor] = None
         try:
             if self.transcriber is None:
                 raise RuntimeError("Transcriber not initialized")
 
             start_time: float = time.time()
 
-            # Capture selection OFF the keyboard-hook thread, before STT, while the
-            # user's highlight is still intact. Tiny settle lets the hook return
-            # and any physical modifier key-ups finish.
+            # Raw dictation never probes the clipboard. AI mode overlaps the
+            # selection copy with Whisper so clipboard wait does not delay STT.
             context = (pre_context or "").strip()
+            sel_future = None
             if use_llm and self.refiner is not None and not context:
-                time.sleep(0.06)
+                sel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odicto-sel")
+                sel_future = sel_pool.submit(self._capture_selection, "")
+
+            # Prefer the in-memory buffer; fall back to disk only if missing.
+            audio_source = audio
+            if audio_source is None:
+                audio_source = self.audio_filepath
+
+            raw_text: str = self.transcriber.transcribe(audio_source)
+            print(f"Raw Transcript: \"{raw_text}\"")
+
+            if sel_future is not None:
                 try:
-                    context = get_selected_text(timeout=0.55)
+                    context = sel_future.result(timeout=0.8) or ""
                 except Exception as e:
                     print(f"Warning: selection capture failed: {e}", flush=True)
                     context = ""
-                if context and len(context) > 12000:
-                    context = context[:12000]
                 if context:
                     print(
                         f'Context captured: {len(context)} chars — '
@@ -653,40 +694,15 @@ class DictationApp:
                         flush=True,
                     )
 
-            # Prefer the in-memory buffer; fall back to disk only if missing.
-            audio_source = audio
-            if audio_source is None:
-                audio_source = self.audio_filepath
-
-            raw_text: str = self.transcriber.transcribe(audio_source)
-            print(f"Raw Transcript: \"{raw_text}\"")
-
             if not raw_text.strip() or not any(c.isalnum() for c in raw_text):
                 print(">>> Empty transcription. Paste cancelled.")
                 self.last_status = "empty"
                 return
 
             if use_llm and self.refiner is not None:
-                # One more probe only if the early capture missed (rare: slow apps).
-                if not context:
-                    try:
-                        context = get_selected_text(timeout=0.35)
-                    except Exception:
-                        context = ""
-                    if context and len(context) > 12000:
-                        context = context[:12000]
-                    if context:
-                        print(
-                            f'Context captured (retry): {len(context)} chars — '
-                            f'"{context[:80]}{"..." if len(context) > 80 else ""}"',
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            "Context: (none — no text was selected, or copy failed)",
-                            flush=True,
-                        )
-                refined_text = self.refiner.refine(raw_text, context=context)
+                refined_text = self.refiner.refine(
+                    raw_text, context=context, keep_history=keep_history
+                )
                 print(f'Refined Text (AI):   "{refined_text}"')
             else:
                 # Raw dictation: transcript only; no selection probe / no LLM.
@@ -708,6 +724,8 @@ class DictationApp:
             print(f"!!! Pipeline Error: {e}", file=sys.stderr)
             self.last_status = "error"
         finally:
+            if sel_pool is not None:
+                sel_pool.shutdown(wait=False)
             self._finish_cycle()
 
     def _finish_cycle(self) -> None:

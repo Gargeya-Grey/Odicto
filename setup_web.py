@@ -39,6 +39,11 @@ EDITABLE_KEYS = {
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
     "OPENROUTER_API_BASE",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_MODEL",
+    "GEMINI_THINKING_LEVEL",
+    "GEMINI_MAX_OUTPUT_TOKENS",
     "LLM_MODEL",
     "LLM_API_BASE",
     "WHISPER_MODEL_SIZE",
@@ -56,7 +61,13 @@ _PULL_DONE = False
 
 
 def _mask_key(key: str) -> bool:
-    return key in ("META_API_KEY", "MODEL_API_KEY", "OPENROUTER_API_KEY")
+    return key in (
+        "META_API_KEY",
+        "MODEL_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    )
 
 
 def read_env() -> dict:
@@ -209,9 +220,12 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     provider = current.get("LLM_PROVIDER", "meta")
     meta_key = current.get("META_API_KEY", "") or current.get("MODEL_API_KEY", "")
     or_key = current.get("OPENROUTER_API_KEY", "")
+    gemini_key = current.get("GEMINI_API_KEY", "") or current.get("GOOGLE_API_KEY", "")
     ollama_base = current.get("LLM_API_BASE", "http://localhost:11434/v1")
     meta_model = current.get("META_MODEL", "muse-spark-1.2-contributor")
     or_model = current.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+    gemini_model = current.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    gemini_thinking = current.get("GEMINI_THINKING_LEVEL", "minimal")
     llm_model = current.get("LLM_MODEL", "qwen2.5:1.5b-instruct")
     whisper = current.get("WHISPER_MODEL_SIZE", "tiny.en")
     hotkey = current.get("HOTKEY", "ctrl+grave")
@@ -519,6 +533,7 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       <div class="select-menu" role="listbox" id="provider_menu">
         <button type="button" class="select-option" data-value="meta" role="option"><span>Meta API</span><span class="hint">default</span></button>
         <button type="button" class="select-option" data-value="openrouter" role="option"><span>OpenRouter</span><span class="hint">cloud</span></button>
+        <button type="button" class="select-option" data-value="gemini" role="option"><span>Google Gemini</span><span class="hint">cloud</span></button>
         <button type="button" class="select-option" data-value="ollama" role="option"><span>Ollama</span><span class="hint">local</span></button>
         <button type="button" class="select-option" data-value="none" role="option"><span>None</span><span class="hint">raw dictation</span></button>
       </div>
@@ -537,6 +552,15 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       <input type="password" name="OPENROUTER_API_KEY" value="{html.escape(or_key)}" placeholder="sk-or-...">
       <label>OpenRouter model</label>
       <input type="text" name="OPENROUTER_MODEL" value="{html.escape(or_model)}">
+    </div>
+
+    <div class="field" id="field-gemini">
+      <label>Gemini API key</label>
+      <input type="password" name="GEMINI_API_KEY" value="{html.escape(gemini_key)}" placeholder="AIza...">
+      <label>Gemini model</label>
+      <input type="text" name="GEMINI_MODEL" value="{html.escape(gemini_model)}">
+      <label>Thinking level</label>
+      <input type="text" name="GEMINI_THINKING_LEVEL" value="{html.escape(gemini_thinking)}" placeholder="minimal">
     </div>
 
     <div class="field" id="field-ollama">
@@ -583,7 +607,7 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
 
 <script>
 function showProvider(v) {{
-  ['meta','openrouter','ollama'].forEach(function(id) {{
+  ['meta','openrouter','gemini','ollama'].forEach(function(id) {{
     document.getElementById('field-' + id).classList.toggle('active', id === v);
   }});
   document.getElementById('test_button').disabled = (v === 'none');
@@ -592,6 +616,7 @@ function showProvider(v) {{
 var PROVIDER_LABELS = {{
   meta: 'Meta API',
   openrouter: 'OpenRouter',
+  gemini: 'Google Gemini',
   ollama: 'Ollama',
   none: 'None'
 }};
@@ -907,6 +932,8 @@ class _Handler(BaseHTTPRequestHandler):
         provider = (form.get("LLM_PROVIDER") or ["meta"])[0].strip().lower()
         if provider in ("meta", "meta_api", "meta-api"):
             provider = "meta"
+        if provider in ("gemini", "gemini_api", "google", "google_api", "google-api"):
+            provider = "gemini"
 
         def pick(key: str, default: str = "") -> str:
             value = (form.get(key) or [""])[0].strip()
@@ -927,6 +954,10 @@ class _Handler(BaseHTTPRequestHandler):
             api_key = pick("OPENROUTER_API_KEY")
             model = pick("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
             api_base = pick("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+        elif provider == "gemini":
+            api_key = pick("GEMINI_API_KEY") or pick("GOOGLE_API_KEY")
+            model = pick("GEMINI_MODEL", "gemini-3.5-flash-lite")
+            api_base = ""
         elif provider == "ollama":
             api_key = ""
             model = pick("LLM_MODEL", "qwen2.5:1.5b-instruct")
@@ -951,6 +982,7 @@ class _Handler(BaseHTTPRequestHandler):
         if updates.get("LLM_PROVIDER") == "none":
             updates.pop("META_API_KEY", None)
             updates.pop("OPENROUTER_API_KEY", None)
+            updates.pop("GEMINI_API_KEY", None)
 
         hotkey = updates.get("HOTKEY") or Config.HOTKEY
         ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
@@ -969,7 +1001,7 @@ class _Handler(BaseHTTPRequestHandler):
         provider = (
             updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "meta"
         ).strip().lower()
-        if provider not in ("meta", "ollama", "openrouter", "none"):
+        if provider not in ("meta", "ollama", "openrouter", "gemini", "none"):
             body = _page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err").encode("utf-8")
             self._send(body)
             return
@@ -978,6 +1010,20 @@ class _Handler(BaseHTTPRequestHandler):
             if not key:
                 body = _page(
                     "Saved, but OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter.",
+                    "err",
+                ).encode("utf-8")
+                self._send(body)
+                return
+        if provider == "gemini":
+            key = (
+                updates.get("GEMINI_API_KEY")
+                or updates.get("GOOGLE_API_KEY")
+                or merged.get("GEMINI_API_KEY", "")
+                or merged.get("GOOGLE_API_KEY", "")
+            )
+            if not key:
+                body = _page(
+                    "Saved, but GEMINI_API_KEY is required when LLM_PROVIDER=gemini.",
                     "err",
                 ).encode("utf-8")
                 self._send(body)
