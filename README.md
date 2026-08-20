@@ -453,6 +453,7 @@ Copy from `.env.example`. Important knobs:
 | `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
 | `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
 | `LLM_MAX_TOKENS` | `1024` | Hard cap on pasted reply length (~750 words; raise for long essays) |
+| `SYSTEM_PROMPT` | *(empty = built-in default)* | AI-mode instructions. Edit in `.env` or the setup page (`setup.bat` / `setup.sh`). Restart Odicto after saving. |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
@@ -476,7 +477,7 @@ Copy from `.env.example`. Important knobs:
 | `install.ps1` | Zero-to-one Windows installer (uv-first, pip fallback) |
 | `install.sh` | Zero-to-one macOS/Linux installer (uv-first, pip fallback) |
 | `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
-| `setup_web.py` | Local setup web page (provider + key config) |
+| `setup_web.py` | Local setup web page (provider, key, and AI system prompt) |
 | `setup.bat` / `setup.sh` | Double-click / shell launcher for the setup page |
 | `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
 | `AGENTS.md` | Agent-oriented install contract |

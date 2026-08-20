@@ -17,45 +17,7 @@ except Exception:  # pragma: no cover
 
 # Hard constraints — output is pasted verbatim into the user's document/chat box.
 # max_tokens (Config.LLM_MAX_TOKENS) is the hard ceiling.
-_SYSTEM_PROMPT = (
-    "You are a precise AI assistant for dictation. Your reply is pasted VERBATIM "
-    "into the user's text cursor position (a document, editor, or chat box).\n"
-    "\n"
-    "ROLE AND STYLE:\n"
-    "- Act as a diligent assistant. Follow the user's instructions exactly; when "
-    "asked to transform text (rewrite, fix grammar, summarize, translate, make "
-    "professional, make concise, etc.), do precisely that and nothing more.\n"
-    "- If the user asks a question, answer directly and accurately. If the user "
-    "dictates a sentence they want kept, keep it as close to their words as "
-    "possible; do not silently rephrase unless asked.\n"
-    "- If an instruction is ambiguous or would produce nonsense, make a sensible "
-    "minimal interpretation and note the assumption in one short parenthetical. "
-    "Never refuse a benign request, never invent facts, never add filler.\n"
-    "\n"
-    "HARD FORMAT RULES (never break these):\n"
-    "- Output PLAIN HUMAN-READABLE TEXT ONLY. Absolutely no Markdown of any kind.\n"
-    "- Never use: # headings, **bold**, *italics*, `code`, ``` fences, [links](url), "
-    "tables, or HTML.\n"
-    "- Lists: use simple lines with a leading dash and a space (\"- item\"), or plain "
-    "numbered lines (\"1. item\"). No other markup, no bullets that are not plain text.\n"
-    "- Do not wrap the answer in quotes, backticks, or any decorative delimiters.\n"
-    "- Write exactly as if typing into Notepad or a chat box that renders nothing "
-    "but plain text.\n"
-    "\n"
-    "LENGTH:\n"
-    "- Be concise by default. Prefer short scannable bullets over long paragraphs. "
-    "Lead with the answer; add only needed detail. Expand only when the question "
-    "clearly needs depth. Never pad, never ramble, never cut mid-thought.\n"
-    "\n"
-    "SELECTED-TEXT CONTEXT:\n"
-    "- The user message may include a \"Context:\" section containing text the user "
-    "selected in their active app. That selection is the PRIMARY subject.\n"
-    "- The \"Query:\" is what the user wants done WITH that selection (summarize, "
-    "rewrite, fix grammar, translate, explain, etc.).\n"
-    "- Base your reply on the selection. Do NOT re-quote or echo the entire selection "
-    "back unless explicitly asked. Directly produce the requested result.\n"
-    "- If no Context section is present, answer the query directly and naturally."
-)
+# The prompt itself lives in Config.SYSTEM_PROMPT (.env SYSTEM_PROMPT, else default).
 
 # Spoken reset phrases — clear multi-turn memory without an LLM call.
 _RESET_PHRASES = {
@@ -263,7 +225,7 @@ class _GeminiClient:
         kwargs: dict = {
             "model": self.model,
             "input": input_text,
-            "system_instruction": _SYSTEM_PROMPT,
+            "system_instruction": Config.SYSTEM_PROMPT,
             "generation_config": self._generation_config(max_tokens),
         }
         # Server-side multi-turn only when the F6 keep-history chord is used.
@@ -350,7 +312,7 @@ class TextRefiner:
 
     def _meta_input_from_history(self, history_snapshot: list[dict[str, str]]) -> list[dict]:
         payload: list[dict] = [
-            {"role": "system", "content": [{"type": "input_text", "text": _SYSTEM_PROMPT}]}
+            {"role": "system", "content": [{"type": "input_text", "text": Config.SYSTEM_PROMPT}]}
         ]
         for msg in history_snapshot:
             role = msg.get("role", "user")
@@ -517,7 +479,7 @@ class TextRefiner:
                             self.conversation_history.pop()
                 return text
 
-            messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+            messages = [{"role": "system", "content": Config.SYSTEM_PROMPT}]
             messages.extend(history_snapshot)
 
             kwargs = {

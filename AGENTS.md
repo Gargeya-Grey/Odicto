@@ -102,7 +102,9 @@ After install, configure a provider and API key without hand-editing `.env`:
 ```
 
 The page writes `.env` atomically, preserves unsubmitted keys, and can test the
-selected provider before saving.
+selected provider before saving. The same page edits `SYSTEM_PROMPT` (AI-mode
+instructions); an empty value uses the built-in default. Restart Odicto after
+saving for the new prompt to take effect.
 
 ## Runtime notes for agents
 

@@ -397,6 +397,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "system")
         self.assertEqual(messages[-1]["role"], "user")
         self.assertEqual(messages[-1]["content"], "hello world")
+        self.assertEqual(messages[0]["content"], Config.SYSTEM_PROMPT)
         self.assertNotIn("LENGTH RULES", messages[0]["content"])
 
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
@@ -460,6 +461,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(first_kwargs["model"], "gemini-3.7-flash")
         self.assertEqual(first_kwargs["input"], "hello from gemini")
         self.assertIn("PLAIN HUMAN-READABLE TEXT", first_kwargs["system_instruction"])
+        self.assertEqual(first_kwargs["system_instruction"], Config.SYSTEM_PROMPT)
         self.assertEqual(first_kwargs["generation_config"]["thinking_level"], "low")
         # First turn has no previous_interaction_id; the second turn chains
         # onto the stored id from the first reply.
@@ -1364,6 +1366,37 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertTrue(_mask_key("GEMINI_API_KEY"))
         self.assertTrue(_mask_key("GOOGLE_API_KEY"))
         self.assertFalse(_mask_key("LLM_PROVIDER"))
+
+    def test_setup_web_merge_env_quotes_system_prompt(self) -> None:
+        import setup_web
+
+        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")):
+            try:
+                with open(setup_web.ENV_PATH, "w") as f:
+                    f.write("LLM_PROVIDER=meta\nSYSTEM_PROMPT=\n")
+                setup_web.merge_env({"SYSTEM_PROMPT": "Line one\nLine two"})
+                with open(setup_web.ENV_PATH) as f:
+                    text = f.read()
+                self.assertIn('SYSTEM_PROMPT="Line one\\nLine two"', text)
+            finally:
+                try:
+                    os.remove(setup_web.ENV_PATH)
+                except Exception:
+                    pass
+
+    def test_setup_web_page_includes_system_prompt(self) -> None:
+        import setup_web
+
+        html_page = setup_web._page()
+        self.assertIn('name="SYSTEM_PROMPT"', html_page)
+        self.assertIn("PLAIN HUMAN-READABLE TEXT", html_page)
+        self.assertIn("var DEFAULT_SYSTEM_PROMPT =", html_page)
+
+    def test_config_system_prompt_falls_back_to_default(self) -> None:
+        from config import DEFAULT_SYSTEM_PROMPT, Config
+
+        self.assertTrue(Config.SYSTEM_PROMPT)
+        self.assertIn("PLAIN HUMAN-READABLE TEXT", DEFAULT_SYSTEM_PROMPT)
 
     def test_setup_web_merge_env_preserves_and_updates(self) -> None:
         import setup_web

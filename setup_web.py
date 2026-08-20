@@ -18,7 +18,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from config import Config
+from config import Config, DEFAULT_SYSTEM_PROMPT
 
 try:
     from dotenv import dotenv_values
@@ -49,6 +49,7 @@ EDITABLE_KEYS = {
     "WHISPER_MODEL_SIZE",
     "HOTKEY",
     "AI_HOTKEY",
+    "SYSTEM_PROMPT",
 }
 
 _MASKED = "••••••••••••••••"
@@ -91,6 +92,19 @@ def read_env_raw() -> dict:
     return dotenv_values(ENV_PATH) or {}
 
 
+def _format_env_assignment(key: str, value: str) -> str:
+    """Write a .env assignment. Multiline SYSTEM_PROMPT is double-quoted with \\n."""
+    if key == "SYSTEM_PROMPT":
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\r\n", "\n")
+            .replace("\n", "\\n")
+        )
+        return f'{key}="{escaped}"'
+    return f"{key}={value}"
+
+
 def _parse_env_text(text: str) -> dict:
     """Parse raw .env text into a key→value dict (preserves unedited keys)."""
     result = {}
@@ -131,7 +145,7 @@ def merge_env(updates: dict) -> None:
             key = stripped.split("=", 1)[0].strip()
             if key in cleaned:
                 if cleaned[key]:
-                    out_lines.append(f"{key}={cleaned[key]}")
+                    out_lines.append(_format_env_assignment(key, cleaned[key]))
                 # Empty submitted value: drop the line.
                 updated.add(key)
                 continue
@@ -139,7 +153,7 @@ def merge_env(updates: dict) -> None:
 
     for key in sorted(cleaned):
         if key not in updated and cleaned[key]:
-            out_lines.append(f"{key}={cleaned[key]}")
+            out_lines.append(_format_env_assignment(key, cleaned[key]))
 
     text = "\n".join(out_lines).rstrip() + "\n"
     tmp = ENV_PATH + ".tmp"
@@ -230,6 +244,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     whisper = current.get("WHISPER_MODEL_SIZE", "tiny.en")
     hotkey = current.get("HOTKEY", "ctrl+grave")
     ai_hotkey = current.get("AI_HOTKEY", "ctrl+shift+grave")
+    system_prompt = (current.get("SYSTEM_PROMPT") or "").strip() or DEFAULT_SYSTEM_PROMPT
 
     # Server-rendered status (after Save / Reset). The Test button uses inline
     # JS instead, so its status is not rendered here.
@@ -328,7 +343,7 @@ body {{
 h1 {{ font-size: 1.35rem; margin: 0; letter-spacing: -0.01em; }}
 .sub {{ color: var(--muted); margin: 0.25rem 0 0; font-size: 0.95rem; }}
 label {{ display: block; margin: 1.15rem 0 0.4rem; font-weight: 480; font-size: 0.92rem; }}
-select, input[type=text], input[type=password] {{
+select, input[type=text], input[type=password], textarea {{
   width: 100%;
   padding: 0.62rem 0.8rem;
   font-size: 0.98rem;
@@ -351,7 +366,14 @@ select {{
 select:hover {{
   border-color: var(--accent);
 }}
-select:focus, input:focus {{
+textarea {{
+  min-height: 10.5rem;
+  resize: vertical;
+  line-height: 1.45;
+  font-size: 0.86rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}}
+select:focus, input:focus, textarea:focus {{
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -520,7 +542,7 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     <span class="logo">O</span>
     <h1>Odicto Setup</h1>
   </div>
-  <p class="sub">Pick a backend, paste its key, test it, then save. Your keys stay in your local <code>.env</code> file.</p>
+  <p class="sub">Pick a backend, paste its key, and optionally edit the AI system prompt. Everything saves to your local <code>.env</code> file.</p>
   <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v2 · inline test feedback</p>
 
   <form id="setupForm" method="post" action="/save">
@@ -575,6 +597,13 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       <div id="pull_status" class="pull-status" hidden></div>
     </div>
 
+    <details open>
+      <summary>AI system prompt</summary>
+      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Used for AI-mode replies (Ctrl+Shift+`). Saved as <code>SYSTEM_PROMPT</code> in <code>.env</code>. Leave blank and save to restore the built-in default. Restart Odicto after saving.</p>
+      <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" spellcheck="false">__SYSTEM_PROMPT__</textarea>
+      <button type="button" class="link" style="margin-top:0.35rem;" onclick="restoreDefaultPrompt()">Restore default prompt</button>
+    </details>
+
     <details>
       <summary>Advanced (Whisper + hotkeys)</summary>
       <label>Whisper model</label>
@@ -606,6 +635,10 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
 </main>
 
 <script>
+var DEFAULT_SYSTEM_PROMPT = __DEFAULT_SYSTEM_PROMPT_JSON__;
+function restoreDefaultPrompt() {{
+  document.getElementById('SYSTEM_PROMPT').value = DEFAULT_SYSTEM_PROMPT;
+}}
 function showProvider(v) {{
   ['meta','openrouter','gemini','ollama'].forEach(function(id) {{
     document.getElementById('field-' + id).classList.toggle('active', id === v);
@@ -879,7 +912,10 @@ async function resetSettings() {{
 </body>
 </html>
 """
-    return page
+    return (
+        page.replace("__SYSTEM_PROMPT__", html.escape(system_prompt))
+        .replace("__DEFAULT_SYSTEM_PROMPT_JSON__", json.dumps(DEFAULT_SYSTEM_PROMPT))
+    )
 
 
 class _Handler(BaseHTTPRequestHandler):
