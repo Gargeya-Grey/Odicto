@@ -18,7 +18,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from config import Config, DEFAULT_SYSTEM_PROMPT
+from config import OPENROUTER_FALLBACK_MODEL, DEFAULT_SYSTEM_PROMPT, ENV_DEFAULTS, Config
 
 try:
     from dotenv import dotenv_values
@@ -28,28 +28,33 @@ except Exception:  # pragma: no cover
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 ENV_EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example")
 
-# Keys the page is allowed to write, in provider groups. Unsubmitted keys are
-# preserved when the .env file is merged.
+# Keys the page is allowed to write. The merge writer expects every editable key
+# to have a positioned line in .env.example; missing ones would be appended.
 EDITABLE_KEYS = {
     "LLM_PROVIDER",
+    "OLLAMA_MODEL",
+    "OLLAMA_MODEL_HISTORY",
+    "LLM_MAX_TOKENS",
+    "LLM_NUM_CTX",
+    "LLM_API_BASE",
     "META_API_KEY",
-    "MODEL_API_KEY",
     "META_MODEL",
-    "META_API_BASE",
+    "META_MODEL_HISTORY",
+    "META_REASONING_EFFORT",
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
+    "OPENROUTER_MODEL_HISTORY",
     "OPENROUTER_API_BASE",
     "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
     "GEMINI_MODEL",
+    "GEMINI_MODEL_HISTORY",
     "GEMINI_THINKING_LEVEL",
-    "GEMINI_MAX_OUTPUT_TOKENS",
-    "LLM_MODEL",
-    "LLM_API_BASE",
     "WHISPER_MODEL_SIZE",
+    "WHISPER_DEVICE",
     "HOTKEY",
     "AI_HOTKEY",
     "SYSTEM_PROMPT",
+    "SYSTEM_PROMPT_FILE",
 }
 
 _MASKED = "••••••••••••••••"
@@ -64,11 +69,58 @@ _PULL_DONE = False
 def _mask_key(key: str) -> bool:
     return key in (
         "META_API_KEY",
-        "MODEL_API_KEY",
         "OPENROUTER_API_KEY",
         "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
     )
+
+
+def _strip_secret_quotes(value: str) -> str:
+    """One layer of matching surrounding quotes, with whitespace."""
+    v = value.strip()
+    if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
+        return v[1:-1].strip()
+    return v
+
+
+_SECRET_KEYS = frozenset({"META_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"})
+
+
+def _clean_submitted_value(key: str, value: str) -> str:
+    """Trim secrets' pasted quotes; leave everything else as plain strip."""
+    v = value.strip()
+    if key in _SECRET_KEYS:
+        return _strip_secret_quotes(v)
+    return v
+
+
+def validate_provider_requirements(provider: str, updates: dict, merged: dict) -> str:
+    """Return '' when satisfied, otherwise the error message to show.
+
+    Extracted so unit tests exercise it without a live HTTP handler.
+    """
+    p = (provider or "none").strip().lower()
+    if p == "meta":
+        src = updates.get("META_API_KEY")
+        if src == _MASKED:
+            return ""
+        key = src if src is not None else merged.get("META_API_KEY", "")
+        if not (key or "").strip():
+            return "META_API_KEY is required when LLM_PROVIDER=meta. Paste your Meta API key and save."
+    if p == "openrouter":
+        src = updates.get("OPENROUTER_API_KEY")
+        if src == _MASKED:
+            return ""
+        key = src if src is not None else merged.get("OPENROUTER_API_KEY", "")
+        if not (key or "").strip():
+            return "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter."
+    if p == "gemini":
+        src = updates.get("GEMINI_API_KEY")
+        if src == _MASKED:
+            return ""
+        key = src if src is not None else merged.get("GEMINI_API_KEY", "")
+        if not (key or "").strip():
+            return "GEMINI_API_KEY is required when LLM_PROVIDER=gemini."
+    return ""
 
 
 def read_env() -> dict:
@@ -117,16 +169,28 @@ def _parse_env_text(text: str) -> dict:
     return result
 
 
-def merge_env(updates: dict) -> None:
-    """Merge submitted values into .env, preserving every unsubmitted key.
+def _template_lines() -> list:
+    """Canonical .env ordering, from .env.example; fallback when missing."""
+    if os.path.exists(ENV_EXAMPLE_PATH):
+        with open(ENV_EXAMPLE_PATH, "r", encoding="utf-8") as f:
+            return f.read().splitlines()
+    # Fallback: at least the editable keys, in deterministic order.
+    return [f"{k}=" for k in sorted(EDITABLE_KEYS)]
 
-    Existing keys are updated in place (line order preserved); new editable
-    keys are appended at the end. Comments and unrelated keys are untouched.
+
+def merge_env(updates: dict) -> None:
+    """Rewrite .env anchored on .env.example so slots stay categorized.
+
+    Every EDITABLE_KEYS entry has a positioned line in .env.example (now mostly
+    empty ``KEY=`` slots). A save fills those slots in place instead of
+    appending at the end — an old .env migrates into the canonical layout on
+    the next save, with unknown keys appended under a marker section.
     """
-    original_lines: list[str] = []
+    # Stored values before this save (raw, unmasked — but never written).
+    stored: dict[str, str] = {}
     if os.path.exists(ENV_PATH):
         with open(ENV_PATH, "r", encoding="utf-8") as f:
-            original_lines = f.read().splitlines()
+            stored = _parse_env_text(f.read())
 
     cleaned: dict[str, str] = {}
     for key, value in updates.items():
@@ -134,28 +198,56 @@ def merge_env(updates: dict) -> None:
             continue
         if value == _MASKED:
             continue
-        value = value.strip()
-        cleaned[key] = value
+        cleaned[key] = _clean_submitted_value(key, value)
 
-    updated: set = set()
-    out_lines: list[str] = []
-    for line in original_lines:
+    template = _template_lines()
+    # Keys the template already positions.
+    template_keys: set = set()
+    for line in template:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            template_keys.add(stripped.split("=", 1)[0].strip())
+
+    out: list[str] = []
+    seen: set = set()
+    for line in template:
         stripped = line.strip()
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key = stripped.split("=", 1)[0].strip()
             if key in cleaned:
-                if cleaned[key]:
-                    out_lines.append(_format_env_assignment(key, cleaned[key]))
-                # Empty submitted value: drop the line.
-                updated.add(key)
-                continue
-        out_lines.append(line)
+                val = cleaned[key]
+                if val:
+                    out.append(_format_env_assignment(key, val))
+                else:
+                    # Intentional clear (user blanked the field): restore the pristine slot.
+                    out.append(line)
+                seen.add(key)
+            elif key in stored and (stored[key] or "").strip():
+                # Unsubmitted this round (sentinel or hidden field): preserve.
+                out.append(_format_env_assignment(key, stored[key].strip()))
+                seen.add(key)
+            else:
+                out.append(line)
+                seen.add(key)
+        else:
+            out.append(line)
 
+    # Unknown/legacy keys from the old file, after the template.
+    unknown = [(k, v) for k, v in stored.items() if k not in template_keys]
+    if unknown:
+        # Avoid duplicating the marker if it already exists in the template.
+        if not any("kept from your previous" in l for l in out):
+            out.append("")
+            out.append("# --- kept from your previous .env ---")
+        for k, v in sorted(unknown):
+            out.append(_format_env_assignment(k, v))
+
+    # Keys submitted this round whose line never existed in the template (defensive).
     for key in sorted(cleaned):
-        if key not in updated and cleaned[key]:
-            out_lines.append(_format_env_assignment(key, cleaned[key]))
+        if key not in seen and cleaned[key]:
+            out.append(_format_env_assignment(key, cleaned[key]))
 
-    text = "\n".join(out_lines).rstrip() + "\n"
+    text = "\n".join(out).rstrip() + "\n"
     tmp = ENV_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
@@ -172,6 +264,31 @@ def reset_env() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(example)
     os.replace(tmp, ENV_PATH)
+
+
+def write_prompt_file(file_ref: str, text: str) -> str:
+    """Write the AI prompt to a UTF-8 text file next to the app (atomic).
+
+    ``file_ref`` may be a bare filename or a relative subpath inside the
+    install directory; absolute paths and ``..`` escapes are rejected.
+
+    Returns "" on success or an error message.
+    """
+    ref = (file_ref or "").strip()
+    if not ref:
+        return "Prompt filename is empty."
+    if os.path.isabs(ref) or ".." in ref.replace("\\", "/").split("/"):
+        return "Prompt file must be a relative path inside the Odicto folder."
+    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), ref)
+    try:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        tmp = target + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text.strip() + "\n")
+        os.replace(tmp, target)
+    except OSError as e:
+        return f"Could not write prompt file '{ref}': {e}"
+    return ""
 
 
 def start_ollama_pull(model: str) -> str:
@@ -231,19 +348,111 @@ def pull_status() -> dict:
 
 def _page(message: str = "", message_kind: str = "neutral") -> str:
     current = read_env()
-    provider = current.get("LLM_PROVIDER", "meta")
-    meta_key = current.get("META_API_KEY", "") or current.get("MODEL_API_KEY", "")
+
+    # Form initial values come from .env when set, otherwise from the single
+    # built-in defaults table — never a second copy of a default literal.
+    def env_or(key: str) -> str:
+        value = (current.get(key) or "").strip()
+        return value if value else ENV_DEFAULTS[key]
+
+    def env_raw(key: str) -> str:
+        """Explicitly configured value only — no default substitution.
+
+        Used for the Model field: an unset generic model must render EMPTY
+        (with the provider's default as the placeholder), never as if the
+        user had chosen it.
+        """
+        return (current.get(key) or "").strip()
+
+    provider = env_or("LLM_PROVIDER")
+    meta_key = current.get("META_API_KEY", "")
     or_key = current.get("OPENROUTER_API_KEY", "")
-    gemini_key = current.get("GEMINI_API_KEY", "") or current.get("GOOGLE_API_KEY", "")
-    ollama_base = current.get("LLM_API_BASE", "http://localhost:11434/v1")
-    meta_model = current.get("META_MODEL", "muse-spark-1.2-contributor")
-    or_model = current.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
-    gemini_model = current.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
-    gemini_thinking = current.get("GEMINI_THINKING_LEVEL", "minimal")
-    llm_model = current.get("LLM_MODEL", "qwen2.5:1.5b-instruct")
-    whisper = current.get("WHISPER_MODEL_SIZE", "tiny.en")
-    hotkey = current.get("HOTKEY", "ctrl+grave")
-    ai_hotkey = current.get("AI_HOTKEY", "ctrl+shift+grave")
+    gemini_key = current.get("GEMINI_API_KEY", "")
+    ollama_base = env_or("LLM_API_BASE")
+    # Per-backend slots (raw: blank = unset → app's built-in default).
+    ollama_model = env_raw("OLLAMA_MODEL")
+    meta_model = env_raw("META_MODEL")
+    or_model_raw = env_raw("OPENROUTER_MODEL")
+    gemini_model_raw = env_raw("GEMINI_MODEL")
+    meta_reasoning = env_raw("META_REASONING_EFFORT")
+    gemini_thinking_raw = env_raw("GEMINI_THINKING_LEVEL")
+    # Legacy seed: a hand-set LLM_MODEL/LLM_REASONING_EFFORT is shown once so
+    # the next save migrates it visibly into the per-backend slot.
+    legacy_model = env_raw("LLM_MODEL")
+    legacy_reasoning = env_raw("LLM_REASONING_EFFORT")
+    # Shorthands for the env-derived model slots + history helpers.
+    def _history_tokens(raw: str) -> list:
+        seen: set = set()
+        out: list = []
+        for tok in (raw or "").split(","):
+            tok = tok.strip()
+            if tok and tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+        return out
+
+    # One default per provider — everything else is Custom + user-grown history.
+    GEMINI_KNOWN_ALL: list = []
+    META_CATALOG_BUILTIN: list = []
+    OPENROUTER_CATALOG_BUILTIN: list = []
+    OLLAMA_CATALOG_BUILTIN: list = []
+    # Stored histories: only API keys are blank on a fresh install; model rows
+    # ship filled, so histories start empty and grow as the user verifies new models.
+    meta_hist = _history_tokens(env_raw("META_MODEL_HISTORY"))
+    or_hist = _history_tokens(env_raw("OPENROUTER_MODEL_HISTORY"))
+    gemini_hist = _history_tokens(env_raw("GEMINI_MODEL_HISTORY"))
+    ollama_hist = _history_tokens(env_raw("OLLAMA_MODEL_HISTORY"))
+    # A model that came from the legacy LLM_MODEL seed is also remembered once the
+    # user next saves — don't inject it here; the save path does the book-keeping.
+    def _catalog(provider: str, builtin: list, hist: list) -> list:
+        # Deduplicated, stable-ordered: builtins first, then verified extras.
+        seen: set = set()
+        out: list = []
+        for x in builtin + hist:
+            if x and x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+    META_CATALOG = _catalog("meta", META_CATALOG_BUILTIN, meta_hist)
+    GEMINI_CATALOG = _catalog("gemini", GEMINI_KNOWN_ALL, gemini_hist)
+    OPENROUTER_CATALOG = _catalog("openrouter", OPENROUTER_CATALOG_BUILTIN, or_hist)
+    OLLAMA_CATALOG = _catalog("ollama", OLLAMA_CATALOG_BUILTIN, ollama_hist)
+    # Seed: explicit slot wins; fallback to legacy hand-edit; else blank (default placeholder in the card).
+    meta_model_seed = meta_model or legacy_model
+    or_model_seed = or_model_raw or legacy_model
+    gemini_model_seed = gemini_model_raw or legacy_model
+    ollama_model_seed = ollama_model or legacy_model
+    meta_reasoning_seed = meta_reasoning or legacy_reasoning
+    gemini_thinking_seed = gemini_thinking_raw or legacy_reasoning
+    # For the saved-hint underline.
+    already_meta = bool(meta_model.strip())
+    already_or = bool(or_model_raw.strip())
+    already_gemini = bool(gemini_model_raw.strip())
+    already_ollama = bool(ollama_model.strip())
+    model_defaults_json = json.dumps(
+        {
+            "meta": ENV_DEFAULTS["META_MODEL"],
+            "openrouter": OPENROUTER_FALLBACK_MODEL,
+            "gemini": ENV_DEFAULTS["GEMINI_MODEL"],
+            "ollama": ENV_DEFAULTS["LLM_MODEL"],
+            "none": "",
+        }
+    )
+    model_catalogs_json = json.dumps(
+        {
+            "meta": META_CATALOG,
+            "openrouter": OPENROUTER_CATALOG,
+            "gemini": GEMINI_CATALOG,
+            "ollama": OLLAMA_CATALOG,
+        }
+    )
+    llm_max_tokens = env_or("LLM_MAX_TOKENS")
+    llm_num_ctx = env_or("LLM_NUM_CTX")
+    whisper = env_or("WHISPER_MODEL_SIZE")
+    whisper_device = env_or("WHISPER_DEVICE")
+    hotkey = env_or("HOTKEY")
+    ai_hotkey = env_or("AI_HOTKEY")
+    system_prompt_file = current.get("SYSTEM_PROMPT_FILE", "")
     system_prompt = (current.get("SYSTEM_PROMPT") or "").strip() or DEFAULT_SYSTEM_PROMPT
 
     # Server-rendered status (after Save / Reset). The Test button uses inline
@@ -315,13 +524,38 @@ body {{
 }}
 .card {{
   width: 100%;
-  max-width: 520px;
+  max-width: min(1100px, calc(100vw - 2rem));
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: 0 24px 60px -32px rgba(0,0,0,0.35);
-  padding: 2rem 2rem 2.2rem;
+  padding: 2.2rem 2.4rem 2.5rem;
 }}
+.layout {{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 2.4rem;
+}}
+.layout > .col {{ min-width: 0; }}
+@media (max-width: 900px) {{
+  .layout {{ grid-template-columns: 1fr; }}
+  .card {{ padding: 1.6rem 1.25rem 1.7rem; }}
+}}
+#none-note {{
+  display: none;
+  margin-top: 1.1rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 0.92rem;
+}}
+#none-note.show {{ display: block; }}
+#sec-ai {{ margin-top: 1.15rem; }}
+#sec-prompt {{ margin-top: 1.5rem; }}
+.panel-note {{ font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0 0; }}
+.ai-hidden {{ display: none !important; }}
 .brand {{
   display: flex;
   align-items: center;
@@ -368,10 +602,25 @@ select:hover {{
 }}
 textarea {{
   min-height: 10.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
   resize: vertical;
   line-height: 1.45;
   font-size: 0.86rem;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}}
+/* Full-screen prompt editing (Expand editor button; Esc closes). */
+textarea.prompt-fullscreen {{
+  position: fixed;
+  inset: 1.5rem;
+  z-index: 100;
+  width: calc(100% - 3rem);
+  height: calc(100vh - 3rem);
+  max-height: none;
+  min-height: 0;
+  font-size: 0.95rem;
+  resize: none;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
 }}
 select:focus, input:focus, textarea:focus {{
   outline: none;
@@ -534,6 +783,17 @@ button:disabled {{ opacity: 0.55; cursor: default; }}
 details {{ margin-top: 1.5rem; }}
 summary {{ cursor: pointer; font-weight: 480; color: var(--muted); font-size: 0.92rem; }}
 code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 6px; }}
+.model-chips {{ display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.45rem; }}
+.model-chip {{ display:inline-flex; align-items:center; gap:0.3rem; padding:0.18rem 0.45rem; border:1px solid var(--line); border-radius:999px; font-size:0.78rem; background: var(--accent-soft); color: var(--ink); }}
+.model-chip button {{ border:none; background:transparent; cursor:pointer; font-size:0.85rem; line-height:1; padding:0 0.1rem; color: var(--muted); }}
+.model-chip button:hover {{ color: var(--err); }}
+.model-chip.active {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
+.test-modal-backdrop {{ position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.35); z-index: 120; padding: 1rem; }}
+.test-modal-backdrop[hidden] {{ display: none !important; }}
+.test-modal {{ width: min(520px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 1.1rem 1.2rem; box-shadow: 0 24px 60px -20px rgba(0,0,0,0.4); }}
+.test-modal h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
+.test-modal p {{ margin: 0; font-size: 0.92rem; color: var(--muted); white-space: pre-wrap; word-break: break-word; }}
+.test-modal .actions {{ margin-top: 0.9rem; display:flex; justify-content:flex-end; }}
 </style>
 </head>
 <body>
@@ -542,18 +802,18 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     <span class="logo">O</span>
     <h1>Odicto Setup</h1>
   </div>
-  <p class="sub">Pick a backend, paste its key, and optionally edit the AI system prompt. Everything saves to your local <code>.env</code> file.</p>
-  <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v2 · inline test feedback</p>
+  <p class="sub">Pick a backend and paste its key — each backend remembers its own key, so you only ever enter it once. Everything saves to your local <code>.env</code> file.</p>
+  <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v3 · per-provider keys</p>
 
   <form id="setupForm" method="post" action="/save">
     <label for="LLM_PROVIDER">AI backend</label>
     <div class="custom-select" id="provider_select">
       <button type="button" class="select-trigger" id="provider_trigger" aria-haspopup="listbox" aria-expanded="false">
-        <span id="provider_label">Meta API (default)</span>
+        <span id="provider_label">AI backend</span>
         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="select-menu" role="listbox" id="provider_menu">
-        <button type="button" class="select-option" data-value="meta" role="option"><span>Meta API</span><span class="hint">default</span></button>
+        <button type="button" class="select-option" data-value="meta" role="option"><span>Meta API</span><span class="hint">cloud</span></button>
         <button type="button" class="select-option" data-value="openrouter" role="option"><span>OpenRouter</span><span class="hint">cloud</span></button>
         <button type="button" class="select-option" data-value="gemini" role="option"><span>Google Gemini</span><span class="hint">cloud</span></button>
         <button type="button" class="select-option" data-value="ollama" role="option"><span>Ollama</span><span class="hint">local</span></button>
@@ -561,53 +821,100 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       </div>
       <input type="hidden" name="LLM_PROVIDER" id="LLM_PROVIDER" value="{html.escape(provider)}">
     </div>
+    <p style="margin:0.4rem 0 0;font-size:0.78rem;color:var(--muted);">Only the selected backend's settings are shown below. Keys are saved per backend and kept when you switch.</p>
 
-    <div class="field" id="field-meta">
-      <label>Meta API key</label>
-      <input type="password" name="META_API_KEY" value="{html.escape(meta_key)}" placeholder="sk-meta-...">
-      <label>Meta model</label>
-      <input type="text" name="META_MODEL" value="{html.escape(meta_model)}">
-    </div>
-
-    <div class="field" id="field-openrouter">
-      <label>OpenRouter API key</label>
-      <input type="password" name="OPENROUTER_API_KEY" value="{html.escape(or_key)}" placeholder="sk-or-...">
-      <label>OpenRouter model</label>
-      <input type="text" name="OPENROUTER_MODEL" value="{html.escape(or_model)}">
-    </div>
-
-    <div class="field" id="field-gemini">
-      <label>Gemini API key</label>
-      <input type="password" name="GEMINI_API_KEY" value="{html.escape(gemini_key)}" placeholder="AIza...">
-      <label>Gemini model</label>
-      <input type="text" name="GEMINI_MODEL" value="{html.escape(gemini_model)}">
-      <label>Thinking level</label>
-      <input type="text" name="GEMINI_THINKING_LEVEL" value="{html.escape(gemini_thinking)}" placeholder="minimal">
-    </div>
-
-    <div class="field" id="field-ollama">
-      <label>Ollama model</label>
-      <input type="text" name="LLM_MODEL" value="{html.escape(llm_model)}">
-      <label>Ollama API base</label>
-      <input type="text" name="LLM_API_BASE" value="{html.escape(ollama_base)}">
-      <div class="pull-row">
-        <button type="button" id="pull_button" class="secondary" onclick="startPull()">Download local model</button>
-        <span class="hint">only downloads when you choose local AI</span>
+        <div id="none-note"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
+    <div id="sec-ai">
+    <div class="layout">
+    <div class="col">
+      <div class="field" id="field-meta">
+        <label>Meta API key{ ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if meta_key else ''}</label>
+        <input type="password" name="META_API_KEY" value="{html.escape(meta_key)}" placeholder="paste your Meta API key — quotes are fine">
+        <label>Model · Meta</label>
+        <select id="meta_model_select" onchange="syncModelSelect('meta')" style="margin-top:0.35rem;"></select>
+        <input type="text" id="meta_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id, e.g. muse-spark-1.2">
+        <input type="hidden" name="META_MODEL" id="META_MODEL" value="{html.escape(meta_model_seed)}">
+        <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="{html.escape(",".join(meta_hist))}">
+        <div id="meta_model_chips" class="model-chips" aria-label="Saved models"></div>
+        <p class="panel-note">Backend default: <code>muse-spark-1.2-contributor</code>{' · saved value shown' if already_meta else ''}</p>
+        <label>Reasoning effort</label>
+        <select id="meta_reasoning_select" onchange="syncEffort('meta')">
+          <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
+        </select>
+        <input type="hidden" name="META_REASONING_EFFORT" id="META_REASONING_EFFORT" value="{html.escape(meta_reasoning_seed)}">
       </div>
-      <div id="pull_status" class="pull-status" hidden></div>
-    </div>
-
+      <div class="field" id="field-openrouter">
+        <label>OpenRouter API key{ ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if or_key else ''}</label>
+        <input type="password" name="OPENROUTER_API_KEY" value="{html.escape(or_key)}" placeholder="paste your OpenRouter key — quotes are fine">
+        <label>Model · OpenRouter</label>
+        <select id="openrouter_model_select" onchange="syncModelSelect('openrouter')" style="margin-top:0.35rem;"></select>
+        <input type="text" id="openrouter_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom slug, e.g. openai/gpt-4o-mini">
+        <input type="hidden" name="OPENROUTER_MODEL" id="OPENROUTER_MODEL" value="{html.escape(or_model_seed)}">
+        <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="{html.escape(",".join(or_hist))}">
+        <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
+        <p class="panel-note">Backend default: <code>openai/gpt-5.6-luna</code>{' · saved value shown' if already_or else ''}</p>
+      </div>
+      <div class="field" id="field-gemini">
+        <label>Gemini API key{ ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if gemini_key else ''}</label>
+        <input type="password" name="GEMINI_API_KEY" value="{html.escape(gemini_key)}" placeholder="paste your Gemini API key — quotes are fine">
+        <label>Model · Gemini</label>
+        <select id="gemini_model_select" onchange="syncModelSelect('gemini')" style="margin-top:0.35rem;"></select>
+        <input type="text" id="gemini_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id">
+        <input type="hidden" name="GEMINI_MODEL" id="GEMINI_MODEL" value="{html.escape(gemini_model_seed)}">
+        <input type="hidden" name="GEMINI_MODEL_HISTORY" id="GEMINI_MODEL_HISTORY" value="{html.escape(",".join(gemini_hist))}">
+        <div id="gemini_model_chips" class="model-chips" aria-label="Saved models"></div>
+        <p class="panel-note">Backend default: <code>gemini-3.5-flash-lite</code>{' · saved value shown' if already_gemini else ''}</p>
+        <label>Thinking level</label>
+        <select id="gemini_thinking_select" onchange="syncEffort('gemini')">
+          <option value="">Backend default (minimal)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
+        </select>
+        <input type="hidden" name="GEMINI_THINKING_LEVEL" id="GEMINI_THINKING_LEVEL" value="{html.escape(gemini_thinking_seed)}">
+      </div>
+      <div class="field" id="field-ollama">
+        <label>Model · Ollama</label>
+        <select id="ollama_model_select" onchange="syncModelSelect('ollama')" style="margin-top:0.35rem;"></select>
+        <input type="text" id="ollama_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom tag, e.g. llama3.2:3b">
+        <input type="hidden" name="OLLAMA_MODEL" id="OLLAMA_MODEL" value="{html.escape(ollama_model_seed)}">
+        <input type="hidden" name="OLLAMA_MODEL_HISTORY" id="OLLAMA_MODEL_HISTORY" value="{html.escape(",".join(ollama_hist))}">
+        <div id="ollama_model_chips" class="model-chips" aria-label="Saved models"></div>
+        <p class="panel-note">Backend default: <code>qwen2.5:1.5b-instruct</code>{' · saved value shown' if already_ollama else ''} · no key needed</p>
+        <label>Ollama API base</label>
+        <input type="text" name="LLM_API_BASE" value="{html.escape(ollama_base)}">
+        <label>Context window <span style="font-weight:400;color:var(--muted);">(higher = better memory, slower)</span></label>
+        <input type="text" name="LLM_NUM_CTX" value="{html.escape(llm_num_ctx)}" placeholder="2048">
+        <div class="pull-row">
+          <button type="button" id="pull_button" class="secondary" onclick="startPull()">Download local model</button>
+          <span class="hint">pulls the model selected for Ollama above</span>
+        </div>
+        <div id="pull_status" class="pull-status" hidden></div>
+      </div>
+      <label>Max output tokens <span style="font-weight:400;color:var(--muted);">(shared cap for every backend)</span></label>
+      <input type="text" name="LLM_MAX_TOKENS" value="{html.escape(llm_max_tokens)}" placeholder="1024">
+    </div><!-- /.col AI -->
+    <div class="col" id="sec-prompt">
     <details open>
       <summary>AI system prompt</summary>
       <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Used for AI-mode replies (Ctrl+Shift+`). Saved as <code>SYSTEM_PROMPT</code> in <code>.env</code>. Leave blank and save to restore the built-in default. Restart Odicto after saving.</p>
       <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" spellcheck="false">__SYSTEM_PROMPT__</textarea>
+      <div class="pull-row">
+        <button type="button" class="secondary" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
+        <span class="hint">grows as you type; Expand gives a full-screen view (Esc to close)</span>
+      </div>
       <button type="button" class="link" style="margin-top:0.35rem;" onclick="restoreDefaultPrompt()">Restore default prompt</button>
+      <label style="margin-top:0.8rem;">Prompt file (optional — wins over the text above)</label>
+      <input type="text" name="SYSTEM_PROMPT_FILE" value="{html.escape(system_prompt_file)}" placeholder="prompt.txt">
+      <p style="margin:0.3rem 0 0;font-size:0.78rem;color:var(--muted);">When saving with a filename here, the textarea content is written to that plain-text file (UTF-8) next to Odicto — no \n escaping needed.</p>
     </details>
+    </div><!-- /.col prompt -->
+    </div><!-- /.layout -->
+    </div><!-- /#sec-ai -->
 
     <details>
       <summary>Advanced (Whisper + hotkeys)</summary>
       <label>Whisper model</label>
       <input type="text" name="WHISPER_MODEL_SIZE" value="{html.escape(whisper)}">
+      <label>Whisper device</label>
+      <input type="text" name="WHISPER_DEVICE" value="{html.escape(whisper_device)}" placeholder="auto">
 
       <label>Dictation hotkey</label>
       <div class="hotkey-row">
@@ -631,19 +938,142 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     <div id="status" class="status" role="status"></div>
     {server_status}
     <button type="button" class="link" id="reset_button" onclick="resetSettings()">Reset settings to defaults</button>
+  
   </form>
+
+  <div id="test_modal" class="test-modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="test_modal_title">
+    <div class="test-modal">
+      <h3 id="test_modal_title">Testing connection…</h3>
+      <p id="test_modal_msg">Contacting the selected backend.</p>
+      <div class="actions"><button type="button" class="secondary" onclick="closeTestModal(); return false;">Close</button></div>
+    </div>
+  </div>
 </main>
 
 <script>
 var DEFAULT_SYSTEM_PROMPT = __DEFAULT_SYSTEM_PROMPT_JSON__;
+// Per-provider built-in default for the shared Model field. The input only
+// ever shows what is explicitly configured; an unset model renders empty and
+// the provider's default appears as the placeholder + hint text below it.
+var MODEL_DEFAULTS = __MODEL_DEFAULTS_JSON__;
+var MODEL_CATALOGS = __MODEL_CATALOGS_JSON__;
 function restoreDefaultPrompt() {{
-  document.getElementById('SYSTEM_PROMPT').value = DEFAULT_SYSTEM_PROMPT;
+  var el = document.getElementById('SYSTEM_PROMPT');
+  el.value = DEFAULT_SYSTEM_PROMPT;
+  autoGrow(el);
 }}
+function initModelSelects() {{
+  var defaultLabels = {{ meta: 'Backend default (muse-spark-1.2-contributor)', openrouter: 'Backend default (openai/gpt-5.6-luna)', gemini: 'Backend default (gemini-3.5-flash-lite)', ollama: 'Backend default (qwen2.5:1.5b-instruct)' }};
+  ['meta','openrouter','gemini','ollama'].forEach(function(p) {{
+    var sel = document.getElementById(p + '_model_select');
+    if (!sel) return;
+    sel.innerHTML = '';
+    var o0 = document.createElement('option'); o0.value = ''; o0.textContent = defaultLabels[p] || 'Backend default'; sel.appendChild(o0);
+    (MODEL_CATALOGS[p] || []).forEach(function(m) {{
+      var o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o);
+    }});
+    var oc = document.createElement('option'); oc.value = '__custom__'; oc.textContent = 'Custom\\u2026'; sel.appendChild(oc);
+    var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+    var cv = hid ? hid.value : '';
+    var has = [].slice.call(sel.options).some(function(o){{ return o.value === cv; }});
+    if (cv && has) sel.value = cv;
+    else if (cv) {{ sel.value = '__custom__'; var ci = document.getElementById(p + '_model_custom'); if (ci) {{ ci.value = cv; ci.style.display = ''; }} }}
+  }});
+  ['meta','openrouter','gemini','ollama'].forEach(function(p){{ _renderChips(p); }});
+}}
+function syncModelSelect(p) {{
+  var sel = document.getElementById(p + '_model_select');
+  var cust = document.getElementById(p + '_model_custom');
+  var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+  var val = sel ? sel.value : '';
+  if (val === '__custom__') {{ if (cust) {{ cust.style.display = ''; cust.focus(); }} if (hid && cust) hid.value = cust.value; }}
+  else {{ if (cust) cust.style.display = 'none'; if (hid) hid.value = val; }}
+}}
+function syncCustomModel(p) {{
+  var cust = document.getElementById(p + '_model_custom');
+  var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+  if (cust && hid) hid.value = cust.value;
+}}
+function initEffortSelects() {{
+  var map = {{ meta: ['meta_reasoning_select','META_REASONING_EFFORT'], gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'] }};
+  Object.keys(map).forEach(function(p) {{
+    var sel = document.getElementById(map[p][0]), hid = document.getElementById(map[p][1]);
+    if (sel && hid && hid.value) {{
+      var ok = [].slice.call(sel.options).some(function(o){{ return o.value === hid.value; }});
+      if (ok) sel.value = hid.value;
+    }}
+  }});
+}}
+function syncEffort(p) {{
+  var map = {{ meta: ['meta_reasoning_select','META_REASONING_EFFORT'], gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'] }};
+  var pair = map[p]; if (!pair) return;
+  var sel = document.getElementById(pair[0]), hid = document.getElementById(pair[1]);
+  if (sel && hid) hid.value = sel.value;
+}}
+
+function _historyTokens(raw){{ return (raw||'').split(',').map(function(s){{return s.trim();}}).filter(Boolean).filter(function(v,i,a){{return a.indexOf(v)===i;}}); }}
+function _providerHistory(provider){{
+  var id = provider.toUpperCase() + '_MODEL_HISTORY';
+  var hid = document.getElementById(id);
+  return _historyTokens(hid ? hid.value : '');
+}}
+function _writeHistory(provider, list){{
+  var hid = document.getElementById(provider.toUpperCase() + '_MODEL_HISTORY');
+  if(hid) hid.value = list.join(', ');
+}}
+function _renderChips(provider){{
+  var wrap = document.getElementById(provider + '_model_chips');
+  var curId = provider.toUpperCase() + '_MODEL';
+  var cur = document.getElementById(curId);
+  var curVal = cur ? cur.value : '';
+  var hist = _providerHistory(provider);
+  if(!wrap) return;
+  wrap.innerHTML = '';
+  hist.forEach(function(m){{
+    var chip = document.createElement('span');
+    chip.className = 'model-chip' + (m === curVal ? ' active' : '');
+    chip.title = m;
+    var label = document.createElement('span'); label.textContent = m; chip.appendChild(label);
+    var x = document.createElement('button'); x.type='button'; x.setAttribute('aria-label','Remove '+m); x.textContent='\u00d7';
+    x.addEventListener('click', function(){{ removeModel(provider, m); }});
+    chip.appendChild(x);
+    chip.addEventListener('click', function(e){{ if(e.target===x) return; var sel=document.getElementById(provider+'_model_select'); var hid=document.getElementById(curId); if(hid) hid.value=m; if(sel) {{ var has=[].slice.call(sel.options).some(function(o){{return o.value===m;}}); if(!has){{ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); }} sel.value=m; syncModelSelect(provider); _renderChips(provider);}} }});
+    wrap.appendChild(chip);
+  }});
+}}
+function removeModel(provider, model){{
+  var list = _providerHistory(provider);
+  var idx = list.indexOf(model);
+  if(idx === -1) return;
+  list.splice(idx,1);
+  _writeHistory(provider, list);
+  var sel=document.getElementById(provider+'_model_select');
+  if(sel){{ var opt=[].slice.call(sel.options).find(function(o){{return o.value===model;}}); if(opt) opt.remove(); if(sel.value===model) {{ sel.value=''; syncModelSelect(provider); }} }}
+  var cur=document.getElementById(provider.toUpperCase()+'_MODEL');
+  if(cur && cur.value===model) {{ cur.value=''; var sel2=document.getElementById(provider+'_model_select'); if(sel2) sel2.value=''; }}
+  _renderChips(provider);
+}}
+function rememberModel(provider, model){{
+  if(!model) return;
+  var list=_providerHistory(provider);
+  if(list.indexOf(model)===-1){{ list.push(model); _writeHistory(provider, list); var sel=document.getElementById(provider+'_model_select'); if(sel && ![].slice.call(sel.options).some(function(o){{return o.value===model;}})){{ var o=document.createElement('option'); o.value=model; o.textContent=model; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); }} _renderChips(provider); }}
+}}
+function openTestModal(title, msg){{ var m=document.getElementById('test_modal'); if(!m) return; var t=document.getElementById('test_modal_title'); var p=document.getElementById('test_modal_msg'); if(t) t.textContent=title||'Testing connection\u2026'; if(p) p.textContent=msg||'Contacting the selected backend.'; m.hidden=false; m.removeAttribute('hidden'); m.classList.remove('hidden'); m.style.display='flex'; }}
+function closeTestModal(){{ var m=document.getElementById('test_modal'); if(!m) return; m.hidden=true; m.setAttribute('hidden',''); m.style.display='none'; }}
+
 function showProvider(v) {{
   ['meta','openrouter','gemini','ollama'].forEach(function(id) {{
-    document.getElementById('field-' + id).classList.toggle('active', id === v);
+    var el = document.getElementById('field-' + id);
+    if (el) el.classList.toggle('active', id === v);
   }});
-  document.getElementById('test_button').disabled = (v === 'none');
+  var noneNote = document.getElementById('none-note');
+  if (noneNote) noneNote.classList.toggle('show', v === 'none');
+  var secAi = document.getElementById('sec-ai');
+  if (secAi) secAi.style.display = (v === 'none') ? 'none' : '';
+  var secPrompt = document.getElementById('sec-prompt');
+  if (secPrompt) secPrompt.style.display = (v === 'none') ? 'none' : '';
+  var tb = document.getElementById('test_button');
+  if (tb) tb.disabled = (v === 'none');
 }}
 
 var PROVIDER_LABELS = {{
@@ -684,7 +1114,7 @@ async function startPull() {{
   try {{
     var resp = await fetch('/pull-ollama', {{
       method: 'POST',
-      body: new URLSearchParams({{ LLM_MODEL: document.querySelector('input[name="LLM_MODEL"]').value || 'qwen2.5:1.5b-instruct' }}),
+      body: new URLSearchParams({{ OLLAMA_MODEL: (document.getElementById('OLLAMA_MODEL') ? document.getElementById('OLLAMA_MODEL').value : '') || 'qwen2.5:1.5b-instruct' }}),
       headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }}
     }});
     var data = await resp.json();
@@ -710,7 +1140,7 @@ function initCustomSelect() {{
   var label = document.getElementById('provider_label');
 
   function render() {{
-    var v = hidden.value || 'meta';
+    var v = hidden.value || 'none';
     label.textContent = PROVIDER_LABELS[v] || v;
     menu.querySelectorAll('.select-option').forEach(function(opt) {{
       opt.classList.toggle('selected', opt.getAttribute('data-value') === v);
@@ -753,6 +1183,42 @@ function initCustomSelect() {{
 }}
 
 initCustomSelect();
+initModelSelects();
+initEffortSelects();
+['meta','openrouter','gemini','ollama'].forEach(function(p){{
+  var ci=document.getElementById(p+'_model_custom');
+  if(ci) ci.addEventListener('input', function(){{ syncCustomModel(p); }});
+}});
+
+// --- System prompt textarea: auto-grow + full-screen editor -----------------
+var promptEl = document.getElementById('SYSTEM_PROMPT');
+var expandBtn = document.getElementById('prompt_expand');
+
+function autoGrow(el) {{
+  if (el.classList.contains('prompt-fullscreen')) return; // fixed height there
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight + 2, window.innerHeight * 0.6) + 'px';
+}}
+promptEl.addEventListener('input', function() {{ autoGrow(promptEl); }});
+
+function togglePromptExpand() {{
+  var open = promptEl.classList.toggle('prompt-fullscreen');
+  expandBtn.textContent = open ? 'Close editor (Esc)' : 'Expand editor';
+  document.body.style.overflow = open ? 'hidden' : '';
+  if (open) {{
+    promptEl.style.height = '';
+    promptEl.focus();
+    promptEl.setSelectionRange(0, 0);
+  }} else {{
+    autoGrow(promptEl);
+  }}
+}}
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape' && promptEl.classList.contains('prompt-fullscreen')) {{
+    togglePromptExpand();
+  }}
+}});
+autoGrow(promptEl);
 
 var hotkeyRecorder = null;
 var MODIFIER_NAMES = {{ Control: 'ctrl', Shift: 'shift', Alt: 'alt', Meta: 'cmd' }};
@@ -857,10 +1323,16 @@ function setStatus(kind, html) {{
 async function testConnection() {{
   var btn = document.getElementById('test_button');
   btn.disabled = true;
+  openTestModal('Testing connection\u2026', 'Contacting the selected backend. This may take a few seconds.');
+  // Keep the old inline status in sync too (useful if the modal is dismissed).
   setStatus('neutral', '<span class="spinner"></span> Testing connection...');
   var controller = new AbortController();
   var timer = setTimeout(function() {{ controller.abort(); }}, 30000);
   try {{
+    // Snapshot the hidden model value's provider so we can grow history on success.
+    var _lpEl = document.getElementById('LLM_PROVIDER'); var provider = (_lpEl && _lpEl.value) ? _lpEl.value : 'none';
+    var modelForHistory = '';
+    if(provider !== 'none'){{ var hid=document.getElementById(provider.toUpperCase()+'_MODEL'); modelForHistory = hid ? hid.value : ''; }}
     var body = new URLSearchParams(new FormData(document.getElementById('setupForm')));
     var resp = await fetch('/test', {{
       method: 'POST',
@@ -868,23 +1340,36 @@ async function testConnection() {{
       signal: controller.signal,
       headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }}
     }});
+    var ct = resp.headers.get('content-type') || '';
+    if(!ct.includes('application/json')){{ var txt = await resp.text(); var snippet = (txt||'').slice(0,800); throw new Error('The test endpoint returned a non-JSON response. Is the setup server still running? ' + snippet); }}
     var data = await resp.json();
     if (data.ok) {{
       setStatus('ok', '&#10003; ' + data.message);
+      document.getElementById('test_modal_title').textContent = 'Connection OK';
+      document.getElementById('test_modal_msg').textContent = data.message || 'Connected successfully.';
+      if(provider!=='none' && modelForHistory) rememberModel(provider, modelForHistory);
     }} else {{
       setStatus('err', '&#9888; ' + data.message);
+      document.getElementById('test_modal_title').textContent = 'Test failed';
+      document.getElementById('test_modal_msg').textContent = data.message || 'The backend rejected the request.';
     }}
   }} catch (e) {{
+    var msg = (e && e.message) ? e.message : String(e);
     if (e && e.name === 'AbortError') {{
-      setStatus('err', '&#9888; Test timed out after 30s. Check your network and key, then try again.');
-    }} else {{
-      setStatus('err', '&#9888; Could not reach the local server.');
+      msg = 'Test timed out after 30s. Check your network and key, then try again.';
+    }} else if (/Failed to fetch|Could not reach/i.test(msg)) {{
+      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via .\\setup.bat (or odicto.py setup) and retry.';
     }}
+    setStatus('err', '&#9888; ' + msg);
+    var mt2=document.getElementById('test_modal_title'); if(mt2) mt2.textContent='Test failed';
+    var mm2=document.getElementById('test_modal_msg'); if(mm2) mm2.textContent=msg;
   }} finally {{
     clearTimeout(timer);
     btn.disabled = (document.getElementById('LLM_PROVIDER').value === 'none');
   }}
 }}
+document.addEventListener('keydown', function(e){{ if(e.key==='Escape') closeTestModal(); }});
+(function(){{ var m=document.getElementById('test_modal'); if(!m) return; m.addEventListener('click', function(e){{ if(e.target===m) closeTestModal(); }}); if(!m.hasAttribute('hidden')){{ m.setAttribute('hidden',''); m.style.display='none'; }} }})();
 
 async function resetSettings() {{
   if (!confirm('Reset settings to defaults? This clears any saved API keys and model choices.')) {{
@@ -915,6 +1400,8 @@ async function resetSettings() {{
     return (
         page.replace("__SYSTEM_PROMPT__", html.escape(system_prompt))
         .replace("__DEFAULT_SYSTEM_PROMPT_JSON__", json.dumps(DEFAULT_SYSTEM_PROMPT))
+        .replace("__MODEL_DEFAULTS_JSON__", model_defaults_json)
+        .replace("__MODEL_CATALOGS_JSON__", model_catalogs_json)
     )
 
 
@@ -937,7 +1424,7 @@ class _Handler(BaseHTTPRequestHandler):
         form = parse_qs(raw)
 
         if self.path == "/pull-ollama":
-            model = (form.get("LLM_MODEL") or ["qwen2.5:1.5b-instruct"])[0].strip()
+            model = (form.get("OLLAMA_MODEL") or form.get("LLM_MODEL") or [ENV_DEFAULTS["LLM_MODEL"]])[0].strip()
             if not model:
                 self._send_json({"ok": False, "message": "Enter an Ollama model first."})
                 return
@@ -965,39 +1452,41 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_test(self, form: dict) -> None:
         from refiner import test_provider
 
-        provider = (form.get("LLM_PROVIDER") or ["meta"])[0].strip().lower()
+        provider = (form.get("LLM_PROVIDER") or ["none"])[0].strip().lower()
         if provider in ("meta", "meta_api", "meta-api"):
             provider = "meta"
         if provider in ("gemini", "gemini_api", "google", "google_api", "google-api"):
             provider = "gemini"
 
         def pick(key: str, default: str = "") -> str:
-            value = (form.get(key) or [""])[0].strip()
-            # A masked field means the user left an existing secret unchanged;
-            # fall back to the real stored value for testing only.
+            raw = (form.get(key) or [""])[0]
+            value = _clean_submitted_value(key, raw)
             if value == _MASKED:
-                return read_env_raw().get(key, default)
-            # Old cached pages may omit the field entirely; use the stored value.
+                stored = read_env_raw().get(key, default)
+                return _strip_secret_quotes((stored or default))
             if not value and key not in form:
-                return read_env_raw().get(key, default)
-            return value or default
+                stored = read_env_raw().get(key, default)
+                return _strip_secret_quotes((stored or default))
+            if not value:
+                return default
+            return _strip_secret_quotes(value) or default
 
         if provider == "meta":
-            api_key = pick("META_API_KEY") or pick("MODEL_API_KEY")
-            model = pick("META_MODEL", "muse-spark-1.2-contributor")
-            api_base = pick("META_API_BASE", "https://api.meta.ai/v1")
+            api_key = pick("META_API_KEY")
+            model = pick("META_MODEL", ENV_DEFAULTS["META_MODEL"])
+            api_base = pick("META_API_BASE", ENV_DEFAULTS["META_API_BASE"])
         elif provider == "openrouter":
             api_key = pick("OPENROUTER_API_KEY")
-            model = pick("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
-            api_base = pick("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+            model = pick("OPENROUTER_MODEL", OPENROUTER_FALLBACK_MODEL)
+            api_base = pick("OPENROUTER_API_BASE", ENV_DEFAULTS["OPENROUTER_API_BASE"])
         elif provider == "gemini":
-            api_key = pick("GEMINI_API_KEY") or pick("GOOGLE_API_KEY")
-            model = pick("GEMINI_MODEL", "gemini-3.5-flash-lite")
+            api_key = pick("GEMINI_API_KEY")
+            model = pick("GEMINI_MODEL", ENV_DEFAULTS["GEMINI_MODEL"])
             api_base = ""
         elif provider == "ollama":
             api_key = ""
-            model = pick("LLM_MODEL", "qwen2.5:1.5b-instruct")
-            api_base = pick("LLM_API_BASE", "http://localhost:11434/v1")
+            model = pick("OLLAMA_MODEL", ENV_DEFAULTS["LLM_MODEL"]) or pick("LLM_MODEL", ENV_DEFAULTS["LLM_MODEL"])
+            api_base = pick("LLM_API_BASE", ENV_DEFAULTS["LLM_API_BASE"])
         else:
             api_key = ""
             model = ""
@@ -1005,6 +1494,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         result = test_provider(provider, api_key, model, api_base)
         ok = result == "ok"
+        if not ok and any(s in result.lower() for s in ("401", "unauthorized", "403", "forbidden")):
+            result = result + " — check the key is valid and was pasted without extra quotes around it."
         message = "Connected successfully." if ok else f"Test failed: {result}"
         self._send_json({"ok": ok, "message": message})
 
@@ -1020,6 +1511,16 @@ class _Handler(BaseHTTPRequestHandler):
             updates.pop("OPENROUTER_API_KEY", None)
             updates.pop("GEMINI_API_KEY", None)
 
+        # Prompt file mode: the textarea content becomes the file's plain-text
+        # content (no \n escaping), and SYSTEM_PROMPT_FILE points at it.
+        prompt_file = (updates.get("SYSTEM_PROMPT_FILE") or "").strip()
+        if prompt_file:
+            err = write_prompt_file(prompt_file, updates.get("SYSTEM_PROMPT", ""))
+            if err:
+                body = _page(err, "err").encode("utf-8")
+                self._send(body)
+                return
+
         hotkey = updates.get("HOTKEY") or Config.HOTKEY
         ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
         try:
@@ -1030,40 +1531,19 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         merge_env(updates)
-        # Validate against the freshly merged .env, not the import-time Config
-        # (Config class attributes are loaded once at server start and would
-        # print a stale "META_API_KEY is empty" warning after a successful save).
         merged = read_env_raw()
         provider = (
-            updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "meta"
+            updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "none"
         ).strip().lower()
         if provider not in ("meta", "ollama", "openrouter", "gemini", "none"):
             body = _page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err").encode("utf-8")
             self._send(body)
             return
-        if provider == "openrouter":
-            key = updates.get("OPENROUTER_API_KEY") or merged.get("OPENROUTER_API_KEY", "")
-            if not key:
-                body = _page(
-                    "Saved, but OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter.",
-                    "err",
-                ).encode("utf-8")
-                self._send(body)
-                return
-        if provider == "gemini":
-            key = (
-                updates.get("GEMINI_API_KEY")
-                or updates.get("GOOGLE_API_KEY")
-                or merged.get("GEMINI_API_KEY", "")
-                or merged.get("GOOGLE_API_KEY", "")
-            )
-            if not key:
-                body = _page(
-                    "Saved, but GEMINI_API_KEY is required when LLM_PROVIDER=gemini.",
-                    "err",
-                ).encode("utf-8")
-                self._send(body)
-                return
+        err_msg = validate_provider_requirements(provider, updates, merged)
+        if err_msg:
+            body = _page(f"Saved, but {err_msg}", "err").encode("utf-8")
+            self._send(body)
+            return
         body = _page("Settings saved. Restart Odicto to apply.", "ok").encode("utf-8")
         self._send(body)
 

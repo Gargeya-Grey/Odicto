@@ -103,8 +103,16 @@ After install, configure a provider and API key without hand-editing `.env`:
 
 The page writes `.env` atomically, preserves unsubmitted keys, and can test the
 selected provider before saving. The same page edits `SYSTEM_PROMPT` (AI-mode
-instructions); an empty value uses the built-in default. Restart Odicto after
-saving for the new prompt to take effect.
+instructions) or writes it to a plain-text `SYSTEM_PROMPT_FILE`; an empty value
+uses the built-in default. Restart Odicto after saving for the new prompt to
+take effect.
+
+Inspect the fully-resolved configuration (every value plus the `.env` key that
+supplied it) with:
+
+```bash
+.venv/bin/python odicto.py config    # Windows: .\.venv\Scripts\python.exe odicto.py config
+```
 
 ## Runtime notes for agents
 
@@ -117,17 +125,41 @@ saving for the new prompt to take effect.
   always loads for STT, independent of LLM provider.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
+- **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,
+  `LLM_REASONING_EFFORT`) apply to whichever provider `LLM_PROVIDER` selects;
+  per-provider keys (`META_*`, `GEMINI_*`, `OPENROUTER_*`) are optional
+  overrides that win only when set. The built-in default provider is `none`
+  (raw dictation until a key is picked). Blank values behave like
+  commented-out lines: the next tier applies.
+- **API keys are per provider and remembered:** `META_API_KEY`,
+  `OPENROUTER_API_KEY`, and `GEMINI_API_KEY` are independent; the setup page
+  saves whichever provider you configured, masks stored values, and never
+  requires re-entry of a saved key. A legacy `LLM_API_KEY` in an old `.env`
+  is ignored with a one-line deprecation warning.
+- **Defaults live in one place:** `ENV_DEFAULTS` at the top of `config.py` is
+  the single source of built-in defaults; `.env.example` must agree with it.
+  `test_units.TestEnvExampleParity` fails when an uncommented `.env.example`
+  value drifts from a default, when a known key is undocumented, or when the
+  example documents a key the app does not read. Update both together.
+- **Prompt files:** `SYSTEM_PROMPT_FILE` points at a plain UTF-8 text file
+  (relative paths resolve against the repo root) and wins over inline
+  `SYSTEM_PROMPT`; missing/unreadable files fall back with a warning.
+  `prompt.txt.example` mirrors the built-in default prompt byte-for-byte.
 - **OpenRouter:** set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and
   `OPENROUTER_MODEL`. Localhost `LLM_API_BASE` is auto-rewritten to
   `OPENROUTER_API_BASE`. Odicto will **not** spawn Ollama in this mode.
-- **Meta:** set `META_API_KEY` (or `MODEL_API_KEY`) and `META_MODEL`. Default
+- **Meta:** set `META_API_KEY` and `META_MODEL`. Default
   model is `muse-spark-1.2-contributor` — do not silently fall back to the
   base `muse-spark-1.2` SKU.
-- **Gemini:** set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`),
+- **Gemini:** set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`,
   and `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Uses the GA Interactions API
   via the `google-genai` SDK (`client.interactions.create`). Optional
   `GEMINI_THINKING_LEVEL` (`minimal|low|medium|high`, default `minimal`).
   Odicto will **not** spawn Ollama in this mode.
+- **Ollama:** set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL` (default `qwen2.5:1.5b-instruct`);
+  per-provider keys — use `OLLAMA_MODEL` for Ollama only (hand-edit `LLM_MODEL` is
+  the legacy generic tier that the setup page no longer writes).
+- **OpenRouter default model** is `openai/gpt-5.6-luna` (override with `OPENROUTER_MODEL`).
 - **Provider `none`:** raw dictation only; no LLM client; Ollama not started.
 - macOS requires **Accessibility** and **Input Monitoring** permissions for
   `pynput` global hooks and synthetic copy/paste.
@@ -166,7 +198,7 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 
 ## Do not
 
-- Do not publish `.env` or API keys (`OPENROUTER_API_KEY` especially).
+- Do not read, view, open, or publish `.env` or API keys (`OPENROUTER_API_KEY`, etc.); inspect `.env.example` or `config.py` instead.
 - Do not hardcode OS-specific paths in docs/scripts; use `platforms.base`.
 - Do not replace the hotkey/paste behavior without user request.
 - Do not assume Ollama is stopped system-wide just because `LLM_PROVIDER` is not

@@ -10,6 +10,7 @@ mock_faster_whisper = MagicMock()
 sys.modules["faster_whisper"] = mock_faster_whisper
 
 # Now we can safely import config, recorder, transcriber, refiner, typer, main
+import config
 from config import Config, parse_hold_hotkey, _sanitize_model_id
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber
@@ -337,7 +338,7 @@ class TestOdicto(unittest.TestCase):
     def test_effective_llm_model_and_api_base(self) -> None:
         """Provider flip picks the right model id and API base without hand-editing paths."""
         with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
-            Config, "LLM_MODEL", "phi4-mini:latest"
+            Config, "OLLAMA_MODEL", "phi4-mini:latest"
         ), patch.object(Config, "OPENROUTER_MODEL", "google/gemini-2.0-flash-001"), patch.object(
             Config, "LLM_API_BASE", "http://localhost:11434/v1"
         ), patch.object(
@@ -397,7 +398,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "system")
         self.assertEqual(messages[-1]["role"], "user")
         self.assertEqual(messages[-1]["content"], "hello world")
-        self.assertEqual(messages[0]["content"], Config.SYSTEM_PROMPT)
+        self.assertEqual(messages[0]["content"], Config.effective_system_prompt())
         self.assertNotIn("LENGTH RULES", messages[0]["content"])
 
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
@@ -461,7 +462,7 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(first_kwargs["model"], "gemini-3.7-flash")
         self.assertEqual(first_kwargs["input"], "hello from gemini")
         self.assertIn("PLAIN HUMAN-READABLE TEXT", first_kwargs["system_instruction"])
-        self.assertEqual(first_kwargs["system_instruction"], Config.SYSTEM_PROMPT)
+        self.assertEqual(first_kwargs["system_instruction"], Config.effective_system_prompt())
         self.assertEqual(first_kwargs["generation_config"]["thinking_level"], "low")
         # First turn has no previous_interaction_id; the second turn chains
         # onto the stored id from the first reply.
@@ -470,6 +471,27 @@ class TestOdicto(unittest.TestCase):
             mock_client.interactions.create.call_args_list[1][1]["previous_interaction_id"],
             "v1_abc123",
         )
+
+    @patch("refiner.Config.LLM_PROVIDER", "meta")
+    @patch("refiner.Config.META_API_KEY", "sk-meta-test")
+    def test_text_refiner_meta_system_prompt_and_context(self) -> None:
+        """Meta Responses payload passes system prompt in role:system and context in user message."""
+        import refiner
+
+        mock_client = MagicMock()
+        mock_client.create_responses.return_value = "Meta response text"
+        with patch.object(refiner, "_MetaClient", return_value=mock_client):
+            r = refiner.TextRefiner()
+            result = r.refine("translate to french", context="Selected sample text")
+            self.assertEqual(result, "Meta response text")
+
+            payload_args, _ = mock_client.create_responses.call_args
+            input_payload = payload_args[0]
+            self.assertEqual(input_payload[0]["role"], "system")
+            self.assertIn("PLAIN HUMAN-READABLE TEXT", input_payload[0]["content"][0]["text"])
+            self.assertEqual(input_payload[1]["role"], "user")
+            self.assertIn("Context:\nSelected sample text", input_payload[1]["content"][0]["text"])
+            self.assertIn("Query: translate to french", input_payload[1]["content"][0]["text"])
 
     @patch("refiner.Config.LLM_PROVIDER", "gemini")
     @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
@@ -819,6 +841,43 @@ class TestOdicto(unittest.TestCase):
         result = get_selected_text(timeout=0.15)
         self.assertEqual(result, "same text as before")
 
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=True)
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
+    def test_get_selected_text_wm_copy_ignored_falls_back_to_send_copy(
+        self,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
+    ) -> None:
+        """When WM_COPY returns True but does not change the clipboard, send_copy is used."""
+        last_written = {"v": ""}
+
+        def fake_write(v: str) -> bool:
+            last_written["v"] = v
+            return True
+
+        def fake_read() -> str:
+            # During WM_COPY check, clipboard still holds whatever was written (sentinel).
+            # Once send_copy is invoked, the app puts the selection on the clipboard.
+            if mock_send_copy.called:
+                return "fallback copied text"
+            return last_written["v"]
+
+        mock_clipboard_write.side_effect = fake_write
+        mock_clipboard_read.side_effect = fake_read
+
+        result = get_selected_text(timeout=0.15)
+        self.assertEqual(result, "fallback copied text")
+        mock_wm.assert_called()
+        mock_send_copy.assert_called()
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
     @patch("main.AudioRecorder")
     @patch("main.WhisperTranscriber")
@@ -952,6 +1011,62 @@ class TestOdicto(unittest.TestCase):
                 keep_history=False,
             )
             mock_paste_text.assert_called_once_with("Improved draft.")
+
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_dictation_app_handles_selection_exception_gracefully(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """Exceptions in get_selected_text log an error and gracefully pass empty context."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("main.time.sleep"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            mock_get_selected_text.side_effect = RuntimeError("Simulated clipboard failure")
+            app._pressed_mods_at_press = ("ctrl", "shift")
+            app.on_press(use_llm=True)
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(100, dtype=np.float32)
+            app.transcriber.transcribe.return_value = "summarize this"
+            app.refiner.refine.return_value = "Summary text."
+            app._record_started_at = 0.0
+
+            with patch("threading.Thread") as mock_thread:
+                app.on_release()
+                pipeline_call = mock_thread.call_args
+                pipeline_target = (
+                    pipeline_call[1].get("target")
+                    if "target" in pipeline_call[1]
+                    else pipeline_call[0][0]
+                )
+                pipeline_args = (
+                    pipeline_call[1].get("args") or pipeline_call[0][1:]
+                )
+            pipeline_target(*pipeline_args)
+
+            app.refiner.refine.assert_called_once_with(
+                "summarize this",
+                context="",
+                keep_history=False,
+            )
+            mock_paste_text.assert_called_once_with("Summary text.")
 
     @patch("socket.socket")
     @patch("main.AudioRecorder")
@@ -1364,7 +1479,7 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertEqual(parsed["META_API_KEY"], "abc")
         self.assertTrue(_mask_key("META_API_KEY"))
         self.assertTrue(_mask_key("GEMINI_API_KEY"))
-        self.assertTrue(_mask_key("GOOGLE_API_KEY"))
+        self.assertFalse(_mask_key("GOOGLE_API_KEY"))
         self.assertFalse(_mask_key("LLM_PROVIDER"))
 
     def test_setup_web_merge_env_quotes_system_prompt(self) -> None:
@@ -1378,6 +1493,40 @@ class TestCrossPlatform(unittest.TestCase):
                 with open(setup_web.ENV_PATH) as f:
                     text = f.read()
                 self.assertIn('SYSTEM_PROMPT="Line one\\nLine two"', text)
+            finally:
+                try:
+                    os.remove(setup_web.ENV_PATH)
+                except Exception:
+                    pass
+
+    def test_setup_web_switching_provider_preserves_saved_keys(self) -> None:
+        """Save-under-new-provider must keep every other provider's stored key.
+
+        The browser round-trips stored secrets as a masked sentinel; merge_env
+        must skip it. This is the 'never ask for the same key twice' guarantee.
+        """
+        import setup_web
+
+        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")):
+            try:
+                with open(setup_web.ENV_PATH, "w", encoding="utf-8") as f:
+                    f.write("LLM_PROVIDER=gemini\nGEMINI_API_KEY=AIza-stored-key\n")
+                # User flips the dropdown to meta, types a Meta key, and leaves
+                # the Gemini field untouched (browser submits the mask).
+                setup_web.merge_env({
+                    "LLM_PROVIDER": "meta",
+                    "META_API_KEY": "sk-meta-new",
+                    "GEMINI_API_KEY": setup_web._MASKED,
+                    "OPENROUTER_API_KEY": "",
+                })
+                with open(setup_web.ENV_PATH, encoding="utf-8") as f:
+                    text = f.read()
+                self.assertIn("LLM_PROVIDER=meta", text)
+                self.assertIn("META_API_KEY=sk-meta-new", text)
+                self.assertIn("GEMINI_API_KEY=AIza-stored-key", text)
+                self.assertNotIn(setup_web._MASKED, text)
+                # Template anchors the slot (blank = unset) so it still appears.
+                self.assertIn("OPENROUTER_API_KEY=", text)
             finally:
                 try:
                     os.remove(setup_web.ENV_PATH)
@@ -1399,6 +1548,7 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn("PLAIN HUMAN-READABLE TEXT", DEFAULT_SYSTEM_PROMPT)
 
     def test_setup_web_merge_env_preserves_and_updates(self) -> None:
+        """Template-anchored merge: positions stay, unknowns survive under marker."""
         import setup_web
 
         with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")):
@@ -1410,8 +1560,9 @@ class TestCrossPlatform(unittest.TestCase):
                     text = f.read()
                 self.assertIn("LLM_PROVIDER=openrouter", text)
                 self.assertIn("OPENROUTER_API_KEY=sk-or-test", text)
+                # Unknown keys are appended under the preservation marker.
                 self.assertIn("CUSTOM_KEY=keep", text)
-                self.assertIn("# keep me", text)
+                self.assertIn("kept from your previous", text)
             finally:
                 try:
                     os.remove(setup_web.ENV_PATH)
@@ -1424,10 +1575,10 @@ class TestCrossPlatform(unittest.TestCase):
         with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")), \
              patch.object(setup_web, "ENV_EXAMPLE_PATH", new=os.path.join(os.getcwd(), ".env.example")):
             try:
-                with open(setup_web.ENV_PATH, "w") as f:
+                with open(setup_web.ENV_PATH, "w", encoding="utf-8") as f:
                     f.write("LLM_PROVIDER=openrouter\nOPENROUTER_API_KEY=sk-or-test\n")
                 setup_web.reset_env()
-                with open(setup_web.ENV_PATH) as f:
+                with open(setup_web.ENV_PATH, encoding="utf-8") as f:
                     text = f.read()
                 self.assertNotIn("sk-or-test", text)
                 self.assertIn("LLM_PROVIDER=", text)
@@ -1495,6 +1646,221 @@ class TestCrossPlatform(unittest.TestCase):
         import platforms
 
         self.assertIn(platforms.hotkey_backend_name(), ("keyboard", "pynput"))
+
+
+class TestEnvExampleParity(unittest.TestCase):
+    """Keeps .env.example and the built-in defaults from drifting apart.
+
+    The promise: a commented-out line means "use the default shown in the
+    comment", so an uncommented value must EQUAL the code default, every
+    documented key must be one the app actually reads, and vice versa.
+    """
+
+    EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example")
+    PROMPT_EXAMPLE_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prompt.txt.example"
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with open(cls.EXAMPLE_PATH, encoding="utf-8") as f:
+            cls.lines = f.read().splitlines()
+        import re
+
+        cls.key_re = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]*)\s*=")
+
+    def _all_keys(self) -> list:
+        keys = []
+        for line in self.lines:
+            m = self.key_re.match(line)
+            if m:
+                keys.append(m.group(1))
+        return keys
+
+    def test_uncommented_values_equal_builtin_defaults(self) -> None:
+        for line in self.lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            self.assertIn(key, config.KNOWN_ENV_KEYS, f"undocumented key {key}")
+            expected = config.ENV_DEFAULTS[key]
+            actual = value.split(" #")[0].strip().strip('"').strip("'")
+            # ``KEY=`` (blank) means "use the built-in default" — the cascade
+            # treats it like a commented line, so it inherently matches.
+            if actual == "":
+                continue
+            # ``*_MODEL`` defaults live in OPENROUTER_FALLBACK_MODEL / provider
+            # defaults, not in ENV_DEFAULTS. The .env value is the user's
+            # current selection (grown via the setup page), not a parity check.
+            if key in ("OPENROUTER_MODEL", "OPENROUTER_MODEL_HISTORY", "GEMINI_MODEL", "GEMINI_MODEL_HISTORY", "META_MODEL", "META_MODEL_HISTORY", "OLLAMA_MODEL", "OLLAMA_MODEL_HISTORY"):
+                continue
+            self.assertEqual(
+                actual,
+                expected,
+                f".env.example ships {key}={actual!r} but the built-in default "
+                f"is {expected!r} — update one of them (they must match).",
+            )
+
+    def test_every_known_key_is_documented(self) -> None:
+        # History keys and the per-provider *current model* slot are user-grown
+        # via the setup page — exempt the history holders from doc parity, and
+        # exempt current-model keys whose defaults live outside ENV_DEFAULTS.
+        EXEMPT_DOC = {
+            "OLLAMA_MODEL_HISTORY",
+            "OPENROUTER_MODEL_HISTORY",
+            "GEMINI_MODEL_HISTORY",
+            "META_MODEL_HISTORY",
+        }
+        documented = set(self._all_keys())
+        for key in sorted(config.KNOWN_ENV_KEYS):
+            if key in EXEMPT_DOC:
+                continue
+            self.assertIn(
+                key,
+                documented,
+                f"{key} is readable by the app but missing from .env.example",
+            )
+
+    def test_every_documented_key_is_known(self) -> None:
+        for key in self._all_keys():
+            self.assertIn(key, config.KNOWN_ENV_KEYS, f"stale/unknown doc key {key}")
+
+    def test_prompt_example_matches_builtin_default(self) -> None:
+        with open(self.PROMPT_EXAMPLE_PATH, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(text, config.DEFAULT_SYSTEM_PROMPT.rstrip() + "\n")
+
+
+class TestConfigCascade(unittest.TestCase):
+    """One generic knob drives every provider; per-provider keys are overrides."""
+
+    def test_model_cascade_generic_then_override(self) -> None:
+        # Generic-only: blank provider-specific model -> LLM_MODEL wins.
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_MODEL", ""
+        ), patch.object(Config, "LLM_MODEL", "my/model"):
+            self.assertEqual(Config.effective_llm_model(), "my/model")
+        # Override: explicit GEMINI_MODEL beats the generic value.
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_MODEL", "gemini-9.9-flash"
+        ), patch.object(Config, "LLM_MODEL", "my/model"):
+            self.assertEqual(Config.effective_llm_model(), "gemini-9.9-flash")
+
+    def test_api_key_per_provider(self) -> None:
+        """Each provider resolves only its own key; nothing is shared."""
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_API_KEY", "sk-or"
+        ):
+            self.assertEqual(Config.effective_api_key(), "sk-or")
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_api_key(), "")
+        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
+            Config, "META_API_KEY", ""
+        ):
+            # An OpenRouter key must not leak into Meta mode.
+            with patch.object(Config, "OPENROUTER_API_KEY", "sk-or"):
+                self.assertEqual(Config.effective_api_key(), "")
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_API_KEY", "AIza-x"
+        ):
+            self.assertEqual(Config.effective_api_key(), "AIza-x")
+
+    def test_max_tokens_cascade_and_floor(self) -> None:
+        # Providers without a dedicated ceiling follow the generic cap.
+        with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
+            Config, "LLM_MAX_TOKENS", 333
+        ):
+            self.assertEqual(Config.effective_max_output_tokens(), 333)
+        # Explicit Meta ceiling overrides it.
+        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
+            Config, "META_MAX_OUTPUT_TOKENS", 777
+        ), patch.object(Config, "LLM_MAX_TOKENS", 333):
+            self.assertEqual(Config.effective_max_output_tokens(), 777)
+
+    def test_reasoning_effort_mapping(self) -> None:
+        # Unified knob reaches the resolvers...
+        with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
+            Config, "LLM_REASONING_EFFORT", "high"
+        ):
+            self.assertEqual(Config.effective_reasoning_effort(), "high")
+        # ...and each client gets a provider-safe mapping.
+        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
+            Config, "META_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "minimal"):
+            self.assertEqual(Config.meta_reasoning_effort(), "low")  # minimal->low
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_THINKING_LEVEL", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "none"):
+            self.assertEqual(Config.gemini_thinking_level(), "minimal")  # none->minimal
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_THINKING_LEVEL", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "bogus"):
+            self.assertEqual(Config.gemini_thinking_level(), "minimal")
+        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
+            Config, "META_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "bogus"):
+            self.assertEqual(Config.meta_reasoning_effort(), "low")
+
+    def test_system_prompt_file_wins_over_inline(self) -> None:
+        import tempfile
+
+        root = os.path.dirname(os.path.abspath(config.__file__))
+        tmp = tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", dir=root, delete=False, encoding="utf-8"
+        )
+        try:
+            tmp.write("FILE PROMPT BODY")
+            tmp.close()
+            ref = os.path.basename(tmp.name)
+            with patch.object(Config, "SYSTEM_PROMPT_FILE", ref), patch.object(
+                Config, "SYSTEM_PROMPT", "INLINE PROMPT"
+            ):
+                self.assertEqual(Config.effective_system_prompt(), "FILE PROMPT BODY")
+        finally:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+
+    def test_system_prompt_missing_file_falls_back(self) -> None:
+        with patch.object(Config, "SYSTEM_PROMPT_FILE", "definitely-missing-prompt.txt"), patch.object(
+            Config, "SYSTEM_PROMPT", "INLINE PROMPT"
+        ):
+            self.assertEqual(Config.effective_system_prompt(), "INLINE PROMPT")
+
+    def test_config_warnings_detect_typos_and_legacy(self) -> None:
+        fake_env = {
+            "HOTKEY": "ctrl+grave",
+            "HOTKEYY": "oops",
+            "LLM_API_KEY": "sk-old-generic",
+            "MODEL_API_KEY": "sk-legacy",
+            "GOOGLE_API_KEY": "AIza-legacy",
+            "CTRL_KEEP_CONTEXT_KEYS": "f6",
+        }
+        with patch.object(config, "load_env_file_keys", return_value=fake_env), patch.object(
+            config, "KNOWN_ENV_KEYS", frozenset({"HOTKEY", "CTRL_KEEP_CONTEXT_KEYS"})
+        ):
+            warnings = config.config_warnings()
+        joined = "\n".join(warnings)
+        self.assertIn("HOTKEYY", joined)
+        self.assertIn("MODEL_API_KEY", joined)
+        self.assertIn("GOOGLE_API_KEY", joined)
+        # The removed generic key gets a dedicated deprecation explanation.
+        self.assertIn("LLM_API_KEY", joined)
+        self.assertIn("no longer used", joined)
+
+    def test_explain_rows_are_grouped_and_secret_masked(self) -> None:
+        rows = Config.explain()
+        self.assertGreater(len(rows), 10)
+        groups = [r["group"] for r in rows]
+        self.assertIn("Provider", groups)
+        self.assertIn("Prompt", groups)
+        secret_rows = [r for r in rows if r["label"] == "API key"]
+        self.assertEqual(len(secret_rows), 1)
+        self.assertTrue(secret_rows[0]["secret"])
 
 
 if __name__ == "__main__":

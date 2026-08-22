@@ -1,5 +1,6 @@
 # Secrets & local config
 .env
+prompt.txt
 *.pid
 
 # Python

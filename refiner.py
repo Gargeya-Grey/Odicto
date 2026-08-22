@@ -1,8 +1,9 @@
 import sys
 import threading
+import time
 from typing import Optional
 
-from config import Config
+from config import OPENROUTER_FALLBACK_MODEL, ENV_DEFAULTS, Config
 
 try:
     from openai import OpenAI  # noqa: F401 — exposed as refiner.OpenAI for tests/mocking
@@ -16,8 +17,10 @@ except Exception:  # pragma: no cover
 
 
 # Hard constraints — output is pasted verbatim into the user's document/chat box.
-# max_tokens (Config.LLM_MAX_TOKENS) is the hard ceiling.
-# The prompt itself lives in Config.SYSTEM_PROMPT (.env SYSTEM_PROMPT, else default).
+# max_tokens: callers pass Config.effective_max_output_tokens() (the resolved
+# cascade cap; the 64 floor lives there). The prompt comes from
+# Config.effective_system_prompt() (SYSTEM_PROMPT_FILE, else inline
+# SYSTEM_PROMPT, else the built-in default).
 
 # Spoken reset phrases — clear multi-turn memory without an LLM call.
 _RESET_PHRASES = {
@@ -120,12 +123,12 @@ class _MetaClient:
         # reasoning.effort=high burns output_tokens on reasoning (your hi-reasoning
         # model produced 61 reasoning tokens for a 64-budget → immediate truncation).
         # Keep a generous floor and default effort=low for fastest + robust dictation.
-        effort = (getattr(Config, "META_REASONING_EFFORT", "low") or "low").strip().lower()
-        # Ceiling, not a floor: a 4096 floor forced every reply to budget for a
-        # long essay and slowed dictation. LLM_MAX_TOKENS is the request cap.
-        ceiling = max(64, int(getattr(Config, "META_MAX_OUTPUT_TOKENS", 4096)))
-        requested = max(1, int(max_tokens) if max_tokens else 512)
-        effective_max = min(requested, ceiling)
+        # Cascade: META_REASONING_EFFORT → LLM_REASONING_EFFORT → "low" (clamped).
+        effort = Config.meta_reasoning_effort()
+        # API constraint: Meta requires max_output_tokens >= 16. The 64 floor
+        # lives in Config.effective_max_output_tokens; here we just clamp the
+        # ping probe as well (a cheap probe is fine at 16 tokens).
+        effective_max = max(16, int(max_tokens) if max_tokens else 16)
         payload: dict = {
             "model": self.model,
             "input": input_payload,
@@ -178,7 +181,7 @@ class _MetaClient:
         try:
             self.create_responses(
                 input_payload=[{"role": "user", "content": [{"type": "input_text", "text": "ping"}]}],
-                max_tokens=1,
+                max_tokens=16,
                 timeout=(3.0, 10.0),
             )
         except Exception as e:
@@ -208,11 +211,11 @@ class _GeminiClient:
             self.client = None
 
     def _generation_config(self, max_tokens: int) -> dict:
-        ceiling = max(64, int(getattr(Config, "GEMINI_MAX_OUTPUT_TOKENS", 4096)))
-        requested = max(1, int(max_tokens) if max_tokens else 512)
-        effective_max = min(requested, ceiling)
-        thinking = (getattr(Config, "GEMINI_THINKING_LEVEL", "minimal") or "minimal").strip().lower()
+        # The resolved cap arrives from the caller (Config.effective_max_output_tokens);
+        # thinking level via Config.gemini_thinking_level().
+        effective_max = max(1, int(max_tokens) if max_tokens else 1)
         cfg: dict = {"max_output_tokens": int(effective_max)}
+        thinking = Config.gemini_thinking_level()
         if thinking:
             cfg["thinking_level"] = thinking
         return cfg
@@ -221,17 +224,26 @@ class _GeminiClient:
         self, input_text: str, max_tokens: int, keep_history: bool = False
     ) -> Optional[str]:
         if self.client is None:
-            raise RuntimeError("google-genai package not installed")
+            raise RuntimeError("google-genai package not installed — run: pip install google-genai")
         kwargs: dict = {
             "model": self.model,
             "input": input_text,
-            "system_instruction": Config.SYSTEM_PROMPT,
+            "system_instruction": Config.effective_system_prompt(),
             "generation_config": self._generation_config(max_tokens),
         }
-        # Server-side multi-turn only when the F6 keep-history chord is used.
         if keep_history and self._last_interaction_id:
             kwargs["previous_interaction_id"] = self._last_interaction_id
-        interaction = self.client.interactions.create(**kwargs)
+        try:
+            interaction = self.client.interactions.create(**kwargs)
+        except Exception as e:
+            # The SDK raises google.genai.errors.* and plain HTTP errors; surface
+            # the message (usually includes the missing-model hint / 404 / 401).
+            detail = ""
+            try:
+                detail = str(getattr(e, "message", "")) or str(e)
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(f"Gemini API error: {detail}".strip()) from e
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str) and text.strip():
             if keep_history:
@@ -245,7 +257,9 @@ class _GeminiClient:
         self._last_interaction_id = None
 
     def ping(self) -> None:
-        self.create_interaction("ping", max_tokens=1)
+        text = self.create_interaction("ping", max_tokens=1)
+        # Treat empty output as "reachable but got no text" — still a successful ping.
+        # The error path above is what makes a bad key / bad model surface.
 
 
 class TextRefiner:
@@ -269,42 +283,53 @@ class TextRefiner:
                 max_retries=0,
             )
         elif self.provider == "openrouter":
-            if OpenAI is None:
-                raise RuntimeError("openai package not installed")
-            self.client = OpenAI(
-                base_url=Config.effective_llm_api_base(),
-                api_key=Config.OPENROUTER_API_KEY,
-                max_retries=0,
-                default_headers={
-                    "HTTP-Referer": "https://github.com/odicto",
-                    "X-Title": "Odicto",
-                },
-            )
-        elif self.provider == "meta":
-            if not Config.META_API_KEY:
+            if not Config.effective_api_key():
                 print(
-                    "Warning: META_API_KEY is empty — Meta AI mode will fall back to raw transcript until set.",
+                    "Warning: OPENROUTER_API_KEY is empty — "
+                    "OpenRouter AI mode will fall back to raw transcript until set.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self.client = None
+            else:
+                if OpenAI is None:
+                    raise RuntimeError("openai package not installed")
+                self.client = OpenAI(
+                    base_url=Config.effective_llm_api_base(),
+                    api_key=Config.effective_api_key(),
+                    max_retries=0,
+                    default_headers={
+                        "HTTP-Referer": "https://github.com/odicto",
+                        "X-Title": "Odicto",
+                    },
+                )
+        elif self.provider == "meta":
+            if not Config.effective_api_key():
+                print(
+                    "Warning: META_API_KEY is empty — "
+                    "Meta AI mode will fall back to raw transcript until set.",
                     file=sys.stderr,
                     flush=True,
                 )
                 self.client = None
             else:
                 self.client = _MetaClient(
-                    api_key=Config.META_API_KEY,
+                    api_key=Config.effective_api_key(),
                     base_url=Config.effective_llm_api_base(),
                     model=self.model,
                 )
         elif self.provider == "gemini":
-            if not Config.GEMINI_API_KEY:
+            if not Config.effective_api_key():
                 print(
-                    "Warning: GEMINI_API_KEY is empty — Gemini AI mode will fall back to raw transcript until set.",
+                    "Warning: GEMINI_API_KEY is empty — "
+                    "Gemini AI mode will fall back to raw transcript until set.",
                     file=sys.stderr,
                     flush=True,
                 )
                 self.client = None
             else:
                 self.client = _GeminiClient(
-                    api_key=Config.GEMINI_API_KEY,
+                    api_key=Config.effective_api_key(),
                     model=self.model,
                 )
         else:  # "none"
@@ -312,7 +337,7 @@ class TextRefiner:
 
     def _meta_input_from_history(self, history_snapshot: list[dict[str, str]]) -> list[dict]:
         payload: list[dict] = [
-            {"role": "system", "content": [{"type": "input_text", "text": Config.SYSTEM_PROMPT}]}
+            {"role": "system", "content": [{"type": "input_text", "text": Config.effective_system_prompt()}]}
         ]
         for msg in history_snapshot:
             role = msg.get("role", "user")
@@ -392,10 +417,10 @@ class TextRefiner:
             return ""
 
         if self.provider == "none" or not self.client:
-            if self.provider == "meta" and not Config.META_API_KEY:
-                print("!!! Meta AI mode: META_API_KEY not set — pasting raw transcript.", file=sys.stderr, flush=True)
-            if self.provider == "gemini" and not Config.GEMINI_API_KEY:
-                print("!!! Gemini AI mode: GEMINI_API_KEY not set — pasting raw transcript.", file=sys.stderr, flush=True)
+            if self.provider == "meta" and not Config.effective_api_key():
+                print("!!! Meta AI mode: no API key resolved — pasting raw transcript.", file=sys.stderr, flush=True)
+            if self.provider == "gemini" and not Config.effective_api_key():
+                print("!!! Gemini AI mode: no API key resolved — pasting raw transcript.", file=sys.stderr, flush=True)
             return text
 
         normalized = text.strip().lower().strip(".,!?")
@@ -404,7 +429,9 @@ class TextRefiner:
             return _RESET_REPLY
 
         try:
-            max_tokens = max(1, int(Config.LLM_MAX_TOKENS))
+            # Single cascade-resolved cap for every provider; provider-specific
+            # ceilings are already folded in by the resolver.
+            max_tokens = Config.effective_max_output_tokens()
             print(
                 f"Sending query to {self.provider} ({self.model}) "
                 f"max_tokens={max_tokens} keep_history={keep_history} "
@@ -433,11 +460,12 @@ class TextRefiner:
                     ]
 
             if self.provider == "meta":
-                assert isinstance(self.client, _MetaClient)
                 input_payload = self._meta_input_from_history(history_snapshot)
+                llm_started = time.time()
                 refined_text: Optional[str] = self.client.create_responses(
                     input_payload, max_tokens=max_tokens, timeout=(5.0, 30.0)
                 )
+                print(f"Meta responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
                     if keep_history:
@@ -459,9 +487,11 @@ class TextRefiner:
                 # Server-side multi-turn only when keep_history (F6). Fresh
                 # captures send the current message with no previous_interaction_id.
                 assert isinstance(self.client, _GeminiClient)
+                llm_started = time.time()
                 refined_text = self.client.create_interaction(
                     user_message, max_tokens=max_tokens, keep_history=keep_history
                 )
+                print(f"Gemini responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
                     if keep_history:
@@ -479,7 +509,7 @@ class TextRefiner:
                             self.conversation_history.pop()
                 return text
 
-            messages = [{"role": "system", "content": Config.SYSTEM_PROMPT}]
+            messages = [{"role": "system", "content": Config.effective_system_prompt()}]
             messages.extend(history_snapshot)
 
             kwargs = {
@@ -498,9 +528,11 @@ class TextRefiner:
                     "keep_alive": -1,
                 }
 
+            llm_started = time.time()
             response = self.client.chat.completions.create(
                 **kwargs, timeout=(5.0, 30.0)
             )
+            print(f"{self.provider} responded in {time.time() - llm_started:.2f}s")
 
             refined_text = response.choices[0].message.content
             if refined_text:
@@ -556,10 +588,10 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
         if provider == "ollama":
             if OpenAI is None:
                 return "openai package not installed"
-            base = api_base.strip() or "http://localhost:11434/v1"
+            base = api_base.strip() or ENV_DEFAULTS["LLM_API_BASE"]
             client = OpenAI(base_url=base, api_key="ollama", max_retries=0)
             client.chat.completions.create(
-                model=model or "qwen2.5:1.5b-instruct",
+                model=model or ENV_DEFAULTS["LLM_MODEL"],
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
                 timeout=(3.0, 10.0),
@@ -570,7 +602,7 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
                 return "openai package not installed"
             if not api_key.strip():
                 return "OPENROUTER_API_KEY is required"
-            base = api_base.strip() or "https://openrouter.ai/api/v1"
+            base = api_base.strip() or ENV_DEFAULTS["OPENROUTER_API_BASE"]
             client = OpenAI(
                 base_url=base,
                 api_key=api_key.strip(),
@@ -581,7 +613,7 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
                 },
             )
             client.chat.completions.create(
-                model=model or "google/gemini-2.0-flash-001",
+                model=model or OPENROUTER_FALLBACK_MODEL,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
                 timeout=(3.0, 10.0),
@@ -589,12 +621,12 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
             return "ok"
         if provider == "meta":
             if not api_key.strip():
-                return "META_API_KEY (or MODEL_API_KEY) is required"
-            base = api_base.strip() or "https://api.meta.ai/v1"
+                return "META_API_KEY is required"
+            base = api_base.strip() or ENV_DEFAULTS["META_API_BASE"]
             client = _MetaClient(
                 api_key=api_key.strip(),
                 base_url=base,
-                model=model or "muse-spark-1.2-contributor",
+                model=model or ENV_DEFAULTS["META_MODEL"],
             )
             client.ping()
             return "ok"
@@ -602,10 +634,10 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
             if google_genai is None:
                 return "google-genai package not installed"
             if not api_key.strip():
-                return "GEMINI_API_KEY (or GOOGLE_API_KEY) is required"
+                return "GEMINI_API_KEY is required"
             client = _GeminiClient(
                 api_key=api_key.strip(),
-                model=model or "gemini-3.7-flash",
+                model=model or ENV_DEFAULTS["GEMINI_MODEL"],
             )
             if client.client is None:
                 return "Could not initialize the google-genai client"

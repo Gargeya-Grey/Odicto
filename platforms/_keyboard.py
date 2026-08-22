@@ -131,6 +131,40 @@ def send(chord: str) -> None:
 
 def force_release_modifiers() -> None:
     """Synthesize key-ups for modifiers that may still be physically held."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            # Neutralize Windows Alt menu activation (SC_KEYMENU) so the active window
+            # does not steal focus to the File/Edit menu bar when Alt is released.
+            VK_NONAME = 0xFC
+            KEYEVENTF_KEYUP = 0x0002
+            user32.keybd_event(VK_NONAME, 0, 0, 0)
+            user32.keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, 0)
+
+            # Direct Win32 keybd_event key-up events for all modifier virtual keys.
+            # Instantaneous (<0.05ms) and clears physical/logical modifier states.
+            VK_MODIFIERS = (
+                0x11,  # VK_CONTROL
+                0xA2,  # VK_LCONTROL
+                0xA3,  # VK_RCONTROL
+                0x10,  # VK_SHIFT
+                0xA0,  # VK_LSHIFT
+                0xA1,  # VK_RSHIFT
+                0x12,  # VK_MENU (Alt)
+                0xA4,  # VK_LMENU (Left Alt)
+                0xA5,  # VK_RMENU (Right Alt)
+                0x5B,  # VK_LWIN (Left Windows/Cmd)
+                0x5C,  # VK_RWIN (Right Windows/Cmd)
+            )
+            for vk in VK_MODIFIERS:
+                user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.01)
+            return
+        except Exception:
+            pass
+
     kb = keyboard
     if kb is None:
         return
@@ -143,7 +177,7 @@ def force_release_modifiers() -> None:
                 kb.release(key)
             except Exception:
                 pass
-    time.sleep(0.04)
+    time.sleep(0.02)
 
 
 def wm_copy_foreground() -> bool:

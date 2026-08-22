@@ -634,11 +634,12 @@ class DictationApp:
         if context:
             return context[:12000]
         # Brief settle so physical modifier key-ups finish after the chord.
-        time.sleep(0.04)
+        time.sleep(0.02)
         try:
             context = get_selected_text(timeout=0.35)
         except Exception as e:
-            print(f"Warning: selection capture failed: {e}", flush=True)
+            err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            print(f"Warning: selection capture failed: {err_msg}", flush=True)
             return ""
         if context and len(context) > 12000:
             context = context[:12000]
@@ -673,24 +674,31 @@ class DictationApp:
             if audio_source is None:
                 audio_source = self.audio_filepath
 
+            stt_started = time.time()
             raw_text: str = self.transcriber.transcribe(audio_source)
-            print(f"Raw Transcript: \"{raw_text}\"")
+            print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
 
             if sel_future is not None:
+                sel_wait_started = time.time()
                 try:
-                    context = sel_future.result(timeout=0.8) or ""
+                    # Give selection probe up to 0.75s to resolve.
+                    # When text was selected, it completes in <0.15s (returns instantly).
+                    # When nothing was selected, it completes in ~0.35s without timing out.
+                    context = sel_future.result(timeout=0.75) or ""
                 except Exception as e:
-                    print(f"Warning: selection capture failed: {e}", flush=True)
+                    err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                    print(f"Warning: selection capture failed: {err_msg}", flush=True)
                     context = ""
+                sel_elapsed = time.time() - sel_wait_started
                 if context:
                     print(
-                        f'Context captured: {len(context)} chars — '
+                        f'Context captured in {sel_elapsed:.2f}s ({len(context)} chars) — '
                         f'"{context[:80]}{"..." if len(context) > 80 else ""}"',
                         flush=True,
                     )
                 else:
                     print(
-                        "Context: (none — no text was selected, or copy failed)",
+                        f"Context: (none after {sel_elapsed:.2f}s — no text was selected, or copy failed)",
                         flush=True,
                     )
 

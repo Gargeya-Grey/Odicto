@@ -30,7 +30,7 @@ def _clipboard_write(text: str) -> bool:
         return False
 
 
-def get_selected_text(timeout: float = 0.50) -> str:
+def get_selected_text(timeout: float = 0.35) -> str:
     """Copy the current selection and return it (restores clipboard after).
 
     Robust against the AI hold-to-talk chord:
@@ -39,8 +39,8 @@ def get_selected_text(timeout: float = 0.50) -> str:
        the selection already equals the previous clipboard contents.
     2. Release held modifiers so a synthetic copy chord is not polluted by the
        AI chord.
-    3. Prefer a native foreground-copy path (Windows ``WM_COPY``).
-    4. Fall back to the platform copy chord if the clipboard still holds the sentinel.
+    3. Check native foreground copy (WM_COPY) or trigger platform copy chord.
+    4. Poll clipboard with low latency for the captured selection.
     5. Always restore the user's original clipboard.
 
     Must **not** be called from inside a keyboard-hook callback — nested synthetic
@@ -66,11 +66,15 @@ def get_selected_text(timeout: float = 0.50) -> str:
     try:
         force_release_modifiers()
 
-        # Path A: native foreground-copy (reliable for many apps; no chord conflicts).
+        # Path A: fast native foreground-copy if supported and immediate.
+        # SendMessageW WM_COPY is synchronous: if the control handles it, the
+        # clipboard updates immediately before the call returns.
         if wm_copy_foreground():
-            selected = _poll_clipboard_change(sentinel, timeout=min(0.25, timeout))
+            cur = _clipboard_read()
+            if cur != sentinel and cur.strip():
+                selected = cur
 
-        # Path B: synthetic copy chord if the native path did nothing.
+        # Path B: synthetic copy chord (fastest & universal for modern apps).
         if selected == sentinel:
             force_release_modifiers()
             try:
@@ -79,13 +83,6 @@ def get_selected_text(timeout: float = 0.50) -> str:
                 print(f"Error: Failed to send copy chord for selection: {e}", flush=True)
             selected = _poll_clipboard_change(sentinel, timeout=timeout)
 
-        # Path C: last-chance copy with a slightly longer wait.
-        if selected == sentinel:
-            try:
-                send_copy()
-            except Exception:
-                pass
-            selected = _poll_clipboard_change(sentinel, timeout=min(0.20, timeout))
     finally:
         if not _clipboard_write(original_clipboard):
             print("Warning: Failed to restore original clipboard after selection probe", flush=True)
@@ -99,13 +96,13 @@ def get_selected_text(timeout: float = 0.50) -> str:
 
 def _poll_clipboard_change(sentinel: str, timeout: float) -> str:
     """Poll until clipboard differs from sentinel, or timeout. Returns last read."""
-    deadline = time.time() + max(0.05, float(timeout))
+    deadline = time.time() + max(0.04, float(timeout))
     last = sentinel
     while time.time() < deadline:
-        time.sleep(0.03)
+        time.sleep(0.015)
         cur = _clipboard_read()
         if cur != sentinel:
-            time.sleep(0.025)
+            time.sleep(0.015)
             cur2 = _clipboard_read()
             return cur2 if cur2 != sentinel else cur
         last = cur
@@ -118,9 +115,9 @@ def _get_selected_text_legacy(original_clipboard: str, timeout: float) -> str:
     try:
         force_release_modifiers()
         send_copy()
-        deadline = time.time() + max(0.08, float(timeout))
+        deadline = time.time() + max(0.05, float(timeout))
         while time.time() < deadline:
-            time.sleep(0.04)
+            time.sleep(0.02)
             cur = _clipboard_read()
             if cur != original_clipboard:
                 selected = cur

@@ -5,6 +5,7 @@ Usage:
     python odicto.py start
     python odicto.py stop
     python odicto.py status
+    python odicto.py config
     python odicto.py autostart
     python odicto.py remove-autostart
 """
@@ -71,6 +72,39 @@ def cmd_status(_args) -> int:
     print(f"Backend:     {platforms.hotkey_backend_name()}")
     print(f"Lock held:   {platforms.lock_is_held()}")
     print(f"PID file:    {pid or '(none)'}")
+    return 0
+
+
+def cmd_config(_args) -> int:
+    """Print the fully-resolved configuration with the source of every value."""
+    from config import Config, config_warnings
+
+    rows = Config.explain()
+
+    # Warnings first: typos and shadowed legacy names are what people come
+    # here to hunt down.
+    warnings = config_warnings()
+    if warnings:
+        print("Warnings:")
+        for w in warnings:
+            print(f"  ! {w}")
+        print()
+
+    group = None
+    width = max(len(r["label"]) for r in rows)
+    for row in rows:
+        if row["group"] != group:
+            group = row["group"]
+            print(f"\n[{group}]")
+        value = str(row["value"])
+        source = row["source"]
+        marker = "" if source == "default" else f"   <- {source}"
+        print(f"  {row['label']:<{width}}  {value}{marker}")
+
+    print(
+        "\nCascade: provider-specific override > generic LLM_* key > built-in "
+        "default.\nEdit .env (start from .env.example) and restart Odicto to apply."
+    )
     return 0
 
 
@@ -151,6 +185,7 @@ def main() -> int:
     sub.add_parser("start", help="Start Odicto in the background")
     sub.add_parser("stop", help="Stop all Odicto processes")
     sub.add_parser("status", help="Show runtime status")
+    sub.add_parser("config", help="Show resolved configuration and where each value came from")
     sub.add_parser("autostart", help="Install autostart entry")
     sub.add_parser("remove-autostart", help="Remove autostart entry")
 
@@ -160,6 +195,7 @@ def main() -> int:
         "start": cmd_start,
         "stop": cmd_stop,
         "status": cmd_status,
+        "config": cmd_config,
         "autostart": cmd_autostart,
         "remove-autostart": cmd_remove_autostart,
     }

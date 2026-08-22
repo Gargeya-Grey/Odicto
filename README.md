@@ -29,7 +29,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 1. Records while you **hold** a global hotkey  
 2. Transcribes with **local Whisper** (`faster-whisper`)  
 3. Pastes into the focused field via clipboard  
-4. Optionally answers with **Meta API** (default), local Ollama, OpenRouter, or **Google Gemini**  
+4. Optionally answers with an LLM — local Ollama, Meta API, OpenRouter, or **Google Gemini** (one-line switch)  
 5. Shows a slim **bottom-center HUD** while it works  
 
 ```text
@@ -147,7 +147,7 @@ Pick your OS below, or use the one-command installers above.
 | **Python 3.10+** | Runtime (needed only for the pip fallback; uv can fetch its own) | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
 | **Microphone** | Capture speech | Working default input device in system sound settings |
 | **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
-| **(Optional) Meta API key** | Cloud AI replies (default backend) | Use `odicto.py setup` or paste `META_API_KEY` into `.env` |
+| **(Optional) One API key per cloud backend** | AI replies — Meta, OpenRouter, or Gemini (Ollama needs none) | Use `odicto.py setup`, or paste each into its `*_API_KEY` in `.env` |
 | **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `brew install ollama` |
 | **(Optional) OpenRouter key** | Cloud LLM instead of Meta/Ollama | [openrouter.ai](https://openrouter.ai/) |
 | **(Optional) Gemini API key** | Cloud LLM via Google Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
@@ -236,36 +236,36 @@ LLM_MODEL=qwen2.5:1.5b-instruct
 LLM_API_BASE=http://localhost:11434/v1
 ```
 
-### 6. Optional: Meta API (default) — flip with one line
+### 6. Optional: pick an AI backend — one line, its own key
 
-Meta is the default. Your example payload:
-
-```
-POST https://api.meta.ai/v1/responses
-Headers: Authorization: Bearer $META_API_KEY
-Body: { "model": "muse-spark-1.2-contributor", "input": [{"role":"user","content":[{"type":"input_text","text":"..."}]}], "stream": false }
-```
+Each cloud provider owns **its own API key**, saved independently:
 
 ```env
-# Default — no extra step if you already set META_API_KEY
-LLM_PROVIDER=meta
-META_API_KEY=sk-meta-...
-META_MODEL=muse-spark-1.2-contributor
-META_API_BASE=https://api.meta.ai/v1
-# Alias that also works: MODEL_API_KEY, META_API_MODEL
+LLM_PROVIDER=gemini          # or: meta / ollama / openrouter / none
+GEMINI_API_KEY=AIza...      # each provider keeps its own key variable
+# META_API_KEY=...           # used when LLM_PROVIDER=meta
+# OPENROUTER_API_KEY=...     # used when LLM_PROVIDER=openrouter
 ```
 
-Single-switch `.env` between the backends:
+Keys start empty. Save a key once under its provider and it is **remembered
+forever** — switching providers later never asks you to re-enter a key you
+already saved (the setup page shows stored keys masked; retype only to replace).
+The generic knobs (`LLM_MODEL`, `LLM_MAX_TOKENS`, …) follow whichever provider
+is selected.
 
 ```env
-LLM_PROVIDER=meta        # or: meta-api / meta_api (aliases)
-# LLM_PROVIDER=ollama
-# LLM_PROVIDER=openrouter
-# LLM_PROVIDER=gemini    # or: google / google-api (aliases)
-# LLM_PROVIDER=none      # raw dictation only
+# Per-backend models (selected via the setup page’s categorized dropdowns):
+# META_MODEL=muse-spark-1.2-contributor
+# GEMINI_MODEL=gemini-3.5-flash-lite
+# OPENROUTER_MODEL=openai/gpt-5.6-luna
+# OLLAMA_MODEL= (blank → qwen2.5:1.5b-instruct)
 ```
 
-Leave unused keys blank — only the active provider's key is required. Switching does not require editing API bases.
+See exactly what is in effect after any change:
+
+```bash
+python odicto.py config   # resolved values + which .env key supplied each
+```
 
 ### 7. Optional: OpenRouter instead of Meta/Ollama
 
@@ -273,7 +273,7 @@ You can keep all three backends configured, then flip one line:
 
 ```env
 LLM_PROVIDER=openrouter
-OPENROUTER_MODEL=google/gemini-2.0-flash-001
+OPENROUTER_MODEL=openai/gpt-5.6-luna
 OPENROUTER_API_KEY=sk-or-...
 ```
 
@@ -284,7 +284,7 @@ OPENROUTER_API_KEY=sk-or-...
 | `OPENROUTER_API_KEY` | Required for openrouter (app refuses to start if missing) |
 | `OPENROUTER_API_BASE` | Defaults to `https://openrouter.ai/api/v1` |
 | `LLM_MODEL` / `LLM_API_BASE` | Stay as your Ollama settings for easy switch-back |
-| `META_API_KEY` / `MODEL_API_KEY` | Placeholder for Meta — paste real key in `.env` (never commit it) |
+| `META_API_KEY` | Placeholder for Meta — paste real key in `.env` (never commit it) |
 | `META_MODEL` | Meta model id (default `muse-spark-1.2-contributor`) |
 
 Notes:
@@ -307,7 +307,7 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 | Variable | Role |
 |----------|------|
 | `LLM_PROVIDER=gemini` | Selects the Gemini backend (`google` / `google-api` also work) |
-| `GEMINI_API_KEY` | Required (app refuses to start if missing); `GOOGLE_API_KEY` is an accepted alias |
+| `GEMINI_API_KEY` | Required (app refuses to start if missing) |
 | `GEMINI_MODEL` | Gemini model id (default `gemini-3.5-flash-lite` — the fast, non-reasoning pick for dictation; `gemini-3.7-flash` is available for heavier questions) |
 | `GEMINI_THINKING_LEVEL` | Thinking budget: `minimal` / `low` / `medium` / `high` (default `minimal`) |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Output budget floor (default `4096`) |
@@ -428,33 +428,57 @@ Run your OS's stop script (see table above), or close the debug console with Ctr
 
 ## Configuration (`.env`)
 
-Copy from `.env.example`. Important knobs:
+Copy from `.env.example`. The file follows one rule:
+
+> **Generic keys apply to whichever provider `LLM_PROVIDER` selects;
+> provider-specific keys are optional overrides that win when set.**
+> A commented-out or blank line means "use the built-in default".
+
+So switching AI backends is a one-line change plus one key. After editing,
+`python odicto.py config` prints every resolved value and which `.env` key
+supplied it (and warns about typo'd or legacy-shadowed keys).
+
+Core knobs:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `LLM_PROVIDER` | `none` | `none` · `ollama` · `openrouter` · `meta` (also `meta-api`) · `gemini` (also `google`) |
+| `LLM_MODEL` | provider default | Model id for any provider (`qwen2.5:1.5b-instruct` / `muse-spark-1.2-contributor` / `gemini-3.5-flash-lite` / an OpenRouter slug) |
+| `LLM_MAX_TOKENS` | `1024` | Output cap for every provider (~750 words) |
+| `LLM_REASONING_EFFORT` | provider default | Unified thinking knob; maps to Meta `reasoning.effort` / Gemini `thinking_level` (`minimal\|low\|medium\|high\|none`) |
+
+Per-provider credentials — each starts empty, is saved independently, and is
+**remembered across provider switches** (the setup page masks stored keys):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OPENROUTER_API_KEY` | *(empty)* | OpenRouter key ([openrouter.ai/keys](https://openrouter.ai/keys)) |
+| `META_API_KEY` | *(empty)* | Meta API key |
+| `GEMINI_API_KEY` | *(empty)* | Gemini key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) |
+
+Optional overrides:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OPENROUTER_MODEL` / `META_MODEL` / `GEMINI_MODEL` / `OLLAMA_MODEL` | `openai/gpt-5.6-luna` (fallback) / `muse-spark-1.2-contributor` / `gemini-3.5-flash-lite` / `qwen2.5:1.5b-instruct` | Pin a model per backend; OLLAMA is blank-by-default → falls back to `LLM_MODEL` |
+| `META_MAX_OUTPUT_TOKENS` / `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Per-provider ceilings over `LLM_MAX_TOKENS` |
+| `META_REASONING_EFFORT` / `GEMINI_THINKING_LEVEL` | `low` / `minimal` | Per-provider effort over `LLM_REASONING_EFFORT` |
+| `LLM_API_BASE` | `http://localhost:11434/v1` | Ollama endpoint (OpenRouter auto-switches to its own root) |
+
+Behavior & UI:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `HOTKEY` | `ctrl+grave` | Dictation chord (`grave` = the `` ` `` key) |
 | `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
-| `AI_MODIFIER` | *(empty)* | Legacy third-key AI trigger; leave blank when using `AI_HOTKEY` |
 | `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
 | `CTRL_KEEP_CONTEXT_KEYS` | `f6` | Key held during a capture keeps AI conversation memory (default AI is always fresh) |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
 | `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
-| `LLM_PROVIDER` | `meta` | `meta` (also `meta-api`, `meta_api`) · `ollama` · `openrouter` · `gemini` (also `google`, `google-api`) · `none` |
-| `META_API_KEY` | *(empty)* | Meta API key (`MODEL_API_KEY` also accepted) — paste real key in `.env` |
-| `META_API_BASE` | `https://api.meta.ai/v1` | Meta API root |
-| `META_MODEL` | `muse-spark-1.2-contributor` | Meta model id (also `META_API_MODEL`) |
-| `GEMINI_API_KEY` | *(empty)* | Gemini API key (`GOOGLE_API_KEY` also accepted) — get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model id (fast non-reasoning default; `gemini-3.7-flash` for heavier questions) |
-| `GEMINI_THINKING_LEVEL` | `minimal` | `minimal` · `low` · `medium` · `high` |
-| `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Output token ceiling for Gemini |
-| `LLM_MODEL` | see example | Ollama model tag (fallback when `OPENROUTER_MODEL`/`META_MODEL` blank) |
-| `OPENROUTER_MODEL` | *(empty)* | OpenRouter model slug when `LLM_PROVIDER=openrouter` |
-| `OPENROUTER_API_KEY` | *(empty)* | Required for openrouter |
-| `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compatible API root |
-| `LLM_MAX_TOKENS` | `1024` | Hard cap on pasted reply length (~750 words; raise for long essays) |
-| `SYSTEM_PROMPT` | *(empty = built-in default)* | AI-mode instructions. Edit in `.env` or the setup page (`setup.bat` / `setup.sh`). Restart Odicto after saving. |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
+| `SYSTEM_PROMPT_FILE` | *(empty)* | Plain-text prompt file (recommended); wins over inline `SYSTEM_PROMPT`. See `prompt.txt.example` |
+| `SYSTEM_PROMPT` | *(empty = built-in default)* | Inline AI instructions; editable on the setup page. Restart Odicto after saving |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
 | `MIN_HOLD_MS` | `80` | Ignore shorter presses |
@@ -496,8 +520,8 @@ Copy from `.env.example`. Important knobs:
 | Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone; macOS → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
 | AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
-| AI mode pastes raw text (Meta) | Check `META_API_KEY` / `MODEL_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
-| AI mode pastes raw text (Gemini) | Check `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `GEMINI_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Meta) | Check `META_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Gemini) | Check `GEMINI_API_KEY`, `GEMINI_MODEL`, and network; restart after `.env` edits |
 | App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
 | App refuses to start on gemini | `GEMINI_API_KEY` is required when `LLM_PROVIDER=gemini` |
 | Ollama still using RAM on Meta/OpenRouter/Gemini | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
