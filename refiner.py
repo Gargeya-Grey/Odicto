@@ -19,8 +19,8 @@ except Exception:  # pragma: no cover
 # Hard constraints — output is pasted verbatim into the user's document/chat box.
 # max_tokens: callers pass Config.effective_max_output_tokens() (the resolved
 # cascade cap; the 64 floor lives there). The prompt comes from
-# Config.effective_system_prompt() (SYSTEM_PROMPT_FILE, else inline
-# SYSTEM_PROMPT, else the built-in default).
+# Config.effective_system_prompt() (prompt.txt, else prompt.txt.example,
+# else the built-in default).
 
 # Spoken reset phrases — clear multi-turn memory without an LLM call.
 _RESET_PHRASES = {

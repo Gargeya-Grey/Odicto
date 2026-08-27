@@ -1669,6 +1669,44 @@ class TestOdicto(unittest.TestCase):
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
     @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_cleanup_freezes_caret_ignores_longer_final(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            session = MagicMock()
+            session.stop.return_value = "hello world"
+            with app._live_caret_lock:
+                app._live_caret_current = "hello"
+                app._live_caret_desired = "hello"
+            app._cleanup_live_session(session, app._live_epoch)
+            self.assertEqual(app._live_caret_desired, "hello")
+            self.assertEqual(app._live_caret_current, "hello")
+            session.stop.assert_called_once()
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
     @patch("main.GeminiTranscriber")
     @patch("main.WhisperTranscriber")
     @patch("main.TextRefiner")
@@ -1782,6 +1820,32 @@ class TestOdicto(unittest.TestCase):
         ):
             apply_live_text("", "hello")
             mock_paste.assert_called_once_with("hello", restore_clipboard=False)
+
+    def test_get_selected_text_retries_when_sentinel_stuck(self) -> None:
+        from typer import get_selected_text
+
+        sentinel_holder = {"v": ""}
+
+        def fake_read() -> str:
+            return sentinel_holder["v"]
+
+        def fake_write(text: str) -> bool:
+            sentinel_holder["v"] = text
+            return True
+
+        reads_after_copy = {"n": 0}
+
+        def fake_copy() -> None:
+            reads_after_copy["n"] += 1
+            if reads_after_copy["n"] >= 2:
+                sentinel_holder["v"] = "highlighted line"
+
+        with patch("typer._clipboard_read", side_effect=fake_read), patch(
+            "typer._clipboard_write", side_effect=fake_write
+        ), patch("typer.wm_copy_foreground", return_value=False), patch(
+            "typer.send_copy", side_effect=fake_copy
+        ), patch("typer._wait_modifiers_up"), patch("typer.time.sleep"):
+            self.assertEqual(get_selected_text(timeout=0.05), "highlighted line")
 
     def test_paste_text_skips_restore_when_asked(self) -> None:
         with patch("typer._clipboard_read", return_value="user clip"), patch(
@@ -2024,12 +2088,35 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn('id="prompt_overlay"', html_page)
         self.assertIn("prompt-panel", html_page)
         self.assertNotIn("autoGrow(promptEl)", html_page)
+        self.assertNotIn('name="SYSTEM_PROMPT_FILE"', html_page)
+        self.assertIn("prompt.txt", html_page)
+        self.assertIn("prompt.txt.example", html_page)
+        self.assertIn("restarts Odicto", html_page)
+
+    def test_restart_odicto_stops_then_starts(self) -> None:
+        import setup_web
+
+        with patch("platforms.kill_other_odicto_processes") as mock_kill, patch(
+            "platforms.spawn_detached"
+        ) as mock_spawn, patch("os.path.isfile", return_value=True):
+            msg = setup_web.restart_odicto()
+        mock_kill.assert_called_once()
+        mock_spawn.assert_called_once()
+        args = mock_spawn.call_args[0][0]
+        self.assertTrue(str(args[1]).endswith("main.py"))
+        self.assertIn("restarting", msg.lower())
 
     def test_config_system_prompt_falls_back_to_default(self) -> None:
         from config import DEFAULT_SYSTEM_PROMPT, Config
 
         self.assertTrue(Config.SYSTEM_PROMPT)
         self.assertIn("PLAIN HUMAN-READABLE TEXT", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("personal assistant", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("Do not transcribe", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("em dash", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("Do not start with a list", DEFAULT_SYSTEM_PROMPT)
+        self.assertNotIn("\u2014", DEFAULT_SYSTEM_PROMPT)
+        self.assertNotIn("- item", DEFAULT_SYSTEM_PROMPT.replace('"- item"', ""))
 
     def test_setup_web_merge_env_preserves_and_updates(self) -> None:
         """Template-anchored merge: positions stay, unknowns survive under marker."""
@@ -2054,11 +2141,19 @@ class TestCrossPlatform(unittest.TestCase):
                     pass
 
     def test_setup_web_reset_env_writes_example(self) -> None:
+        import tempfile
+
         import setup_web
 
-        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")), \
-             patch.object(setup_web, "ENV_EXAMPLE_PATH", new=os.path.join(os.getcwd(), ".env.example")):
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")
+        ), patch.object(
+            setup_web, "ENV_EXAMPLE_PATH", new=os.path.join(os.getcwd(), ".env.example")
+        ), patch("config._prompt_dir", return_value=root):
             try:
+                live = os.path.join(root, "prompt.txt")
+                with open(live, "w", encoding="utf-8") as f:
+                    f.write("private prompt\n")
                 with open(setup_web.ENV_PATH, "w", encoding="utf-8") as f:
                     f.write("LLM_PROVIDER=openrouter\nOPENROUTER_API_KEY=sk-or-test\n")
                 setup_web.reset_env()
@@ -2066,6 +2161,7 @@ class TestCrossPlatform(unittest.TestCase):
                     text = f.read()
                 self.assertNotIn("sk-or-test", text)
                 self.assertIn("LLM_PROVIDER=", text)
+                self.assertFalse(os.path.exists(live))
             finally:
                 try:
                     os.remove(setup_web.ENV_PATH)
@@ -2293,32 +2389,79 @@ class TestConfigCascade(unittest.TestCase):
         ), patch.object(Config, "LLM_REASONING_EFFORT", "bogus"):
             self.assertEqual(Config.meta_reasoning_effort(), "low")
 
-    def test_system_prompt_file_wins_over_inline(self) -> None:
+    def test_prompt_txt_wins_over_example(self) -> None:
         import tempfile
 
-        root = os.path.dirname(os.path.abspath(config.__file__))
-        tmp = tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", dir=root, delete=False, encoding="utf-8"
-        )
-        try:
-            tmp.write("FILE PROMPT BODY")
-            tmp.close()
-            ref = os.path.basename(tmp.name)
-            with patch.object(Config, "SYSTEM_PROMPT_FILE", ref), patch.object(
-                Config, "SYSTEM_PROMPT", "INLINE PROMPT"
-            ):
-                self.assertEqual(Config.effective_system_prompt(), "FILE PROMPT BODY")
-        finally:
-            try:
-                os.remove(tmp.name)
-            except OSError:
-                pass
+        from config import DEFAULT_SYSTEM_PROMPT
 
-    def test_system_prompt_missing_file_falls_back(self) -> None:
-        with patch.object(Config, "SYSTEM_PROMPT_FILE", "definitely-missing-prompt.txt"), patch.object(
-            Config, "SYSTEM_PROMPT", "INLINE PROMPT"
-        ):
-            self.assertEqual(Config.effective_system_prompt(), "INLINE PROMPT")
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "prompt.txt"), "w", encoding="utf-8") as f:
+                f.write("LIVE PRIVATE PROMPT\n")
+            with open(os.path.join(root, "prompt.txt.example"), "w", encoding="utf-8") as f:
+                f.write(DEFAULT_SYSTEM_PROMPT.rstrip() + "\n")
+            with patch("config._prompt_dir", return_value=root), patch.object(
+                Config, "SYSTEM_PROMPT", "INLINE"
+            ), patch.object(Config, "SYSTEM_PROMPT_FILE", ""):
+                self.assertEqual(Config.effective_system_prompt(), "LIVE PRIVATE PROMPT")
+                self.assertEqual(Config.prompt_source_label(), "prompt.txt")
+
+    def test_missing_prompt_txt_uses_example(self) -> None:
+        import tempfile
+
+        from config import DEFAULT_SYSTEM_PROMPT
+
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "prompt.txt.example"), "w", encoding="utf-8") as f:
+                f.write("SHIPPED EXAMPLE PROMPT\n")
+            with patch("config._prompt_dir", return_value=root), patch.object(
+                Config, "SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT
+            ), patch.object(Config, "SYSTEM_PROMPT_FILE", ""):
+                self.assertEqual(
+                    Config.effective_system_prompt(), "SHIPPED EXAMPLE PROMPT"
+                )
+                self.assertEqual(Config.prompt_source_label(), "prompt.txt.example")
+
+    def test_no_prompt_files_uses_builtin(self) -> None:
+        import tempfile
+
+        from config import DEFAULT_SYSTEM_PROMPT
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("config._prompt_dir", return_value=root), patch.object(
+                Config, "SYSTEM_PROMPT_FILE", ""
+            ), patch.object(Config, "_explicit", return_value=False):
+                self.assertEqual(
+                    Config.effective_system_prompt(), DEFAULT_SYSTEM_PROMPT.strip()
+                )
+                self.assertEqual(Config.prompt_source_label(), "built-in default")
+
+    def test_legacy_inline_prompt_when_no_files(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("config._prompt_dir", return_value=root), patch.object(
+                Config, "SYSTEM_PROMPT", "INLINE PROMPT"
+            ), patch.object(Config, "SYSTEM_PROMPT_FILE", ""), patch.object(
+                Config, "_explicit", return_value=True
+            ):
+                self.assertEqual(Config.effective_system_prompt(), "INLINE PROMPT")
+
+    def test_apply_prompt_save_writes_and_restores(self) -> None:
+        import tempfile
+
+        import setup_web
+        from config import DEFAULT_SYSTEM_PROMPT
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("config._prompt_dir", return_value=root):
+                err = setup_web.apply_prompt_save("my custom persona")
+                self.assertEqual(err, "")
+                live = os.path.join(root, "prompt.txt")
+                with open(live, encoding="utf-8") as f:
+                    self.assertEqual(f.read().strip(), "my custom persona")
+                err = setup_web.apply_prompt_save(DEFAULT_SYSTEM_PROMPT)
+                self.assertEqual(err, "")
+                self.assertFalse(os.path.exists(live))
 
     def test_config_warnings_detect_typos_and_legacy(self) -> None:
         fake_env = {

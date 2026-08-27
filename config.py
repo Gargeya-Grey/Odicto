@@ -149,46 +149,85 @@ def _default_env(name: str) -> str:
 
 
 # Default AI-mode instructions. Used when SYSTEM_PROMPT is blank in .env.
-# Keep this paste-friendly: replies are inserted verbatim at the cursor.
+# Keep this paste-friendly: replies are inserted at the cursor.
+# Speech-to-text (Whisper / Gemini Transcribe) already produced the query;
+# this prompt is the assistant, not a second transcriber.
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a precise AI assistant for dictation. Your reply is pasted VERBATIM "
-    "into the user's text cursor position (a document, editor, or chat box).\n"
+    "You are the user's personal assistant. Your reply is pasted at their cursor "
+    "in whatever they are typing into. Speech-to-text already wrote the query. "
+    "Do not transcribe, clean, or polish dictation. Do the work they asked for.\n"
     "\n"
-    "ROLE AND STYLE:\n"
-    "- Act as a diligent assistant. Follow the user's instructions exactly; when "
-    "asked to transform text (rewrite, fix grammar, summarize, translate, make "
-    "professional, make concise, etc.), do precisely that and nothing more.\n"
-    "- If the user asks a question, answer directly and accurately. If the user "
-    "dictates a sentence they want kept, keep it as close to their words as "
-    "possible; do not silently rephrase unless asked.\n"
-    "- If an instruction is ambiguous or would produce nonsense, make a sensible "
-    "minimal interpretation and note the assumption in one short parenthetical. "
-    "Never refuse a benign request, never invent facts, never add filler.\n"
+    "VOICE\n"
+    "Match how they sound. Casual stays casual. Precise stays precise. If they "
+    "selected text, match that writing: formality, length, vocabulary, punctuation, "
+    "unless they ask for a different register. Follow the instruction. Answer, "
+    "draft, transform, or decide. Never echo the request back as tidied dictation. "
+    "If something is ambiguous, make a small sensible call. Never refuse a benign "
+    "request, never invent facts, never pad.\n"
     "\n"
-    "HARD FORMAT RULES (never break these):\n"
-    "- Output PLAIN HUMAN-READABLE TEXT ONLY. Absolutely no Markdown of any kind.\n"
-    "- Never use: # headings, **bold**, *italics*, `code`, ``` fences, [links](url), "
-    "tables, or HTML.\n"
-    "- Lists: use simple lines with a leading dash and a space (\"- item\"), or plain "
-    "numbered lines (\"1. item\"). No other markup, no bullets that are not plain text.\n"
-    "- Do not wrap the answer in quotes, backticks, or any decorative delimiters.\n"
-    "- Write exactly as if typing into Notepad or a chat box that renders nothing "
-    "but plain text.\n"
+    "HARD FORMAT\n"
+    "Output PLAIN HUMAN-READABLE TEXT ONLY. No Markdown, no HTML.\n"
+    "Never use # headings, **bold**, *italics*, `code`, fences, [links](url), or "
+    "tables.\n"
+    "Never wrap the answer in quotes or backticks.\n"
+    "Never use an em dash, en dash, or a hyphen standing in for a dash. Use a "
+    "period or a comma. Do not swap in parentheses to do the same job.\n"
+    "Straight quotes only. No curly quotes. No decorative emoji.\n"
     "\n"
-    "LENGTH:\n"
-    "- Be concise by default. Prefer short scannable bullets over long paragraphs. "
-    "Lead with the answer; add only needed detail. Expand only when the question "
-    "clearly needs depth. Never pad, never ramble, never cut mid-thought.\n"
+    "LISTS\n"
+    "Do not start with a list. Open with a short intro that actually says something, "
+    "then list only if the content needs one.\n"
+    "Do not use a leading hyphen-minus for bullets (\"- item\"). That is the default "
+    "AI look.\n"
+    "When a list helps, mix markers: • for facts or items, → for steps, results, or "
+    "cause to effect. Do not stamp the same marker on every line unless it is a "
+    "tight sequence of one kind.\n"
+    "Numbered lines (\"1. item\") are fine for ordered steps.\n"
+    "A list of exactly three is a tell. Use the natural count.\n"
     "\n"
-    "SELECTED-TEXT CONTEXT:\n"
-    "- The user message may include a \"Context:\" section containing text the user "
-    "selected in their active app. That selection is the PRIMARY subject.\n"
-    "- The \"Query:\" is what the user wants done WITH that selection (summarize, "
-    "rewrite, fix grammar, translate, explain, etc.).\n"
-    "- Base your reply on the selection. Do NOT re-quote or echo the entire selection "
-    "back unless explicitly asked. Directly produce the requested result.\n"
-    "- If no Context section is present, answer the query directly and naturally."
+    "LENGTH AND TELL\n"
+    "Be concise. Lead with the answer. Expand only when the question needs depth. "
+    "Never ramble. Never cut mid-thought.\n"
+    "Vary sentence length. Have a point of view when it fits. Be specific.\n"
+    "Skip chatbot closers: happy to help, let me know if, certainly, of course, "
+    "great question.\n"
+    "Skip stock AI words: delve, pivotal, landscape, tapestry, testament, leverage, "
+    "utilize, robust, seamless, groundbreaking.\n"
+    "\n"
+    "CONTEXT\n"
+    "The user message may include a Context section with text they selected. That "
+    "selection is the subject.\n"
+    "The Query is what they want done with it.\n"
+    "Base the reply on the selection. Do not quote the whole selection back unless "
+    "asked. Produce the result.\n"
+    "If there is no Context section, the spoken query is the whole request. Answer "
+    "it as an assistant."
 )
+
+# Live private copy vs shipped default. Presence of prompt.txt is the source of
+# truth for AI-mode instructions (setup page, runtime, agents).
+PROMPT_LIVE_NAME = "prompt.txt"
+PROMPT_EXAMPLE_NAME = "prompt.txt.example"
+
+
+def _prompt_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _read_utf8_prompt(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def prompt_live_path() -> str:
+    return os.path.join(_prompt_dir(), PROMPT_LIVE_NAME)
+
+
+def prompt_example_path() -> str:
+    return os.path.join(_prompt_dir(), PROMPT_EXAMPLE_NAME)
 
 
 def _sanitize_model_id(raw: str) -> str:
@@ -382,8 +421,8 @@ class Config:
     # thinking_level; ignored by ollama/openrouter. Provider-specific knobs
     # (META_REASONING_EFFORT / GEMINI_THINKING_LEVEL) override when set.
     LLM_REASONING_EFFORT: str = _default_env("LLM_REASONING_EFFORT").strip().lower()
-    # AI-mode system prompt. Empty SYSTEM_PROMPT in .env uses the built-in default;
-    # SYSTEM_PROMPT_FILE (plain text, recommended) wins over the inline value.
+    # AI-mode system prompt. Runtime prefers prompt.txt, then prompt.txt.example.
+    # These .env keys are kept for setup Save (pointer vs empty) and legacy installs.
     SYSTEM_PROMPT: str = _default_env("SYSTEM_PROMPT").strip() or DEFAULT_SYSTEM_PROMPT
     SYSTEM_PROMPT_FILE: str = _default_env("SYSTEM_PROMPT_FILE").strip()
 
@@ -609,37 +648,73 @@ class Config:
         return terms
 
     @classmethod
-    def effective_system_prompt(cls) -> str:
-        """AI instructions: SYSTEM_PROMPT_FILE → inline SYSTEM_PROMPT → default.
-
-        The file path may be absolute or relative to the install root (the
-        directory containing config.py). An unreadable/empty file warns and
-        falls through so dictation never breaks because of a bad path.
-        """
+    def prompt_source_label(cls) -> str:
+        """Where the live AI prompt is coming from (for setup + `odicto config`)."""
+        if _read_utf8_prompt(prompt_live_path()):
+            return "prompt.txt"
         file_ref = (cls.SYSTEM_PROMPT_FILE or "").strip()
-        if file_ref:
+        if file_ref and file_ref.replace("\\", "/") not in (
+            PROMPT_LIVE_NAME,
+            f"./{PROMPT_LIVE_NAME}",
+        ):
+            if _read_utf8_prompt(
+                file_ref
+                if os.path.isabs(file_ref)
+                else os.path.join(_prompt_dir(), file_ref)
+            ):
+                return f".env (SYSTEM_PROMPT_FILE={file_ref})"
+        if cls._explicit("SYSTEM_PROMPT", ("SYSTEM_PROMPT",)):
+            raw = (cls.SYSTEM_PROMPT or "").strip()
+            if raw and raw != DEFAULT_SYSTEM_PROMPT.strip():
+                return ".env (SYSTEM_PROMPT)"
+        if _read_utf8_prompt(prompt_example_path()):
+            return "prompt.txt.example"
+        return "built-in default"
+
+    @classmethod
+    def effective_system_prompt(cls) -> str:
+        """AI instructions: prompt.txt → example → built-in default.
+
+        ``prompt.txt`` is the private live copy (gitignored). If it is missing,
+        ``prompt.txt.example`` (shipped, matches DEFAULT_SYSTEM_PROMPT) is used.
+        Legacy ``SYSTEM_PROMPT_FILE`` / inline ``SYSTEM_PROMPT`` are read only
+        when ``prompt.txt`` is absent, until the next setup Save migrates them.
+        """
+        live = _read_utf8_prompt(prompt_live_path())
+        if live:
+            return live
+
+        file_ref = (cls.SYSTEM_PROMPT_FILE or "").strip()
+        normalized = file_ref.replace("\\", "/").lstrip("./")
+        if file_ref and normalized != PROMPT_LIVE_NAME:
             path = (
                 file_ref
                 if os.path.isabs(file_ref)
-                else os.path.join(os.path.dirname(os.path.abspath(__file__)), file_ref)
+                else os.path.join(_prompt_dir(), file_ref)
             )
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    text = fh.read().strip()
-                if text:
-                    return text
+            legacy = _read_utf8_prompt(path)
+            if legacy:
                 print(
-                    f"Warning: SYSTEM_PROMPT_FILE '{file_ref}' is empty — "
-                    "using the fallback prompt.",
+                    f"Notice: using SYSTEM_PROMPT_FILE '{file_ref}'. "
+                    f"Save setup to move this into {PROMPT_LIVE_NAME}.",
                     flush=True,
                 )
-            except OSError as e:
+                return legacy
+
+        if cls._explicit("SYSTEM_PROMPT", ("SYSTEM_PROMPT",)):
+            raw = (cls.SYSTEM_PROMPT or "").strip()
+            if raw and raw != DEFAULT_SYSTEM_PROMPT.strip():
                 print(
-                    f"Warning: could not read SYSTEM_PROMPT_FILE '{file_ref}' ({e}) — "
-                    "using the fallback prompt.",
+                    f"Notice: using inline SYSTEM_PROMPT from .env. "
+                    f"Save setup to move this into {PROMPT_LIVE_NAME}.",
                     flush=True,
                 )
-        return cls.SYSTEM_PROMPT
+                return raw
+
+        example = _read_utf8_prompt(prompt_example_path())
+        if example:
+            return example
+        return DEFAULT_SYSTEM_PROMPT.strip()
 
     @classmethod
     def explain(cls) -> list:
@@ -826,11 +901,7 @@ class Config:
         add("Timing", "Retrigger cooldown (ms)", cls.RETRIGGER_COOLDOWN_MS, _source_of("RETRIGGER_COOLDOWN_MS"))
 
         prompt = cls.effective_system_prompt()
-        prompt_src = (
-            ".env (SYSTEM_PROMPT_FILE)"
-            if cls.SYSTEM_PROMPT_FILE.strip()
-            else _source_of("SYSTEM_PROMPT")
-        )
+        prompt_src = cls.prompt_source_label()
         ascii_preview = prompt[:64].encode("ascii", "replace").decode("ascii")
         preview = ascii_preview + ("..." if len(prompt) > 64 else "")
         add("Prompt", "System prompt", preview, prompt_src)

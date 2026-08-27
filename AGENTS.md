@@ -102,10 +102,10 @@ After install, configure a provider and API key without hand-editing `.env`:
 ```
 
 The page writes `.env` atomically, preserves unsubmitted keys, and can test the
-selected provider before saving. The same page edits `SYSTEM_PROMPT` (AI-mode
-instructions) or writes it to a plain-text `SYSTEM_PROMPT_FILE`; an empty value
-uses the built-in default. Restart Odicto after saving for the new prompt to
-take effect.
+selected provider before saving. AI-mode instructions live in `prompt.txt` when
+that file exists (private, gitignored); otherwise `prompt.txt.example` (the
+shipped default). The setup textarea shows that same text. Save writes
+`prompt.txt` and restarts Odicto; Restore default then Save deletes `prompt.txt`.
 
 Inspect the fully-resolved configuration (every value plus the `.env` key that
 supplied it) with:
@@ -149,10 +149,11 @@ supplied it) with:
   `test_units.TestEnvExampleParity` fails when an uncommented `.env.example`
   value drifts from a default, when a known key is undocumented, or when the
   example documents a key the app does not read. Update both together.
-- **Prompt files:** `SYSTEM_PROMPT_FILE` points at a plain UTF-8 text file
-  (relative paths resolve against the repo root) and wins over inline
-  `SYSTEM_PROMPT`; missing/unreadable files fall back with a warning.
-  `prompt.txt.example` mirrors the built-in default prompt byte-for-byte.
+- **Prompt files:** `prompt.txt` is the private live prompt (gitignored). If it
+  is missing, `prompt.txt.example` is used. That example must match
+  `DEFAULT_SYSTEM_PROMPT` in `config.py` byte-for-byte. Setup Save writes
+  `prompt.txt` and sets `SYSTEM_PROMPT_FILE=prompt.txt` with `SYSTEM_PROMPT`
+  empty. Do not store a second copy of the body in `.env`.
 - **OpenRouter:** set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and
   `OPENROUTER_MODEL`. Localhost `LLM_API_BASE` is auto-rewritten to
   `OPENROUTER_API_BASE`. Odicto will **not** spawn Ollama in this mode.

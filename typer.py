@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 
@@ -10,11 +11,29 @@ from platforms import (
     clipboard_read,
     clipboard_write,
     force_release_modifiers,
+    is_pressed,
     send_backspaces,
     send_copy,
     send_paste,
     send_text,
     wm_copy_foreground,
+)
+
+# Live paste, F7 clipboard restore, and AI selection copy must not interleave.
+_CLIPBOARD_LOCK = threading.Lock()
+
+_MODIFIER_POLL_KEYS = (
+    "ctrl",
+    "shift",
+    "alt",
+    "cmd",
+    "win",
+    "left ctrl",
+    "right ctrl",
+    "left shift",
+    "right shift",
+    "left alt",
+    "right alt",
 )
 
 
@@ -30,6 +49,36 @@ def _clipboard_write(text: str) -> bool:
         return clipboard_write(text)
     except Exception:
         return False
+
+
+def clipboard_snapshot() -> str:
+    """Read the clipboard under the process-wide clipboard lock."""
+    with _CLIPBOARD_LOCK:
+        return _clipboard_read()
+
+
+def clipboard_restore(text: str) -> None:
+    """Write the clipboard under the process-wide clipboard lock."""
+    with _CLIPBOARD_LOCK:
+        _clipboard_write(text or "")
+
+
+def _wait_modifiers_up(timeout: float = 0.08) -> None:
+    """Release modifiers, then poll until they are actually up (or timeout)."""
+    force_release_modifiers()
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        held = False
+        for key in _MODIFIER_POLL_KEYS:
+            try:
+                if is_pressed(key):
+                    held = True
+                    break
+            except Exception:
+                continue
+        if not held:
+            return
+        time.sleep(0.01)
 
 
 def get_selected_text(timeout: float = 0.35) -> str:
@@ -55,6 +104,11 @@ def get_selected_text(timeout: float = 0.35) -> str:
     Returns:
         Selected text, or ``""`` when nothing usable was captured.
     """
+    with _CLIPBOARD_LOCK:
+        return _get_selected_text_locked(timeout)
+
+
+def _get_selected_text_locked(timeout: float) -> str:
     original_clipboard = _clipboard_read()
     if original_clipboard is None:
         original_clipboard = ""
@@ -65,8 +119,9 @@ def get_selected_text(timeout: float = 0.35) -> str:
         return _get_selected_text_legacy(original_clipboard, timeout)
 
     selected = sentinel
+    path = "empty"
     try:
-        force_release_modifiers()
+        _wait_modifiers_up(0.08)
 
         # Path A: fast native foreground-copy if supported and immediate.
         # SendMessageW WM_COPY is synchronous: if the control handles it, the
@@ -75,25 +130,40 @@ def get_selected_text(timeout: float = 0.35) -> str:
             cur = _clipboard_read()
             if cur != sentinel and cur.strip():
                 selected = cur
+                path = "WM_COPY"
 
         # Path B: synthetic copy chord (fastest & universal for modern apps).
         if selected == sentinel:
-            force_release_modifiers()
-            try:
-                send_copy()
-            except Exception as e:
-                print(f"Error: Failed to send copy chord for selection: {e}", flush=True)
-            selected = _poll_clipboard_change(sentinel, timeout=timeout)
+            selected = _copy_chord_until_change(sentinel, timeout)
+            if selected != sentinel and (selected or "").strip():
+                path = "ctrl+c"
+
+        # One retry: chord still polluted or the app was slow to copy.
+        if selected == sentinel:
+            _wait_modifiers_up(0.08)
+            selected = _copy_chord_until_change(sentinel, min(timeout, 0.25))
+            if selected != sentinel and (selected or "").strip():
+                path = "ctrl+c-retry"
 
     finally:
         if not _clipboard_write(original_clipboard):
             print("Warning: Failed to restore original clipboard after selection probe", flush=True)
 
-    if not selected or selected == sentinel:
+    if not selected or selected == sentinel or not selected.strip():
+        print("Context: selection empty (sentinel unchanged)", flush=True)
         return ""
-    if not selected.strip():
-        return ""
+    print(f"Context: selection via {path}", flush=True)
     return selected
+
+
+def _copy_chord_until_change(sentinel: str, timeout: float) -> str:
+    force_release_modifiers()
+    try:
+        send_copy()
+    except Exception as e:
+        print(f"Error: Failed to send copy chord for selection: {e}", flush=True)
+        return sentinel
+    return _poll_clipboard_change(sentinel, timeout=timeout)
 
 
 def _poll_clipboard_change(sentinel: str, timeout: float) -> str:
@@ -146,35 +216,36 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
     if not text:
         return
 
-    original_clipboard = _clipboard_read() if restore_clipboard else None
+    with _CLIPBOARD_LOCK:
+        original_clipboard = _clipboard_read() if restore_clipboard else None
 
-    try:
-        if not _clipboard_write(text):
-            print("Error: Failed to write paste payload to clipboard", flush=True)
-            return
-
-        force_release_modifiers()
-
-        time.sleep(0.02 if restore_clipboard else 0.008)
         try:
-            send_paste()
+            if not _clipboard_write(text):
+                print("Error: Failed to write paste payload to clipboard", flush=True)
+                return
+
+            force_release_modifiers()
+
+            time.sleep(0.02 if restore_clipboard else 0.008)
+            try:
+                send_paste()
+            except Exception as e:
+                print(f"Error: Failed to perform paste simulation: {e}", flush=True)
+
+            if restore_clipboard:
+                delay = max(0.02, float(Config.PASTE_DELAY_SECONDS))
+                time.sleep(delay)
+            else:
+                time.sleep(0.015)
         except Exception as e:
             print(f"Error: Failed to perform paste simulation: {e}", flush=True)
-
-        if restore_clipboard:
-            delay = max(0.02, float(Config.PASTE_DELAY_SECONDS))
-            time.sleep(delay)
-        else:
-            time.sleep(0.015)
-    except Exception as e:
-        print(f"Error: Failed to perform paste simulation: {e}", flush=True)
-    finally:
-        if restore_clipboard:
-            if not _clipboard_write(original_clipboard or ""):
-                print(
-                    "Warning: Failed to restore original clipboard after paste",
-                    flush=True,
-                )
+        finally:
+            if restore_clipboard:
+                if not _clipboard_write(original_clipboard or ""):
+                    print(
+                        "Warning: Failed to restore original clipboard after paste",
+                        flush=True,
+                    )
 
 
 def apply_live_text(current: str, desired: str) -> str:

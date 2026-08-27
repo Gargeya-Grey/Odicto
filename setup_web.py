@@ -13,12 +13,20 @@ import html
 import json
 import os
 import subprocess
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from config import OPENROUTER_FALLBACK_MODEL, DEFAULT_SYSTEM_PROMPT, ENV_DEFAULTS, Config
+from config import (
+    OPENROUTER_FALLBACK_MODEL,
+    DEFAULT_SYSTEM_PROMPT,
+    ENV_DEFAULTS,
+    Config,
+    PROMPT_LIVE_NAME,
+    prompt_live_path,
+)
 
 try:
     from dotenv import dotenv_values
@@ -271,6 +279,7 @@ def reset_env() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(example)
     os.replace(tmp, ENV_PATH)
+    delete_live_prompt()
 
 
 def write_prompt_file(file_ref: str, text: str) -> str:
@@ -286,7 +295,7 @@ def write_prompt_file(file_ref: str, text: str) -> str:
         return "Prompt filename is empty."
     if os.path.isabs(ref) or ".." in ref.replace("\\", "/").split("/"):
         return "Prompt file must be a relative path inside the Odicto folder."
-    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), ref)
+    target = os.path.join(os.path.dirname(prompt_live_path()), ref)
     try:
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
         tmp = target + ".tmp"
@@ -296,6 +305,60 @@ def write_prompt_file(file_ref: str, text: str) -> str:
     except OSError as e:
         return f"Could not write prompt file '{ref}': {e}"
     return ""
+
+
+def delete_live_prompt() -> str:
+    """Remove private ``prompt.txt`` so the shipped example is used again."""
+    target = prompt_live_path()
+    try:
+        if os.path.exists(target):
+            os.remove(target)
+    except OSError as e:
+        return f"Could not remove {PROMPT_LIVE_NAME}: {e}"
+    return ""
+
+
+def restart_odicto() -> str:
+    """Stop any running Odicto for this install, then start a fresh instance.
+
+    Setup itself is ``odicto.py setup`` and is not matched by the main.py killer,
+    so this page stays up. Returns a short status line for the save banner.
+    """
+    import platforms
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    pid_file = os.path.join(root, "dictation.pid")
+    try:
+        platforms.kill_other_odicto_processes(pid_file)
+    except Exception as e:
+        return f"Settings saved, but could not stop Odicto ({e}). Start it yourself."
+
+    if sys.platform == "win32":
+        pyw = os.path.join(root, ".venv", "Scripts", "pythonw.exe")
+        py = os.path.join(root, ".venv", "Scripts", "python.exe")
+        exe = pyw if os.path.isfile(pyw) else py
+    else:
+        exe = os.path.join(root, ".venv", "bin", "python")
+    main_py = os.path.join(root, "main.py")
+    if not os.path.isfile(exe) or not os.path.isfile(main_py):
+        return "Settings saved. Start Odicto yourself to apply them."
+    try:
+        platforms.spawn_detached([exe, main_py])
+    except Exception as e:
+        return f"Settings saved, but Odicto did not start ({e})."
+    return "Settings saved. Odicto is restarting with the new settings."
+
+
+def apply_prompt_save(text: str) -> str:
+    """Persist the setup textarea to prompt.txt, or restore the shipped default.
+
+    Matching the built-in default deletes ``prompt.txt``. Anything else writes
+    the private file. Returns "" on success or an error message.
+    """
+    body = (text or "").strip()
+    if not body or body == DEFAULT_SYSTEM_PROMPT.strip():
+        return delete_live_prompt()
+    return write_prompt_file(PROMPT_LIVE_NAME, body)
 
 
 def start_ollama_pull(model: str) -> str:
@@ -464,8 +527,8 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     live_hotkey = env_or("LIVE_HOTKEY")
     hotkey = env_or("HOTKEY")
     ai_hotkey = env_or("AI_HOTKEY")
-    system_prompt_file = current.get("SYSTEM_PROMPT_FILE", "")
-    system_prompt = (current.get("SYSTEM_PROMPT") or "").strip() or DEFAULT_SYSTEM_PROMPT
+    system_prompt = Config.effective_system_prompt()
+    prompt_source = Config.prompt_source_label()
 
     # Server-rendered status (after Save / Reset). The Test button uses inline
     # JS instead, so its status is not rendered here.
@@ -1133,18 +1196,14 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
           <label class="prompt-title" id="prompt_title">AI system prompt</label>
           <span class="prompt-chip">persona</span>
         </div>
-        <p class="prompt-lede">Pasted into AI-mode replies. Leave blank and save to restore the built-in default. Restart Odicto after saving.</p>
+        <p class="prompt-lede">AI-mode assistant, not the transcriber. Edit here or in <code>prompt.txt</code>. Save writes that private file (not in git) and restarts Odicto. Restore default, then Save, to use the shipped <code>prompt.txt.example</code>.</p>
+        <p class="panel-note">Using {html.escape(prompt_source)}.</p>
         <div id="prompt_slot">
           <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
         </div>
         <div class="prompt-toolbar">
           <button type="button" class="secondary" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
           <button type="button" class="link" onclick="restoreDefaultPrompt()">Restore default</button>
-        </div>
-        <div class="prompt-file">
-          <label>Prompt file (optional — wins over the text above)</label>
-          <input type="text" name="SYSTEM_PROMPT_FILE" value="{html.escape(system_prompt_file)}" placeholder="prompt.txt">
-          <p class="panel-note">When a filename is set, Save writes this editor to that UTF-8 file next to Odicto.</p>
         </div>
       </section>
     </div><!-- /.col prompt -->
@@ -1863,15 +1922,21 @@ class _Handler(BaseHTTPRequestHandler):
             updates.pop("OPENROUTER_API_KEY", None)
             updates.pop("GEMINI_API_KEY", None)
 
-        # Prompt file mode: the textarea content becomes the file's plain-text
-        # content (no \n escaping), and SYSTEM_PROMPT_FILE points at it.
-        prompt_file = (updates.get("SYSTEM_PROMPT_FILE") or "").strip()
-        if prompt_file:
-            err = write_prompt_file(prompt_file, updates.get("SYSTEM_PROMPT", ""))
-            if err:
-                body = _page(err, "err").encode("utf-8")
-                self._send(body)
-                return
+        # prompt.txt is the only live prompt. Matching the shipped default
+        # deletes it; any other textarea content writes the private file.
+        prompt_body = updates.get("SYSTEM_PROMPT", "")
+        err = apply_prompt_save(prompt_body)
+        if err:
+            body = _page(err, "err").encode("utf-8")
+            self._send(body)
+            return
+        if (prompt_body or "").strip() and (
+            prompt_body.strip() != DEFAULT_SYSTEM_PROMPT.strip()
+        ):
+            updates["SYSTEM_PROMPT_FILE"] = PROMPT_LIVE_NAME
+        else:
+            updates["SYSTEM_PROMPT_FILE"] = ""
+        updates["SYSTEM_PROMPT"] = ""
 
         hotkey = updates.get("HOTKEY") or Config.HOTKEY
         ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
@@ -1896,7 +1961,7 @@ class _Handler(BaseHTTPRequestHandler):
             body = _page(f"Saved, but {err_msg}", "err").encode("utf-8")
             self._send(body)
             return
-        body = _page("Settings saved. Restart Odicto to apply.", "ok").encode("utf-8")
+        body = _page(restart_odicto(), "ok").encode("utf-8")
         self._send(body)
 
     def _handle_reset(self) -> None:

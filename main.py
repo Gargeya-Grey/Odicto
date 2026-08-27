@@ -11,7 +11,13 @@ from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import GeminiLiveSession, GeminiTranscriber, WhisperTranscriber
 from refiner import TextRefiner
-from typer import apply_live_text, paste_text, get_selected_text
+from typer import (
+    apply_live_text,
+    clipboard_restore,
+    clipboard_snapshot,
+    get_selected_text,
+    paste_text,
+)
 
 import platforms
 
@@ -149,6 +155,9 @@ class DictationApp:
         self._live_caret_thread: Optional[threading.Thread] = None
         self._live_saved_clipboard: str = ""
         self._live_restore_clipboard: bool = False
+        self._live_epoch: int = 0
+        self._live_cleanup_done = threading.Event()
+        self._live_cleanup_done.set()
         # Lazy Whisper used by the AI chord when dictation STT is Gemini.
         self._whisper: Optional[WhisperTranscriber] = None
         self._whisper_lock = threading.Lock()
@@ -208,6 +217,7 @@ class DictationApp:
             with self._live_caret_lock:
                 current = self._live_caret_current
                 desired = self._live_caret_desired
+                epoch = self._live_epoch
             if current == desired:
                 continue
             try:
@@ -216,7 +226,10 @@ class DictationApp:
                 print(f"Warning: live caret insert failed: {e}", flush=True)
                 continue
             with self._live_caret_lock:
-                if self._live_caret_desired == desired:
+                if (
+                    self._live_epoch == epoch
+                    and self._live_caret_desired == desired
+                ):
                     self._live_caret_current = desired
 
     def _set_live_caret_desired(self, text: str) -> None:
@@ -235,12 +248,16 @@ class DictationApp:
             time.sleep(0.015)
 
     def _on_live_interim(self, text: str) -> None:
+        if not self.live_active:
+            return
         draft = (text or "").strip()
         committed = self._live_committed
         desired = f"{committed} {draft}".strip() if committed else draft
         self._set_live_caret_desired(desired)
 
     def _on_live_final(self, text: str) -> None:
+        if not self.live_active:
+            return
         piece = (text or "").strip()
         if not piece:
             return
@@ -252,18 +269,20 @@ class DictationApp:
 
     def _capture_live_clipboard(self) -> None:
         try:
-            saved = platforms.clipboard_read()
+            saved = clipboard_snapshot()
             self._live_saved_clipboard = saved if isinstance(saved, str) else ""
         except Exception:
             self._live_saved_clipboard = ""
         self._live_restore_clipboard = True
 
-    def _restore_live_clipboard(self) -> None:
+    def _restore_live_clipboard(self, epoch: Optional[int] = None) -> None:
         if not self._live_restore_clipboard:
+            return
+        if epoch is not None and epoch != self._live_epoch:
             return
         self._live_restore_clipboard = False
         try:
-            platforms.clipboard_write(self._live_saved_clipboard)
+            clipboard_restore(self._live_saved_clipboard)
         except Exception:
             pass
 
@@ -873,11 +892,18 @@ class DictationApp:
                     print(">>> Live tap too short; ignored.")
                     return
                 audio = self.recorder.last_audio_array
+                self._live_cleanup_done.clear()
                 start_pipeline = True
             elif self.state == AppState.IDLE:
                 now = time.monotonic()
                 cooldown_s = Config.RETRIGGER_COOLDOWN_MS / 1000.0
                 if now - self._last_cycle_end < cooldown_s:
+                    return
+                if not self._live_cleanup_done.wait(timeout=0.2):
+                    print(
+                        ">>> Still finishing the previous live tap; try F7 again.",
+                        flush=True,
+                    )
                     return
                 self.use_llm = False
                 self._keep_history = False
@@ -885,6 +911,7 @@ class DictationApp:
                 self.last_status = None
                 self.live_preview = ""
                 self._live_committed = ""
+                self._live_epoch += 1
                 with self._live_caret_lock:
                     self._live_caret_current = ""
                     self._live_caret_desired = ""
@@ -924,8 +951,11 @@ class DictationApp:
                 return
 
         if start_pipeline:
+            epoch = self._live_epoch
             with self._live_caret_lock:
-                already_in_field = bool(self._live_caret_current.strip())
+                already_in_field = bool(
+                    self._live_caret_current.strip() or self._live_caret_desired.strip()
+                )
             if already_in_field:
                 print(">>> Live text already at the caret — skip extra STT/paste.")
                 self.last_status = "success"
@@ -934,25 +964,27 @@ class DictationApp:
                     self._set_state(AppState.IDLE)
                     threading.Thread(
                         target=self._cleanup_live_session,
-                        args=(live_session,),
+                        args=(live_session, epoch),
                         daemon=True,
                         name="odicto-live-cleanup",
                     ).start()
                 else:
-                    self._restore_live_clipboard()
+                    self._restore_live_clipboard(epoch)
+                    self._live_cleanup_done.set()
                     self._finish_cycle()
                 return
             if live_session is not None:
                 self._set_state(AppState.PROCESSING)
                 threading.Thread(
                     target=self._finish_live_session,
-                    args=(live_session, audio),
+                    args=(live_session, audio, epoch),
                     daemon=True,
                     name="odicto-live-stop",
                 ).start()
                 return
             print(">>> Transcribing tap-to-talk clip...")
-            self._restore_live_clipboard()
+            self._restore_live_clipboard(epoch)
+            self._live_cleanup_done.set()
             self._set_state(AppState.PROCESSING)
             threading.Thread(
                 target=self.process_and_paste,
@@ -961,46 +993,84 @@ class DictationApp:
                 name="dictation-pipeline",
             ).start()
 
-    def _cleanup_live_session(self, session: GeminiLiveSession) -> None:
-        """Close the Live socket off the keyboard hook after caret text is in place."""
+    def _cleanup_live_session(
+        self, session: GeminiLiveSession, epoch: int
+    ) -> None:
+        """Close the Live socket. Do not rewrite caret text that is already shown."""
         try:
-            session.stop(timeout=0.7)
-            self._flush_live_caret(timeout=0.25)
+            live_text = session.stop(timeout=0.7)
+            if epoch != self._live_epoch:
+                return
+            folded = (live_text or "").strip()
+            with self._live_caret_lock:
+                frozen = (
+                    self._live_caret_desired or self._live_caret_current or ""
+                ).strip()
+            print(
+                f'>>> Live stop frozen="{frozen[:80]}" final="{folded[:80]}"',
+                flush=True,
+            )
+            # Stop means freeze: ignore a later/longer Live final.
+            self._flush_live_caret(timeout=0.3)
         except Exception as e:
             print(f"Warning: live session cleanup failed: {e}", flush=True)
         finally:
-            self._restore_live_clipboard()
-            try:
-                if self.recorder is not None:
-                    self.recorder.clear()
-            except Exception:
-                pass
+            if epoch == self._live_epoch:
+                self._restore_live_clipboard(epoch)
+                try:
+                    if self.recorder is not None:
+                        self.recorder.clear()
+                except Exception:
+                    pass
+            self._live_cleanup_done.set()
 
-    def _finish_live_session(self, session: GeminiLiveSession, audio) -> None:
+    def _finish_live_session(
+        self, session: GeminiLiveSession, audio, epoch: int
+    ) -> None:
         """Join Live off the hook, then skip STT or fall back to unary/Whisper."""
         live_text = ""
         try:
             live_text = session.stop(timeout=0.7)
+            if epoch != self._live_epoch:
+                return
             folded = (live_text or "").strip()
-            if folded and folded != self._live_committed:
-                self._live_committed = folded
-                self._set_live_caret_desired(folded)
-            self._flush_live_caret(timeout=0.3)
             with self._live_caret_lock:
-                already_in_field = bool(self._live_caret_current.strip())
-            self._restore_live_clipboard()
-            if already_in_field:
+                frozen = (
+                    self._live_caret_desired or self._live_caret_current or ""
+                ).strip()
+            print(
+                f'>>> Live stop frozen="{frozen[:80]}" final="{folded[:80]}"',
+                flush=True,
+            )
+            if frozen:
+                self._flush_live_caret(timeout=0.3)
+                self._restore_live_clipboard(epoch)
                 print(">>> Live text already at the caret — skip extra STT/paste.")
                 self.last_status = "success"
                 self._finish_cycle()
                 return
+            if folded:
+                self._live_committed = folded
+                self._set_live_caret_desired(folded)
+                self._flush_live_caret(timeout=0.3)
+                with self._live_caret_lock:
+                    frozen = bool(self._live_caret_current.strip())
+                self._restore_live_clipboard(epoch)
+                if frozen:
+                    print(">>> Live text already at the caret — skip extra STT/paste.")
+                    self.last_status = "success"
+                    self._finish_cycle()
+                    return
             print(">>> Live stream empty; falling back to clip transcription...")
+            self._restore_live_clipboard(epoch)
             self.process_and_paste(audio, False, "", False, live_text)
         except Exception as e:
             print(f"!!! Live stop failed: {e}", file=sys.stderr)
             self.last_status = "error"
-            self._restore_live_clipboard()
+            self._restore_live_clipboard(epoch)
             self._finish_cycle()
+        finally:
+            self._live_cleanup_done.set()
 
     @staticmethod
     def _capture_selection(pre_context: str = "") -> str:

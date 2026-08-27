@@ -508,8 +508,8 @@ Behavior & UI:
 | `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
 | `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
-| `SYSTEM_PROMPT_FILE` | *(empty)* | Plain-text prompt file (recommended); wins over inline `SYSTEM_PROMPT`. See `prompt.txt.example` |
-| `SYSTEM_PROMPT` | *(empty = built-in default)* | Inline AI instructions; editable on the setup page. Restart Odicto after saving |
+| `SYSTEM_PROMPT_FILE` | *(empty)* | Set to `prompt.txt` when you have a private live prompt. Do not point this at other files. |
+| `SYSTEM_PROMPT` | *(empty)* | Leave blank. The prompt body lives in `prompt.txt` or `prompt.txt.example`, not in `.env`. |
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
 | `MIN_HOLD_MS` | `80` | Ignore shorter presses |
