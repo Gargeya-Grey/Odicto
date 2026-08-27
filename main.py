@@ -1,9 +1,11 @@
 import os
+import re
 import sys
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 from typing import Optional
 
 from app_state import AppState
@@ -102,11 +104,16 @@ def ensure_can_bind_hotkeys() -> None:
         )
 
 
+def _norm_live_utterance(text: str) -> str:
+    """Letters and numbers only, so Smart punctuation does not look like a new sentence."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
 def live_final_refines_caret(frozen: str, final: str) -> bool:
     """True when Live ``final`` is the same utterance as the on-screen caret.
 
-    Interim text is often a prefix. Smart mode may tidy the tail. A longer
-    string alone is not enough; leftover text from another session is not.
+    Interim text is often a prefix. Smart may drop fillers, fix punctuation, or
+    keep a self-corrected ending. A longer string alone is not enough.
     """
     frozen = (frozen or "").strip()
     final = (final or "").strip()
@@ -121,7 +128,6 @@ def live_final_refines_caret(frozen: str, final: str) -> bool:
         return False
     if frozen.startswith(final) and len(final) >= 8:
         return True
-    # Smart often keeps the restated ending after "sorry" / self-correction.
     if frozen.endswith(final) and len(final) >= 12:
         return True
     final_words = final.split()
@@ -129,12 +135,16 @@ def live_final_refines_caret(frozen: str, final: str) -> bool:
         tail = " ".join(final_words[-5:])
         if tail and frozen.endswith(tail):
             return True
-    i = 0
-    limit = min(len(frozen), len(final))
-    while i < limit and frozen[i] == final[i]:
-        i += 1
-    shorter = min(len(frozen), len(final))
-    return i >= 16 and i >= 0.7 * shorter
+    a = _norm_live_utterance(frozen)
+    b = _norm_live_utterance(final)
+    if not a or not b:
+        return False
+    if a == b or b.startswith(a + " ") or a.startswith(b + " "):
+        return True
+    shorter = min(len(a), len(b))
+    if shorter < 12:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= 0.62
 
 
 class DictationApp:

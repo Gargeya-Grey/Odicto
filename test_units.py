@@ -1684,6 +1684,18 @@ class TestOdicto(unittest.TestCase):
                 "Hello, this is not working fine.",
             )
         )
+        self.assertTrue(
+            live_final_refines_caret(
+                "I want the super PR. to use Unslop",
+                "I want the super PR to use Unslop skill.",
+            )
+        )
+        self.assertTrue(
+            live_final_refines_caret(
+                "This is great actually. This is really fast. And the fact that I can speak and it is writing",
+                "This is really fast, and the fact that I can speak and it is writing is really great.",
+            )
+        )
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
