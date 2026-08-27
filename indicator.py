@@ -151,7 +151,7 @@ class DictationIndicator(QWidget):
 
         # Animation clock
         self._t: float = 0.0
-        self._bars: list[float] = [0.16] * 5  # quiet equalizer
+        self._bars: list[float] = [0.16] * 5  # quiet equalizer; grows in live layout
         self._level_smooth: float = 0.0
         self._appear: float = 0.0  # 0..1 opacity only (never scale)
         self._appear_target: float = 1.0
@@ -174,6 +174,8 @@ class DictationIndicator(QWidget):
         self._text_optical_y = -0.5
 
         self._pill_w = 170
+        self._compact_w = 170
+        self._compact_h = 44
         self._canvas_w = self._pill_w + self._pad * 2
         self._canvas_h = self._pill_h + self._pad * 2
 
@@ -307,6 +309,11 @@ class DictationIndicator(QWidget):
         self._font_chip.setWeight(QFont.Weight.DemiBold)
         self._font_chip.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 106)
 
+        self._font_caption = QFont(family, 10)
+        self._font_caption.setWeight(QFont.Weight.Normal)
+        self._font_caption.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        self._font_caption.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+
     def _chip_width(self) -> float:
         fm = QFontMetrics(self._font_chip)
         return float(fm.horizontalAdvance("AI") + self._chip_pad_x * 2)
@@ -326,6 +333,38 @@ class DictationIndicator(QWidget):
         # Shave 8% off the auto-fit width for a tighter, quieter capsule. The longest
         # label still fits because the 4px padding + glyph gap absorb the difference.
         self._pill_w = int(math.ceil((left + max_text + chip + right + 4.0) * 0.92))
+        self._compact_w = self._pill_w
+        self._compact_h = self._pill_h
+        self._canvas_w = self._pill_w + self._pad * 2
+        self._canvas_h = self._pill_h + self._pad * 2
+        self.setFixedSize(self._canvas_w, self._canvas_h)
+        self._reposition_bottom_center()
+
+    def _is_live_layout(self) -> bool:
+        live = getattr(self.app, "live_active", False) is True
+        return live and self.gui_state in (GuiState.RECORDING, GuiState.PROCESSING)
+
+    def _sync_geometry(self) -> None:
+        """Grow the capsule for live captions / expanded recording waveform."""
+        live = self._is_live_layout()
+        recording = self.gui_state == GuiState.RECORDING
+        if live:
+            pill_w, pill_h, n_bars, radius = 360, 78, 16, 22
+        elif recording:
+            pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 11, 22
+        else:
+            pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 5, 22
+        if (
+            pill_w == self._pill_w
+            and pill_h == self._pill_h
+            and len(self._bars) == n_bars
+        ):
+            return
+        self._pill_w = pill_w
+        self._pill_h = pill_h
+        self._radius = radius
+        if len(self._bars) != n_bars:
+            self._bars = [0.16] * n_bars
         self._canvas_w = self._pill_w + self._pad * 2
         self._canvas_h = self._pill_h + self._pad * 2
         self.setFixedSize(self._canvas_w, self._canvas_h)
@@ -435,6 +474,8 @@ class DictationIndicator(QWidget):
 
         if target != self.gui_state or app_state != prev_app_state:
             self._transition_to(target)
+        else:
+            self._sync_geometry()
 
         self.last_app_state = app_state
         self.update()
@@ -450,6 +491,7 @@ class DictationIndicator(QWidget):
 
         prev = self.gui_state
         self.gui_state = new_state
+        self._sync_geometry()
         self._t = 0.0
         if new_state in (GuiState.SUCCESS, GuiState.ERROR):
             self._check_progress = 0.0
@@ -664,6 +706,18 @@ class DictationIndicator(QWidget):
     def _paint_content(
         self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
     ) -> None:
+        """Compact glyph+label, expanded recording waveform, or two-row live."""
+        if self._is_live_layout():
+            self._paint_live_content(p, pill, accent)
+            return
+        if self.gui_state == GuiState.RECORDING:
+            self._paint_recording_content(p, pill, accent, use_llm)
+            return
+        self._paint_compact_content(p, pill, accent, use_llm)
+
+    def _paint_compact_content(
+        self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
+    ) -> None:
         """[ inset | glyph | gap | label .............. | chip? | inset ]"""
         left = pill.x() + self._inset_x
         glyph_cx = left + self._glyph_slot * 0.5
@@ -727,6 +781,127 @@ class DictationIndicator(QWidget):
                 self._chip_h,
             )
 
+    def _paint_recording_content(
+        self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
+    ) -> None:
+        """Expanded waveform on the left, status text on the right."""
+        left = pill.x() + self._inset_x
+        wave_w = 96.0
+        wave_cx = left + wave_w * 0.5
+        wave_cy = pill.center().y()
+        self._draw_eq_bars(p, wave_cx, wave_cy, accent, slot=wave_w, max_h=16.0, bar_w=3.0)
+
+        div_x = left + wave_w + 8.0
+        mid = pill.center().y()
+        div_pen = QPen(_Theme.divider)
+        div_pen.setWidthF(1.0)
+        p.setPen(div_pen)
+        p.drawLine(QPointF(div_x, mid - 9), QPointF(div_x, mid + 9))
+
+        last_status = getattr(self.app, "last_status", None)
+        label = status_label(self.gui_state, use_llm, last_status)
+        chip_on = _show_ai_chip(self.gui_state, use_llm)
+        chip_w = self._chip_width() if chip_on else 0.0
+        text_left = div_x + 10.0
+        text_right = pill.right() - self._inset_x
+        if chip_on:
+            text_right -= chip_w + self._gap_text_chip
+
+        p.setFont(self._font)
+        p.setPen(_Theme.text)
+        fm = p.fontMetrics()
+        cap = (
+            float(fm.capHeight())
+            if hasattr(fm, "capHeight")
+            else float(fm.ascent() * 0.7)
+        )
+        band = max(cap + 10.0, float(fm.height()))
+        text_rect = QRectF(
+            text_left,
+            pill.center().y() + self._text_optical_y - band * 0.5,
+            max(0.0, text_right - text_left),
+            band,
+        )
+        p.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            label,
+        )
+        if chip_on:
+            self._draw_ai_chip(
+                p,
+                pill.right() - self._inset_x - chip_w,
+                pill.center().y() - self._chip_h * 0.5,
+                chip_w,
+                self._chip_h,
+            )
+
+    def _paint_live_content(self, p: QPainter, pill: QRectF, accent: QColor) -> None:
+        """Two-row live HUD: wide waveform + status on top, caption underneath."""
+        inset = float(self._inset_x)
+        top = QRectF(pill.x() + inset, pill.y() + 10.0, pill.width() - inset * 2, 28.0)
+        chip_label = "Live"
+        fm_chip = QFontMetrics(self._font_chip)
+        chip_w = float(fm_chip.horizontalAdvance(chip_label) + self._chip_pad_x * 2)
+        wave_w = max(80.0, top.width() - chip_w - 16.0)
+        self._draw_eq_bars(
+            p,
+            top.x() + wave_w * 0.5,
+            top.center().y(),
+            accent,
+            slot=wave_w,
+            max_h=18.0,
+            bar_w=3.2,
+        )
+        self._draw_named_chip(
+            p,
+            top.right() - chip_w,
+            top.center().y() - self._chip_h * 0.5,
+            chip_w,
+            self._chip_h,
+            chip_label,
+        )
+
+        raw_caption = getattr(self.app, "live_preview", "")
+        caption = raw_caption.strip() if isinstance(raw_caption, str) else ""
+        if not caption:
+            caption = "Tap the key again to paste"
+            empty = True
+        else:
+            empty = False
+        cap_rect = QRectF(
+            pill.x() + inset,
+            pill.y() + 42.0,
+            pill.width() - inset * 2,
+            26.0,
+        )
+        p.setFont(self._font_caption)
+        p.setPen(QColor(168, 168, 176, 200) if empty else QColor(220, 220, 226, 240))
+        elided = p.fontMetrics().elidedText(
+            caption, Qt.TextElideMode.ElideRight, int(cap_rect.width())
+        )
+        p.drawText(
+            cap_rect,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            elided,
+        )
+
+    def _draw_named_chip(
+        self, p: QPainter, x: float, y: float, w: float, h: float, label: str
+    ) -> None:
+        rect = QRectF(x, y, w, h)
+        path = QPainterPath()
+        path.addRoundedRect(rect, h * 0.5, h * 0.5)
+        p.fillPath(path, _Theme.chip_fill)
+        pen = QPen(_Theme.chip_border)
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.setFont(self._font_chip)
+        p.setPen(_Theme.chip_text)
+        p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), label)
+
     def _draw_ai_chip(
         self, p: QPainter, x: float, y: float, w: float, h: float
     ) -> None:
@@ -744,14 +919,22 @@ class DictationIndicator(QWidget):
         p.setPen(_Theme.chip_text)
         p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "AI")
 
-    def _draw_eq_bars(self, p: QPainter, cx: float, cy: float, accent: QColor) -> None:
+    def _draw_eq_bars(
+        self,
+        p: QPainter,
+        cx: float,
+        cy: float,
+        accent: QColor,
+        slot: Optional[float] = None,
+        max_h: float = 11.0,
+        bar_w: float = 2.0,
+    ) -> None:
         """Slim rounded bars — calm, not nightclub equalizer."""
         n = len(self._bars)
-        slot = self._glyph_slot - 2.0
-        bar_w = 2.0
+        if slot is None:
+            slot = self._glyph_slot - 2.0
         gap = (slot - n * bar_w) / max(1, n - 1)
         x0 = cx - slot * 0.5
-        max_h = 11.0
 
         for i, v in enumerate(self._bars):
             h = max(2.2, max_h * (0.2 + 0.8 * v))

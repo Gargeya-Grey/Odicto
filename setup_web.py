@@ -51,6 +51,13 @@ EDITABLE_KEYS = {
     "GEMINI_THINKING_LEVEL",
     "WHISPER_MODEL_SIZE",
     "WHISPER_DEVICE",
+    "STT_PROVIDER",
+    "GEMINI_TRANSCRIBE_MODE",
+    "GEMINI_TRANSCRIBE_MODEL",
+    "GEMINI_TRANSCRIBE_LIVE_MODEL",
+    "GEMINI_TRANSCRIBE_LANGUAGE",
+    "GEMINI_TRANSCRIBE_VOCABULARY",
+    "LIVE_HOTKEY",
     "HOTKEY",
     "AI_HOTKEY",
     "SYSTEM_PROMPT",
@@ -450,6 +457,11 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     llm_num_ctx = env_or("LLM_NUM_CTX")
     whisper = env_or("WHISPER_MODEL_SIZE")
     whisper_device = env_or("WHISPER_DEVICE")
+    stt_provider = env_or("STT_PROVIDER")
+    transcribe_mode = env_or("GEMINI_TRANSCRIBE_MODE")
+    transcribe_lang = env_or("GEMINI_TRANSCRIBE_LANGUAGE")
+    transcribe_vocab = env_or("GEMINI_TRANSCRIBE_VOCABULARY")
+    live_hotkey = env_or("LIVE_HOTKEY")
     hotkey = env_or("HOTKEY")
     ai_hotkey = env_or("AI_HOTKEY")
     system_prompt_file = current.get("SYSTEM_PROMPT_FILE", "")
@@ -704,6 +716,54 @@ select:focus, input:focus, textarea:focus {{
 .hotkey-row {{ display: flex; gap: 0.5rem; align-items: center; }}
 .hotkey-row input {{ flex: 1; }}
 .hotkey-row button {{ flex: 0 0 auto; }}
+.mode-switch {{
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 0.35rem;
+  user-select: none;
+}}
+.mode-switch .mode-label {{
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-weight: 480;
+  min-width: 4.6rem;
+}}
+.mode-switch .mode-label.on {{ color: var(--ink); }}
+.switch {{
+  position: relative;
+  width: 46px;
+  height: 26px;
+  flex: 0 0 auto;
+}}
+.switch input {{
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}}
+.switch .slider {{
+  position: absolute;
+  inset: 0;
+  background: var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}}
+.switch .slider::before {{
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  left: 3px;
+  top: 3px;
+  background: #ececf0;
+  border-radius: 50%;
+  transition: transform 0.15s ease;
+}}
+.switch input:checked + .slider {{ background: var(--accent); }}
+.switch input:checked + .slider::before {{ transform: translateX(20px); }}
+.switch input:focus-visible + .slider {{ box-shadow: 0 0 0 3px var(--accent-soft); }}
 button.recording {{ background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }}
 .actions {{ display: flex; gap: 0.7rem; margin-top: 1.6rem; }}
 button {{
@@ -909,13 +969,38 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     </div><!-- /.layout -->
     </div><!-- /#sec-ai -->
 
-    <details>
-      <summary>Advanced (Whisper + hotkeys)</summary>
+    <details open>
+      <summary>Speech to text</summary>
+      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Independent of the AI backend. Gemini STT uses <code>GEMINI_API_KEY</code> even when replies go through Meta / OpenRouter / Ollama. Smart/verbatim applies to both hold-to-talk chords and the live tap key.</p>
+      <label>STT provider</label>
+      <select name="STT_PROVIDER" id="STT_PROVIDER">
+        <option value="whisper"{" selected" if stt_provider == "whisper" else ""}>whisper — local, offline</option>
+        <option value="gemini"{" selected" if stt_provider == "gemini" else ""}>gemini — Gemini 3.5 Transcribe (cloud)</option>
+        <option value="auto"{" selected" if stt_provider == "auto" else ""}>auto — Gemini when a key is saved, else Whisper</option>
+      </select>
+      <label>Transcription mode</label>
+      <div class="mode-switch" role="group" aria-label="Transcription mode">
+        <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
+        <label class="switch">
+          <input type="checkbox" id="stt_mode_toggle" {"checked" if transcribe_mode != "verbatim" else ""} onchange="syncTranscribeMode()">
+          <span class="slider"></span>
+        </label>
+        <span class="mode-label" id="mode_label_smart">Smart</span>
+      </div>
+      <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="{html.escape(transcribe_mode)}">
+      <p class="panel-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on Ctrl+`, Ctrl+Shift+`, and the live tap key.</p>
+      <label>Language hint <span style="font-weight:400;color:var(--muted);">(blank = auto-detect)</span></label>
+      <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" value="{html.escape(transcribe_lang)}" placeholder="en-US">
+      <label>Custom vocabulary <span style="font-weight:400;color:var(--muted);">(comma-separated, optional)</span></label>
+      <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" value="{html.escape(transcribe_vocab)}" placeholder="Odicto, Kubernetes">
       <label>Whisper model</label>
       <input type="text" name="WHISPER_MODEL_SIZE" value="{html.escape(whisper)}">
       <label>Whisper device</label>
       <input type="text" name="WHISPER_DEVICE" value="{html.escape(whisper_device)}" placeholder="auto">
+    </details>
 
+    <details>
+      <summary>Advanced (hotkeys)</summary>
       <label>Dictation hotkey</label>
       <div class="hotkey-row">
         <input type="text" name="HOTKEY" id="HOTKEY" value="{html.escape(hotkey)}" readonly>
@@ -927,7 +1012,12 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
         <input type="text" name="AI_HOTKEY" id="AI_HOTKEY" value="{html.escape(ai_hotkey)}" readonly>
         <button type="button" class="secondary" data-record-for="AI_HOTKEY" onclick="recordHotkey(this)">Press key</button>
       </div>
-      <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">Press and hold the modifier(s), then the main key. Release all keys to save the chord.</p>
+      <label>Live tap-to-talk hotkey</label>
+      <div class="hotkey-row">
+        <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="{html.escape(live_hotkey)}" readonly>
+        <button type="button" class="secondary" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Press key</button>
+      </div>
+      <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">Hold-to-talk: press and hold the modifier(s), then the main key. Live tap: press once to start, press again to stop and paste (default F7). While Odicto is running, F7 is captured so it does not fire in other apps.</p>
     </details>
 
     <div class="actions">
@@ -1009,6 +1099,22 @@ function syncEffort(p) {{
   var pair = map[p]; if (!pair) return;
   var sel = document.getElementById(pair[0]), hid = document.getElementById(pair[1]);
   if (sel && hid) hid.value = sel.value;
+}}
+function syncTranscribeMode() {{
+  var tog = document.getElementById('stt_mode_toggle');
+  var hid = document.getElementById('GEMINI_TRANSCRIBE_MODE');
+  var on = tog && tog.checked;
+  if (hid) hid.value = on ? 'smart' : 'verbatim';
+  var v = document.getElementById('mode_label_verbatim');
+  var s = document.getElementById('mode_label_smart');
+  if (v) v.className = 'mode-label' + (on ? '' : ' on');
+  if (s) s.className = 'mode-label' + (on ? ' on' : '');
+}}
+function initTranscribeMode() {{
+  var hid = document.getElementById('GEMINI_TRANSCRIBE_MODE');
+  var tog = document.getElementById('stt_mode_toggle');
+  if (tog && hid) tog.checked = (hid.value || 'smart') !== 'verbatim';
+  syncTranscribeMode();
 }}
 
 function _historyTokens(raw){{ return (raw||'').split(',').map(function(s){{return s.trim();}}).filter(Boolean).filter(function(v,i,a){{return a.indexOf(v)===i;}}); }}
@@ -1185,6 +1291,7 @@ function initCustomSelect() {{
 initCustomSelect();
 initModelSelects();
 initEffortSelects();
+initTranscribeMode();
 ['meta','openrouter','gemini','ollama'].forEach(function(p){{
   var ci=document.getElementById(p+'_model_custom');
   if(ci) ci.addEventListener('input', function(){{ syncCustomModel(p); }});

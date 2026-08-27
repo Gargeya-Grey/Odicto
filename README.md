@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
   <img src="https://img.shields.io/badge/Linux-X11%2FWayland-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/STT-faster--whisper-00C853?style=for-the-badge" alt="Whisper" />
+  <img src="https://img.shields.io/badge/STT-Whisper%20%7C%20Gemini%203.5%20Transcribe-00C853?style=for-the-badge" alt="Whisper" />
   <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter%20%7C%20Gemini-FF6F00?style=for-the-badge" alt="LLM" />
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt" />
 </p>
@@ -12,7 +12,7 @@
 
 <p align="center">
   <b>Hold a hotkey. Speak. Text appears where your cursor is.</b><br/>
-  Local speech-to-text on Windows, macOS, and Linux — optional AI replies — quiet glass HUD — no cloud required.
+  Local Whisper or Gemini 3.5 Transcribe — optional AI replies — quiet glass HUD — private by default.
 </p>
 
 <p align="center">
@@ -26,22 +26,24 @@
 Most dictation tools are either cloud-bound, locked to one app, or slow.  
 **Odicto** is a small background service that:
 
-1. Records while you **hold** a global hotkey  
-2. Transcribes with **local Whisper** (`faster-whisper`)  
+1. Records while you **hold** a global hotkey (or **tap F7** to talk until you tap again)  
+2. Transcribes with **local Whisper** or **Gemini 3.5 Transcribe** (`STT_PROVIDER`)  
 3. Pastes into the focused field via clipboard  
 4. Optionally answers with an LLM — local Ollama, Meta API, OpenRouter, or **Google Gemini** (one-line switch)  
-5. Shows a slim **bottom-center HUD** while it works  
+5. Shows a slim **bottom-center HUD** while it works (live captions on F7)  
 
 ```text
-  Hold hotkey ──► mic ──► Whisper ──► (optional LLM) ──► Ctrl+V paste
+  Hold hotkey ──► mic ──► Whisper or Gemini STT ──► (optional LLM) ──► Ctrl+V paste
+  Tap F7      ──► live stream ──► same STT mode ─────────────────────► Ctrl+V paste
                               │
                          glass HUD
 ```
 
 | Mode | How | Result |
 |------|-----|--------|
-| **Dictation** | Hold **Ctrl+\`**, speak, release | Raw transcript pasted |
+| **Dictation** | Hold **Ctrl+\`**, speak, release | Transcript pasted (smart or verbatim) |
 | **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Fresh model answer (no prior turns) |
+| **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Live captions, then paste |
 | **AI with memory** | Hold **F6** + **Ctrl+\`**, speak, release | Continues the F6 conversation |
 | **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
@@ -198,12 +200,12 @@ cp .env.example .env
 | Package | Role |
 |---------|------|
 | `faster-whisper` | Local speech-to-text (downloads model weights on first use) |
+| `google-genai` | Gemini LLM **and** Gemini 3.5 Transcribe (unary + Live API) |
 | `sounddevice` / `soundfile` / `numpy` | Microphone capture + audio buffers |
 | `keyboard` | Global hotkey hold-to-talk (Windows/Linux) |
 | `pynput` | Global hotkey hold-to-talk (macOS) |
 | `pyperclip` | Clipboard paste injection |
 | `openai` | OpenAI-compatible client for Ollama / OpenRouter |
-| `google-genai` | Official Google Gen AI SDK for Gemini (Interactions API) |
 | `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
 | `python-dotenv` | Load `.env` |
 | `PySide6` | Always-on-top HUD overlay |
@@ -318,15 +320,43 @@ Notes:
 - Ctrl+Shift+\` AI is always a fresh one-shot (no previous_interaction_id).
 - Speaking “reset chat” (or pressing `RESET_CONTEXT_HOTKEY`) starts a fresh conversation.
 
+### 7c. Optional: Gemini 3.5 Transcribe as STT
+
+Speech-to-text is **independent** of `LLM_PROVIDER`. You can keep Meta/OpenRouter/Ollama
+for AI replies and still use Gemini for dictation. The setup page toggle
+**Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE` and applies to **every**
+capture chord plus the live tap key.
+
+```env
+STT_PROVIDER=auto            # whisper | gemini | auto
+GEMINI_API_KEY=AIza...       # same key as Gemini LLM; reused, not a second secret
+GEMINI_TRANSCRIBE_MODE=smart # smart (cleaned) or verbatim (literal)
+LIVE_HOTKEY=f7               # tap to start, tap again to stop and paste
+```
+
+| Variable | Role |
+|----------|------|
+| `STT_PROVIDER` | `whisper` (default, local), `gemini` (cloud STT), or `auto` (Gemini when a key is saved) |
+| `GEMINI_TRANSCRIBE_MODE` | `smart` strips ums/self-corrections and punctuates; `verbatim` is word-for-word |
+| `GEMINI_TRANSCRIBE_MODEL` | Unary model (`gemini-3.5-transcribe`) used after hold-to-talk release |
+| `GEMINI_TRANSCRIBE_LIVE_MODEL` | Live API model (`gemini-3.5-transcribe-live`) used while F7 is active |
+| `GEMINI_TRANSCRIBE_LANGUAGE` | Optional BCP-47 hint (`en-US`); blank = auto-detect 85+ languages |
+| `GEMINI_TRANSCRIBE_VOCABULARY` | Optional comma-separated bias terms |
+| `LIVE_HOTKEY` | Tap-to-talk key (default `f7`). Empty disables. Captured while Odicto runs |
+
+On Gemini STT failure (no key, 429, network), Odicto falls back to local Whisper.
+Default `STT_PROVIDER=whisper` so existing local-only installs do not change.
+
 ### Resource use: Ollama vs OpenRouter vs Meta vs Gemini vs Whisper
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
-| **Whisper (STT)** | Always (dictation needs it) | Local — loads regardless of LLM provider |
+| **Whisper (STT)** | When `STT_PROVIDER=whisper`, or as fallback | Local — skipped at boot if Gemini STT is selected and a key is present |
 | **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
 | **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
-| **Google Gemini** | Only if `LLM_PROVIDER=gemini` | Cloud — no local LLM VRAM from Odicto |
+| **Google Gemini (LLM)** | Only if `LLM_PROVIDER=gemini` | Cloud — no local LLM VRAM from Odicto |
+| **Gemini 3.5 Transcribe (STT)** | Only if `STT_PROVIDER` resolves to `gemini` | Cloud — falls back to Whisper on error |
 
 **Important:** Switching to Meta, OpenRouter, or Gemini stops Odicto from launching or talking to Ollama.  
 It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.

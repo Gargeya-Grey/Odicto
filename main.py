@@ -9,7 +9,7 @@ from typing import Optional
 from app_state import AppState
 from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
-from transcriber import WhisperTranscriber
+from transcriber import GeminiLiveSession, GeminiTranscriber, WhisperTranscriber
 from refiner import TextRefiner
 from typer import paste_text, get_selected_text
 
@@ -136,9 +136,15 @@ class DictationApp:
         # F6 (CTRL_KEEP_CONTEXT_KEYS): opt-in multi-turn memory for this capture.
         self._keep_history: bool = False
 
+        # F7 (LIVE_HOTKEY): tap-to-talk. Distinct from hold-to-talk chords.
+        self.live_active: bool = False
+        self.live_preview: str = ""
+        self._live_session: Optional[GeminiLiveSession] = None
+        self._live_key_held: bool = False
+
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
-        self.transcriber: Optional[WhisperTranscriber] = None
+        self.transcriber = None
         self.refiner: Optional[TextRefiner] = None
         self.indicator = None
 
@@ -172,6 +178,11 @@ class DictationApp:
             indicator.notify_state_changed()
         except Exception:
             pass
+
+    def _set_live_preview(self, text: str) -> None:
+        """HUD live-caption callback (may run off the Qt thread)."""
+        self.live_preview = (text or "").strip()
+        self._notify_ui()
 
     def _set_state(self, new_state: AppState) -> None:
         """Update app state and immediately notify the indicator."""
@@ -214,7 +225,10 @@ class DictationApp:
                 sample_rate=Config.SAMPLE_RATE,
                 channels=Config.CHANNELS,
             )
-            self.transcriber = WhisperTranscriber()
+            if Config.effective_stt_provider() == "gemini":
+                self.transcriber = GeminiTranscriber()
+            else:
+                self.transcriber = WhisperTranscriber()
             self.refiner = TextRefiner()
             self.refiner.preload()
         except Exception as e:
@@ -245,8 +259,15 @@ class DictationApp:
 
         print("--------------------------------------------------")
         print(f"Application ready! Global Hotkey: '{Config.HOTKEY}'")
+        stt_name = (
+            "Gemini 3.5 Transcribe"
+            if Config.effective_stt_provider() == "gemini"
+            else "Whisper"
+        )
+        mode_name = Config.gemini_transcribe_mode()
         print(
-            f"  - Hold '{Config.HOTKEY}': RECORD and paste raw Whisper transcript."
+            f"  - Hold '{Config.HOTKEY}': RECORD and paste transcript "
+            f"({stt_name}, {mode_name})."
         )
         if Config.AI_HOTKEY:
             print(
@@ -263,6 +284,11 @@ class DictationApp:
             print(
                 f"  - Hold {keep_keys.upper()} + '{Config.HOTKEY}' (or the AI chord): "
                 "same AI reply, but keep / continue conversation memory."
+            )
+        if Config.LIVE_HOTKEY:
+            print(
+                f"  - Tap '{Config.LIVE_HOTKEY}': start live dictation; tap again to "
+                "stop and paste (same smart/verbatim mode)."
             )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
@@ -389,6 +415,28 @@ class DictationApp:
                 flush=True,
             )
 
+        live_key: str = (Config.LIVE_HOTKEY or "").split("+")[-1].strip().lower()
+        if live_key:
+            def live_handler(event: object) -> bool:
+                event_type = getattr(event, "event_type", None)
+                if event_type == platforms.KEY_DOWN:
+                    if self._live_key_held:
+                        return False  # key-repeat while held
+                    self._live_key_held = True
+                    self.on_live_toggle()
+                    return False  # suppress so F7 does not leak into the focused app
+                if event_type == platforms.KEY_UP:
+                    self._live_key_held = False
+                    return False
+                return True
+
+            platforms.hook_key(live_key, live_handler, suppress=True)
+            print(
+                f"Live tap-to-talk hotkey bound: '{live_key}' "
+                f"(press to start, press again to stop and paste)",
+                flush=True,
+            )
+
         print(
             f"Hotkeys bound: primary='{primary}' "
             f"dictation_mods={list(dict_mods) or '(none)'} "
@@ -451,6 +499,17 @@ class DictationApp:
     def _shutdown(self) -> None:
         """Release resources, keyboard hooks, PID file, and any Ollama we spawned."""
         self.ready = False
+        try:
+            if self._live_session is not None:
+                try:
+                    if self.recorder is not None:
+                        self.recorder.remove_chunk_listener(self._live_session.push_audio)
+                except Exception:
+                    pass
+                self._live_session.stop(timeout=1.0)
+                self._live_session = None
+        except Exception:
+            pass
         try:
             if self.recorder is not None:
                 self.recorder.close()
@@ -546,6 +605,8 @@ class DictationApp:
 
             self._record_started_at = now
             self.last_status = None
+            self.live_active = False
+            self.live_preview = ""
             self._set_state(AppState.RECORDING)
 
             if Config.PLAY_AUDIO_CUES:
@@ -622,7 +683,106 @@ class DictationApp:
             print(">>> Processing transcription and refinement...")
             threading.Thread(
                 target=self.process_and_paste,
-                args=(audio, use_llm, "", keep_history),
+                args=(audio, use_llm, "", keep_history, ""),
+                daemon=True,
+                name="dictation-pipeline",
+            ).start()
+
+    def on_live_toggle(self, event: object = None) -> None:
+        """Tap-to-talk: first press starts capture, second press stops and pastes."""
+        if not self.ready or self.recorder is None:
+            return
+
+        start_pipeline = False
+        audio = None
+        live_session: Optional[GeminiLiveSession] = None
+        with self.state_lock:
+            if self.state == AppState.PROCESSING:
+                print("!!! System busy. Still refining previous transcription. Please wait...")
+                return
+            if self.state == AppState.RECORDING:
+                if not self.live_active:
+                    return  # hold-to-talk owns the mic
+                hold_ms = (time.monotonic() - self._record_started_at) * 1000.0
+                self._set_state(AppState.PROCESSING)
+                if Config.PLAY_AUDIO_CUES:
+                    threading.Thread(
+                        target=play_beep, args=(440.0, 0.08), daemon=True, name="beep-stop"
+                    ).start()
+                success = False
+                try:
+                    success = self.recorder.stop(filepath=None)
+                except Exception as e:
+                    print(f"Warning: live stop recorder failed: {e}", flush=True)
+                live_session = self._live_session
+                self._live_session = None
+                if live_session is not None:
+                    try:
+                        self.recorder.remove_chunk_listener(live_session.push_audio)
+                    except Exception:
+                        pass
+                self.live_active = False
+                if hold_ms < Config.MIN_HOLD_MS or not success:
+                    self.last_status = "empty" if success else None
+                    if live_session is not None:
+                        threading.Thread(
+                            target=live_session.stop, kwargs={"timeout": 0.5},
+                            daemon=True, name="odicto-live-abort",
+                        ).start()
+                    if self.recorder is not None:
+                        self.recorder.clear()
+                    self._last_cycle_end = time.monotonic()
+                    self._set_state(AppState.IDLE)
+                    print(">>> Live tap too short; ignored.")
+                    return
+                audio = self.recorder.last_audio_array
+                start_pipeline = True
+            elif self.state == AppState.IDLE:
+                now = time.monotonic()
+                cooldown_s = Config.RETRIGGER_COOLDOWN_MS / 1000.0
+                if now - self._last_cycle_end < cooldown_s:
+                    return
+                self.use_llm = False
+                self._keep_history = False
+                self._record_started_at = now
+                self.last_status = None
+                self.live_preview = ""
+                self.live_active = True
+                self._set_state(AppState.RECORDING)
+                if Config.PLAY_AUDIO_CUES:
+                    threading.Thread(
+                        target=play_beep, args=(880.0, 0.08), daemon=True, name="beep-start"
+                    ).start()
+                try:
+                    self.recorder.start()
+                except Exception as e:
+                    print(f"!!! Failed to start recorder: {e}", file=sys.stderr)
+                    self.live_active = False
+                    self.last_status = "error"
+                    self._set_state(AppState.IDLE)
+                    return
+                if Config.effective_stt_provider() == "gemini":
+                    session = GeminiLiveSession(on_interim=self._set_live_preview)
+                    self._live_session = session
+                    self.recorder.add_chunk_listener(session.push_audio)
+                    session.start()
+                    print("\n>>> Live dictation... (tap the key again to stop and paste)")
+                else:
+                    print(
+                        "\n>>> Tap-to-talk recording... "
+                        "(tap the key again to stop; local STT on release)"
+                    )
+            else:
+                return
+
+        if start_pipeline:
+            live_text = ""
+            if live_session is not None:
+                live_text = live_session.stop(timeout=8.0)
+            print(">>> Processing live transcription...")
+            threading.Thread(
+                target=self.process_and_paste,
+                args=(audio, False, "", False, live_text),
                 daemon=True,
                 name="dictation-pipeline",
             ).start()
@@ -651,6 +811,7 @@ class DictationApp:
         use_llm: bool,
         pre_context: str = "",
         keep_history: bool = False,
+        pre_transcript: str = "",
     ) -> None:
         """Worker: STT (and selection, in parallel for AI) → optional LLM → paste."""
         self.last_status = None
@@ -675,8 +836,15 @@ class DictationApp:
                 audio_source = self.audio_filepath
 
             stt_started = time.time()
-            raw_text: str = self.transcriber.transcribe(audio_source)
-            print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
+            raw_text: str = (pre_transcript or "").strip()
+            if raw_text:
+                print(
+                    f'Live Transcript: "{raw_text}" '
+                    f"(committed in {time.time() - stt_started:.2f}s)"
+                )
+            else:
+                raw_text = self.transcriber.transcribe(audio_source)
+                print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
 
             if sel_future is not None:
                 sel_wait_started = time.time()

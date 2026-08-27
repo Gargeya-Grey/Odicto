@@ -13,7 +13,7 @@ sys.modules["faster_whisper"] = mock_faster_whisper
 import config
 from config import Config, parse_hold_hotkey, _sanitize_model_id
 from recorder import AudioRecorder, play_beep
-from transcriber import WhisperTranscriber
+from transcriber import GeminiTranscriber, WhisperTranscriber, float32_to_wav_bytes
 from refiner import TextRefiner
 from typer import paste_text, get_selected_text
 from app_state import AppState
@@ -334,6 +334,94 @@ class TestOdicto(unittest.TestCase):
             transcriber.transcribe(audio)
         kwargs = mock_model_instance.transcribe.call_args[1]
         self.assertTrue(kwargs.get("vad_filter"))
+
+    def test_float32_to_wav_bytes_header(self) -> None:
+        audio = np.zeros(1600, dtype=np.float32)
+        wav = float32_to_wav_bytes(audio, 16000)
+        self.assertTrue(wav.startswith(b"RIFF"))
+        self.assertIn(b"WAVE", wav[:16])
+        self.assertGreater(len(wav), 44)
+
+    def test_stt_provider_and_mode_helpers(self) -> None:
+        with patch.object(Config, "GEMINI_TRANSCRIBE_MODE", "verbatim"):
+            self.assertEqual(Config.gemini_transcribe_mode(), "verbatim")
+        with patch.object(Config, "GEMINI_TRANSCRIBE_MODE", "smart"):
+            self.assertEqual(Config.gemini_transcribe_mode(), "smart")
+        with patch.object(Config, "STT_PROVIDER", "auto"), patch.object(
+            Config, "GEMINI_API_KEY", "AIza-test"
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "gemini")
+        with patch.object(Config, "STT_PROVIDER", "auto"), patch.object(
+            Config, "GEMINI_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "whisper")
+        with patch.object(Config, "STT_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "whisper")
+        with patch.object(
+            Config, "GEMINI_TRANSCRIBE_VOCABULARY", "Odicto, Kubernetes, Odicto"
+        ):
+            self.assertEqual(
+                Config.gemini_transcribe_vocabulary(), ["Odicto", "Kubernetes"]
+            )
+        with patch.object(Config, "GEMINI_TRANSCRIBE_LANGUAGE", "en-US, hi-IN"):
+            self.assertEqual(
+                Config.gemini_transcribe_language_codes(), ["en-US", "hi-IN"]
+            )
+
+    @patch("transcriber.google_genai")
+    def test_gemini_transcriber_unary_smart(self, mock_genai: MagicMock) -> None:
+        client = MagicMock()
+        mock_genai.Client.return_value = client
+        interaction = MagicMock()
+        interaction.output_text = "Let's meet Wednesday."
+        client.interactions.create.return_value = interaction
+        with patch.object(Config, "GEMINI_API_KEY", "AIza-test"), patch.object(
+            Config, "GEMINI_TRANSCRIBE_MODE", "smart"
+        ), patch.object(Config, "GEMINI_TRANSCRIBE_LANGUAGE", ""), patch.object(
+            Config, "GEMINI_TRANSCRIBE_VOCABULARY", ""
+        ):
+            transcriber = GeminiTranscriber()
+            audio = np.zeros(1600, dtype=np.float32)
+            self.assertEqual(transcriber.transcribe(audio), "Let's meet Wednesday.")
+        kwargs = client.interactions.create.call_args.kwargs
+        self.assertIn("gemini-3.5-transcribe", kwargs["model"])
+        mode = kwargs["generation_config"]["transcription_config"]["mode"]
+        self.assertEqual(mode["type"], "smart")
+        self.assertEqual(kwargs["input"][0]["mime_type"], "audio/wav")
+        self.assertTrue(kwargs["input"][0]["data"])
+
+    @patch("transcriber.WhisperTranscriber")
+    @patch("transcriber.google_genai")
+    def test_gemini_transcriber_falls_back_on_error(
+        self, mock_genai: MagicMock, mock_whisper: MagicMock
+    ) -> None:
+        client = MagicMock()
+        mock_genai.Client.return_value = client
+        client.interactions.create.side_effect = RuntimeError("429 RESOURCE_EXHAUSTED")
+        mock_whisper.return_value.transcribe.return_value = "whisper text"
+        with patch.object(Config, "GEMINI_API_KEY", "AIza-test"):
+            transcriber = GeminiTranscriber()
+            audio = np.zeros(1600, dtype=np.float32)
+            self.assertEqual(transcriber.transcribe(audio), "whisper text")
+        mock_whisper.return_value.transcribe.assert_called_once()
+
+    def test_audio_recorder_chunk_listener(self) -> None:
+        with patch("recorder.sd.InputStream") as mock_stream:
+            mock_stream.return_value.start.return_value = None
+            recorder = AudioRecorder(sample_rate=16000, channels=1)
+            seen: list = []
+            recorder.add_chunk_listener(lambda c: seen.append(c.copy()))
+            recorder.start()
+            chunk = np.array([0.1, 0.2], dtype=np.float32)
+            recorder._callback(chunk.reshape(-1, 1), 2, None, None)
+            self.assertEqual(len(seen), 1)
+            np.testing.assert_allclose(seen[0], chunk)
+            recorder.remove_chunk_listener(recorder._chunk_listeners[0])
+            recorder._callback(chunk.reshape(-1, 1), 2, None, None)
+            self.assertEqual(len(seen), 1)
+            recorder.close()
 
     def test_effective_llm_model_and_api_base(self) -> None:
         """Provider flip picks the right model id and API base without hand-editing paths."""
@@ -1344,6 +1432,95 @@ class TestOdicto(unittest.TestCase):
             finally:
                 main_mod._INSTANCE_LOCK_HELD = was_held
 
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_toggle_tap_to_talk(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("main.Config.LIVE_HOTKEY", "f7"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.recorder.stop.return_value = True
+            fake_audio = np.zeros(1600, dtype=np.float32)
+            app.recorder.last_audio_array = fake_audio
+
+            app.on_live_toggle()
+            self.assertEqual(app.state, AppState.RECORDING)
+            self.assertTrue(app.live_active)
+            self.assertFalse(app.use_llm)
+            app.recorder.start.assert_called()
+
+            app._record_started_at = 0.0
+            with patch("threading.Thread") as mock_thread:
+                app.on_live_toggle()
+            self.assertEqual(app.state, AppState.PROCESSING)
+            self.assertFalse(app.live_active)
+            mock_thread.assert_called()
+            pipeline_call = mock_thread.call_args
+            args = pipeline_call[1].get("args") or pipeline_call[0][1:]
+            self.assertEqual(args[1], False)  # use_llm
+            self.assertEqual(args[4], "")  # no live transcript when STT is whisper
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_process_and_paste_uses_pre_transcript(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.transcriber.transcribe.side_effect = AssertionError(
+                "unary STT should be skipped when live text is present"
+            )
+            app.process_and_paste(
+                np.zeros(100, dtype=np.float32),
+                False,
+                "",
+                False,
+                "already transcribed",
+            )
+            mock_paste_text.assert_called_once_with("already transcribed")
+
     def test_indicator_reset_label(self) -> None:
         """F5 reset shows a distinct HUD label."""
         from indicator import GuiState, status_label
@@ -1428,6 +1605,28 @@ class TestDictationIndicator(unittest.TestCase):
         indicator._tick.stop()
         indicator.close()
         # Keep qt app alive for other tests; do not quit.
+
+    def test_live_layout_requires_explicit_flag(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        from indicator import DictationIndicator, GuiState
+        from app_state import AppState
+
+        QApplication.instance() or QApplication([])
+        mock_app = MagicMock()
+        mock_app.state = AppState.RECORDING
+        mock_app.last_status = None
+        mock_app.use_llm = False
+        mock_app.ready = True
+        mock_app.recorder = None
+        mock_app.live_active = False
+        mock_app.live_preview = ""
+        indicator = DictationIndicator(mock_app)
+        indicator.gui_state = GuiState.RECORDING
+        self.assertFalse(indicator._is_live_layout())
+        mock_app.live_active = True
+        self.assertTrue(indicator._is_live_layout())
+        indicator._tick.stop()
+        indicator.close()
 
 
 class TestCrossPlatform(unittest.TestCase):
@@ -1540,6 +1739,11 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn('name="SYSTEM_PROMPT"', html_page)
         self.assertIn("PLAIN HUMAN-READABLE TEXT", html_page)
         self.assertIn("var DEFAULT_SYSTEM_PROMPT =", html_page)
+        self.assertIn('name="STT_PROVIDER"', html_page)
+        self.assertIn('name="GEMINI_TRANSCRIBE_MODE"', html_page)
+        self.assertIn("stt_mode_toggle", html_page)
+        self.assertIn('name="LIVE_HOTKEY"', html_page)
+        self.assertIn("function syncTranscribeMode", html_page)
 
     def test_config_system_prompt_falls_back_to_default(self) -> None:
         from config import DEFAULT_SYSTEM_PROMPT, Config

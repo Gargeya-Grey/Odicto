@@ -116,13 +116,19 @@ supplied it) with:
 
 ## Runtime notes for agents
 
-- Default hotkeys: hold **Ctrl+`** (`HOTKEY=ctrl+grave`) for raw dictation;
+- Default hotkeys: hold **Ctrl+`** (`HOTKEY=ctrl+grave`) for dictation;
   hold **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for a **fresh** AI reply
   (no previous conversation). Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
-  to keep / continue AI memory. Keyboard lib name for `` ` `` is `grave`.
+  to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
+  dictation; tap again to stop and paste. Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
-- First Whisper load downloads model weights (~75MB for `tiny.en`). Whisper
-  always loads for STT, independent of LLM provider.
+- **STT is independent of `LLM_PROVIDER`:** `STT_PROVIDER=whisper|gemini|auto`
+  (default `whisper`). Gemini STT reuses `GEMINI_API_KEY` and does **not** require
+  `LLM_PROVIDER=gemini`. `GEMINI_TRANSCRIBE_MODE=smart|verbatim` is the setup-page
+  toggle and applies to **both** hold-to-talk chords and the live tap key.
+  `auto` uses Gemini when a key is saved, otherwise Whisper. Cloud STT failures
+  fall back to Whisper. First Whisper load downloads model weights (~75MB for
+  `tiny.en`) only when Whisper is the active or fallback backend.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,
@@ -156,6 +162,11 @@ supplied it) with:
   via the `google-genai` SDK (`client.interactions.create`). Optional
   `GEMINI_THINKING_LEVEL` (`minimal|low|medium|high`, default `minimal`).
   Odicto will **not** spawn Ollama in this mode.
+- **Gemini 3.5 Transcribe (STT):** unary `GEMINI_TRANSCRIBE_MODEL=gemini-3.5-transcribe`
+  via `interactions.create`; live tap-to-talk uses
+  `GEMINI_TRANSCRIBE_LIVE_MODEL=gemini-3.5-transcribe-live` (Live API, Manual VAD).
+  Requires `google-genai>=2.20.0` for `AudioTranscriptionConfig.mode`.
+  Public preview as of Aug 2026; free-tier audio may be used to improve Google products.
 - **Ollama:** set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL` (default `qwen2.5:1.5b-instruct`);
   per-provider keys — use `OLLAMA_MODEL` for Ollama only (hand-edit `LLM_MODEL` is
   the legacy generic tier that the setup page no longer writes).

@@ -40,6 +40,14 @@ ENV_DEFAULTS: dict[str, str] = {
     "WHISPER_MODEL_SIZE": "tiny.en",
     "WHISPER_DEVICE": "auto",
     "WHISPER_VAD": "false",
+    # Speech-to-text backend (independent of LLM_PROVIDER)
+    "STT_PROVIDER": "whisper",
+    "GEMINI_TRANSCRIBE_MODEL": "gemini-3.5-transcribe",
+    "GEMINI_TRANSCRIBE_LIVE_MODEL": "gemini-3.5-transcribe-live",
+    "GEMINI_TRANSCRIBE_MODE": "smart",
+    "GEMINI_TRANSCRIBE_LANGUAGE": "",
+    "GEMINI_TRANSCRIBE_VOCABULARY": "",
+    "LIVE_HOTKEY": "f7",
     # LLM — generic knobs (apply to the active provider)
     "LLM_PROVIDER": "none",
     "LLM_MODEL": "qwen2.5:1.5b-instruct",
@@ -307,6 +315,32 @@ class Config:
     # Forced on for recordings >= 8s in transcriber.py, or set WHISPER_VAD=true.
     WHISPER_VAD: bool = _env_bool("WHISPER_VAD", _def("WHISPER_VAD"))
 
+    # Speech-to-text backend. Independent of LLM_PROVIDER: Gemini STT can run
+    # while AI replies still go through Meta/OpenRouter/Ollama/none.
+    # whisper | gemini | auto  (auto = Gemini when GEMINI_API_KEY is set)
+    _raw_stt = os.getenv("STT_PROVIDER", _def("STT_PROVIDER")).strip().lower().replace("-", "_")
+    STT_PROVIDER: Literal["whisper", "gemini", "auto"] = (  # type: ignore
+        "gemini"
+        if _raw_stt in ("gemini", "gemini_api", "google", "google_api")
+        else "auto"
+        if _raw_stt == "auto"
+        else "whisper"
+    )
+    GEMINI_TRANSCRIBE_MODEL: str = _sanitize_model_id(
+        _default_env("GEMINI_TRANSCRIBE_MODEL")
+    )
+    GEMINI_TRANSCRIBE_LIVE_MODEL: str = _sanitize_model_id(
+        _default_env("GEMINI_TRANSCRIBE_LIVE_MODEL")
+    )
+    _raw_stt_mode = _default_env("GEMINI_TRANSCRIBE_MODE").strip().lower()
+    GEMINI_TRANSCRIBE_MODE: Literal["smart", "verbatim"] = (  # type: ignore
+        "verbatim" if _raw_stt_mode in ("verbatim", "off", "false", "0") else "smart"
+    )
+    GEMINI_TRANSCRIBE_LANGUAGE: str = _default_env("GEMINI_TRANSCRIBE_LANGUAGE").strip()
+    GEMINI_TRANSCRIBE_VOCABULARY: str = _default_env("GEMINI_TRANSCRIBE_VOCABULARY").strip()
+    # Tap-to-talk (press once to start, press again to stop and paste). Empty disables.
+    LIVE_HOTKEY: str = _default_env("LIVE_HOTKEY").strip().lower()
+
     # LLM config
     # Flip LLM_PROVIDER between ollama / openrouter / meta / gemini / none to switch backends.
     # Aliases: meta-api, meta_api -> meta ; google, gemini-api -> gemini
@@ -524,6 +558,53 @@ class Config:
         return "minimal"
 
     @classmethod
+    def effective_stt_provider(cls) -> Literal["whisper", "gemini"]:
+        """Resolved STT backend: gemini only when a Gemini key is present."""
+        if cls.STT_PROVIDER == "whisper":
+            return "whisper"
+        if cls.GEMINI_API_KEY.strip():
+            return "gemini"
+        return "whisper"
+
+    @classmethod
+    def gemini_transcribe_mode(cls) -> Literal["smart", "verbatim"]:
+        """Smart (cleaned dictation) or verbatim (literal). Applies to every STT path."""
+        mode = (cls.GEMINI_TRANSCRIBE_MODE or "smart").strip().lower()
+        return "verbatim" if mode == "verbatim" else "smart"
+
+    @classmethod
+    def gemini_transcribe_language_codes(cls) -> list:
+        """BCP-47 hints for Gemini STT. Empty list → automatic detection."""
+        raw = (cls.GEMINI_TRANSCRIBE_LANGUAGE or "").strip()
+        if not raw:
+            return []
+        codes = []
+        seen = set()
+        for tok in raw.replace(";", ",").split(","):
+            code = tok.strip()
+            if code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
+    @classmethod
+    def gemini_transcribe_vocabulary(cls) -> list:
+        """Custom vocabulary terms (best ≤100). Empty when unset."""
+        raw = (cls.GEMINI_TRANSCRIBE_VOCABULARY or "").strip()
+        if not raw:
+            return []
+        terms = []
+        seen = set()
+        for tok in raw.split(","):
+            term = tok.strip()
+            if term and term not in seen:
+                seen.add(term)
+                terms.append(term)
+            if len(terms) >= 100:
+                break
+        return terms
+
+    @classmethod
     def effective_system_prompt(cls) -> str:
         """AI instructions: SYSTEM_PROMPT_FILE → inline SYSTEM_PROMPT → default.
 
@@ -682,12 +763,57 @@ class Config:
             keep,
             _source_of("CTRL_KEEP_CONTEXT_KEYS"),
         )
+        add(
+            "Hotkeys",
+            "Live tap-to-talk key",
+            cls.LIVE_HOTKEY or "(disabled)",
+            _source_of("LIVE_HOTKEY"),
+        )
 
         add("Audio & Whisper", "Sample rate", cls.SAMPLE_RATE, _source_of("SAMPLE_RATE"))
         add("Audio & Whisper", "Channels", cls.CHANNELS, _source_of("CHANNELS"))
         add("Audio & Whisper", "Whisper model", cls.WHISPER_MODEL_SIZE, _source_of("WHISPER_MODEL_SIZE"))
         add("Audio & Whisper", "Whisper device", cls.WHISPER_DEVICE, _source_of("WHISPER_DEVICE"))
         add("Audio & Whisper", "Whisper VAD", cls.WHISPER_VAD, _source_of("WHISPER_VAD"))
+        add("Speech to text", "STT provider", cls.STT_PROVIDER, _source_of("STT_PROVIDER"))
+        add(
+            "Speech to text",
+            "Resolved STT",
+            cls.effective_stt_provider(),
+            _source_of("STT_PROVIDER"),
+        )
+        add(
+            "Speech to text",
+            "Transcribe mode",
+            cls.gemini_transcribe_mode(),
+            _source_of("GEMINI_TRANSCRIBE_MODE"),
+        )
+        add(
+            "Speech to text",
+            "Transcribe model",
+            cls.GEMINI_TRANSCRIBE_MODEL,
+            _source_of("GEMINI_TRANSCRIBE_MODEL"),
+        )
+        add(
+            "Speech to text",
+            "Live transcribe model",
+            cls.GEMINI_TRANSCRIBE_LIVE_MODEL,
+            _source_of("GEMINI_TRANSCRIBE_LIVE_MODEL"),
+        )
+        lang = ", ".join(cls.gemini_transcribe_language_codes()) or "(auto)"
+        add(
+            "Speech to text",
+            "Language",
+            lang,
+            _source_of("GEMINI_TRANSCRIBE_LANGUAGE"),
+        )
+        vocab_n = len(cls.gemini_transcribe_vocabulary())
+        add(
+            "Speech to text",
+            "Custom vocabulary",
+            f"{vocab_n} term(s)" if vocab_n else "(none)",
+            _source_of("GEMINI_TRANSCRIBE_VOCABULARY"),
+        )
 
         add("Timing", "Paste delay (s)", cls.PASTE_DELAY_SECONDS, _source_of("PASTE_DELAY_SECONDS"))
         add("Timing", "Audio cues", cls.PLAY_AUDIO_CUES, _source_of("PLAY_AUDIO_CUES"))
@@ -762,6 +888,20 @@ class Config:
             )
         if cls.GEMINI_MAX_OUTPUT_TOKENS < 64:
             raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 64, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
+        if cls.STT_PROVIDER not in ("whisper", "gemini", "auto"):
+            raise ValueError(
+                f"STT_PROVIDER must be whisper|gemini|auto, got {cls.STT_PROVIDER!r}"
+            )
+        if cls.GEMINI_TRANSCRIBE_MODE not in ("smart", "verbatim"):
+            raise ValueError(
+                f"GEMINI_TRANSCRIBE_MODE must be smart|verbatim, got {cls.GEMINI_TRANSCRIBE_MODE!r}"
+            )
+        if cls.STT_PROVIDER == "gemini" and not cls.GEMINI_API_KEY.strip():
+            print(
+                "Warning: GEMINI_API_KEY is empty while STT_PROVIDER='gemini'. "
+                "Speech-to-text will fall back to local Whisper until a key is set.",
+                flush=True,
+            )
 
         if cls.SAMPLE_RATE <= 0:
             raise ValueError(f"SAMPLE_RATE must be positive, got {cls.SAMPLE_RATE}")
@@ -792,6 +932,23 @@ class Config:
                 raise ValueError(
                     f"AI_MODIFIER '{cls.AI_MODIFIER}' must be distinct from HOTKEY parts "
                     f"({cls.HOTKEY})"
+                )
+        live_key = (cls.LIVE_HOTKEY or "").split("+")[-1].strip()
+        if live_key:
+            if live_key == dict_primary:
+                raise ValueError(
+                    f"LIVE_HOTKEY '{cls.LIVE_HOTKEY}' must not use the dictation "
+                    f"primary key '{dict_primary}'"
+                )
+            reset_key = (
+                cls.RESET_CONTEXT_HOTKEY.split("+")[-1].strip()
+                if cls.RESET_CONTEXT_HOTKEY
+                else ""
+            )
+            if reset_key and live_key == reset_key:
+                raise ValueError(
+                    f"LIVE_HOTKEY '{cls.LIVE_HOTKEY}' must be distinct from "
+                    f"RESET_CONTEXT_HOTKEY '{cls.RESET_CONTEXT_HOTKEY}'"
                 )
 
 

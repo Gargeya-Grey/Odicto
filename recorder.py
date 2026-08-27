@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -47,6 +47,9 @@ class AudioRecorder:
         self._ring_samples = int(sample_rate * self.RING_SECONDS)
         self._session_samples = int(sample_rate * self.PRE_ROLL_SECONDS)
         self._ring_bytes = self._ring_samples * np.dtype(np.float32).itemsize
+        # Optional live-STT listeners. Invoked on the audio thread with a copy
+        # of each captured mono chunk; listeners must never block.
+        self._chunk_listeners: List[Callable[[np.ndarray], None]] = []
 
         # Open the device once; if it fails here, the app fails fast at startup
         # instead of discovering a broken mic on the first hotkey press.
@@ -94,15 +97,32 @@ class AudioRecorder:
                 else:
                     session_chunk = chunk
                 self.audio_data.append(session_chunk)
+                listeners = list(self._chunk_listeners)
                 # Exponential smooth toward current peak.
                 self._level = (0.55 * self._level) + (0.45 * level)
             else:
+                listeners = []
                 self._level = 0.0
+        for fn in listeners:
+            try:
+                fn(session_chunk)
+            except Exception:
+                pass
 
     def get_level(self) -> float:
         """Returns a smoothed 0..1 mic level for the visualizer."""
         with self._lock:
             return self._level
+
+    def add_chunk_listener(self, fn: Callable[[np.ndarray], None]) -> None:
+        """Register a live-audio consumer (called from the input callback)."""
+        with self._lock:
+            if fn not in self._chunk_listeners:
+                self._chunk_listeners.append(fn)
+
+    def remove_chunk_listener(self, fn: Callable[[np.ndarray], None]) -> None:
+        with self._lock:
+            self._chunk_listeners = [x for x in self._chunk_listeners if x is not fn]
 
     def start(self) -> None:
         """Starts a capture session from the persistent stream (no device re-open)."""
