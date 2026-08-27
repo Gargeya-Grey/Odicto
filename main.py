@@ -121,6 +121,14 @@ def live_final_refines_caret(frozen: str, final: str) -> bool:
         return False
     if frozen.startswith(final) and len(final) >= 8:
         return True
+    # Smart often keeps the restated ending after "sorry" / self-correction.
+    if frozen.endswith(final) and len(final) >= 12:
+        return True
+    final_words = final.split()
+    if len(final_words) >= 4:
+        tail = " ".join(final_words[-5:])
+        if tail and frozen.endswith(tail):
+            return True
     i = 0
     limit = min(len(frozen), len(final))
     while i < limit and frozen[i] == final[i]:

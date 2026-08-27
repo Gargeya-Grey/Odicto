@@ -1678,6 +1678,12 @@ class TestOdicto(unittest.TestCase):
             live_final_refines_caret("But why the money", "summarize this please")
         )
         self.assertFalse(live_final_refines_caret("hi", "history of Rome"))
+        self.assertTrue(
+            live_final_refines_caret(
+                "Hello, this is working fine. Let's just, sorry, this is not working fine.",
+                "Hello, this is not working fine.",
+            )
+        )
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
