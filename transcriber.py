@@ -429,7 +429,7 @@ class GeminiLiveSession:
                 except Exception:
                     pass
                 try:
-                    await asyncio.wait_for(asyncio.shield(receiver), timeout=0.45)
+                    await asyncio.wait_for(asyncio.shield(receiver), timeout=0.8)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:

@@ -364,6 +364,26 @@ class TestOdicto(unittest.TestCase):
             Config, "GEMINI_API_KEY", ""
         ):
             self.assertEqual(Config.effective_stt_provider(), "whisper")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "whisper"), patch.object(
+            Config, "GEMINI_API_KEY", "AIza-test"
+        ):
+            self.assertEqual(Config.effective_live_stt_provider(), "whisper")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_API_KEY", "AIza-test"
+        ):
+            self.assertEqual(Config.effective_live_stt_provider(), "gemini")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "auto"), patch.object(
+            Config, "GEMINI_API_KEY", "AIza-test"
+        ):
+            self.assertEqual(Config.effective_live_stt_provider(), "gemini")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "auto"), patch.object(
+            Config, "GEMINI_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_live_stt_provider(), "whisper")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_live_stt_provider(), "whisper")
         with patch.object(
             Config, "GEMINI_TRANSCRIBE_VOCABULARY", "Odicto, Kubernetes, Odicto"
         ):
@@ -617,9 +637,9 @@ class TestOdicto(unittest.TestCase):
             input_payload = payload_args[0]
             self.assertEqual(input_payload[0]["role"], "system")
             self.assertIn("PLAIN HUMAN-READABLE TEXT", input_payload[0]["content"][0]["text"])
+            self.assertIn("SELECTED CONTEXT:\n<<<\nSelected sample text\n>>>", input_payload[0]["content"][0]["text"])
             self.assertEqual(input_payload[1]["role"], "user")
-            self.assertIn("Context:\nSelected sample text", input_payload[1]["content"][0]["text"])
-            self.assertIn("Query: translate to french", input_payload[1]["content"][0]["text"])
+            self.assertEqual(input_payload[1]["content"][0]["text"], "translate to french")
 
     @patch("refiner.Config.LLM_PROVIDER", "gemini")
     @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
@@ -770,12 +790,12 @@ class TestOdicto(unittest.TestCase):
 
         kwargs = mock_client.chat.completions.create.call_args[1]
         messages = kwargs["messages"]
+        sys_msgs = [m for m in messages if m["role"] == "system"]
+        self.assertEqual(len(sys_msgs), 1)
+        self.assertIn("SELECTED CONTEXT:\n<<<\nHello world\n>>>", sys_msgs[0]["content"])
         user_msgs = [m for m in messages if m["role"] == "user"]
         self.assertEqual(len(user_msgs), 1)
-        user_content = user_msgs[0]["content"]
-        self.assertIn("Hello world", user_content)
-        self.assertIn("make this better", user_content)
-        self.assertIn("Context:", user_content)
+        self.assertEqual(user_msgs[0]["content"], "make this better")
 
     @patch("refiner.OpenAI")
     def test_text_refiner_without_context(self, mock_openai: MagicMock) -> None:
@@ -1004,6 +1024,139 @@ class TestOdicto(unittest.TestCase):
         mock_wm.assert_called()
         mock_send_copy.assert_called()
 
+    @patch("PySide6.QtGui.QGuiApplication")
+    def test_get_clipboard_image_success(self, mock_qguiapp: MagicMock) -> None:
+        """get_clipboard_image converts a non-null QImage into PNG bytes."""
+        from typer import get_clipboard_image
+        from PySide6.QtGui import QImage, QColor
+
+        img = QImage(20, 20, QImage.Format_ARGB32)
+        img.fill(QColor("blue"))
+        mock_app = MagicMock()
+        mock_cb = MagicMock()
+        mock_cb.image.return_value = img
+        mock_app.clipboard.return_value = mock_cb
+        mock_qguiapp.instance.return_value = mock_app
+
+        png_bytes = get_clipboard_image()
+        self.assertIsNotNone(png_bytes)
+        self.assertIsInstance(png_bytes, bytes)
+        self.assertTrue(len(png_bytes) > 0)
+        self.assertTrue(png_bytes.startswith(b"\x89PNG"))
+
+    @patch("PySide6.QtGui.QGuiApplication")
+    def test_get_clipboard_image_scaled_down(self, mock_qguiapp: MagicMock) -> None:
+        """get_clipboard_image downscales images exceeding max_dim (1600px)."""
+        from typer import get_clipboard_image
+        from PySide6.QtGui import QImage, QColor
+
+        # 2000x1000 image
+        large_img = QImage(2000, 1000, QImage.Format_ARGB32)
+        large_img.fill(QColor("red"))
+        mock_app = MagicMock()
+        mock_cb = MagicMock()
+        mock_cb.image.return_value = large_img
+        mock_app.clipboard.return_value = mock_cb
+        mock_qguiapp.instance.return_value = mock_app
+
+        png_bytes = get_clipboard_image(max_dim=1600)
+        self.assertIsNotNone(png_bytes)
+        self.assertTrue(png_bytes.startswith(b"\x89PNG"))
+
+    @patch("PySide6.QtGui.QGuiApplication")
+    def test_get_clipboard_image_empty(self, mock_qguiapp: MagicMock) -> None:
+        """get_clipboard_image returns None if clipboard image is null or empty."""
+        from typer import get_clipboard_image
+        from PySide6.QtGui import QImage
+
+        null_img = QImage()
+        mock_app = MagicMock()
+        mock_cb = MagicMock()
+        mock_cb.image.return_value = null_img
+        mock_app.clipboard.return_value = mock_cb
+        mock_qguiapp.instance.return_value = mock_app
+
+        png_bytes = get_clipboard_image()
+        self.assertIsNone(png_bytes)
+
+    @patch("typer._get_clipboard_image_locked")
+    @patch("typer._get_selected_text_locked")
+    def test_capture_ai_context_preserves_image_and_text(
+        self, mock_get_sel: MagicMock, mock_get_img: MagicMock
+    ) -> None:
+        """capture_ai_context retrieves both pre-existing image and highlighted text."""
+        from typer import capture_ai_context
+
+        mock_get_img.return_value = b"\x89PNGfakeimage"
+        mock_get_sel.return_value = "selected code snippet"
+
+        text_ctx, img_bytes = capture_ai_context(timeout=0.1)
+        self.assertEqual(text_ctx, "selected code snippet")
+        self.assertEqual(img_bytes, b"\x89PNGfakeimage")
+
+    @patch("refiner.Config.LLM_PROVIDER", "gemini")
+    @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
+    def test_text_refiner_gemini_multimodal(self) -> None:
+        """Gemini client creates multimodal Part when image_bytes is provided."""
+        import refiner
+
+        mock_client = MagicMock()
+        mock_interaction = MagicMock()
+        mock_interaction.output_text = "Multimodal explanation"
+        mock_client.interactions.create.return_value = mock_interaction
+
+        with patch.object(refiner, "google_genai") as mock_genai:
+            mock_genai.Client.return_value = mock_client
+            r = refiner.TextRefiner()
+            fake_png = b"\x89PNGfakebytes"
+            result = r.refine("explain this diagram", image_bytes=fake_png)
+            self.assertEqual(result, "Multimodal explanation")
+
+            call_kwargs = mock_client.interactions.create.call_args[1]
+            input_val = call_kwargs["input"]
+            self.assertIsInstance(input_val, list)
+            self.assertEqual(len(input_val), 2)
+            self.assertEqual(input_val[1], "explain this diagram")
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
+    @patch("refiner.OpenAI")
+    def test_text_refiner_openrouter_multimodal(self, mock_openai: MagicMock) -> None:
+        """OpenRouter client creates OpenAI image_url part when image_bytes is provided."""
+        import refiner
+
+        mock_client = mock_openai.return_value
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "Vision response"
+        mock_client.chat.completions.create.return_value = mock_resp
+
+        r = refiner.TextRefiner()
+        fake_png = b"\x89PNGtestvision"
+        result = r.refine("what is in this screenshot", image_bytes=fake_png)
+        self.assertEqual(result, "Vision response")
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        messages = call_kwargs["messages"]
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        self.assertIsInstance(user_msg["content"], list)
+        self.assertEqual(user_msg["content"][0]["text"], "what is in this screenshot")
+        self.assertTrue(user_msg["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    @patch("refiner.Config.LLM_PROVIDER", "meta")
+    @patch("refiner.Config.META_API_KEY", "sk-meta-test")
+    def test_text_refiner_meta_multimodal_fallback(self) -> None:
+        """Meta provider gracefully falls back to text-only when image_bytes is provided."""
+        import refiner
+
+        mock_client = MagicMock()
+        mock_client.create_responses.return_value = "Meta text fallback reply"
+        with patch.object(refiner, "_MetaClient", return_value=mock_client):
+            r = refiner.TextRefiner()
+            fake_png = b"\x89PNGmetafallback"
+            result = r.refine("describe this", image_bytes=fake_png)
+            self.assertEqual(result, "Meta text fallback reply")
+
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
@@ -1076,7 +1229,7 @@ class TestOdicto(unittest.TestCase):
 
             app.transcriber.transcribe.assert_called_once()
             app.refiner.refine.assert_called_once_with(
-                "raw speech text", context="", keep_history=False
+                "raw speech text", context="", image_bytes=None, keep_history=False
             )
             mock_paste_text.assert_called_once_with("Polished speech text.")
             self.assertEqual(app.state, AppState.IDLE)
@@ -1136,6 +1289,7 @@ class TestOdicto(unittest.TestCase):
             app.refiner.refine.assert_called_once_with(
                 "make this better",
                 context="highlighted draft paragraph",
+                image_bytes=None,
                 keep_history=False,
             )
             mock_paste_text.assert_called_once_with("Improved draft.")
@@ -1192,6 +1346,7 @@ class TestOdicto(unittest.TestCase):
             app.refiner.refine.assert_called_once_with(
                 "summarize this",
                 context="",
+                image_bytes=None,
                 keep_history=False,
             )
             mock_paste_text.assert_called_once_with("Summary text.")
@@ -1404,7 +1559,7 @@ class TestOdicto(unittest.TestCase):
             pipeline_target(*pipeline_args)
             self.assertEqual(app.state, AppState.IDLE)
             app.refiner.refine.assert_called_once_with(
-                "draft", context="", keep_history=True
+                "draft", context="", image_bytes=None, keep_history=True
             )
 
     @patch("socket.socket")
@@ -1497,7 +1652,11 @@ class TestOdicto(unittest.TestCase):
             "main.Config.SHOW_VISUAL_INDICATOR", False
         ), patch("main.Config.LIVE_HOTKEY", "f7"), patch.object(
             Config, "STT_PROVIDER", "whisper"
-        ), patch.object(Config, "effective_stt_provider", return_value="whisper"):
+        ), patch.object(
+            Config, "effective_stt_provider", return_value="whisper"
+        ), patch.object(
+            Config, "effective_live_stt_provider", return_value="whisper"
+        ):
             with patch("threading.Thread"):
                 app = DictationApp()
                 app.initialize_app()
@@ -1519,7 +1678,7 @@ class TestOdicto(unittest.TestCase):
             self.assertFalse(app.live_active)
             mock_thread.assert_called()
             pipeline_call = mock_thread.call_args
-            args = pipeline_call[1].get("args") or pipeline_call[0][1:]
+            args = pipeline_call.kwargs.get("args") if hasattr(pipeline_call, "kwargs") else pipeline_call[1].get("args")
             self.assertEqual(args[1], False)  # use_llm
             self.assertEqual(args[4], "")  # no live transcript when STT is whisper
 
@@ -1665,38 +1824,6 @@ class TestOdicto(unittest.TestCase):
             )
             self.assertEqual(getattr(target, "__name__", ""), "_cleanup_live_session")
 
-    def test_live_final_refines_caret_same_utterance(self) -> None:
-        from main import live_final_refines_caret
-
-        self.assertTrue(
-            live_final_refines_caret(
-                "But why the money", "But why the money is independent?"
-            )
-        )
-        self.assertTrue(live_final_refines_caret("hello", "hello world"))
-        self.assertFalse(
-            live_final_refines_caret("But why the money", "summarize this please")
-        )
-        self.assertFalse(live_final_refines_caret("hi", "history of Rome"))
-        self.assertTrue(
-            live_final_refines_caret(
-                "Hello, this is working fine. Let's just, sorry, this is not working fine.",
-                "Hello, this is not working fine.",
-            )
-        )
-        self.assertTrue(
-            live_final_refines_caret(
-                "I want the super PR. to use Unslop",
-                "I want the super PR to use Unslop skill.",
-            )
-        )
-        self.assertTrue(
-            live_final_refines_caret(
-                "This is great actually. This is really fast. And the fact that I can speak and it is writing",
-                "This is really fast, and the fact that I can speak and it is writing is really great.",
-            )
-        )
-
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
@@ -1707,7 +1834,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.get_selected_text")
     @patch("main.platforms")
     @patch("main.play_beep")
-    def test_live_cleanup_applies_related_final_not_unrelated(
+    def test_live_cleanup_applies_api_final(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
@@ -1731,13 +1858,71 @@ class TestOdicto(unittest.TestCase):
                 app._live_caret_current = "hello"
                 app._live_caret_desired = "hello"
             app._cleanup_live_session(session, app._live_epoch)
-            self.assertEqual(app._live_caret_desired, "hello world")
+            # On-screen text is kept intact without post-stop mutation
+            self.assertEqual(app._live_caret_desired, "hello")
             session.stop.return_value = "totally different sentence"
             with app._live_caret_lock:
                 app._live_caret_current = "But why the money"
                 app._live_caret_desired = "But why the money"
             app._cleanup_live_session(session, app._live_epoch)
             self.assertEqual(app._live_caret_desired, "But why the money")
+            session.stop.return_value = ""
+            with app._live_caret_lock:
+                app._live_caret_current = "keep me"
+                app._live_caret_desired = "keep me"
+            app._cleanup_live_session(session, app._live_epoch)
+            self.assertEqual(app._live_caret_desired, "keep me")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_finish_live_session_branches(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """_finish_live_session handles on-screen text, stream fallback, and empty clips."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+
+            # 1. On-screen text present -> keep on-screen text, success status
+            session = MagicMock()
+            session.stop.return_value = "streamed words"
+            with app._live_caret_lock:
+                app._live_caret_desired = "on-screen text"
+            app._finish_live_session(session, None, app._live_epoch)
+            self.assertEqual(app.last_status, "success")
+
+            # 2. On-screen empty, but session.stop has text -> processes and pastes
+            with app._live_caret_lock:
+                app._live_caret_desired = ""
+                app._live_caret_current = ""
+            with patch.object(app, "process_and_paste") as mock_pap:
+                app._finish_live_session(session, np.zeros(100), app._live_epoch)
+                mock_pap.assert_called_once()
+
+            # 3. Stale epoch -> discarded immediately
+            with patch.object(app, "process_and_paste") as mock_pap:
+                app._finish_live_session(session, None, app._live_epoch + 99)
+                mock_pap.assert_not_called()
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2151,6 +2336,8 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn("Do not transcribe", DEFAULT_SYSTEM_PROMPT)
         self.assertIn("em dash", DEFAULT_SYSTEM_PROMPT)
         self.assertIn("Do not start with a list", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("Never repeat the instruction back", DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("Selected text", DEFAULT_SYSTEM_PROMPT)
         self.assertNotIn("\u2014", DEFAULT_SYSTEM_PROMPT)
         self.assertNotIn("- item", DEFAULT_SYSTEM_PROMPT.replace('"- item"', ""))
 

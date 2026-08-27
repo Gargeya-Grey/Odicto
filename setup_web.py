@@ -60,6 +60,7 @@ EDITABLE_KEYS = {
     "WHISPER_MODEL_SIZE",
     "WHISPER_DEVICE",
     "STT_PROVIDER",
+    "LIVE_STT_PROVIDER",
     "GEMINI_TRANSCRIBE_MODE",
     "GEMINI_TRANSCRIBE_MODEL",
     "GEMINI_TRANSCRIBE_LIVE_MODEL",
@@ -266,6 +267,11 @@ def merge_env(updates: dict) -> None:
     tmp = ENV_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
+    if hasattr(os, "chmod") and sys.platform != "win32":
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
     os.replace(tmp, ENV_PATH)
 
 
@@ -278,6 +284,11 @@ def reset_env() -> None:
     tmp = ENV_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(example)
+    if hasattr(os, "chmod") and sys.platform != "win32":
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
     os.replace(tmp, ENV_PATH)
     delete_live_prompt()
 
@@ -521,6 +532,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     whisper = env_or("WHISPER_MODEL_SIZE")
     whisper_device = env_or("WHISPER_DEVICE")
     stt_provider = env_or("STT_PROVIDER")
+    live_stt_provider = env_or("LIVE_STT_PROVIDER")
     transcribe_mode = env_or("GEMINI_TRANSCRIBE_MODE")
     transcribe_lang = env_or("GEMINI_TRANSCRIBE_LANGUAGE")
     transcribe_vocab = env_or("GEMINI_TRANSCRIBE_VOCABULARY")
@@ -568,6 +580,17 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
   --err-bg: #fdeceb;
   --radius: 16px;
   --radius-sm: 10px;
+
+  --prompt-panel-bg: linear-gradient(165deg, rgba(15, 118, 110, 0.05) 0%, rgba(248, 247, 245, 0.9) 42%, rgba(240, 239, 236, 0.95) 100%);
+  --prompt-panel-border: rgba(15, 118, 110, 0.22);
+  --prompt-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 24px -12px rgba(0, 0, 0, 0.08);
+  --prompt-chip-color: #0f766e;
+  --prompt-chip-bg: #ccfbf1;
+  --prompt-chip-border: rgba(15, 118, 110, 0.25);
+  --prompt-textarea-bg: #ffffff;
+  --prompt-textarea-ink: #1b1b1f;
+  --prompt-textarea-border: #d5d3ce;
+  --prompt-file-border: rgba(0, 0, 0, 0.08);
 }}
 @media (prefers-color-scheme: dark) {{
   :root {{
@@ -582,6 +605,17 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     --ok-bg: #12281a;
     --err: #fca5a5;
     --err-bg: #331a1a;
+
+    --prompt-panel-bg: linear-gradient(165deg, rgba(45, 212, 191, 0.09) 0%, rgba(24, 24, 28, 0.55) 42%, rgba(18, 18, 22, 0.72) 100%);
+    --prompt-panel-border: rgba(45, 212, 191, 0.28);
+    --prompt-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 32px -24px rgba(0, 0, 0, 0.7);
+    --prompt-chip-color: #99f6e4;
+    --prompt-chip-bg: rgba(15, 118, 110, 0.35);
+    --prompt-chip-border: rgba(45, 212, 191, 0.3);
+    --prompt-textarea-bg: rgba(10, 10, 14, 0.55);
+    --prompt-textarea-ink: #ececf0;
+    --prompt-textarea-border: rgba(45, 212, 191, 0.2);
+    --prompt-file-border: rgba(255, 255, 255, 0.08);
   }}
 }}
 * {{ box-sizing: border-box; }}
@@ -643,12 +677,9 @@ body {{
   position: relative;
   padding: 0.9rem 1.05rem 1rem 1.2rem;
   border-radius: 16px;
-  background:
-    linear-gradient(165deg, rgba(45, 212, 191, 0.09) 0%, rgba(24, 24, 28, 0.55) 42%, rgba(18, 18, 22, 0.72) 100%);
-  border: 1px solid rgba(45, 212, 191, 0.28);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 12px 32px -24px rgba(0, 0, 0, 0.7);
+  background: var(--prompt-panel-bg);
+  border: 1px solid var(--prompt-panel-border);
+  box-shadow: var(--prompt-panel-shadow);
 }}
 .prompt-panel::before {{
   content: "";
@@ -658,7 +689,7 @@ body {{
   bottom: 12px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #5eead4, #0f766e);
+  background: linear-gradient(180deg, var(--accent), #0f766e);
 }}
 .prompt-head {{
   display: flex;
@@ -671,6 +702,7 @@ body {{
   margin: 0;
   font-size: 0.92rem;
   font-weight: 480;
+  color: var(--ink);
 }}
 .prompt-chip {{
   flex: 0 0 auto;
@@ -678,9 +710,9 @@ body {{
   font-weight: 650;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #99f6e4;
-  background: rgba(15, 118, 110, 0.35);
-  border: 1px solid rgba(45, 212, 191, 0.3);
+  color: var(--prompt-chip-color);
+  background: var(--prompt-chip-bg);
+  border: 1px solid var(--prompt-chip-border);
   border-radius: 999px;
   padding: 0.18rem 0.5rem;
 }}
@@ -705,6 +737,7 @@ body {{
   flex: 0 0 auto;
   padding: 0.4rem 0.75rem;
   font-size: 0.84rem;
+  background: var(--card);
 }}
 .prompt-toolbar .link {{
   margin: 0;
@@ -715,7 +748,7 @@ body {{
 .prompt-file {{
   margin-top: 0.75rem;
   padding-top: 0.7rem;
-  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  border-top: 1px dashed var(--prompt-file-border);
 }}
 .prompt-file label {{ margin-top: 0; }}
 .panel-note {{ font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0 0; }}
@@ -777,8 +810,9 @@ textarea {{
   min-height: 0;
   max-height: none;
   height: auto;
-  background: rgba(10, 10, 14, 0.55);
-  border-color: rgba(45, 212, 191, 0.2);
+  color: var(--prompt-textarea-ink);
+  background: var(--prompt-textarea-bg);
+  border: 1px solid var(--prompt-textarea-border);
 }}
 .prompt-overlay {{
   position: fixed;
@@ -964,7 +998,8 @@ select:focus, input:focus, textarea:focus {{
   height: 18px;
   left: 3px;
   top: 3px;
-  background: #ececf0;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   border-radius: 50%;
   transition: transform 0.15s ease;
 }}
@@ -1262,6 +1297,12 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
         <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="{html.escape(live_hotkey)}" readonly>
         <button type="button" class="secondary" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Press key</button>
       </div>
+      <label>Live dictation engine (F7)</label>
+      <select name="LIVE_STT_PROVIDER" id="LIVE_STT_PROVIDER">
+        <option value="auto"{" selected" if live_stt_provider == "auto" else ""}>auto — Google Gemini Live if key is saved, else Local Whisper</option>
+        <option value="gemini"{" selected" if live_stt_provider == "gemini" else ""}>gemini — Google Gemini Live (real-time caret streaming)</option>
+        <option value="whisper"{" selected" if live_stt_provider == "whisper" else ""}>whisper — Local Whisper (offline batch recording)</option>
+      </select>
       <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">Hold-to-talk: press and hold the modifier(s), then the main key. Live tap: press once to start, press again to stop and paste (default F7). While Odicto is running, F7 is captured so it does not fire in other apps.</p>
     </details>
 
@@ -1829,7 +1870,26 @@ class _Handler(BaseHTTPRequestHandler):
         body = _page().encode("utf-8")
         self._send(body)
 
+    def _validate_origin(self) -> bool:
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin", "")
+        referer = self.headers.get("Referer", "")
+        allowed_hosts = {"127.0.0.1", "localhost"}
+        host_name = host.split(":")[0].lower()
+        if host_name and host_name not in allowed_hosts:
+            return False
+        for header_val in (origin, referer):
+            if header_val:
+                from urllib.parse import urlparse
+                p = urlparse(header_val)
+                if p.hostname and p.hostname.lower() not in allowed_hosts:
+                    return False
+        return True
+
     def do_POST(self) -> None:
+        if not self._validate_origin():
+            self.send_error(403, "Forbidden: Cross-origin requests not permitted")
+            return
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8")
         form = parse_qs(raw)

@@ -1,11 +1,9 @@
 import os
-import re
 import sys
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from difflib import SequenceMatcher
 from typing import Optional
 
 from app_state import AppState
@@ -15,8 +13,10 @@ from transcriber import GeminiLiveSession, GeminiTranscriber, WhisperTranscriber
 from refiner import TextRefiner
 from typer import (
     apply_live_text,
+    capture_ai_context,
     clipboard_restore,
     clipboard_snapshot,
+    get_clipboard_image,
     get_selected_text,
     paste_text,
 )
@@ -102,49 +102,6 @@ def ensure_can_bind_hotkeys() -> None:
             "Refusing keyboard.hook_key: single-instance lock not held. "
             "Duplicate hooks double every keystroke system-wide."
         )
-
-
-def _norm_live_utterance(text: str) -> str:
-    """Letters and numbers only, so Smart punctuation does not look like a new sentence."""
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
-
-
-def live_final_refines_caret(frozen: str, final: str) -> bool:
-    """True when Live ``final`` is the same utterance as the on-screen caret.
-
-    Interim text is often a prefix. Smart may drop fillers, fix punctuation, or
-    keep a self-corrected ending. A longer string alone is not enough.
-    """
-    frozen = (frozen or "").strip()
-    final = (final or "").strip()
-    if not frozen or not final:
-        return False
-    if frozen == final:
-        return True
-    if final.startswith(frozen):
-        rest = final[len(frozen) :]
-        if len(frozen) >= 8 or rest[:1] in (" ", ",", ".", ";", ":", "?", "!"):
-            return True
-        return False
-    if frozen.startswith(final) and len(final) >= 8:
-        return True
-    if frozen.endswith(final) and len(final) >= 12:
-        return True
-    final_words = final.split()
-    if len(final_words) >= 4:
-        tail = " ".join(final_words[-5:])
-        if tail and frozen.endswith(tail):
-            return True
-    a = _norm_live_utterance(frozen)
-    b = _norm_live_utterance(final)
-    if not a or not b:
-        return False
-    if a == b or b.startswith(a + " ") or a.startswith(b + " "):
-        return True
-    shorter = min(len(a), len(b))
-    if shorter < 12:
-        return False
-    return SequenceMatcher(None, a, b).ratio() >= 0.62
 
 
 class DictationApp:
@@ -271,10 +228,7 @@ class DictationApp:
                 print(f"Warning: live caret insert failed: {e}", flush=True)
                 continue
             with self._live_caret_lock:
-                if (
-                    self._live_epoch == epoch
-                    and self._live_caret_desired == desired
-                ):
+                if self._live_epoch == epoch:
                     self._live_caret_current = desired
 
     def _set_live_caret_desired(self, text: str) -> None:
@@ -487,9 +441,14 @@ class DictationApp:
                 "same AI reply, but keep / continue conversation memory."
             )
         if Config.LIVE_HOTKEY:
+            live_stt_name = (
+                "Gemini 3.5 Transcribe Live"
+                if Config.effective_live_stt_provider() == "gemini"
+                else "Whisper"
+            )
             print(
                 f"  - Tap '{Config.LIVE_HOTKEY}': start live dictation; tap again to "
-                "stop and paste (same smart/verbatim mode)."
+                f"stop and paste ({live_stt_name})."
             )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
@@ -977,7 +936,7 @@ class DictationApp:
                     self._restore_live_clipboard()
                     self._set_state(AppState.IDLE)
                     return
-                if Config.effective_stt_provider() == "gemini":
+                if Config.effective_live_stt_provider() == "gemini":
                     session = GeminiLiveSession(
                         on_interim=self._on_live_interim,
                         on_final=self._on_live_final,
@@ -1038,36 +997,22 @@ class DictationApp:
                 name="dictation-pipeline",
             ).start()
 
-    def _maybe_apply_live_final(self, frozen: str, folded: str) -> None:
-        """Use the Live final when it is clearly the same utterance as the caret."""
-        if not live_final_refines_caret(frozen, folded):
-            if folded and folded != frozen:
-                print(">>> Live final ignored (not the same utterance).", flush=True)
-            return
-        if folded == frozen:
-            return
-        print(">>> Live final completes the caret text.", flush=True)
-        self._live_committed = folded
-        self._set_live_caret_desired(folded)
-
     def _cleanup_live_session(
         self, session: GeminiLiveSession, epoch: int
     ) -> None:
-        """Close the Live socket. Apply final only if it refines the on-screen text."""
+        """Close the Live socket. Keep the already-streamed on-screen text as is."""
         try:
-            live_text = session.stop(timeout=0.7)
+            session.stop(timeout=1.0)
             if epoch != self._live_epoch:
                 return
-            folded = (live_text or "").strip()
             with self._live_caret_lock:
                 frozen = (
                     self._live_caret_desired or self._live_caret_current or ""
                 ).strip()
             print(
-                f'>>> Live stop frozen="{frozen[:80]}" final="{folded[:80]}"',
+                f'>>> Live stop: keeping on-screen text intact ("{frozen[:80]}").',
                 flush=True,
             )
-            self._maybe_apply_live_final(frozen, folded)
             self._flush_live_caret(timeout=0.3)
         except Exception as e:
             print(f"Warning: live session cleanup failed: {e}", flush=True)
@@ -1084,69 +1029,60 @@ class DictationApp:
     def _finish_live_session(
         self, session: GeminiLiveSession, audio, epoch: int
     ) -> None:
-        """Join Live off the hook, then skip STT or fall back to unary/Whisper."""
-        live_text = ""
+        """Join Live off the hook. Keep on-screen text or fall back if empty."""
         try:
-            live_text = session.stop(timeout=0.7)
+            live_text = session.stop(timeout=1.0)
             if epoch != self._live_epoch:
                 return
-            folded = (live_text or "").strip()
             with self._live_caret_lock:
                 frozen = (
                     self._live_caret_desired or self._live_caret_current or ""
                 ).strip()
-            print(
-                f'>>> Live stop frozen="{frozen[:80]}" final="{folded[:80]}"',
-                flush=True,
-            )
             if frozen:
-                self._maybe_apply_live_final(frozen, folded)
                 self._flush_live_caret(timeout=0.3)
                 self._restore_live_clipboard(epoch)
-                print(">>> Live text already at the caret — skip extra STT/paste.")
+                print(f'>>> Live text kept at caret ("{frozen[:80]}").')
                 self.last_status = "success"
                 self._finish_cycle()
                 return
-            if folded:
-                self._live_committed = folded
-                self._set_live_caret_desired(folded)
-                self._flush_live_caret(timeout=0.3)
-                with self._live_caret_lock:
-                    frozen = bool(self._live_caret_current.strip())
+            if live_text and live_text.strip():
+                # If caret was empty but live_text was received, paste it
                 self._restore_live_clipboard(epoch)
-                if frozen:
-                    print(">>> Live text already at the caret — skip extra STT/paste.")
-                    self.last_status = "success"
-                    self._finish_cycle()
-                    return
+                self.process_and_paste(audio, False, "", False, live_text.strip())
+                return
             print(">>> Live stream empty; falling back to clip transcription...")
             self._restore_live_clipboard(epoch)
-            self.process_and_paste(audio, False, "", False, live_text)
+            self.process_and_paste(audio, False, "", False, "")
         except Exception as e:
-            print(f"!!! Live stop failed: {e}", file=sys.stderr)
+            print(f"!!! Live finish failed: {e}", file=sys.stderr)
             self.last_status = "error"
             self._restore_live_clipboard(epoch)
             self._finish_cycle()
         finally:
             self._live_cleanup_done.set()
 
-    @staticmethod
-    def _capture_selection(pre_context: str = "") -> str:
-        """Copy highlighted text off the hook thread. Empty if nothing selected."""
+    def _capture_selection(self, pre_context: str = "") -> tuple[str, Optional[bytes]]:
+        """Capture highlighted text and/or clipboard image off the hook thread."""
         context = (pre_context or "").strip()
         if context:
-            return context[:12000]
+            return context[:12000], None
+        self._live_cleanup_done.wait(timeout=0.25)
         # Brief settle so physical modifier key-ups finish after the chord.
         time.sleep(0.02)
         try:
+            image_bytes = get_clipboard_image()
+        except Exception as e:
+            print(f"Warning: image capture failed: {e}", flush=True)
+            image_bytes = None
+
+        try:
             context = get_selected_text(timeout=0.35)
         except Exception as e:
-            err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
-            print(f"Warning: selection capture failed: {err_msg}", flush=True)
-            return ""
+            print(f"Warning: text selection capture failed: {e}", flush=True)
+            context = ""
         if context and len(context) > 12000:
             context = context[:12000]
-        return context
+        return context, image_bytes
 
     def process_and_paste(
         self,
@@ -1156,7 +1092,7 @@ class DictationApp:
         keep_history: bool = False,
         pre_transcript: str = "",
     ) -> None:
-        """Worker: STT (and selection, in parallel for AI) → optional LLM → paste."""
+        """Worker: STT (and selection/image, in parallel for AI) → optional LLM → paste."""
         self.last_status = None
         sel_pool: Optional[ThreadPoolExecutor] = None
         try:
@@ -1166,8 +1102,9 @@ class DictationApp:
             start_time: float = time.time()
 
             # Raw dictation never probes the clipboard. AI mode overlaps the
-            # selection copy with Whisper so clipboard wait does not delay STT.
+            # selection/image probe with Whisper so clipboard wait does not delay STT.
             context = (pre_context or "").strip()
+            image_bytes: Optional[bytes] = None
             sel_future = None
             if use_llm and self.refiner is not None and not context:
                 sel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odicto-sel")
@@ -1192,24 +1129,31 @@ class DictationApp:
             if sel_future is not None:
                 sel_wait_started = time.time()
                 try:
-                    # Give selection probe up to 0.75s to resolve.
-                    # When text was selected, it completes in <0.15s (returns instantly).
-                    # When nothing was selected, it completes in ~0.35s without timing out.
-                    context = sel_future.result(timeout=0.75) or ""
+                    res = sel_future.result(timeout=1.5)
+                    if isinstance(res, tuple):
+                        context, image_bytes = res
+                    elif isinstance(res, str):
+                        context, image_bytes = res, None
+                    else:
+                        context, image_bytes = "", None
                 except Exception as e:
                     err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                     print(f"Warning: selection capture failed: {err_msg}", flush=True)
-                    context = ""
+                    context, image_bytes = "", None
                 sel_elapsed = time.time() - sel_wait_started
-                if context:
+                if context or image_bytes:
+                    ctx_parts = []
+                    if context:
+                        ctx_parts.append(f'text ({len(context)} chars) "{context[:80]}{"..." if len(context) > 80 else ""}"')
+                    if image_bytes:
+                        ctx_parts.append(f'image ({len(image_bytes)} bytes PNG)')
                     print(
-                        f'Context captured in {sel_elapsed:.2f}s ({len(context)} chars) — '
-                        f'"{context[:80]}{"..." if len(context) > 80 else ""}"',
+                        f"Context captured in {sel_elapsed:.2f}s — {' + '.join(ctx_parts)}",
                         flush=True,
                     )
                 else:
                     print(
-                        f"Context: (none after {sel_elapsed:.2f}s — no text was selected, or copy failed)",
+                        f"Context: (none after {sel_elapsed:.2f}s — no text/image selected)",
                         flush=True,
                     )
 
@@ -1220,7 +1164,10 @@ class DictationApp:
 
             if use_llm and self.refiner is not None:
                 refined_text = self.refiner.refine(
-                    raw_text, context=context, keep_history=keep_history
+                    raw_text,
+                    context=context,
+                    image_bytes=image_bytes,
+                    keep_history=keep_history,
                 )
                 print(f'Refined Text (AI):   "{refined_text}"')
             else:

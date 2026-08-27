@@ -14,12 +14,15 @@ if exist dictation.pid (
   REM A stale pid file can point at an unrelated process after Windows reuses the PID.
   REM Do not name the PowerShell variable $pid - that is reserved (current process).
   REM taskkill /T kills venv launcher stub + real interpreter child together.
+  set "TARGET_PID=!PID!"
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$targetPid = [int]'!PID!'; " ^
+    "$rawPid = $env:TARGET_PID; " ^
+    "if (-not ($rawPid -match '^\d+$')) { exit 0 }; " ^
+    "$targetPid = [int]$rawPid; " ^
     "$root = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\'); " ^
     "$p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue; " ^
-    "if ($null -eq $p) { Write-Output '  (PID !PID! already gone)'; exit 0 }; " ^
-    "if ($p.ProcessName -ne 'python' -and $p.ProcessName -ne 'pythonw') { Write-Output '  (PID !PID! is not python/pythonw - left alone)'; exit 0 }; " ^
+    "if ($null -eq $p) { Write-Output ('  (PID ' + $targetPid + ' already gone)'); exit 0 }; " ^
+    "if ($p.ProcessName -ne 'python' -and $p.ProcessName -ne 'pythonw') { Write-Output ('  (PID ' + $targetPid + ' is not python/pythonw - left alone)'); exit 0 }; " ^
     "$okPath = $false; " ^
     "try { if ($p.Path -and $p.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $okPath = $true } } catch {}; " ^
     "if (-not $okPath) { " ^
@@ -28,8 +31,8 @@ if exist dictation.pid (
     "}; " ^
     "if ($okPath) { " ^
     "  Start-Process -FilePath taskkill.exe -ArgumentList @('/F','/T','/PID',\"$targetPid\") -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue; " ^
-    "  Write-Output '  Stopped PID !PID! (process tree)' " ^
-    "} else { Write-Output '  (PID !PID! is not an Odicto process - left alone)' }"
+    "  Write-Output ('  Stopped PID ' + $targetPid + ' (process tree)') " ^
+    "} else { Write-Output ('  (PID ' + $targetPid + ' is not an Odicto process - left alone)') }"
   del dictation.pid >nul 2>&1
 )
 

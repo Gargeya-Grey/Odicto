@@ -1,7 +1,8 @@
+import base64
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Optional, Union
 
 from config import OPENROUTER_FALLBACK_MODEL, ENV_DEFAULTS, Config
 
@@ -125,10 +126,14 @@ class _MetaClient:
         # Keep a generous floor and default effort=low for fastest + robust dictation.
         # Cascade: META_REASONING_EFFORT → LLM_REASONING_EFFORT → "low" (clamped).
         effort = Config.meta_reasoning_effort()
-        # API constraint: Meta requires max_output_tokens >= 16. The 64 floor
-        # lives in Config.effective_max_output_tokens; here we just clamp the
-        # ping probe as well (a cheap probe is fine at 16 tokens).
-        effective_max = max(16, int(max_tokens) if max_tokens else 16)
+        # Meta reasoning models (like muse-spark-1.2-contributor) deduct internal
+        # reasoning tokens from max_output_tokens. If the caller requested max_tokens
+        # (e.g. 512), ensure a floor of 2048 during normal refinement so reasoning
+        # tokens do not prematurely truncate the response into status: incomplete.
+        if max_tokens > 16:
+            effective_max = max(2048, int(max_tokens))
+        else:
+            effective_max = max(16, int(max_tokens) if max_tokens else 16)
         payload: dict = {
             "model": self.model,
             "input": input_payload,
@@ -188,6 +193,23 @@ class _MetaClient:
             raise e
 
 
+def build_system_prompt_with_context(base_prompt: str, context: Optional[str] = None) -> str:
+    """Combines base system prompt with selected context block (if present)."""
+    base = (base_prompt or "").strip()
+    ctx = (context or "").strip()
+    if not ctx:
+        return base
+    return (
+        f"{base}\n\n"
+        "SELECTED CONTEXT:\n"
+        "<<<\n"
+        f"{ctx}\n"
+        ">>>\n\n"
+        "The block above is the selected document/text context. The user's input is the instruction to execute on it. "
+        "Produce only the final result to replace the selection or insert at the caret."
+    )
+
+
 class _GeminiClient:
     """Efficient Gemini API client built on the official google-genai SDK.
 
@@ -221,14 +243,23 @@ class _GeminiClient:
         return cfg
 
     def create_interaction(
-        self, input_text: str, max_tokens: int, keep_history: bool = False
+        self,
+        input_content: Union[str, list],
+        max_tokens: int,
+        keep_history: bool = False,
+        system_instruction: Optional[str] = None,
     ) -> Optional[str]:
         if self.client is None:
             raise RuntimeError("google-genai package not installed — run: pip install google-genai")
+        sys_inst = (
+            system_instruction
+            if system_instruction is not None
+            else Config.effective_system_prompt()
+        )
         kwargs: dict = {
             "model": self.model,
-            "input": input_text,
-            "system_instruction": Config.effective_system_prompt(),
+            "input": input_content,
+            "system_instruction": sys_inst,
             "generation_config": self._generation_config(max_tokens),
         }
         if keep_history and self._last_interaction_id:
@@ -335,9 +366,12 @@ class TextRefiner:
         else:  # "none"
             self.client = None
 
-    def _meta_input_from_history(self, history_snapshot: list[dict[str, str]]) -> list[dict]:
+    def _meta_input_from_history(
+        self, history_snapshot: list[dict[str, str]], system_prompt: str = ""
+    ) -> list[dict]:
+        sys_text = system_prompt or Config.effective_system_prompt()
         payload: list[dict] = [
-            {"role": "system", "content": [{"type": "input_text", "text": Config.effective_system_prompt()}]}
+            {"role": "system", "content": [{"type": "input_text", "text": sys_text}]}
         ]
         for msg in history_snapshot:
             role = msg.get("role", "user")
@@ -400,11 +434,19 @@ class TextRefiner:
             self.client.reset_context()
         print(">>> AI context cleared (fresh conversation).", flush=True)
 
-    def refine(self, text: str, context: str = "", keep_history: bool = False) -> str:
+    def refine(
+        self,
+        text: str,
+        context: str = "",
+        image_bytes: Optional[bytes] = None,
+        keep_history: bool = False,
+    ) -> str:
         """Queries the LLM for a normal reply to the spoken query.
 
         Uses Config.LLM_MAX_TOKENS as the only output limit.
-        Optional ``context`` is selected text from the focused app (if any).
+        Optional ``context`` is selected text from the focused app (if any), injected
+        into the system prompt so the LLM treats it as document background context.
+        Optional ``image_bytes`` is clipboard image/screenshot data for multimodal models.
         ``keep_history`` (F6 chord) sends and updates multi-turn memory.
         Default is a fresh one-shot that does not read or write conversation state.
 
@@ -439,12 +481,14 @@ class TextRefiner:
             )
 
             if context:
-                user_message = f"Context:\n{context}\n\nQuery: {text}"
                 print(
                     f'Context: "{context[:80]}{"..." if len(context) > 80 else ""}"'
                 )
-            else:
-                user_message = text
+
+            effective_sys_prompt = build_system_prompt_with_context(
+                Config.effective_system_prompt(), context
+            )
+            user_message = text
 
             with self._history_lock:
                 if keep_history:
@@ -460,7 +504,11 @@ class TextRefiner:
                     ]
 
             if self.provider == "meta":
-                input_payload = self._meta_input_from_history(history_snapshot)
+                if image_bytes:
+                    print("Notice: Meta provider does not support image context; text only.", flush=True)
+                input_payload = self._meta_input_from_history(
+                    history_snapshot, system_prompt=effective_sys_prompt
+                )
                 llm_started = time.time()
                 refined_text: Optional[str] = self.client.create_responses(
                     input_payload, max_tokens=max_tokens, timeout=(5.0, 30.0)
@@ -488,8 +536,19 @@ class TextRefiner:
                 # captures send the current message with no previous_interaction_id.
                 assert isinstance(self.client, _GeminiClient)
                 llm_started = time.time()
+                gemini_input: Union[str, list] = user_message
+                if image_bytes:
+                    try:
+                        from google.genai import types as genai_types
+                        part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+                        gemini_input = [part, user_message]
+                    except Exception:
+                        gemini_input = user_message
                 refined_text = self.client.create_interaction(
-                    user_message, max_tokens=max_tokens, keep_history=keep_history
+                    gemini_input,
+                    max_tokens=max_tokens,
+                    keep_history=keep_history,
+                    system_instruction=effective_sys_prompt,
                 )
                 print(f"Gemini responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
@@ -509,8 +568,21 @@ class TextRefiner:
                             self.conversation_history.pop()
                 return text
 
-            messages = [{"role": "system", "content": Config.effective_system_prompt()}]
-            messages.extend(history_snapshot)
+            messages = [{"role": "system", "content": effective_sys_prompt}]
+            last_idx = len(history_snapshot) - 1
+            for idx, msg in enumerate(history_snapshot):
+                if idx == last_idx and msg.get("role") == "user" and image_bytes:
+                    b64_img = base64.b64encode(image_bytes).decode("ascii")
+                    user_content = [
+                        {"type": "text", "text": user_message},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64_img}"},
+                        },
+                    ]
+                    messages.append({"role": "user", "content": user_content})
+                else:
+                    messages.append(msg)
 
             kwargs = {
                 "model": self.model,

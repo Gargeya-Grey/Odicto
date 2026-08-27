@@ -42,6 +42,7 @@ ENV_DEFAULTS: dict[str, str] = {
     "WHISPER_VAD": "false",
     # Speech-to-text backend (independent of LLM_PROVIDER)
     "STT_PROVIDER": "whisper",
+    "LIVE_STT_PROVIDER": "auto",
     "GEMINI_TRANSCRIBE_MODEL": "gemini-3.5-transcribe",
     "GEMINI_TRANSCRIBE_LIVE_MODEL": "gemini-3.5-transcribe-live",
     "GEMINI_TRANSCRIBE_MODE": "smart",
@@ -195,13 +196,15 @@ DEFAULT_SYSTEM_PROMPT = (
     "utilize, robust, seamless, groundbreaking.\n"
     "\n"
     "CONTEXT\n"
-    "The user message may include a Context section with text they selected. That "
-    "selection is the subject.\n"
-    "The Query is what they want done with it.\n"
-    "Base the reply on the selection. Do not quote the whole selection back unless "
-    "asked. Produce the result.\n"
-    "If there is no Context section, the spoken query is the whole request. Answer "
-    "it as an assistant."
+    "The system prompt or context block may include Selected text between <<< and "
+    ">>>. That block is the document/context to act upon. The user's input is the "
+    "instruction to execute.\n"
+    "Do the instruction to the selected text. Produce only the final result that "
+    "belongs in the user's field.\n"
+    "Never repeat the instruction back. Never ignore the selected text when it is "
+    "present.\n"
+    "If there is no Selected text block, the spoken instruction is the whole "
+    "request. Answer it as an assistant."
 )
 
 # Live private copy vs shipped default. Presence of prompt.txt is the source of
@@ -364,6 +367,14 @@ class Config:
         else "auto"
         if _raw_stt == "auto"
         else "whisper"
+    )
+    _raw_live_stt = os.getenv("LIVE_STT_PROVIDER", _def("LIVE_STT_PROVIDER")).strip().lower().replace("-", "_")
+    LIVE_STT_PROVIDER: Literal["whisper", "gemini", "auto"] = (  # type: ignore
+        "gemini"
+        if _raw_live_stt in ("gemini", "gemini_api", "google", "google_api")
+        else "whisper"
+        if _raw_live_stt == "whisper"
+        else "auto"
     )
     GEMINI_TRANSCRIBE_MODEL: str = _sanitize_model_id(
         _default_env("GEMINI_TRANSCRIBE_MODEL")
@@ -601,6 +612,18 @@ class Config:
         """Resolved STT backend: gemini only when a Gemini key is present."""
         if cls.STT_PROVIDER == "whisper":
             return "whisper"
+        if cls.GEMINI_API_KEY.strip():
+            return "gemini"
+        return "whisper"
+
+    @classmethod
+    def effective_live_stt_provider(cls) -> Literal["whisper", "gemini"]:
+        """Resolved STT backend for F7 Live Tap-to-Talk."""
+        if cls.LIVE_STT_PROVIDER == "whisper":
+            return "whisper"
+        if cls.LIVE_STT_PROVIDER == "gemini":
+            return "gemini" if cls.GEMINI_API_KEY.strip() else "whisper"
+        # auto:
         if cls.GEMINI_API_KEY.strip():
             return "gemini"
         return "whisper"
@@ -861,6 +884,13 @@ class Config:
             cls.effective_stt_provider(),
             _source_of("STT_PROVIDER"),
         )
+        add("Speech to text", "Live STT provider", cls.LIVE_STT_PROVIDER, _source_of("LIVE_STT_PROVIDER"))
+        add(
+            "Speech to text",
+            "Resolved live STT",
+            cls.effective_live_stt_provider(),
+            _source_of("LIVE_STT_PROVIDER"),
+        )
         add(
             "Speech to text",
             "Transcribe mode",
@@ -966,6 +996,10 @@ class Config:
         if cls.STT_PROVIDER not in ("whisper", "gemini", "auto"):
             raise ValueError(
                 f"STT_PROVIDER must be whisper|gemini|auto, got {cls.STT_PROVIDER!r}"
+            )
+        if cls.LIVE_STT_PROVIDER not in ("whisper", "gemini", "auto"):
+            raise ValueError(
+                f"LIVE_STT_PROVIDER must be whisper|gemini|auto, got {cls.LIVE_STT_PROVIDER!r}"
             )
         if cls.GEMINI_TRANSCRIBE_MODE not in ("smart", "verbatim"):
             raise ValueError(

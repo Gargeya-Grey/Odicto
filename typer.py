@@ -20,7 +20,7 @@ from platforms import (
 )
 
 # Live paste, F7 clipboard restore, and AI selection copy must not interleave.
-_CLIPBOARD_LOCK = threading.Lock()
+_CLIPBOARD_LOCK = threading.RLock()
 
 _MODIFIER_POLL_KEYS = (
     "ctrl",
@@ -278,3 +278,55 @@ def apply_live_text(current: str, desired: str) -> str:
         if not typed:
             paste_text(add, restore_clipboard=False)
     return desired
+
+
+def get_clipboard_image(max_dim: int = 1600) -> Optional[bytes]:
+    """Retrieve image bytes (PNG format) from the system clipboard under lock."""
+    with _CLIPBOARD_LOCK:
+        return _get_clipboard_image_locked(max_dim=max_dim)
+
+
+def _get_clipboard_image_locked(max_dim: int = 1600) -> Optional[bytes]:
+    """Inspects clipboard for image data and returns PNG bytes."""
+    try:
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+        from PySide6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is not None:
+            cb = app.clipboard()
+            if cb is not None:
+                img = cb.image()
+                if not img.isNull() and img.width() > 0 and img.height() > 0:
+                    if max_dim and (img.width() > max_dim or img.height() > max_dim):
+                        img = img.scaled(
+                            max_dim,
+                            max_dim,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                    ba = QByteArray()
+                    buf = QBuffer(ba)
+                    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                    if img.save(buf, "PNG"):
+                        buf.close()
+                        data = bytes(ba.data())
+                        if data and len(data) > 0:
+                            return data
+                    buf.close()
+    except Exception as e:
+        print(f"Notice: Qt clipboard image probe failed: {e}", flush=True)
+    return None
+
+
+def capture_ai_context(timeout: float = 0.35) -> tuple[str, Optional[bytes]]:
+    """Capture selected text and/or clipboard image without destroying clipboard bitmap.
+
+    1. Snapshot pre-existing clipboard image (e.g. screenshot via Win+Shift+S / Cmd+Shift+4).
+    2. Probe for selected text in the active application.
+    3. Return (selected_text, image_bytes).
+    """
+    with _CLIPBOARD_LOCK:
+        image_bytes = _get_clipboard_image_locked(max_dim=1600)
+        selected_text = get_selected_text(timeout=timeout)
+        return selected_text, image_bytes
