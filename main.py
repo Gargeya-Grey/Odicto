@@ -102,6 +102,33 @@ def ensure_can_bind_hotkeys() -> None:
         )
 
 
+def live_final_refines_caret(frozen: str, final: str) -> bool:
+    """True when Live ``final`` is the same utterance as the on-screen caret.
+
+    Interim text is often a prefix. Smart mode may tidy the tail. A longer
+    string alone is not enough; leftover text from another session is not.
+    """
+    frozen = (frozen or "").strip()
+    final = (final or "").strip()
+    if not frozen or not final:
+        return False
+    if frozen == final:
+        return True
+    if final.startswith(frozen):
+        rest = final[len(frozen) :]
+        if len(frozen) >= 8 or rest[:1] in (" ", ",", ".", ";", ":", "?", "!"):
+            return True
+        return False
+    if frozen.startswith(final) and len(final) >= 8:
+        return True
+    i = 0
+    limit = min(len(frozen), len(final))
+    while i < limit and frozen[i] == final[i]:
+        i += 1
+    shorter = min(len(frozen), len(final))
+    return i >= 16 and i >= 0.7 * shorter
+
+
 class DictationApp:
     def __init__(self) -> None:
         """Initializes the background dictation app, setting up state and loading model instances."""
@@ -993,10 +1020,22 @@ class DictationApp:
                 name="dictation-pipeline",
             ).start()
 
+    def _maybe_apply_live_final(self, frozen: str, folded: str) -> None:
+        """Use the Live final when it is clearly the same utterance as the caret."""
+        if not live_final_refines_caret(frozen, folded):
+            if folded and folded != frozen:
+                print(">>> Live final ignored (not the same utterance).", flush=True)
+            return
+        if folded == frozen:
+            return
+        print(">>> Live final completes the caret text.", flush=True)
+        self._live_committed = folded
+        self._set_live_caret_desired(folded)
+
     def _cleanup_live_session(
         self, session: GeminiLiveSession, epoch: int
     ) -> None:
-        """Close the Live socket. Do not rewrite caret text that is already shown."""
+        """Close the Live socket. Apply final only if it refines the on-screen text."""
         try:
             live_text = session.stop(timeout=0.7)
             if epoch != self._live_epoch:
@@ -1010,7 +1049,7 @@ class DictationApp:
                 f'>>> Live stop frozen="{frozen[:80]}" final="{folded[:80]}"',
                 flush=True,
             )
-            # Stop means freeze: ignore a later/longer Live final.
+            self._maybe_apply_live_final(frozen, folded)
             self._flush_live_caret(timeout=0.3)
         except Exception as e:
             print(f"Warning: live session cleanup failed: {e}", flush=True)
@@ -1043,6 +1082,7 @@ class DictationApp:
                 flush=True,
             )
             if frozen:
+                self._maybe_apply_live_final(frozen, folded)
                 self._flush_live_caret(timeout=0.3)
                 self._restore_live_clipboard(epoch)
                 print(">>> Live text already at the caret — skip extra STT/paste.")

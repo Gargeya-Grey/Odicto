@@ -1665,6 +1665,20 @@ class TestOdicto(unittest.TestCase):
             )
             self.assertEqual(getattr(target, "__name__", ""), "_cleanup_live_session")
 
+    def test_live_final_refines_caret_same_utterance(self) -> None:
+        from main import live_final_refines_caret
+
+        self.assertTrue(
+            live_final_refines_caret(
+                "But why the money", "But why the money is independent?"
+            )
+        )
+        self.assertTrue(live_final_refines_caret("hello", "hello world"))
+        self.assertFalse(
+            live_final_refines_caret("But why the money", "summarize this please")
+        )
+        self.assertFalse(live_final_refines_caret("hi", "history of Rome"))
+
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
@@ -1675,7 +1689,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.get_selected_text")
     @patch("main.platforms")
     @patch("main.play_beep")
-    def test_live_cleanup_freezes_caret_ignores_longer_final(
+    def test_live_cleanup_applies_related_final_not_unrelated(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
@@ -1699,9 +1713,13 @@ class TestOdicto(unittest.TestCase):
                 app._live_caret_current = "hello"
                 app._live_caret_desired = "hello"
             app._cleanup_live_session(session, app._live_epoch)
-            self.assertEqual(app._live_caret_desired, "hello")
-            self.assertEqual(app._live_caret_current, "hello")
-            session.stop.assert_called_once()
+            self.assertEqual(app._live_caret_desired, "hello world")
+            session.stop.return_value = "totally different sentence"
+            with app._live_caret_lock:
+                app._live_caret_current = "But why the money"
+                app._live_caret_desired = "But why the money"
+            app._cleanup_live_session(session, app._live_epoch)
+            self.assertEqual(app._live_caret_desired, "But why the money")
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
