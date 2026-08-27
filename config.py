@@ -568,7 +568,11 @@ class Config:
 
     @classmethod
     def gemini_transcribe_mode(cls) -> Literal["smart", "verbatim"]:
-        """Smart (cleaned dictation) or verbatim (literal). Applies to every STT path."""
+        """Smart (cleaned dictation) or verbatim (literal).
+
+        Applies to the dictation chord and F7 live tap. The AI chord uses local
+        Whisper instead (the LLM is the cleanup step).
+        """
         mode = (cls.GEMINI_TRANSCRIBE_MODE or "smart").strip().lower()
         return "verbatim" if mode == "verbatim" else "smart"
 

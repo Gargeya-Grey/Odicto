@@ -117,18 +117,16 @@ class AudioRecorder:
     def get_waveform(self, n: int) -> list:
         """Cheap per-bar envelope from the latest captured samples.
 
-        Splits the most recent 1–2 callback chunks into ``n`` RMS buckets so
+        Splits the most recent callback chunk into ``n`` RMS buckets so
         the HUD tracks the actual voice instead of a synthetic sine. O(chunk).
         """
         n = max(1, int(n))
         with self._lock:
             if not self.recording or not self.audio_data:
                 return [0.0] * n
-            parts = self.audio_data[-2:] if len(self.audio_data) >= 2 else self.audio_data[-1:]
-            chunks = [np.asarray(p, dtype=np.float32).reshape(-1) for p in parts]
-        if not chunks:
+            arr = np.asarray(self.audio_data[-1], dtype=np.float32).reshape(-1)
+        if arr.size == 0:
             return [0.0] * n
-        arr = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
         if arr.size < n:
             # Repeat-pad so quiet/short callbacks still fill the bars.
             reps = int(np.ceil(n / max(1, arr.size)))

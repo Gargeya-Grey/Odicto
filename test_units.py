@@ -32,6 +32,10 @@ class TestOdicto(unittest.TestCase):
         # Reset state/config to defaults where necessary
         Config.LLM_PROVIDER = "ollama"
         Config.LLM_MODEL = "qwen2.5:1.5b-instruct"
+        # Do not inherit the operator's STT_PROVIDER (often gemini) — tests mock
+        # WhisperTranscriber and would otherwise construct a real Gemini client.
+        self._real_stt = Config.STT_PROVIDER
+        Config.STT_PROVIDER = "whisper"
         # CRITICAL: never run the real single-instance lock or orphan killer in tests.
         # initialize_app() acquires it when not held — that would taskkill a live
         # Odicto and take the Global mutex for the duration of the test run.
@@ -39,6 +43,7 @@ class TestOdicto(unittest.TestCase):
         main_mod._INSTANCE_LOCK_HELD = True  # bypass lock acquisition + orphan kill in initialize_app
 
     def tearDown(self) -> None:
+        Config.STT_PROVIDER = self._real_stt
         main_mod._INSTANCE_LOCK_HELD = self._real_lock_held
 
     @skipUnless(sys.platform == "win32", "keyboard scan codes are Windows-specific")
@@ -391,6 +396,26 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(mode["type"], "smart")
         self.assertEqual(kwargs["input"][0]["mime_type"], "audio/wav")
         self.assertTrue(kwargs["input"][0]["data"])
+
+    @patch("transcriber.google_genai")
+    def test_gemini_transcriber_mode_override_verbatim(
+        self, mock_genai: MagicMock
+    ) -> None:
+        client = MagicMock()
+        mock_genai.Client.return_value = client
+        interaction = MagicMock()
+        interaction.output_text = "um hello"
+        client.interactions.create.return_value = interaction
+        with patch.object(Config, "GEMINI_API_KEY", "AIza-test"), patch.object(
+            Config, "GEMINI_TRANSCRIBE_MODE", "smart"
+        ):
+            transcriber = GeminiTranscriber()
+            audio = np.zeros(1600, dtype=np.float32)
+            self.assertEqual(transcriber.transcribe(audio, mode="verbatim"), "um hello")
+        mode = client.interactions.create.call_args.kwargs["generation_config"][
+            "transcription_config"
+        ]["mode"]
+        self.assertEqual(mode["type"], "verbatim")
 
     @patch("transcriber.WhisperTranscriber")
     @patch("transcriber.google_genai")
@@ -1588,20 +1613,186 @@ class TestOdicto(unittest.TestCase):
                     target = call[0][0]
                 self.assertNotEqual(getattr(target, "__name__", ""), "process_and_paste")
 
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_stop_does_not_join_session_on_hook_thread(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "whisper"), patch.object(
+            Config, "effective_stt_provider", return_value="whisper"
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+            session = MagicMock()
+            app._live_session = session
+            app.live_active = True
+            app.state = AppState.RECORDING
+            app._record_started_at = 0.0
+            with app._live_caret_lock:
+                app._live_caret_current = "hello from live"
+                app._live_caret_desired = "hello from live"
+            with patch("threading.Thread") as mock_thread:
+                app.on_live_toggle()
+            session.stop.assert_not_called()
+            self.assertEqual(app.state, AppState.IDLE)
+            self.assertEqual(app.last_status, "success")
+            target = (
+                mock_thread.call_args[1].get("target")
+                if mock_thread.call_args[1]
+                else mock_thread.call_args[0][0]
+            )
+            self.assertEqual(getattr(target, "__name__", ""), "_cleanup_live_session")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.GeminiTranscriber")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_ai_chord_uses_local_whisper_not_gemini_smart(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_whisper: MagicMock,
+        mock_gemini: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "gemini"), patch.object(
+            Config, "effective_stt_provider", return_value="gemini"
+        ), patch.object(Config, "LLM_PROVIDER", "gemini"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            mock_get_selected_text.return_value = ""
+            mock_whisper.return_value.transcribe.return_value = "ask the model"
+            app.refiner.refine.return_value = "A reply."
+            app.process_and_paste(
+                np.zeros(100, dtype=np.float32), True, "", False, ""
+            )
+            mock_whisper.return_value.transcribe.assert_called()
+            mock_gemini.return_value.transcribe.assert_not_called()
+            mock_paste_text.assert_called_once_with("A reply.")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.GeminiTranscriber")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_ai_chord_falls_back_to_gemini_verbatim(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_whisper: MagicMock,
+        mock_gemini: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "gemini"), patch.object(
+            Config, "effective_stt_provider", return_value="gemini"
+        ), patch.object(Config, "LLM_PROVIDER", "gemini"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            mock_get_selected_text.return_value = ""
+            mock_whisper.return_value.transcribe.side_effect = RuntimeError("no model")
+            mock_gemini.return_value.transcribe.return_value = "verbatim words"
+            app.refiner.refine.return_value = "A reply."
+            app.process_and_paste(
+                np.zeros(100, dtype=np.float32), True, "", False, ""
+            )
+            mock_gemini.return_value.transcribe.assert_called()
+            self.assertEqual(
+                mock_gemini.return_value.transcribe.call_args.kwargs.get("mode"),
+                "verbatim",
+            )
+            mock_paste_text.assert_called_once_with("A reply.")
+
     def test_apply_live_text_edits_tail_only(self) -> None:
         from typer import apply_live_text
 
         with patch("typer.send_backspaces") as mock_bs, patch(
             "typer.paste_text"
-        ) as mock_paste, patch("typer.force_release_modifiers"):
+        ) as mock_paste, patch("typer.force_release_modifiers"), patch(
+            "typer.send_text", return_value=True
+        ) as mock_type:
             out = apply_live_text("hello wo", "hello world")
             self.assertEqual(out, "hello world")
             mock_bs.assert_not_called()
-            mock_paste.assert_called_once_with("rld")
-            mock_paste.reset_mock()
+            mock_type.assert_called_once_with("rld")
+            mock_paste.assert_not_called()
+            mock_type.reset_mock()
             apply_live_text("hello world", "hello")
             mock_bs.assert_called_once_with(6)
             mock_paste.assert_not_called()
+            mock_type.assert_not_called()
+
+    def test_apply_live_text_falls_back_to_paste(self) -> None:
+        from typer import apply_live_text
+
+        with patch("typer.send_backspaces"), patch(
+            "typer.paste_text"
+        ) as mock_paste, patch("typer.force_release_modifiers"), patch(
+            "typer.send_text", return_value=False
+        ):
+            apply_live_text("", "hello")
+            mock_paste.assert_called_once_with("hello", restore_clipboard=False)
+
+    def test_paste_text_skips_restore_when_asked(self) -> None:
+        with patch("typer._clipboard_read", return_value="user clip"), patch(
+            "typer._clipboard_write"
+        ) as mock_write, patch("typer.send_paste"), patch(
+            "typer.force_release_modifiers"
+        ), patch("typer.time.sleep"):
+            paste_text("live", restore_clipboard=False)
+            written = [c[0][0] for c in mock_write.call_args_list]
+            self.assertIn("live", written)
+            self.assertNotIn("user clip", written)
 
     def test_indicator_reset_label(self) -> None:
         """F5 reset shows a distinct HUD label."""

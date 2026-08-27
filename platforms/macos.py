@@ -289,6 +289,20 @@ def send_backspaces(n: int) -> None:
         controller.tap(Key.backspace)
 
 
+def send_text(text: str) -> bool:
+    """Type ``text`` at the caret without touching the clipboard."""
+    if not text:
+        return True
+    if len(text) > 256:
+        return False
+    try:
+        pynput = _require_pynput()
+        pynput.Controller().type(text)
+        return True
+    except Exception:
+        return False
+
+
 def apply_window_exstyles(widget) -> None:
     # Qt window flags already handle topmost/click-through on macOS.
     return None

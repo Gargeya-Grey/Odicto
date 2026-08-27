@@ -147,6 +147,11 @@ class DictationApp:
         self._live_caret_lock = threading.Lock()
         self._live_caret_event = threading.Event()
         self._live_caret_thread: Optional[threading.Thread] = None
+        self._live_saved_clipboard: str = ""
+        self._live_restore_clipboard: bool = False
+        # Lazy Whisper used by the AI chord when dictation STT is Gemini.
+        self._whisper: Optional[WhisperTranscriber] = None
+        self._whisper_lock = threading.Lock()
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -184,11 +189,6 @@ class DictationApp:
             indicator.notify_state_changed()
         except Exception:
             pass
-
-    def _set_live_preview(self, text: str) -> None:
-        """HUD live-caption callback (may run off the Qt thread)."""
-        self.live_preview = (text or "").strip()
-        self._notify_ui()
 
     def _ensure_live_caret_worker(self) -> None:
         t = self._live_caret_thread
@@ -238,9 +238,7 @@ class DictationApp:
         draft = (text or "").strip()
         committed = self._live_committed
         desired = f"{committed} {draft}".strip() if committed else draft
-        self.live_preview = desired
         self._set_live_caret_desired(desired)
-        self._notify_ui()
 
     def _on_live_final(self, text: str) -> None:
         piece = (text or "").strip()
@@ -250,9 +248,69 @@ class DictationApp:
             self._live_committed = f"{self._live_committed} {piece}".strip()
         else:
             self._live_committed = piece
-        self.live_preview = self._live_committed
         self._set_live_caret_desired(self._live_committed)
-        self._notify_ui()
+
+    def _capture_live_clipboard(self) -> None:
+        try:
+            saved = platforms.clipboard_read()
+            self._live_saved_clipboard = saved if isinstance(saved, str) else ""
+        except Exception:
+            self._live_saved_clipboard = ""
+        self._live_restore_clipboard = True
+
+    def _restore_live_clipboard(self) -> None:
+        if not self._live_restore_clipboard:
+            return
+        self._live_restore_clipboard = False
+        try:
+            platforms.clipboard_write(self._live_saved_clipboard)
+        except Exception:
+            pass
+
+    def _should_warm_whisper(self) -> bool:
+        """Pre-load tiny/base Whisper after boot when AI will need local STT."""
+        if Config.LLM_PROVIDER == "none":
+            return False
+        if Config.effective_stt_provider() != "gemini":
+            return False
+        # Skip when tests have replaced WhisperTranscriber with a mock.
+        if getattr(WhisperTranscriber, "__module__", "") != "transcriber":
+            return False
+        size = (Config.WHISPER_MODEL_SIZE or "").lower()
+        return size.startswith("tiny") or size.startswith("base")
+
+    def _ensure_whisper(self) -> WhisperTranscriber:
+        with self._whisper_lock:
+            if self._whisper is None:
+                print("Loading Whisper for AI dictation...", flush=True)
+                self._whisper = WhisperTranscriber()
+            return self._whisper
+
+    def _warm_whisper_for_ai(self) -> None:
+        try:
+            self._ensure_whisper()
+            print("Whisper ready for AI dictation (local STT + LLM).", flush=True)
+        except Exception as e:
+            print(f"Warning: could not pre-load Whisper for AI: {e}", flush=True)
+
+    def _transcribe_for_pipeline(self, audio, use_llm: bool) -> str:
+        """Dictation uses configured STT; AI chord uses local Whisper."""
+        if not use_llm:
+            return self.transcriber.transcribe(audio)
+        try:
+            return self._ensure_whisper().transcribe(audio)
+        except Exception as e:
+            print(
+                f"AI STT: Whisper unavailable ({e}); trying Gemini verbatim",
+                flush=True,
+            )
+            transcribe = getattr(self.transcriber, "transcribe", None)
+            if transcribe is None:
+                raise
+            try:
+                return transcribe(audio, mode="verbatim")
+            except TypeError:
+                return transcribe(audio)
 
     def _set_state(self, new_state: AppState) -> None:
         """Update app state and immediately notify the indicator."""
@@ -299,6 +357,7 @@ class DictationApp:
                 self.transcriber = GeminiTranscriber()
             else:
                 self.transcriber = WhisperTranscriber()
+                self._whisper = self.transcriber
             self.refiner = TextRefiner()
             self.refiner.preload()
         except Exception as e:
@@ -317,6 +376,13 @@ class DictationApp:
             return
 
         self.ready = True
+
+        if self._should_warm_whisper():
+            threading.Thread(
+                target=self._warm_whisper_for_ai,
+                daemon=True,
+                name="odicto-whisper-warm",
+            ).start()
 
         if self.indicator is not None:
             try:
@@ -342,12 +408,13 @@ class DictationApp:
         if Config.AI_HOTKEY:
             print(
                 f"  - Hold '{Config.AI_HOTKEY}': RECORD and paste a fresh AI reply "
-                "(no previous conversation)."
+                "(local Whisper STT, then LLM; no previous conversation)."
             )
         elif Config.AI_MODIFIER:
             print(
                 f"  - Hold '{Config.HOTKEY}+{Config.AI_MODIFIER}': "
-                "RECORD and paste a fresh AI reply (no previous conversation)."
+                "RECORD and paste a fresh AI reply "
+                "(local Whisper STT, then LLM; no previous conversation)."
             )
         keep_keys = ", ".join(k for k in Config.CTRL_KEEP_CONTEXT_KEYS if k)
         if keep_keys:
@@ -800,6 +867,7 @@ class DictationApp:
                         ).start()
                     if self.recorder is not None:
                         self.recorder.clear()
+                    self._restore_live_clipboard()
                     self._last_cycle_end = time.monotonic()
                     self._set_state(AppState.IDLE)
                     print(">>> Live tap too short; ignored.")
@@ -820,6 +888,7 @@ class DictationApp:
                 with self._live_caret_lock:
                     self._live_caret_current = ""
                     self._live_caret_desired = ""
+                self._capture_live_clipboard()
                 self.live_active = True
                 self._ensure_live_caret_worker()
                 self._set_state(AppState.RECORDING)
@@ -833,12 +902,14 @@ class DictationApp:
                     print(f"!!! Failed to start recorder: {e}", file=sys.stderr)
                     self.live_active = False
                     self.last_status = "error"
+                    self._restore_live_clipboard()
                     self._set_state(AppState.IDLE)
                     return
                 if Config.effective_stt_provider() == "gemini":
                     session = GeminiLiveSession(
                         on_interim=self._on_live_interim,
                         on_final=self._on_live_final,
+                        client=getattr(self.transcriber, "_client", None),
                     )
                     self._live_session = session
                     self.recorder.add_chunk_listener(session.push_audio)
@@ -853,29 +924,83 @@ class DictationApp:
                 return
 
         if start_pipeline:
-            live_text = ""
-            if live_session is not None:
-                live_text = live_session.stop(timeout=0.7)
-                folded = (live_text or "").strip()
-                if folded and folded != self._live_committed:
-                    self._live_committed = folded
-                    self._set_live_caret_desired(folded)
-                self._flush_live_caret(timeout=0.3)
             with self._live_caret_lock:
                 already_in_field = bool(self._live_caret_current.strip())
+            if already_in_field:
+                print(">>> Live text already at the caret — skip extra STT/paste.")
+                self.last_status = "success"
+                if live_session is not None:
+                    self._last_cycle_end = time.monotonic()
+                    self._set_state(AppState.IDLE)
+                    threading.Thread(
+                        target=self._cleanup_live_session,
+                        args=(live_session,),
+                        daemon=True,
+                        name="odicto-live-cleanup",
+                    ).start()
+                else:
+                    self._restore_live_clipboard()
+                    self._finish_cycle()
+                return
+            if live_session is not None:
+                self._set_state(AppState.PROCESSING)
+                threading.Thread(
+                    target=self._finish_live_session,
+                    args=(live_session, audio),
+                    daemon=True,
+                    name="odicto-live-stop",
+                ).start()
+                return
+            print(">>> Transcribing tap-to-talk clip...")
+            self._restore_live_clipboard()
+            self._set_state(AppState.PROCESSING)
+            threading.Thread(
+                target=self.process_and_paste,
+                args=(audio, False, "", False, ""),
+                daemon=True,
+                name="dictation-pipeline",
+            ).start()
+
+    def _cleanup_live_session(self, session: GeminiLiveSession) -> None:
+        """Close the Live socket off the keyboard hook after caret text is in place."""
+        try:
+            session.stop(timeout=0.7)
+            self._flush_live_caret(timeout=0.25)
+        except Exception as e:
+            print(f"Warning: live session cleanup failed: {e}", flush=True)
+        finally:
+            self._restore_live_clipboard()
+            try:
+                if self.recorder is not None:
+                    self.recorder.clear()
+            except Exception:
+                pass
+
+    def _finish_live_session(self, session: GeminiLiveSession, audio) -> None:
+        """Join Live off the hook, then skip STT or fall back to unary/Whisper."""
+        live_text = ""
+        try:
+            live_text = session.stop(timeout=0.7)
+            folded = (live_text or "").strip()
+            if folded and folded != self._live_committed:
+                self._live_committed = folded
+                self._set_live_caret_desired(folded)
+            self._flush_live_caret(timeout=0.3)
+            with self._live_caret_lock:
+                already_in_field = bool(self._live_caret_current.strip())
+            self._restore_live_clipboard()
             if already_in_field:
                 print(">>> Live text already at the caret — skip extra STT/paste.")
                 self.last_status = "success"
                 self._finish_cycle()
                 return
             print(">>> Live stream empty; falling back to clip transcription...")
-            self._set_state(AppState.PROCESSING)
-            threading.Thread(
-                target=self.process_and_paste,
-                args=(audio, False, "", False, live_text),
-                daemon=True,
-                name="dictation-pipeline",
-            ).start()
+            self.process_and_paste(audio, False, "", False, live_text)
+        except Exception as e:
+            print(f"!!! Live stop failed: {e}", file=sys.stderr)
+            self.last_status = "error"
+            self._restore_live_clipboard()
+            self._finish_cycle()
 
     @staticmethod
     def _capture_selection(pre_context: str = "") -> str:
@@ -933,7 +1058,7 @@ class DictationApp:
                     f"(committed in {time.time() - stt_started:.2f}s)"
                 )
             else:
-                raw_text = self.transcriber.transcribe(audio_source)
+                raw_text = self._transcribe_for_pipeline(audio_source, use_llm)
                 print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
 
             if sel_future is not None:

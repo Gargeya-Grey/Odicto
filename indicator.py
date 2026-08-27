@@ -309,11 +309,6 @@ class DictationIndicator(QWidget):
         self._font_chip.setWeight(QFont.Weight.DemiBold)
         self._font_chip.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 106)
 
-        self._font_caption = QFont(family, 10)
-        self._font_caption.setWeight(QFont.Weight.Normal)
-        self._font_caption.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-        self._font_caption.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-
     def _chip_width(self) -> float:
         fm = QFontMetrics(self._font_chip)
         return float(fm.horizontalAdvance("AI") + self._chip_pad_x * 2)
@@ -345,12 +340,9 @@ class DictationIndicator(QWidget):
         return False
 
     def _sync_geometry(self) -> None:
-        """Grow the capsule for live captions / expanded recording waveform."""
-        live = self._is_live_layout()
+        """Grow the capsule for the expanded recording waveform."""
         recording = self.gui_state == GuiState.RECORDING
-        if live:
-            pill_w, pill_h, n_bars, radius = 360, 78, 29, 22
-        elif recording:
+        if recording:
             pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 20, 22
         else:
             pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 7, 22
@@ -703,10 +695,7 @@ class DictationIndicator(QWidget):
     def _paint_content(
         self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
     ) -> None:
-        """Compact glyph+label, expanded recording waveform, or two-row live."""
-        if self._is_live_layout():
-            self._paint_live_content(p, pill, accent)
-            return
+        """Compact glyph+label or expanded recording waveform."""
         if self.gui_state == GuiState.RECORDING:
             self._paint_recording_content(p, pill, accent, use_llm)
             return
@@ -839,56 +828,6 @@ class DictationIndicator(QWidget):
                 self._chip_h,
                 chip_label,
             )
-
-    def _paint_live_content(self, p: QPainter, pill: QRectF, accent: QColor) -> None:
-        """Two-row live HUD: wide waveform + status on top, caption underneath."""
-        inset = float(self._inset_x)
-        top = QRectF(pill.x() + inset, pill.y() + 10.0, pill.width() - inset * 2, 28.0)
-        chip_label = "Live"
-        fm_chip = QFontMetrics(self._font_chip)
-        chip_w = float(fm_chip.horizontalAdvance(chip_label) + self._chip_pad_x * 2)
-        wave_w = max(80.0, top.width() - chip_w - 16.0)
-        self._draw_eq_bars(
-            p,
-            top.x() + wave_w * 0.5,
-            top.center().y(),
-            accent,
-            slot=wave_w,
-            max_h=18.0,
-            bar_w=2.0,
-        )
-        self._draw_named_chip(
-            p,
-            top.right() - chip_w,
-            top.center().y() - self._chip_h * 0.5,
-            chip_w,
-            self._chip_h,
-            chip_label,
-        )
-
-        raw_caption = getattr(self.app, "live_preview", "")
-        caption = raw_caption.strip() if isinstance(raw_caption, str) else ""
-        if not caption:
-            caption = "Tap the key again to paste"
-            empty = True
-        else:
-            empty = False
-        cap_rect = QRectF(
-            pill.x() + inset,
-            pill.y() + 42.0,
-            pill.width() - inset * 2,
-            26.0,
-        )
-        p.setFont(self._font_caption)
-        p.setPen(QColor(168, 168, 176, 200) if empty else QColor(220, 220, 226, 240))
-        elided = p.fontMetrics().elidedText(
-            caption, Qt.TextElideMode.ElideRight, int(cap_rect.width())
-        )
-        p.drawText(
-            cap_rect,
-            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
-            elided,
-        )
 
     def _draw_named_chip(
         self, p: QPainter, x: float, y: float, w: float, h: float, label: str

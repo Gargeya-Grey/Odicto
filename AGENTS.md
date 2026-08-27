@@ -125,10 +125,12 @@ supplied it) with:
 - **STT is independent of `LLM_PROVIDER`:** `STT_PROVIDER=whisper|gemini|auto`
   (default `whisper`). Gemini STT reuses `GEMINI_API_KEY` and does **not** require
   `LLM_PROVIDER=gemini`. `GEMINI_TRANSCRIBE_MODE=smart|verbatim` is the setup-page
-  toggle and applies to **both** hold-to-talk chords and the live tap key.
-  `auto` uses Gemini when a key is saved, otherwise Whisper. Cloud STT failures
-  fall back to Whisper. First Whisper load downloads model weights (~75MB for
-  `tiny.en`) only when Whisper is the active or fallback backend.
+  toggle and applies to the **dictation chord and F7 live tap**. The **AI chord**
+  uses local Whisper (lazy-loaded; tiny/base may warm after boot) so Smart cloud
+  STT is not stacked in front of the LLM; Whisper failure falls back to Gemini
+  **verbatim**. `auto` uses Gemini when a key is saved, otherwise Whisper. Cloud
+  STT failures fall back to Whisper. First Whisper load downloads model weights
+  (~75MB for `tiny.en`) only when Whisper is the active, AI, or fallback backend.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,

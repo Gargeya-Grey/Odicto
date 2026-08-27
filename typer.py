@@ -13,6 +13,7 @@ from platforms import (
     send_backspaces,
     send_copy,
     send_paste,
+    send_text,
     wm_copy_foreground,
 )
 
@@ -136,12 +137,16 @@ def _get_selected_text_legacy(original_clipboard: str, timeout: float) -> str:
     return selected
 
 
-def paste_text(text: str) -> None:
-    """Inject text at the cursor via clipboard + paste chord, then restore clipboard."""
+def paste_text(text: str, restore_clipboard: bool = True) -> None:
+    """Inject text at the cursor via clipboard + paste chord.
+
+    Hold-to-talk restores the user's clipboard after a settle delay. Live
+    caret updates pass ``restore_clipboard=False`` and restore once at F7 stop.
+    """
     if not text:
         return
 
-    original_clipboard = _clipboard_read()
+    original_clipboard = _clipboard_read() if restore_clipboard else None
 
     try:
         if not _clipboard_write(text):
@@ -150,26 +155,34 @@ def paste_text(text: str) -> None:
 
         force_release_modifiers()
 
-        time.sleep(0.02)
+        time.sleep(0.02 if restore_clipboard else 0.008)
         try:
             send_paste()
         except Exception as e:
             print(f"Error: Failed to perform paste simulation: {e}", flush=True)
 
-        delay = max(0.02, float(Config.PASTE_DELAY_SECONDS))
-        time.sleep(delay)
+        if restore_clipboard:
+            delay = max(0.02, float(Config.PASTE_DELAY_SECONDS))
+            time.sleep(delay)
+        else:
+            time.sleep(0.015)
     except Exception as e:
         print(f"Error: Failed to perform paste simulation: {e}", flush=True)
     finally:
-        if not _clipboard_write(original_clipboard):
-            print("Warning: Failed to restore original clipboard after paste", flush=True)
+        if restore_clipboard:
+            if not _clipboard_write(original_clipboard or ""):
+                print(
+                    "Warning: Failed to restore original clipboard after paste",
+                    flush=True,
+                )
 
 
 def apply_live_text(current: str, desired: str) -> str:
     """Bring the caret from ``current`` to ``desired`` with minimal edits.
 
-    Shares a common prefix, backspaces the tail, then pastes the remainder.
-    Used by F7 live dictation so text appears in the focused field as you speak.
+    Shares a common prefix, backspaces the tail, then types or pastes the
+    remainder. Short tails prefer ``send_text`` (no clipboard); long tails
+    paste without restoring the clipboard (the F7 session restores once).
     """
     current = current or ""
     desired = desired or ""
@@ -185,5 +198,12 @@ def apply_live_text(current: str, desired: str) -> str:
     if back:
         send_backspaces(back)
     if add:
-        paste_text(add)
+        typed = False
+        if len(add) <= 32:
+            try:
+                typed = bool(send_text(add))
+            except Exception:
+                typed = False
+        if not typed:
+            paste_text(add, restore_clipboard=False)
     return desired

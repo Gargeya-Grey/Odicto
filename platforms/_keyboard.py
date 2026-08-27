@@ -240,6 +240,26 @@ def send_backspaces(n: int) -> None:
         kb.press_and_release("backspace")
 
 
+def send_text(text: str) -> bool:
+    """Type ``text`` at the caret without touching the clipboard.
+
+    Returns True if key events were injected. Callers must fall back to a
+    clipboard paste when this returns False — some apps ignore Unicode SendInput.
+    """
+    if not text:
+        return True
+    if len(text) > 256:
+        return False
+    if sys.platform == "win32" and _win_send_text(text):
+        return True
+    try:
+        kb = _require_keyboard()
+        kb.write(text, delay=0, restore_state_after=False)
+        return True
+    except Exception:
+        return False
+
+
 def _win_send_backspaces(n: int) -> bool:
     try:
         import ctypes
@@ -283,6 +303,62 @@ def _win_send_backspaces(n: int) -> bool:
             if sent != count * 2:
                 return False
             remaining -= count
+        return True
+    except Exception:
+        return False
+
+
+def _win_send_text(text: str) -> bool:
+    """Inject UTF-16 code units via SendInput KEYEVENTF_UNICODE."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ulong_ptr = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ulong_ptr),
+            ]
+
+        class INPUT(ctypes.Structure):
+            class _I(ctypes.Union):
+                _fields_ = [("ki", KEYBDINPUT)]
+
+            _anonymous_ = ("i",)
+            _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+        units = [ord(ch) for ch in text]
+        if any(u > 0xFFFF for u in units):
+            encoded = text.encode("utf-16-le")
+            units = [
+                encoded[i] | (encoded[i + 1] << 8) for i in range(0, len(encoded), 2)
+            ]
+        batch = 128
+        remaining = units
+        while remaining:
+            chunk = remaining[:batch]
+            remaining = remaining[batch:]
+            arr = (INPUT * (len(chunk) * 2))()
+            for i, code in enumerate(chunk):
+                arr[i * 2].type = INPUT_KEYBOARD
+                arr[i * 2].ki.wScan = code
+                arr[i * 2].ki.dwFlags = KEYEVENTF_UNICODE
+                arr[i * 2 + 1].type = INPUT_KEYBOARD
+                arr[i * 2 + 1].ki.wScan = code
+                arr[i * 2 + 1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+            sent = ctypes.windll.user32.SendInput(
+                len(chunk) * 2, ctypes.byref(arr), ctypes.sizeof(INPUT)
+            )
+            if sent != len(chunk) * 2:
+                return False
         return True
     except Exception:
         return False

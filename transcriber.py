@@ -9,7 +9,6 @@ import wave
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
-from faster_whisper import WhisperModel
 
 from config import Config
 
@@ -19,6 +18,44 @@ try:
 except Exception:  # pragma: no cover
     google_genai = None  # type: ignore
     google_genai_types = None  # type: ignore
+
+# Filled on first Whisper load so Gemini-only boots skip ctranslate2 import.
+WhisperModel = None  # type: ignore
+
+_genai_client_lock = threading.Lock()
+_genai_client = None
+_genai_client_key: Optional[str] = None
+_genai_client_factory = None
+
+
+def get_genai_client(api_key: str):
+    """One SDK client per process for the same API key.
+
+    The cache is keyed by both the key and the ``Client`` factory object so
+    tests that patch ``google_genai.Client`` still get a fresh mock.
+    """
+    global _genai_client, _genai_client_key, _genai_client_factory
+    key = (api_key or "").strip()
+    if google_genai is None or not key:
+        return None
+    factory = getattr(google_genai, "Client", None)
+    if factory is None:
+        return None
+    with _genai_client_lock:
+        if (
+            _genai_client is not None
+            and _genai_client_key == key
+            and _genai_client_factory is factory
+        ):
+            return _genai_client
+        try:
+            client = factory(api_key=key)
+        except Exception:
+            return None
+        _genai_client = client
+        _genai_client_key = key
+        _genai_client_factory = factory
+        return client
 
 
 def float32_to_pcm16_bytes(audio: np.ndarray) -> bytes:
@@ -82,6 +119,11 @@ class WhisperTranscriber:
             devices_to_try = [("cuda", "float16"), ("cpu", "int8")]
 
         last_error: Optional[Exception] = None
+        global WhisperModel
+        if WhisperModel is None:
+            from faster_whisper import WhisperModel as _WhisperModel
+
+            WhisperModel = _WhisperModel
         for device, compute_type in devices_to_try:
             try:
                 print(
@@ -215,11 +257,9 @@ class GeminiTranscriber:
                 flush=True,
             )
             return
-        try:
-            self._client = google_genai.Client(api_key=api_key)
-        except Exception as e:
-            print(f"Warning: Could not create Gemini STT client: {e}", flush=True)
-            self._client = None
+        self._client = get_genai_client(api_key)
+        if self._client is None:
+            print("Warning: Could not create Gemini STT client.", flush=True)
 
     def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
         print(f"Gemini STT fallback to Whisper ({reason})", flush=True)
@@ -227,7 +267,9 @@ class GeminiTranscriber:
             self._whisper = WhisperTranscriber()
         return self._whisper.transcribe(audio)
 
-    def transcribe(self, audio: Union[str, np.ndarray]) -> str:
+    def transcribe(
+        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+    ) -> str:
         if isinstance(audio, np.ndarray) and audio.size == 0:
             return ""
         if self._client is None:
@@ -240,7 +282,9 @@ class GeminiTranscriber:
         if not wav_bytes:
             return ""
 
-        mode = Config.gemini_transcribe_mode()
+        resolved = (mode or Config.gemini_transcribe_mode() or "smart").strip().lower()
+        if resolved != "verbatim":
+            resolved = "smart"
         model = Config.GEMINI_TRANSCRIBE_MODEL or "gemini-3.5-transcribe"
         try:
             interaction = self._client.interactions.create(
@@ -252,7 +296,9 @@ class GeminiTranscriber:
                         "mime_type": "audio/wav",
                     }
                 ],
-                generation_config={"transcription_config": _transcription_config_payload(mode)},
+                generation_config={
+                    "transcription_config": _transcription_config_payload(resolved)
+                },
             )
         except Exception as e:
             detail = str(getattr(e, "message", "")) or str(e)
@@ -276,9 +322,11 @@ class GeminiLiveSession:
         self,
         on_interim: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[str], None]] = None,
+        client=None,
     ) -> None:
         self._on_interim = on_interim
         self._on_final = on_final
+        self._sdk_client = client
         self._chunks: queue.Queue = queue.Queue(maxsize=128)
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -336,7 +384,10 @@ class GeminiLiveSession:
         if not api_key:
             self._error = "GEMINI_API_KEY empty"
             return
-        client = google_genai.Client(api_key=api_key)
+        client = self._sdk_client or get_genai_client(api_key)
+        if client is None:
+            self._error = "no Gemini client"
+            return
         mode = Config.gemini_transcribe_mode()
         mode_enum = (
             google_genai_types.AudioTranscriptionConfigMode.VERBATIM

@@ -42,8 +42,8 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 | Mode | How | Result |
 |------|-----|--------|
 | **Dictation** | Hold **Ctrl+\`**, speak, release | Transcript pasted (smart or verbatim) |
-| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Fresh model answer (no prior turns) |
-| **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Live captions, then paste |
+| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Local Whisper, then a fresh model answer |
+| **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Live text at the caret; tap again when done |
 | **AI with memory** | Hold **F6** + **Ctrl+\`**, speak, release | Continues the F6 conversation |
 | **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
@@ -324,8 +324,9 @@ Notes:
 
 Speech-to-text is **independent** of `LLM_PROVIDER`. You can keep Meta/OpenRouter/Ollama
 for AI replies and still use Gemini for dictation. The setup page toggle
-**Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE` and applies to **every**
-capture chord plus the live tap key.
+**Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE` and applies to the
+**dictation chord and F7**. The AI chord uses **local Whisper** (the LLM is the
+cleanup step) and only falls back to Gemini **verbatim** if Whisper cannot load.
 
 ```env
 STT_PROVIDER=auto            # whisper | gemini | auto
@@ -351,7 +352,7 @@ Default `STT_PROVIDER=whisper` so existing local-only installs do not change.
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
-| **Whisper (STT)** | When `STT_PROVIDER=whisper`, or as fallback | Local — skipped at boot if Gemini STT is selected and a key is present |
+| **Whisper (STT)** | When `STT_PROVIDER=whisper`, as fallback, or for the AI chord | Local — skipped at boot if Gemini STT is selected; tiny/base may warm after ready when an LLM is configured |
 | **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
 | **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
