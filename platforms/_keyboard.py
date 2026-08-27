@@ -226,3 +226,63 @@ def send_paste() -> None:
         paste_chord()
     except Exception:
         send("ctrl+v")
+
+
+def send_backspaces(n: int) -> None:
+    """Delete ``n`` characters before the caret. Batched on Windows."""
+    n = min(max(0, int(n)), 4000)
+    if n <= 0:
+        return
+    if sys.platform == "win32" and _win_send_backspaces(n):
+        return
+    kb = _require_keyboard()
+    for _ in range(n):
+        kb.press_and_release("backspace")
+
+
+def _win_send_backspaces(n: int) -> bool:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ulong_ptr = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ulong_ptr),
+            ]
+
+        class INPUT(ctypes.Structure):
+            class _I(ctypes.Union):
+                _fields_ = [("ki", KEYBDINPUT)]
+
+            _anonymous_ = ("i",)
+            _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_KEYUP = 0x0002
+        VK_BACK = 0x08
+        batch = 256
+        remaining = n
+        while remaining > 0:
+            count = min(batch, remaining)
+            arr = (INPUT * (count * 2))()
+            for i in range(count):
+                arr[i * 2].type = INPUT_KEYBOARD
+                arr[i * 2].ki.wVk = VK_BACK
+                arr[i * 2 + 1].type = INPUT_KEYBOARD
+                arr[i * 2 + 1].ki.wVk = VK_BACK
+                arr[i * 2 + 1].ki.dwFlags = KEYEVENTF_KEYUP
+            sent = ctypes.windll.user32.SendInput(
+                count * 2, ctypes.byref(arr), ctypes.sizeof(INPUT)
+            )
+            if sent != count * 2:
+                return False
+            remaining -= count
+        return True
+    except Exception:
+        return False

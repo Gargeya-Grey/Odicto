@@ -277,6 +277,18 @@ def send_paste() -> None:
         send("cmd+v")
 
 
+def send_backspaces(n: int) -> None:
+    n = min(max(0, int(n)), 4000)
+    if n <= 0:
+        return
+    pynput = _require_pynput()
+    from pynput.keyboard import Key
+
+    controller = pynput.Controller()
+    for _ in range(n):
+        controller.tap(Key.backspace)
+
+
 def apply_window_exstyles(widget) -> None:
     # Qt window flags already handle topmost/click-through on macOS.
     return None

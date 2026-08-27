@@ -546,9 +546,15 @@ body {{
 .layout {{
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0 2.4rem;
+  gap: 0 1.7rem;
+  align-items: stretch;
 }}
-.layout > .col {{ min-width: 0; }}
+.layout > .col {{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}}
+.layout > .col > label:first-child {{ margin-top: 0; }}
 @media (max-width: 900px) {{
   .layout {{ grid-template-columns: 1fr; }}
   .card {{ padding: 1.6rem 1.25rem 1.7rem; }}
@@ -564,8 +570,91 @@ body {{
   font-size: 0.92rem;
 }}
 #none-note.show {{ display: block; }}
-#sec-ai {{ margin-top: 1.15rem; }}
-#sec-prompt {{ margin-top: 1.5rem; }}
+#sec-ai {{ margin-top: 0.85rem; }}
+#sec-prompt {{ margin-top: 0; }}
+.prompt-panel {{
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  padding: 0.9rem 1.05rem 1rem 1.2rem;
+  border-radius: 16px;
+  background:
+    linear-gradient(165deg, rgba(45, 212, 191, 0.09) 0%, rgba(24, 24, 28, 0.55) 42%, rgba(18, 18, 22, 0.72) 100%);
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 32px -24px rgba(0, 0, 0, 0.7);
+}}
+.prompt-panel::before {{
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, #5eead4, #0f766e);
+}}
+.prompt-head {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.4rem;
+}}
+.prompt-head .prompt-title {{
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 480;
+}}
+.prompt-chip {{
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #99f6e4;
+  background: rgba(15, 118, 110, 0.35);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+}}
+.prompt-lede {{
+  margin: 0 0 0.7rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}}
+#prompt_slot {{
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}}
+.prompt-toolbar {{
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}}
+.prompt-toolbar .secondary {{
+  flex: 0 0 auto;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.84rem;
+}}
+.prompt-toolbar .link {{
+  margin: 0;
+  width: auto;
+  padding: 0.35rem 0.2rem;
+  font-size: 0.8rem;
+}}
+.prompt-file {{
+  margin-top: 0.75rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}}
+.prompt-file label {{ margin-top: 0; }}
 .panel-note {{ font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0 0; }}
 .ai-hidden {{ display: none !important; }}
 .brand {{
@@ -613,26 +702,71 @@ select:hover {{
   border-color: var(--accent);
 }}
 textarea {{
-  min-height: 10.5rem;
-  max-height: 60vh;
-  overflow-y: auto;
-  resize: vertical;
   line-height: 1.45;
   font-size: 0.86rem;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-}}
-/* Full-screen prompt editing (Expand editor button; Esc closes). */
-textarea.prompt-fullscreen {{
-  position: fixed;
-  inset: 1.5rem;
-  z-index: 100;
-  width: calc(100% - 3rem);
-  height: calc(100vh - 3rem);
-  max-height: none;
-  min-height: 0;
-  font-size: 0.95rem;
+  overflow-y: auto;
   resize: none;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}}
+#prompt_slot textarea {{
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  background: rgba(10, 10, 14, 0.55);
+  border-color: rgba(45, 212, 191, 0.2);
+}}
+.prompt-overlay {{
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 6vh 6vw;
+  background: rgba(8, 8, 10, 0.52);
+}}
+.prompt-overlay[hidden] {{ display: none !important; }}
+.prompt-overlay-panel {{
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 28px 80px -24px rgba(0, 0, 0, 0.65);
+  padding: 0.9rem 1rem 1rem;
+}}
+.prompt-overlay-head {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.7rem;
+}}
+.prompt-overlay-head span {{
+  font-size: 0.92rem;
+  font-weight: 520;
+}}
+.prompt-overlay-head button {{
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.86rem;
+}}
+#prompt_overlay_body {{
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}}
+#prompt_overlay_body textarea {{
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  font-size: 0.92rem;
 }}
 select:focus, input:focus, textarea:focus {{
   outline: none;
@@ -719,22 +853,32 @@ select:focus, input:focus, textarea:focus {{
 .mode-switch {{
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.65rem;
   margin-top: 0.35rem;
+  height: 28px;
   user-select: none;
 }}
 .mode-switch .mode-label {{
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  margin: 0;
   font-size: 0.88rem;
+  line-height: 24px;
   color: var(--muted);
   font-weight: 480;
-  min-width: 4.6rem;
 }}
 .mode-switch .mode-label.on {{ color: var(--ink); }}
-.switch {{
+.mode-switch > label.switch {{
+  display: block;
   position: relative;
-  width: 46px;
-  height: 26px;
-  flex: 0 0 auto;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+  font-size: 0;
 }}
 .switch input {{
   opacity: 0;
@@ -753,8 +897,8 @@ select:focus, input:focus, textarea:focus {{
 .switch .slider::before {{
   content: "";
   position: absolute;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   left: 3px;
   top: 3px;
   background: #ececf0;
@@ -764,6 +908,38 @@ select:focus, input:focus, textarea:focus {{
 .switch input:checked + .slider {{ background: var(--accent); }}
 .switch input:checked + .slider::before {{ transform: translateX(20px); }}
 .switch input:focus-visible + .slider {{ box-shadow: 0 0 0 3px var(--accent-soft); }}
+.result-tag {{
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.34rem 0.72rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 520;
+  line-height: 1;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+.result-tag.show {{ display: inline-flex; }}
+.result-tag.loading {{
+  background: var(--accent-soft);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}}
+.result-tag.ok {{
+  background: var(--ok-bg);
+  color: var(--ok);
+  border: 1px solid rgba(74, 222, 128, 0.35);
+}}
+.result-tag.err {{
+  background: var(--err-bg);
+  color: var(--err);
+  border: 1px solid rgba(252, 165, 165, 0.35);
+}}
+.actions {{ align-items: center; }}
 button.recording {{ background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }}
 .actions {{ display: flex; gap: 0.7rem; margin-top: 1.6rem; }}
 button {{
@@ -863,9 +1039,11 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     <h1>Odicto Setup</h1>
   </div>
   <p class="sub">Pick a backend and paste its key — each backend remembers its own key, so you only ever enter it once. Everything saves to your local <code>.env</code> file.</p>
-  <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v3 · per-provider keys</p>
+  <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v6 · per-provider keys</p>
 
   <form id="setupForm" method="post" action="/save">
+    <div class="layout">
+    <div class="col">
     <label for="LLM_PROVIDER">AI backend</label>
     <div class="custom-select" id="provider_select">
       <button type="button" class="select-trigger" id="provider_trigger" aria-haspopup="listbox" aria-expanded="false">
@@ -882,11 +1060,8 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       <input type="hidden" name="LLM_PROVIDER" id="LLM_PROVIDER" value="{html.escape(provider)}">
     </div>
     <p style="margin:0.4rem 0 0;font-size:0.78rem;color:var(--muted);">Only the selected backend's settings are shown below. Keys are saved per backend and kept when you switch.</p>
-
-        <div id="none-note"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
+    <div id="none-note"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
     <div id="sec-ai">
-    <div class="layout">
-    <div class="col">
       <div class="field" id="field-meta">
         <label>Meta API key{ ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if meta_key else ''}</label>
         <input type="password" name="META_API_KEY" value="{html.escape(meta_key)}" placeholder="paste your Meta API key — quotes are fine">
@@ -950,53 +1125,64 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
       </div>
       <label>Max output tokens <span style="font-weight:400;color:var(--muted);">(shared cap for every backend)</span></label>
       <input type="text" name="LLM_MAX_TOKENS" value="{html.escape(llm_max_tokens)}" placeholder="1024">
-    </div><!-- /.col AI -->
+    </div><!-- /#sec-ai -->
+    </div><!-- /.col left -->
     <div class="col" id="sec-prompt">
-    <details open>
-      <summary>AI system prompt</summary>
-      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Used for AI-mode replies (Ctrl+Shift+`). Saved as <code>SYSTEM_PROMPT</code> in <code>.env</code>. Leave blank and save to restore the built-in default. Restart Odicto after saving.</p>
-      <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" spellcheck="false">__SYSTEM_PROMPT__</textarea>
-      <div class="pull-row">
-        <button type="button" class="secondary" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
-        <span class="hint">grows as you type; Expand gives a full-screen view (Esc to close)</span>
-      </div>
-      <button type="button" class="link" style="margin-top:0.35rem;" onclick="restoreDefaultPrompt()">Restore default prompt</button>
-      <label style="margin-top:0.8rem;">Prompt file (optional — wins over the text above)</label>
-      <input type="text" name="SYSTEM_PROMPT_FILE" value="{html.escape(system_prompt_file)}" placeholder="prompt.txt">
-      <p style="margin:0.3rem 0 0;font-size:0.78rem;color:var(--muted);">When saving with a filename here, the textarea content is written to that plain-text file (UTF-8) next to Odicto — no \n escaping needed.</p>
-    </details>
+      <section class="prompt-panel" aria-labelledby="prompt_title">
+        <div class="prompt-head">
+          <label class="prompt-title" id="prompt_title">AI system prompt</label>
+          <span class="prompt-chip">persona</span>
+        </div>
+        <p class="prompt-lede">Pasted into AI-mode replies. Leave blank and save to restore the built-in default. Restart Odicto after saving.</p>
+        <div id="prompt_slot">
+          <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
+        </div>
+        <div class="prompt-toolbar">
+          <button type="button" class="secondary" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
+          <button type="button" class="link" onclick="restoreDefaultPrompt()">Restore default</button>
+        </div>
+        <div class="prompt-file">
+          <label>Prompt file (optional — wins over the text above)</label>
+          <input type="text" name="SYSTEM_PROMPT_FILE" value="{html.escape(system_prompt_file)}" placeholder="prompt.txt">
+          <p class="panel-note">When a filename is set, Save writes this editor to that UTF-8 file next to Odicto.</p>
+        </div>
+      </section>
     </div><!-- /.col prompt -->
     </div><!-- /.layout -->
-    </div><!-- /#sec-ai -->
 
     <details open>
       <summary>Speech to text</summary>
-      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Independent of the AI backend. Gemini STT uses <code>GEMINI_API_KEY</code> even when replies go through Meta / OpenRouter / Ollama. Smart/verbatim applies to both hold-to-talk chords and the live tap key.</p>
+      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Independent of the AI backend. Gemini STT reuses <code>GEMINI_API_KEY</code>.</p>
       <label>STT provider</label>
-      <select name="STT_PROVIDER" id="STT_PROVIDER">
+      <select name="STT_PROVIDER" id="STT_PROVIDER" onchange="syncSttProvider()">
         <option value="whisper"{" selected" if stt_provider == "whisper" else ""}>whisper — local, offline</option>
         <option value="gemini"{" selected" if stt_provider == "gemini" else ""}>gemini — Gemini 3.5 Transcribe (cloud)</option>
         <option value="auto"{" selected" if stt_provider == "auto" else ""}>auto — Gemini when a key is saved, else Whisper</option>
       </select>
-      <label>Transcription mode</label>
-      <div class="mode-switch" role="group" aria-label="Transcription mode">
-        <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
-        <label class="switch">
-          <input type="checkbox" id="stt_mode_toggle" {"checked" if transcribe_mode != "verbatim" else ""} onchange="syncTranscribeMode()">
-          <span class="slider"></span>
-        </label>
-        <span class="mode-label" id="mode_label_smart">Smart</span>
+      <div id="stt-gemini-fields"{" hidden" if stt_provider == "whisper" else ""}>
+        <label>Transcription mode</label>
+        <div class="mode-switch" role="group" aria-label="Transcription mode">
+          <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
+          <label class="switch">
+            <input type="checkbox" id="stt_mode_toggle" {"checked" if transcribe_mode != "verbatim" else ""} onchange="syncTranscribeMode()">
+            <span class="slider"></span>
+          </label>
+          <span class="mode-label" id="mode_label_smart">Smart</span>
+        </div>
+        <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="{html.escape(transcribe_mode)}">
+        <p class="panel-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on both hold-to-talk chords and the live tap key.</p>
+        <label>Language hint <span style="font-weight:400;color:var(--muted);">(blank = auto-detect)</span></label>
+        <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" value="{html.escape(transcribe_lang)}" placeholder="en-US">
+        <label>Custom vocabulary <span style="font-weight:400;color:var(--muted);">(comma-separated, optional)</span></label>
+        <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" value="{html.escape(transcribe_vocab)}" placeholder="Odicto, Kubernetes">
       </div>
-      <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="{html.escape(transcribe_mode)}">
-      <p class="panel-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on Ctrl+`, Ctrl+Shift+`, and the live tap key.</p>
-      <label>Language hint <span style="font-weight:400;color:var(--muted);">(blank = auto-detect)</span></label>
-      <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" value="{html.escape(transcribe_lang)}" placeholder="en-US">
-      <label>Custom vocabulary <span style="font-weight:400;color:var(--muted);">(comma-separated, optional)</span></label>
-      <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" value="{html.escape(transcribe_vocab)}" placeholder="Odicto, Kubernetes">
-      <label>Whisper model</label>
-      <input type="text" name="WHISPER_MODEL_SIZE" value="{html.escape(whisper)}">
-      <label>Whisper device</label>
-      <input type="text" name="WHISPER_DEVICE" value="{html.escape(whisper_device)}" placeholder="auto">
+      <div id="stt-whisper-fields">
+        <label>Whisper model</label>
+        <input type="text" name="WHISPER_MODEL_SIZE" value="{html.escape(whisper)}">
+        <label>Whisper device</label>
+        <input type="text" name="WHISPER_DEVICE" value="{html.escape(whisper_device)}" placeholder="auto">
+        <p class="panel-note" id="stt-whisper-fallback-note"{" hidden" if stt_provider == "whisper" else ""}>Used if Gemini STT is unavailable (no key, rate limit, or network).</p>
+      </div>
     </details>
 
     <details>
@@ -1023,11 +1209,22 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
     <div class="actions">
       <button type="submit" class="primary">Save settings</button>
       <button type="button" id="test_button" class="secondary" onclick="testConnection()">Test connection</button>
+      <span id="test_tag" class="result-tag" role="status" aria-live="polite"></span>
     </div>
 
     <div id="status" class="status" role="status"></div>
     {server_status}
     <button type="button" class="link" id="reset_button" onclick="resetSettings()">Reset settings to defaults</button>
+
+    <div id="prompt_overlay" class="prompt-overlay" hidden>
+      <div class="prompt-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="prompt_overlay_title">
+        <div class="prompt-overlay-head">
+          <span id="prompt_overlay_title">AI system prompt</span>
+          <button type="button" class="secondary" id="prompt_overlay_close" onclick="togglePromptExpand()">Close</button>
+        </div>
+        <div id="prompt_overlay_body"></div>
+      </div>
+    </div>
   
   </form>
 
@@ -1050,7 +1247,6 @@ var MODEL_CATALOGS = __MODEL_CATALOGS_JSON__;
 function restoreDefaultPrompt() {{
   var el = document.getElementById('SYSTEM_PROMPT');
   el.value = DEFAULT_SYSTEM_PROMPT;
-  autoGrow(el);
 }}
 function initModelSelects() {{
   var defaultLabels = {{ meta: 'Backend default (muse-spark-1.2-contributor)', openrouter: 'Backend default (openai/gpt-5.6-luna)', gemini: 'Backend default (gemini-3.5-flash-lite)', ollama: 'Backend default (qwen2.5:1.5b-instruct)' }};
@@ -1116,6 +1312,14 @@ function initTranscribeMode() {{
   if (tog && hid) tog.checked = (hid.value || 'smart') !== 'verbatim';
   syncTranscribeMode();
 }}
+function syncSttProvider() {{
+  var sel = document.getElementById('STT_PROVIDER');
+  var v = sel ? sel.value : 'whisper';
+  var gem = document.getElementById('stt-gemini-fields');
+  var note = document.getElementById('stt-whisper-fallback-note');
+  if (gem) gem.hidden = (v === 'whisper');
+  if (note) note.hidden = (v === 'whisper');
+}}
 
 function _historyTokens(raw){{ return (raw||'').split(',').map(function(s){{return s.trim();}}).filter(Boolean).filter(function(v,i,a){{return a.indexOf(v)===i;}}); }}
 function _providerHistory(provider){{
@@ -1180,6 +1384,7 @@ function showProvider(v) {{
   if (secPrompt) secPrompt.style.display = (v === 'none') ? 'none' : '';
   var tb = document.getElementById('test_button');
   if (tb) tb.disabled = (v === 'none');
+  setTimeout(syncPromptPanelHeight, 0);
 }}
 
 var PROVIDER_LABELS = {{
@@ -1292,40 +1497,74 @@ initCustomSelect();
 initModelSelects();
 initEffortSelects();
 initTranscribeMode();
+syncSttProvider();
 ['meta','openrouter','gemini','ollama'].forEach(function(p){{
   var ci=document.getElementById(p+'_model_custom');
   if(ci) ci.addEventListener('input', function(){{ syncCustomModel(p); }});
 }});
 
-// --- System prompt textarea: auto-grow + full-screen editor -----------------
+// --- System prompt: 5-line preview + margined overlay editor -----------------
 var promptEl = document.getElementById('SYSTEM_PROMPT');
 var expandBtn = document.getElementById('prompt_expand');
+var promptOverlay = document.getElementById('prompt_overlay');
+var promptSlot = document.getElementById('prompt_slot');
+var promptOverlayBody = document.getElementById('prompt_overlay_body');
 
-function autoGrow(el) {{
-  if (el.classList.contains('prompt-fullscreen')) return; // fixed height there
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight + 2, window.innerHeight * 0.6) + 'px';
+function promptOverlayOpen() {{
+  return promptOverlay && !promptOverlay.hidden;
 }}
-promptEl.addEventListener('input', function() {{ autoGrow(promptEl); }});
-
 function togglePromptExpand() {{
-  var open = promptEl.classList.toggle('prompt-fullscreen');
-  expandBtn.textContent = open ? 'Close editor (Esc)' : 'Expand editor';
-  document.body.style.overflow = open ? 'hidden' : '';
-  if (open) {{
-    promptEl.style.height = '';
+  if (!promptEl || !promptOverlay || !promptSlot || !promptOverlayBody) return;
+  if (!promptOverlayOpen()) {{
+    promptOverlayBody.appendChild(promptEl);
+    promptOverlay.hidden = false;
+    document.body.style.overflow = 'hidden';
+    if (expandBtn) expandBtn.textContent = 'Close editor (Esc)';
     promptEl.focus();
     promptEl.setSelectionRange(0, 0);
   }} else {{
-    autoGrow(promptEl);
+    promptSlot.insertBefore(promptEl, promptSlot.firstChild);
+    promptOverlay.hidden = true;
+    document.body.style.overflow = '';
+    if (expandBtn) expandBtn.textContent = 'Expand editor';
+    setTimeout(syncPromptPanelHeight, 0);
   }}
 }}
+if (promptOverlay) {{
+  promptOverlay.addEventListener('click', function(e) {{
+    if (e.target === promptOverlay) togglePromptExpand();
+  }});
+}}
 document.addEventListener('keydown', function(e) {{
-  if (e.key === 'Escape' && promptEl.classList.contains('prompt-fullscreen')) {{
+  if (e.key === 'Escape' && promptOverlayOpen()) {{
     togglePromptExpand();
   }}
 }});
-autoGrow(promptEl);
+function syncPromptPanelHeight() {{
+  if (promptOverlayOpen()) return;
+  var left = document.querySelector('.layout > .col');
+  var panel = document.querySelector('.prompt-panel');
+  var slot = document.getElementById('prompt_slot');
+  var ta = document.getElementById('SYSTEM_PROMPT');
+  if (!left || !panel || !slot || !ta) return;
+  if (window.matchMedia('(max-width: 900px)').matches) {{
+    panel.style.minHeight = '';
+    ta.style.height = '';
+    return;
+  }}
+  panel.style.minHeight = left.offsetHeight + 'px';
+  var used = 0;
+  Array.prototype.forEach.call(panel.children, function(child) {{
+    if (child === slot) return;
+    var cs = window.getComputedStyle(child);
+    used += child.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }});
+  var pad = parseFloat(getComputedStyle(panel).paddingTop) + parseFloat(getComputedStyle(panel).paddingBottom);
+  var h = Math.max(140, panel.clientHeight - used - pad * 0 - 4);
+  ta.style.height = h + 'px';
+}}
+window.addEventListener('resize', syncPromptPanelHeight);
+setTimeout(syncPromptPanelHeight, 0);
 
 var hotkeyRecorder = null;
 var MODIFIER_NAMES = {{ Control: 'ctrl', Shift: 'shift', Alt: 'alt', Meta: 'cmd' }};
@@ -1426,12 +1665,21 @@ function setStatus(kind, html) {{
   el.className = 'status show ' + kind;
   el.innerHTML = html;
 }}
+function setTestTag(kind, text) {{
+  var tag = document.getElementById('test_tag');
+  if (!tag) return;
+  if (!kind) {{ tag.className = 'result-tag'; tag.innerHTML = ''; return; }}
+  var spin = kind === 'loading' ? '<span class="spinner"></span>' : '';
+  tag.className = 'result-tag show ' + kind;
+  tag.innerHTML = spin + (text || '');
+  tag.title = text || '';
+}}
 
 async function testConnection() {{
   var btn = document.getElementById('test_button');
   btn.disabled = true;
-  openTestModal('Testing connection\u2026', 'Contacting the selected backend. This may take a few seconds.');
-  // Keep the old inline status in sync too (useful if the modal is dismissed).
+  closeTestModal();
+  setTestTag('loading', 'Testing\u2026');
   setStatus('neutral', '<span class="spinner"></span> Testing connection...');
   var controller = new AbortController();
   var timer = setTimeout(function() {{ controller.abort(); }}, 30000);
@@ -1451,14 +1699,12 @@ async function testConnection() {{
     if(!ct.includes('application/json')){{ var txt = await resp.text(); var snippet = (txt||'').slice(0,800); throw new Error('The test endpoint returned a non-JSON response. Is the setup server still running? ' + snippet); }}
     var data = await resp.json();
     if (data.ok) {{
+      setTestTag('ok', 'Success');
       setStatus('ok', '&#10003; ' + data.message);
-      document.getElementById('test_modal_title').textContent = 'Connection OK';
-      document.getElementById('test_modal_msg').textContent = data.message || 'Connected successfully.';
       if(provider!=='none' && modelForHistory) rememberModel(provider, modelForHistory);
     }} else {{
+      setTestTag('err', 'Error');
       setStatus('err', '&#9888; ' + data.message);
-      document.getElementById('test_modal_title').textContent = 'Test failed';
-      document.getElementById('test_modal_msg').textContent = data.message || 'The backend rejected the request.';
     }}
   }} catch (e) {{
     var msg = (e && e.message) ? e.message : String(e);
@@ -1467,9 +1713,8 @@ async function testConnection() {{
     }} else if (/Failed to fetch|Could not reach/i.test(msg)) {{
       msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via .\\setup.bat (or odicto.py setup) and retry.';
     }}
+    setTestTag('err', 'Error');
     setStatus('err', '&#9888; ' + msg);
-    var mt2=document.getElementById('test_modal_title'); if(mt2) mt2.textContent='Test failed';
-    var mm2=document.getElementById('test_modal_msg'); if(mm2) mm2.textContent=msg;
   }} finally {{
     clearTimeout(timer);
     btn.disabled = (document.getElementById('LLM_PROVIDER').value === 'none');

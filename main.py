@@ -11,7 +11,7 @@ from config import Config, parse_hold_hotkey
 from recorder import AudioRecorder, play_beep
 from transcriber import GeminiLiveSession, GeminiTranscriber, WhisperTranscriber
 from refiner import TextRefiner
-from typer import paste_text, get_selected_text
+from typer import apply_live_text, paste_text, get_selected_text
 
 import platforms
 
@@ -141,6 +141,12 @@ class DictationApp:
         self.live_preview: str = ""
         self._live_session: Optional[GeminiLiveSession] = None
         self._live_key_held: bool = False
+        self._live_committed: str = ""
+        self._live_caret_current: str = ""
+        self._live_caret_desired: str = ""
+        self._live_caret_lock = threading.Lock()
+        self._live_caret_event = threading.Event()
+        self._live_caret_thread: Optional[threading.Thread] = None
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -182,6 +188,70 @@ class DictationApp:
     def _set_live_preview(self, text: str) -> None:
         """HUD live-caption callback (may run off the Qt thread)."""
         self.live_preview = (text or "").strip()
+        self._notify_ui()
+
+    def _ensure_live_caret_worker(self) -> None:
+        t = self._live_caret_thread
+        if t is not None and t.is_alive():
+            return
+        self._live_caret_thread = threading.Thread(
+            target=self._live_caret_worker, daemon=True, name="odicto-live-caret"
+        )
+        self._live_caret_thread.start()
+
+    def _live_caret_worker(self) -> None:
+        """Apply the latest live string at the focused caret (not the hook thread)."""
+        while True:
+            self._live_caret_event.wait()
+            time.sleep(0.04)  # coalesce rapid interim updates
+            self._live_caret_event.clear()
+            with self._live_caret_lock:
+                current = self._live_caret_current
+                desired = self._live_caret_desired
+            if current == desired:
+                continue
+            try:
+                apply_live_text(current, desired)
+            except Exception as e:
+                print(f"Warning: live caret insert failed: {e}", flush=True)
+                continue
+            with self._live_caret_lock:
+                if self._live_caret_desired == desired:
+                    self._live_caret_current = desired
+
+    def _set_live_caret_desired(self, text: str) -> None:
+        desired = (text or "").strip()
+        with self._live_caret_lock:
+            self._live_caret_desired = desired
+        self._live_caret_event.set()
+
+    def _flush_live_caret(self, timeout: float = 0.35) -> None:
+        self._live_caret_event.set()
+        deadline = time.monotonic() + max(0.05, timeout)
+        while time.monotonic() < deadline:
+            with self._live_caret_lock:
+                if self._live_caret_current == self._live_caret_desired:
+                    return
+            time.sleep(0.015)
+
+    def _on_live_interim(self, text: str) -> None:
+        draft = (text or "").strip()
+        committed = self._live_committed
+        desired = f"{committed} {draft}".strip() if committed else draft
+        self.live_preview = desired
+        self._set_live_caret_desired(desired)
+        self._notify_ui()
+
+    def _on_live_final(self, text: str) -> None:
+        piece = (text or "").strip()
+        if not piece:
+            return
+        if self._live_committed:
+            self._live_committed = f"{self._live_committed} {piece}".strip()
+        else:
+            self._live_committed = piece
+        self.live_preview = self._live_committed
+        self._set_live_caret_desired(self._live_committed)
         self._notify_ui()
 
     def _set_state(self, new_state: AppState) -> None:
@@ -704,7 +774,6 @@ class DictationApp:
                 if not self.live_active:
                     return  # hold-to-talk owns the mic
                 hold_ms = (time.monotonic() - self._record_started_at) * 1000.0
-                self._set_state(AppState.PROCESSING)
                 if Config.PLAY_AUDIO_CUES:
                     threading.Thread(
                         target=play_beep, args=(440.0, 0.08), daemon=True, name="beep-stop"
@@ -726,7 +795,7 @@ class DictationApp:
                     self.last_status = "empty" if success else None
                     if live_session is not None:
                         threading.Thread(
-                            target=live_session.stop, kwargs={"timeout": 0.5},
+                            target=live_session.stop, kwargs={"timeout": 0.4},
                             daemon=True, name="odicto-live-abort",
                         ).start()
                     if self.recorder is not None:
@@ -747,7 +816,12 @@ class DictationApp:
                 self._record_started_at = now
                 self.last_status = None
                 self.live_preview = ""
+                self._live_committed = ""
+                with self._live_caret_lock:
+                    self._live_caret_current = ""
+                    self._live_caret_desired = ""
                 self.live_active = True
+                self._ensure_live_caret_worker()
                 self._set_state(AppState.RECORDING)
                 if Config.PLAY_AUDIO_CUES:
                     threading.Thread(
@@ -762,11 +836,14 @@ class DictationApp:
                     self._set_state(AppState.IDLE)
                     return
                 if Config.effective_stt_provider() == "gemini":
-                    session = GeminiLiveSession(on_interim=self._set_live_preview)
+                    session = GeminiLiveSession(
+                        on_interim=self._on_live_interim,
+                        on_final=self._on_live_final,
+                    )
                     self._live_session = session
                     self.recorder.add_chunk_listener(session.push_audio)
                     session.start()
-                    print("\n>>> Live dictation... (tap the key again to stop and paste)")
+                    print("\n>>> Live dictation at the caret... (tap again when finished)")
                 else:
                     print(
                         "\n>>> Tap-to-talk recording... "
@@ -778,8 +855,21 @@ class DictationApp:
         if start_pipeline:
             live_text = ""
             if live_session is not None:
-                live_text = live_session.stop(timeout=8.0)
-            print(">>> Processing live transcription...")
+                live_text = live_session.stop(timeout=0.7)
+                folded = (live_text or "").strip()
+                if folded and folded != self._live_committed:
+                    self._live_committed = folded
+                    self._set_live_caret_desired(folded)
+                self._flush_live_caret(timeout=0.3)
+            with self._live_caret_lock:
+                already_in_field = bool(self._live_caret_current.strip())
+            if already_in_field:
+                print(">>> Live text already at the caret — skip extra STT/paste.")
+                self.last_status = "success"
+                self._finish_cycle()
+                return
+            print(">>> Live stream empty; falling back to clip transcription...")
+            self._set_state(AppState.PROCESSING)
             threading.Thread(
                 target=self.process_and_paste,
                 args=(audio, False, "", False, live_text),

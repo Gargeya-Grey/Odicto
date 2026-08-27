@@ -423,6 +423,21 @@ class TestOdicto(unittest.TestCase):
             self.assertEqual(len(seen), 1)
             recorder.close()
 
+    def test_audio_recorder_waveform_follows_signal(self) -> None:
+        with patch("recorder.sd.InputStream") as mock_stream:
+            mock_stream.return_value.start.return_value = None
+            recorder = AudioRecorder(sample_rate=16000, channels=1)
+            recorder.start()
+            quiet = np.zeros(64, dtype=np.float32)
+            loud = np.linspace(0.0, 0.9, 64, dtype=np.float32)
+            recorder._callback(quiet.reshape(-1, 1), 64, None, None)
+            recorder._callback(loud.reshape(-1, 1), 64, None, None)
+            wave = recorder.get_waveform(8)
+            self.assertEqual(len(wave), 8)
+            self.assertGreater(max(wave), 0.05)
+            self.assertGreater(wave[-1], wave[0])
+            recorder.close()
+
     def test_effective_llm_model_and_api_base(self) -> None:
         """Provider flip picks the right model id and API base without hand-editing paths."""
         with patch.object(Config, "LLM_PROVIDER", "ollama"), patch.object(
@@ -1455,7 +1470,9 @@ class TestOdicto(unittest.TestCase):
     ) -> None:
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
-        ), patch("main.Config.LIVE_HOTKEY", "f7"):
+        ), patch("main.Config.LIVE_HOTKEY", "f7"), patch.object(
+            Config, "STT_PROVIDER", "whisper"
+        ), patch.object(Config, "effective_stt_provider", return_value="whisper"):
             with patch("threading.Thread"):
                 app = DictationApp()
                 app.initialize_app()
@@ -1520,6 +1537,71 @@ class TestOdicto(unittest.TestCase):
                 "already transcribed",
             )
             mock_paste_text.assert_called_once_with("already transcribed")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_stop_skips_stt_when_caret_has_text(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "whisper"), patch.object(
+            Config, "effective_stt_provider", return_value="whisper"
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+            app.on_live_toggle()
+            self.assertTrue(app.live_active)
+            app._record_started_at = 0.0
+            with app._live_caret_lock:
+                app._live_caret_current = "hello from live"
+                app._live_caret_desired = "hello from live"
+            with patch("threading.Thread") as mock_thread:
+                app.on_live_toggle()
+            self.assertFalse(app.live_active)
+            self.assertEqual(app.state, AppState.IDLE)
+            self.assertEqual(app.last_status, "success")
+            app.transcriber.transcribe.assert_not_called()
+            for call in mock_thread.call_args_list:
+                target = call[1].get("target") if call[1] else None
+                if target is None and call[0]:
+                    target = call[0][0]
+                self.assertNotEqual(getattr(target, "__name__", ""), "process_and_paste")
+
+    def test_apply_live_text_edits_tail_only(self) -> None:
+        from typer import apply_live_text
+
+        with patch("typer.send_backspaces") as mock_bs, patch(
+            "typer.paste_text"
+        ) as mock_paste, patch("typer.force_release_modifiers"):
+            out = apply_live_text("hello wo", "hello world")
+            self.assertEqual(out, "hello world")
+            mock_bs.assert_not_called()
+            mock_paste.assert_called_once_with("rld")
+            mock_paste.reset_mock()
+            apply_live_text("hello world", "hello")
+            mock_bs.assert_called_once_with(6)
+            mock_paste.assert_not_called()
 
     def test_indicator_reset_label(self) -> None:
         """F5 reset shows a distinct HUD label."""
@@ -1624,7 +1706,8 @@ class TestDictationIndicator(unittest.TestCase):
         indicator.gui_state = GuiState.RECORDING
         self.assertFalse(indicator._is_live_layout())
         mock_app.live_active = True
-        self.assertTrue(indicator._is_live_layout())
+        # Live captions go to the caret; HUD stays a one-row listening pill.
+        self.assertFalse(indicator._is_live_layout())
         indicator._tick.stop()
         indicator.close()
 
@@ -1742,8 +1825,14 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn('name="STT_PROVIDER"', html_page)
         self.assertIn('name="GEMINI_TRANSCRIBE_MODE"', html_page)
         self.assertIn("stt_mode_toggle", html_page)
+        self.assertIn('id="stt-gemini-fields"', html_page)
+        self.assertIn("function syncSttProvider", html_page)
         self.assertIn('name="LIVE_HOTKEY"', html_page)
         self.assertIn("function syncTranscribeMode", html_page)
+        self.assertIn('id="prompt_slot"', html_page)
+        self.assertIn('id="prompt_overlay"', html_page)
+        self.assertIn("prompt-panel", html_page)
+        self.assertNotIn("autoGrow(promptEl)", html_page)
 
     def test_config_system_prompt_falls_back_to_default(self) -> None:
         from config import DEFAULT_SYSTEM_PROMPT, Config
@@ -1824,6 +1913,11 @@ class TestCrossPlatform(unittest.TestCase):
         js = match.group(1)
         self.assertIn("initCustomSelect();", js)
         self.assertIn("function showProvider", js)
+        self.assertIn("function syncSttProvider", js)
+        self.assertIn("function togglePromptExpand", js)
+        self.assertIn("function syncPromptPanelHeight", js)
+        self.assertIn("function setTestTag", js)
+        self.assertIn("test_tag", page)
 
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
             f.write(js)

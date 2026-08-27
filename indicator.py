@@ -341,19 +341,19 @@ class DictationIndicator(QWidget):
         self._reposition_bottom_center()
 
     def _is_live_layout(self) -> bool:
-        live = getattr(self.app, "live_active", False) is True
-        return live and self.gui_state in (GuiState.RECORDING, GuiState.PROCESSING)
+        # Live text goes to the caret; HUD stays a one-row listening pill.
+        return False
 
     def _sync_geometry(self) -> None:
         """Grow the capsule for live captions / expanded recording waveform."""
         live = self._is_live_layout()
         recording = self.gui_state == GuiState.RECORDING
         if live:
-            pill_w, pill_h, n_bars, radius = 360, 78, 16, 22
+            pill_w, pill_h, n_bars, radius = 360, 78, 29, 22
         elif recording:
-            pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 11, 22
+            pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 20, 22
         else:
-            pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 5, 22
+            pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 7, 22
         if (
             pill_w == self._pill_w
             and pill_h == self._pill_h
@@ -582,28 +582,25 @@ class DictationIndicator(QWidget):
         if self._content_fade < 1.0:
             self._content_fade = min(1.0, self._content_fade + 0.16)
 
-        level = 0.0
+        n = len(self._bars)
         recorder = getattr(self.app, "recorder", None)
+        wave: list[float] = []
         if recorder is not None and self.gui_state == GuiState.RECORDING:
             try:
-                level = float(recorder.get_level())
+                wave = recorder.get_waveform(n)
             except Exception:
-                level = 0.0
-        self._level_smooth += (level - self._level_smooth) * 0.28
-
-        n = len(self._bars)
+                wave = []
         for i in range(n):
-            # Center bars taller; traveling phase keeps idle motion alive
-            mid = abs(i - (n - 1) / 2.0) / max(1.0, (n - 1) / 2.0)
-            shape = 1.0 - 0.35 * mid
-            phase = self._t * 3.2 + i * 0.65
-            ambient = 0.12 + 0.08 * abs(math.sin(phase))
-            speech = self._level_smooth * (0.55 + 0.45 * abs(math.sin(phase * 1.05)))
-            if self.gui_state == GuiState.RECORDING:
-                target = min(1.0, (ambient * 0.4 + speech) * shape)
+            if self.gui_state == GuiState.RECORDING and wave:
+                target = float(wave[i]) if i < len(wave) else 0.0
+                # Fast attack / slower release so consonants pop, vowels settle.
+                blend = 0.55 if target > self._bars[i] else 0.22
             else:
+                mid = abs(i - (n - 1) / 2.0) / max(1.0, (n - 1) / 2.0)
+                shape = 1.0 - 0.35 * mid
                 target = (0.08 + 0.04 * abs(math.sin(self._t * 1.4 + i * 0.35))) * shape
-            self._bars[i] += (target - self._bars[i]) * 0.26
+                blend = 0.26
+            self._bars[i] += (target - self._bars[i]) * blend
 
         if self.gui_state in (GuiState.SUCCESS, GuiState.ERROR):
             self._check_progress = min(1.0, self._check_progress + 0.08)
@@ -789,7 +786,7 @@ class DictationIndicator(QWidget):
         wave_w = 96.0
         wave_cx = left + wave_w * 0.5
         wave_cy = pill.center().y()
-        self._draw_eq_bars(p, wave_cx, wave_cy, accent, slot=wave_w, max_h=16.0, bar_w=3.0)
+        self._draw_eq_bars(p, wave_cx, wave_cy, accent, slot=wave_w, max_h=16.0, bar_w=2.0)
 
         div_x = left + wave_w + 8.0
         mid = pill.center().y()
@@ -800,11 +797,17 @@ class DictationIndicator(QWidget):
 
         last_status = getattr(self.app, "last_status", None)
         label = status_label(self.gui_state, use_llm, last_status)
+        live_on = getattr(self.app, "live_active", False) is True
         chip_on = _show_ai_chip(self.gui_state, use_llm)
-        chip_w = self._chip_width() if chip_on else 0.0
+        chip_label = "Live" if live_on else ("AI" if chip_on else "")
+        chip_w = (
+            float(QFontMetrics(self._font_chip).horizontalAdvance(chip_label) + self._chip_pad_x * 2)
+            if chip_label
+            else 0.0
+        )
         text_left = div_x + 10.0
         text_right = pill.right() - self._inset_x
-        if chip_on:
+        if chip_w:
             text_right -= chip_w + self._gap_text_chip
 
         p.setFont(self._font)
@@ -827,13 +830,14 @@ class DictationIndicator(QWidget):
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
             label,
         )
-        if chip_on:
-            self._draw_ai_chip(
+        if chip_label:
+            self._draw_named_chip(
                 p,
                 pill.right() - self._inset_x - chip_w,
                 pill.center().y() - self._chip_h * 0.5,
                 chip_w,
                 self._chip_h,
+                chip_label,
             )
 
     def _paint_live_content(self, p: QPainter, pill: QRectF, accent: QColor) -> None:
@@ -851,7 +855,7 @@ class DictationIndicator(QWidget):
             accent,
             slot=wave_w,
             max_h=18.0,
-            bar_w=3.2,
+            bar_w=2.0,
         )
         self._draw_named_chip(
             p,
@@ -933,8 +937,10 @@ class DictationIndicator(QWidget):
         n = len(self._bars)
         if slot is None:
             slot = self._glyph_slot - 2.0
-        gap = (slot - n * bar_w) / max(1, n - 1)
-        x0 = cx - slot * 0.5
+        raw_gap = (slot - n * bar_w) / max(1, n - 1)
+        gap = min(1.85, max(0.85, raw_gap))
+        used = n * bar_w + max(0, n - 1) * gap
+        x0 = cx - min(used, slot) * 0.5
 
         for i, v in enumerate(self._bars):
             h = max(2.2, max_h * (0.2 + 0.8 * v))

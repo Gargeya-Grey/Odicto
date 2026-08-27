@@ -34,6 +34,7 @@ __all__ = [
     "send",
     "send_copy",
     "send_paste",
+    "send_backspaces",
     "force_release_modifiers",
     "wm_copy_foreground",
     "apply_window_exstyles",

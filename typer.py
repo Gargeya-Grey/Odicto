@@ -10,6 +10,7 @@ from platforms import (
     clipboard_read,
     clipboard_write,
     force_release_modifiers,
+    send_backspaces,
     send_copy,
     send_paste,
     wm_copy_foreground,
@@ -162,3 +163,27 @@ def paste_text(text: str) -> None:
     finally:
         if not _clipboard_write(original_clipboard):
             print("Warning: Failed to restore original clipboard after paste", flush=True)
+
+
+def apply_live_text(current: str, desired: str) -> str:
+    """Bring the caret from ``current`` to ``desired`` with minimal edits.
+
+    Shares a common prefix, backspaces the tail, then pastes the remainder.
+    Used by F7 live dictation so text appears in the focused field as you speak.
+    """
+    current = current or ""
+    desired = desired or ""
+    if current == desired:
+        return desired
+    i = 0
+    limit = min(len(current), len(desired))
+    while i < limit and current[i] == desired[i]:
+        i += 1
+    back = len(current) - i
+    add = desired[i:]
+    force_release_modifiers()
+    if back:
+        send_backspaces(back)
+    if add:
+        paste_text(add)
+    return desired

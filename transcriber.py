@@ -275,8 +275,10 @@ class GeminiLiveSession:
     def __init__(
         self,
         on_interim: Optional[Callable[[str], None]] = None,
+        on_final: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._on_interim = on_interim
+        self._on_final = on_final
         self._chunks: queue.Queue = queue.Queue(maxsize=128)
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -376,7 +378,7 @@ class GeminiLiveSession:
                 except Exception:
                     pass
                 try:
-                    await asyncio.wait_for(asyncio.shield(receiver), timeout=2.5)
+                    await asyncio.wait_for(asyncio.shield(receiver), timeout=0.45)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:
@@ -426,9 +428,9 @@ class GeminiLiveSession:
                 text = getattr(final, "text", None)
                 if isinstance(text, str) and text.strip():
                     self._final_parts.append(text.strip())
-                    if self._on_interim:
+                    if self._on_final:
                         try:
-                            self._on_interim(" ".join(self._final_parts))
+                            self._on_final(text.strip())
                         except Exception:
                             pass
             if self._stop.is_set() and getattr(server, "turn_complete", False):
