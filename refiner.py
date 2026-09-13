@@ -51,6 +51,23 @@ def _ensure_google_genai():
     return google_genai
 
 
+def _require_openai() -> None:
+    """Import the openai SDK, or raise the message the callers already surface."""
+    _ensure_openai()
+    if OpenAI is None:
+        raise RuntimeError("openai package not installed")
+
+
+def _warn_missing_api_key(env_key: str, provider_label: str) -> None:
+    """Warn on stderr that a provider key is unset, so AI mode falls back to raw text."""
+    print(
+        f"Warning: {env_key} is empty — "
+        f"{provider_label} AI mode will fall back to raw transcript until set.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 # Hard constraints — output is pasted verbatim into the user's document/chat box.
 # The Meta Responses call sends no max_output_tokens: reasoning budget is
 # uncapped and the effort knob (META_REASONING_EFFORT) is the only control.
@@ -489,9 +506,7 @@ class TextRefiner:
         self.conversation_history: list[dict[str, str]] = []
 
         if self.provider == "ollama":
-            _ensure_openai()
-            if OpenAI is None:
-                raise RuntimeError("openai package not installed")
+            _require_openai()
             self.client = OpenAI(
                 base_url=Config.effective_llm_api_base(),
                 api_key="ollama",
@@ -499,17 +514,10 @@ class TextRefiner:
             )
         elif self.provider == "openrouter":
             if not Config.effective_api_key():
-                print(
-                    "Warning: OPENROUTER_API_KEY is empty — "
-                    "OpenRouter AI mode will fall back to raw transcript until set.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                _warn_missing_api_key("OPENROUTER_API_KEY", "OpenRouter")
                 self.client = None
             else:
-                _ensure_openai()
-                if OpenAI is None:
-                    raise RuntimeError("openai package not installed")
+                _require_openai()
                 self.client = OpenAI(
                     base_url=Config.effective_llm_api_base(),
                     api_key=Config.effective_api_key(),
@@ -522,12 +530,7 @@ class TextRefiner:
                 prefetch_openrouter_catalog()
         elif self.provider == "meta":
             if not Config.effective_api_key():
-                print(
-                    "Warning: META_API_KEY is empty — "
-                    "Meta AI mode will fall back to raw transcript until set.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                _warn_missing_api_key("META_API_KEY", "Meta")
                 self.client = None
             else:
                 self.client = _MetaClient(
@@ -537,12 +540,7 @@ class TextRefiner:
                 )
         elif self.provider == "gemini":
             if not Config.effective_api_key():
-                print(
-                    "Warning: GEMINI_API_KEY is empty — "
-                    "Gemini AI mode will fall back to raw transcript until set.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                _warn_missing_api_key("GEMINI_API_KEY", "Gemini")
                 self.client = None
             else:
                 self.client = _GeminiClient(
@@ -551,6 +549,21 @@ class TextRefiner:
                 )
         else:  # "none"
             self.client = None
+
+    def _record_reply(self, reply: str, keep_history: bool) -> None:
+        """Append the assistant turn when multi-turn memory is on."""
+        if not keep_history:
+            return
+        with self._history_lock:
+            self.conversation_history.append({"role": "assistant", "content": reply})
+
+    def _pop_pending_user_turn(self, keep_history: bool) -> None:
+        """Drop the user turn recorded optimistically when the call yields no reply."""
+        if not keep_history:
+            return
+        with self._history_lock:
+            if self.conversation_history and self.conversation_history[-1]["role"] == "user":
+                self.conversation_history.pop()
 
     def _meta_input_from_history(
         self, history_snapshot: list[dict[str, str]], system_prompt: str = ""
@@ -712,19 +725,9 @@ class TextRefiner:
                 print(f"Meta responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
-                    if keep_history:
-                        with self._history_lock:
-                            self.conversation_history.append(
-                                {"role": "assistant", "content": refined_text}
-                            )
+                    self._record_reply(refined_text, keep_history)
                     return refined_text
-                if keep_history:
-                    with self._history_lock:
-                        if (
-                            self.conversation_history
-                            and self.conversation_history[-1]["role"] == "user"
-                        ):
-                            self.conversation_history.pop()
+                self._pop_pending_user_turn(keep_history)
                 return text
 
             if self.provider == "gemini":
@@ -749,19 +752,9 @@ class TextRefiner:
                 print(f"Gemini responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
-                    if keep_history:
-                        with self._history_lock:
-                            self.conversation_history.append(
-                                {"role": "assistant", "content": refined_text}
-                            )
+                    self._record_reply(refined_text, keep_history)
                     return refined_text
-                if keep_history:
-                    with self._history_lock:
-                        if (
-                            self.conversation_history
-                            and self.conversation_history[-1]["role"] == "user"
-                        ):
-                            self.conversation_history.pop()
+                self._pop_pending_user_turn(keep_history)
                 return text
 
             messages = [{"role": "system", "content": effective_sys_prompt}]
@@ -837,11 +830,7 @@ class TextRefiner:
                 refined_text = _choice_content(response)
 
             if refined_text:
-                if keep_history:
-                    with self._history_lock:
-                        self.conversation_history.append(
-                            {"role": "assistant", "content": refined_text}
-                        )
+                self._record_reply(refined_text, keep_history)
                 return refined_text
 
             print(
@@ -850,23 +839,11 @@ class TextRefiner:
                 f"pasting the raw transcript.",
                 flush=True,
             )
-            if keep_history:
-                with self._history_lock:
-                    if (
-                        self.conversation_history
-                        and self.conversation_history[-1]["role"] == "user"
-                    ):
-                        self.conversation_history.pop()
+            self._pop_pending_user_turn(keep_history)
             return text
 
         except Exception as e:
-            if keep_history:
-                with self._history_lock:
-                    if (
-                        self.conversation_history
-                        and self.conversation_history[-1]["role"] == "user"
-                    ):
-                        self.conversation_history.pop()
+            self._pop_pending_user_turn(keep_history)
             print(
                 f"!!! AI mode FAILED for model '{self.model}' ({self.provider}): {e}\n"
                 f"    Pasting raw Whisper transcript instead. "
@@ -899,9 +876,7 @@ def test_provider(
         if provider == "none":
             return "ok"
         if provider == "ollama":
-            _ensure_openai()
-            if OpenAI is None:
-                return "openai package not installed"
+            _require_openai()
             base = api_base.strip() or ENV_DEFAULTS["LLM_API_BASE"]
             client = OpenAI(base_url=base, api_key="ollama", max_retries=0)
             client.chat.completions.create(
@@ -912,9 +887,7 @@ def test_provider(
             )
             return "ok"
         if provider == "openrouter":
-            _ensure_openai()
-            if OpenAI is None:
-                return "openai package not installed"
+            _require_openai()
             if not api_key.strip():
                 return "OPENROUTER_API_KEY is required"
             base = api_base.strip() or ENV_DEFAULTS["OPENROUTER_API_BASE"]
