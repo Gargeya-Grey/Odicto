@@ -70,14 +70,49 @@ $ExpectedSkips = if ($OnWindows) { 0 } else { 2 }
 $Scratch = if ($env:COMMANDCODE_SCRATCHPAD) { $env:COMMANDCODE_SCRATCHPAD } else { Join-Path $env:TEMP 'odicto-verify' }
 if (-not (Test-Path $Scratch)) { New-Item -ItemType Directory -Path $Scratch -Force | Out-Null }
 
+# Self-heal first: if a previous run was killed mid-way, .env / prompt.txt may still be
+# sitting in the backup directory. Put them back before doing anything else, so this
+# script can never leave the app running without its configuration.
+$backupDir = Join-Path $Scratch 'clean-env-backup'
+foreach ($name in @('.env', 'prompt.txt')) {
+    $live = Join-Path $RepoRoot $name
+    $stashed = Join-Path $backupDir $name
+    if ((Test-Path -LiteralPath $stashed) -and -not (Test-Path -LiteralPath $live)) {
+        Move-Item -LiteralPath $stashed -Destination $live -Force
+        Write-Host "Recovered $name from an interrupted previous run." -ForegroundColor Yellow
+    }
+}
+
+# Runs python in a child job with a hard timeout, writing output to a file so partial
+# output survives a kill. This exists because of a pre-existing hazard: the unit suite
+# prints "OK" and then can stall at interpreter shutdown with
+#   Exception ignored in: BaseEventLoop.__del__
+#   AttributeError: 'ProactorEventLoop' object has no attribute '_ssock_'
+# (Gemini Live asyncio teardown; triggered by GC timing). Treating output-based success
+# as authoritative keeps the gate reliable without hiding a genuine hang, which would
+# produce no "Ran N tests" / "OK" line at all.
+$GateTimeoutSeconds = 180
+
 function Invoke-Python {
-    param([string[]]$PyArgs)
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $text = (& $Python @PyArgs 2>&1 | Out-String)
-    $code = $LASTEXITCODE
-    $ErrorActionPreference = $previous
-    return [pscustomobject]@{ Text = $text; Code = $code }
+    param([string[]]$PyArgs, [int]$TimeoutSeconds = $GateTimeoutSeconds)
+    $outFile = Join-Path $Scratch 'py-out.txt'
+    if (Test-Path $outFile) { Remove-Item $outFile -Force -ErrorAction SilentlyContinue }
+    $job = Start-Job -ScriptBlock {
+        param($py, $pyArgs, $repo, $target)
+        Set-Location $repo
+        $env:QT_QPA_PLATFORM = 'offscreen'
+        & $py @pyArgs *>&1 > $target
+        ('EXITCODE={0}' -f $LASTEXITCODE) | Add-Content -Path $target
+    } -ArgumentList $Python, $PyArgs, $RepoRoot, $outFile
+    Wait-Job $job -Timeout $TimeoutSeconds | Out-Null
+    $timedOut = ($job.State -eq 'Running')
+    if ($timedOut) { Stop-Job $job }
+    Remove-Job $job -Force
+    Start-Sleep -Milliseconds 200
+    $text = if (Test-Path $outFile) { [string](Get-Content $outFile -Raw -ErrorAction SilentlyContinue) } else { '' }
+    $match = [regex]::Match($text, 'EXITCODE=(\d+)')
+    $code = if ($match.Success) { [int]$match.Groups[1].Value } else { 124 }
+    return [pscustomobject]@{ Text = $text; Code = $code; TimedOut = $timedOut }
 }
 
 function Get-SkipCount {
@@ -115,7 +150,8 @@ if ($runCount -ne $ExpectedUnitTestCount) {
 } elseif ($units.Text -notmatch 'OK') {
     Add-Failure "test_units did not report OK"
 } else {
-    Add-Pass "$runCount ran, $skipCount skipped, OK"
+    $note = if ($units.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
+    Add-Pass "$runCount ran, $skipCount skipped, OK$note"
 }
 
 # --------------------------------------------------------- 3. the equivalence oracle
@@ -127,7 +163,8 @@ if ($equiv.Text -notmatch 'OK') {
 } elseif ($equivSkips -ne 0) {
     Add-Failure "test_equivalence skipped $equivSkips tests - the oracle must always run in full"
 } else {
-    Add-Pass ("{0} ran, 0 skipped, OK" -f (Get-RunCount $equiv.Text))
+    $note = if ($equiv.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
+    Add-Pass ("{0} ran, 0 skipped, OK{1}" -f (Get-RunCount $equiv.Text), $note)
 }
 
 # --------------------------------------------------------------- 4. import smoke test
@@ -165,8 +202,7 @@ if ($SkipCleanEnv) {
     $promptPath = Join-Path $RepoRoot 'prompt.txt'
     $hadEnv = Test-Path -LiteralPath $envPath
     $hadPrompt = Test-Path -LiteralPath $promptPath
-    $backupDir = Join-Path $Scratch 'clean-env-backup'
-    if (Test-Path $backupDir) { Remove-Item $backupDir -Recurse -Force }
+    if (Test-Path $backupDir) { Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
     $cleanResult = $null
@@ -185,10 +221,11 @@ if ($SkipCleanEnv) {
 
     if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
         Add-Failure "'.env' was NOT restored after the clean-environment run - restore it from $backupDir"
-    } elseif ($cleanResult -and $cleanResult.Text -notmatch 'OK') {
+    } elseif (-not $cleanResult -or $cleanResult.Text -notmatch 'OK') {
         Add-Failure "clean-environment run failed (this is how CI runs; a local .env can mask it):`n$($cleanResult.Text)"
     } else {
-        Add-Pass 'suite passes with no .env present, and .env was restored'
+        $note = if ($cleanResult.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
+        Add-Pass "suite passes with no .env present, and .env was restored$note"
     }
 }
 
