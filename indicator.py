@@ -152,7 +152,6 @@ class DictationIndicator(QWidget):
         # Animation clock
         self._t: float = 0.0
         self._bars: list[float] = [0.16] * 5  # quiet equalizer; grows in live layout
-        self._level_smooth: float = 0.0
         self._appear: float = 0.0  # 0..1 opacity only (never scale)
         self._appear_target: float = 1.0
         self._rise: float = 0.0    # 0..1 rise offset for the entrance (no scale)
@@ -568,8 +567,6 @@ class DictationIndicator(QWidget):
         # Processing fill clock — a full ring represents one "working" sweep.
         if self.gui_state == GuiState.PROCESSING:
             self._proc_fill = (getattr(self, "_proc_fill", 0.0) + 0.016 / 2.5) % 1.0
-            if self._proc_fill < 0.001:
-                pass  # loop: indeterminate working sweep
 
         if self._content_fade < 1.0:
             self._content_fade = min(1.0, self._content_fade + 0.16)

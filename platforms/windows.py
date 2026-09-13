@@ -33,10 +33,6 @@ def _mutex_names_for_install() -> Tuple[str, ...]:
     )
 
 
-def _mutex_name_for_install() -> str:
-    return _mutex_names_for_install()[0]
-
-
 def _self_and_parent_pids() -> set:
     """This interpreter and its launcher stub.
 

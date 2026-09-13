@@ -273,7 +273,6 @@ class DictationApp:
 
         # F7 (LIVE_HOTKEY): tap-to-talk. Distinct from hold-to-talk chords.
         self.live_active: bool = False
-        self.live_preview: str = ""
         self._live_session: Optional[GeminiLiveSession] = None
         self._live_key_held: bool = False
         self._live_committed: str = ""
@@ -586,15 +585,6 @@ class DictationApp:
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
 
-    def _mods_held(self, mods: tuple) -> bool:
-        """True if every listed modifier is currently down (empty mods → True)."""
-        if not mods:
-            return True
-        try:
-            return all(platforms.is_pressed(m) for m in mods)
-        except Exception:
-            return False
-
     def _mods_in_snapshot(self, mods: tuple) -> bool:
         """True if every modifier was physically down at primary-key press time."""
         if not mods:
@@ -744,10 +734,6 @@ class DictationApp:
             f"(single-instance lock held)",
             flush=True,
         )
-
-    def _kill_stale_instance(self) -> None:
-        """Kill every other Odicto main.py for this install."""
-        platforms.kill_other_odicto_processes(self.pid_file)
 
     def _ensure_ollama_running(self) -> None:
         """Starts a local Ollama server if port 11434 is not already listening."""
@@ -907,7 +893,6 @@ class DictationApp:
             self._record_started_at = now
             self.last_status = None
             self.live_active = False
-            self.live_preview = ""
             self._set_state(AppState.RECORDING)
 
             if Config.PLAY_AUDIO_CUES:
@@ -1061,7 +1046,6 @@ class DictationApp:
                 self._keep_history = False
                 self._record_started_at = now
                 self.last_status = None
-                self.live_preview = ""
                 self._live_committed = ""
                 self._live_epoch += 1
                 with self._live_caret_lock:

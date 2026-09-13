@@ -152,11 +152,6 @@ def wait_for_cuda_driver(max_wait_s: Optional[float] = None) -> bool:
     return False
 
 
-def cuda_is_safe_to_load() -> bool:
-    """Back-compat alias used by tests; waits then reports whether the probe passed."""
-    return wait_for_cuda_driver()
-
-
 def _probe_cuda_subprocess(timeout: float = 20.0) -> bool:
     code = (
         "import sys\n"
@@ -617,19 +612,3 @@ class GeminiLiveSession:
                             pass
             if self._stop.is_set() and getattr(server, "turn_complete", False):
                 break
-
-
-def build_transcriber():
-    """Factory used by main: Gemini unary (with Whisper fallback) or local Whisper."""
-    if Config.effective_stt_provider() == "gemini":
-        print(
-            f"STT: Gemini 3.5 Transcribe "
-            f"({Config.gemini_transcribe_mode()}, model={Config.GEMINI_TRANSCRIBE_MODEL})",
-            flush=True,
-        )
-        return GeminiTranscriber()
-    print(
-        f"STT: local Whisper ({Config.WHISPER_MODEL_SIZE} on {Config.WHISPER_DEVICE})",
-        flush=True,
-    )
-    return WhisperTranscriber()
