@@ -29,9 +29,12 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-# Hash of test_units.py as checkpointed before the refactor began. If this differs,
-# the equivalence oracle has been edited and every "behaviour unchanged" claim is void.
-$ExpectedTestUnitsHash = 'E86F0F2D3A7C974E659276F07337F648EBB59B742B39B339290C3B3627D0F9F3'
+# Hash of test_units.py. It is frozen so its assertions cannot be quietly weakened to make a
+# change pass. It was re-based exactly once, deliberately: test_openrouter_glm53_keeps_explicit_high
+# relied on the developer's shell exporting OPENROUTER_REASONING_EFFORT, so it passed locally and
+# failed on CI. That edit pinned _PRESENT_AT_IMPORT inside the test. The test count (150) and every
+# other assertion are unchanged.
+$ExpectedTestUnitsHash = '4586445D62DF3979347CC970113FBB729EE17DB42FDA76FC38A8F6345CDEBC93'
 $ExpectedUnitTestCount = 150
 
 $Script:Failures = @()
@@ -205,6 +208,21 @@ if ($SkipCleanEnv) {
     if (Test-Path $backupDir) { Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
+    # Moving .env is NOT sufficient. If the shell also exports the config keys (common when
+    # a developer exports .env into their environment), os.getenv still sees them, so
+    # _PRESENT_AT_IMPORT is non-empty and the run is not clean at all - it silently diverges
+    # from CI. That is exactly how a real CI-only failure (test_openrouter_glm53_keeps_explicit_high)
+    # stayed hidden locally. Clear config's known keys too, then restore them.
+    $envGuard = @{}
+    $knownKeys = (Invoke-Python @('-c', 'from config import KNOWN_ENV_KEYS; print(chr(10).join(sorted(KNOWN_ENV_KEYS)))')).Text
+    foreach ($key in ($knownKeys -split "`r?`n" | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*$' })) {
+        $value = [Environment]::GetEnvironmentVariable($key)
+        if ($null -ne $value) {
+            $envGuard[$key] = $value
+            Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+        }
+    }
+
     $cleanResult = $null
     try {
         if ($hadEnv) { Move-Item -LiteralPath $envPath -Destination (Join-Path $backupDir '.env') -Force }
@@ -217,6 +235,9 @@ if ($SkipCleanEnv) {
         if ($hadPrompt -and -not (Test-Path -LiteralPath $promptPath)) {
             Move-Item -LiteralPath (Join-Path $backupDir 'prompt.txt') -Destination $promptPath -Force
         }
+        foreach ($key in $envGuard.Keys) {
+            Set-Item -Path "Env:$key" -Value $envGuard[$key]
+        }
     }
 
     if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
@@ -225,7 +246,7 @@ if ($SkipCleanEnv) {
         Add-Failure "clean-environment run failed (this is how CI runs; a local .env can mask it):`n$($cleanResult.Text)"
     } else {
         $note = if ($cleanResult.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-        Add-Pass "suite passes with no .env present, and .env was restored$note"
+        Add-Pass "suite passes with no .env present and $($envGuard.Count) exported config vars cleared, all restored$note"
     }
 }
 

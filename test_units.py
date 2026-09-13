@@ -798,7 +798,16 @@ class TestOdicto(unittest.TestCase):
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
     @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "high")
     @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    @patch.object(config, "_PRESENT_AT_IMPORT", frozenset({"OPENROUTER_REASONING_EFFORT"}))
     def test_openrouter_glm53_keeps_explicit_high(self) -> None:
+        """An explicit OPENROUTER_REASONING_EFFORT must beat the built-in default.
+
+        Pins _PRESENT_AT_IMPORT deliberately. OPENROUTER_REASONING_EFFORT is not listed in
+        _IMPORT_SNAPSHOT, so _explicit() only reports it as provided when the key was in the
+        environment at import time - patching the attribute alone does not make it an
+        override. Without this pin the test passed only on a developer machine whose shell
+        exports the key, and failed on CI where nothing does.
+        """
         from refiner import openrouter_effort_for_model
 
         self.assertEqual(openrouter_effort_for_model("z-ai/glm-5.3-flash"), "high")
