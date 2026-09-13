@@ -388,6 +388,44 @@ class TestPlatformExportSurface(unittest.TestCase):
             self.assertIn(name, exported, "%s must be exported by platforms.%s" % (name, backend))
 
 
+class TestTokenSubstitutionIsSinglePass(unittest.TestCase):
+    """Substitution is one pass over the template only.
+
+    The pre-refactor code chained ``page.replace(...)`` calls, which re-scanned values they
+    had already inserted. A prompt or status message containing a literal token name was
+    therefore silently corrupted. These are property assertions rather than golden hashes,
+    because the *old* output for these inputs was the corrupt one - there is no worthwhile
+    byte-identity to preserve.
+    """
+
+    def test_prompt_containing_a_token_name_survives(self) -> None:
+        literal = "__MODEL_DEFAULTS_JSON__"
+        page = _render_page(
+            {
+                "env": {"LLM_PROVIDER": "none"},
+                "system_prompt": "keep %s literal" % literal,
+                "present": ("SYSTEM_PROMPT",),
+            }
+        )
+        self.assertIn("keep %s literal" % literal, page)
+
+    def test_status_message_containing_a_token_name_survives(self) -> None:
+        literal = "__SYSTEM_PROMPT__"
+        page = _render_page(
+            {
+                "env": {"LLM_PROVIDER": "none"},
+                "message": "failed on %s" % literal,
+                "message_kind": "err",
+            }
+        )
+        self.assertIn("failed on %s" % literal, page)
+
+    def test_template_file_is_shipped_beside_the_module(self) -> None:
+        """setup_web loads setup_template.html from its own directory, never the CWD."""
+        path = os.path.join(os.path.dirname(os.path.abspath(setup_web.__file__)), "setup_template.html")
+        self.assertTrue(os.path.isfile(path), "setup_template.html must sit beside setup_web.py")
+
+
 class TestSendTextCap(unittest.TestCase):
     """Regression guard for the 256-character cap that a de-dup could silently drop."""
 
