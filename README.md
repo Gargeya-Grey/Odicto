@@ -556,22 +556,23 @@ Behavior & UI:
 
 ## Architecture (quick map)
 
+**Canonical reference: [`docs/architecture.md`](docs/architecture.md)** — module map, Mermaid
+diagrams (system context, dependency graph, the dictation and live-F7 sequences, state machine,
+lock gate, threads and locks, failure paths), the config cascade, "where do I change X?", and the
+invariants not to break.
+
+**Why the code is shaped this way, including refactorings that were deliberately rejected:
+[`docs/engineering-notes.md`](docs/engineering-notes.md).**
+
 | File | Role |
 |------|------|
 | `main.py` | App lifecycle, hotkeys, pipeline orchestration |
-| `recorder.py` | Low-latency mic capture + level meter |
-| `transcriber.py` | `faster-whisper` STT |
-| `refiner.py` | LLM replies (fresh by default; F6 keeps history) |
-| `typer.py` | Text injection: clipboard paste, or typing into terminals |
-| `indicator.py` | PySide6 glass HUD |
-| `config.py` | Env-backed settings |
-| `app_state.py` | Shared state enum (import-safe) |
-| `install.ps1` | Zero-to-one Windows installer (uv-first, pip fallback) |
-| `install.sh` | Zero-to-one macOS/Linux installer (uv-first, pip fallback) |
-| `odicto.py` | Cross-platform lifecycle CLI (setup/start/stop/status/autostart) |
-| `setup_web.py` | Local setup web page (provider, key, and AI system prompt) |
-| `setup.bat` / `setup.sh` | Double-click / shell launcher for the setup page |
+| `setup_web.py` + `setup_template.html` | Local setup page (server + markup) |
 | `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
+| `tools/verify.ps1` | Runs every gate used to prove behaviour is unchanged |
+| `tools/module_graph.py` | Regenerates the dependency diagram in `docs/architecture.md` |
+| `install.ps1` / `install.sh` | Zero-to-one installers (uv-first, pip fallback) |
+| `setup.bat` / `setup.sh` | Launchers for the setup page |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---

@@ -426,6 +426,26 @@ class TestTokenSubstitutionIsSinglePass(unittest.TestCase):
         self.assertTrue(os.path.isfile(path), "setup_template.html must sit beside setup_web.py")
 
 
+class TestDocumentationConsistency(unittest.TestCase):
+    """The generated parts of docs/architecture.md must match the source."""
+
+    def test_module_graph_is_not_stale(self) -> None:
+        import subprocess
+
+        tool = os.path.join(REPO_ROOT, "tools", "module_graph.py")
+        result = subprocess.run(
+            [sys.executable, tool, "--check"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            0,
+            result.returncode,
+            "module graph is stale - run: python tools/module_graph.py --write\n%s%s"
+            % (result.stdout, result.stderr),
+        )
+
+
 class TestSendTextCap(unittest.TestCase):
     """Regression guard for the 256-character cap that a de-dup could silently drop."""
 

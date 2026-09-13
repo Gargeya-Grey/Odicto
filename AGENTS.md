@@ -2,6 +2,12 @@
 
 This file is for coding agents (and power users) automating setup on a **fresh machine**.
 
+> **Before changing code, read [`docs/architecture.md`](docs/architecture.md)** — the canonical
+> module map, diagram set, "where do I change X?" cookbook, and the invariants not to break.
+> [`docs/engineering-notes.md`](docs/engineering-notes.md) records why the code is shaped this way,
+> including refactorings that were deliberately rejected and the coupling that makes them unsafe.
+> Run `.\tools\verify.ps1` after any change; it is the whole safety net in one command.
+
 ## Goal
 
 Make the app runnable end-to-end: venv, Python deps, optional Ollama LLM,
@@ -214,6 +220,10 @@ supplied it) with:
   `.venv/bin/python odicto.py stop`.
 
 ## STRICT: single instance only (never stack keyboard hooks)
+
+The full lock → hook-bind gate diagram and the invariant list live in
+[`docs/architecture.md`](docs/architecture.md) (§7 and §13). The operational rules below are the
+short version.
 
 **Why normal typing is related to Odicto:** the hold-to-talk hotkey installs a
 **system-wide** keyboard hook with suppression. While Odicto is running,
