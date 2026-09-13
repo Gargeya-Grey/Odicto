@@ -1,0 +1,407 @@
+"""Equivalence oracle for the efficient-modular refactor (see docs/architecture.md).
+
+Pins the rendered setup page and a set of pure config functions so that
+"behaviour is unchanged" is *proved* rather than asserted while the code is
+de-duplicated. Goldens were captured from the pre-refactor tree.
+
+Design notes
+------------
+* Imports only ``setup_web`` and ``config`` - never ``main``, which calls
+  ``attach_pythonw_log()`` at import time and would touch the on-disk log.
+  The oracle is deliberately hermetic.
+* Page goldens are SHA-256 hashes, not fixtures: committing a ~1,750-line HTML
+  fixture per state would dwarf the line savings the refactor is chasing. On a
+  mismatch the rendered page is dumped to disk so the diff is still diagnosable.
+* Every input that could differ between machines is pinned, including
+  ``config._PRESENT_AT_IMPORT`` - it is computed at import from the real ``.env``,
+  and leaving it unpinned produces a golden that passes locally and fails on CI.
+  (This is not hypothetical: an early capture of ``OPENROUTER_REASONING_EFFORT``
+  silently encoded the developer's own ``.env`` value.)
+* ``test_units.py`` is not touched by this refactor; this is an independent,
+  additional oracle. Run both.
+"""
+
+from __future__ import annotations
+
+import ast
+import contextlib
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+import config
+import setup_web
+
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+_BACKEND_FOR_PLATFORM = {"win32": "windows", "darwin": "macos"}
+_SUBMODULE_NAMES = {"base", "_keyboard", "_posix", "windows", "macos", "linux"}
+# Set on the ``platforms`` package directly from platforms.base (see
+# platforms/__init__.py), so they are legitimately absent from a backend's __all__.
+_BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
+
+# sha256 of setup_web._page() captured from the pre-refactor tree.
+_GOLDEN_PAGE_HASHES = {
+    "fresh_empty_env": "2ac08d35d0afa3c439bcdce31811d29b0feb7f453eb1bf0509ea9cfa8e87b15f",
+    "provider_meta": "bc81492e84d5a9512f1731c210903a6c82c3bb8251fc156942c91580fb699ae6",
+    "provider_openrouter": "7ba502c29ec009a197254c143ac0ee17770da3cd0adb72d0a981d32b611b2eec",
+    "provider_gemini": "6265256a619b1dfba7d5ba63ac2b5b0e745845f8c16ce38976ccb62d4d260e0e",
+    "provider_ollama": "b44fb4b977a8cf01ee1da5167cc05a6c42cd5c526e543e6b1d7f97af629544d6",
+    "provider_none": "2ac08d35d0afa3c439bcdce31811d29b0feb7f453eb1bf0509ea9cfa8e87b15f",
+    "history_and_custom": "b5e67e2568ed61ce47b59fc79e5b250c6ff682b3e5432c6829f3988739f33fd6",
+    "hotkey_short": "28e7e4fc47cf20ec694a669610b3b5d07b6fc265c1e6e97b76e3add1c6d43c91",
+    "stt_gemini": "bcc50eb2b19a63f7a06222c34498e9b3ed6ebcb2f8141f8670c39e57f0b6fcdf",
+    "prompt_from_file": "f8ae555c290ce5dbe5b9fd86855501f53d31a509f9f7fea0cf074c319482cd63",
+    "prompt_from_inline_env": "47eda2a306a3d5942e7da534d9c011c7061dd6900f5f514463b0aba9545d2fc2",
+    "msg_ok": "e30b88cc41851f34ef4f863db0fd4b4ddf489d5f6317c8345fe63b36e0edc6d3",
+    "msg_err": "bf53a712148ff30cc045767b36a7bdb7eeb39f6a23a256b044fc312cb6fb5006",
+    "msg_neutral": "85c14d11a9777d881e5ebc1587b83d6c45d819784326b4a04678fa0f9e623b9c",
+}
+
+# Captured from the pre-refactor tree with every machine-dependent input pinned.
+_GOLDEN_PURE_VALUES = {
+    "parse_hold_hotkey_default": (("ctrl",), "grave"),
+    "parse_hold_hotkey_ai": (("ctrl", "shift"), "grave"),
+    "sanitize_hash_tail": "openai/gpt-5.6-luna",
+    "sanitize_plain": "plain/model",
+    "normalize_key_aliases": ["right ctrl", "left shift", "grave", "ctrl", "f7"],
+    "eff_meta": ["m1", "https://api.meta.ai/v1", "k", 1024, "low"],
+    "eff_openrouter": ["o1", "https://openrouter.ai/api/v1", "k", 1024, "none"],
+    "eff_gemini": ["g1", "https://generativelanguage.googleapis.com", "k", 1024, "medium"],
+    "eff_ollama": ["q1", "", "", 1024, ""],
+    "eff_none": ["", "", "", 1024, ""],
+}
+
+# env -> value written to a temporary .env; optional prompt_txt / system_prompt / present.
+_PAGE_STATES = {
+    "fresh_empty_env": {"env": {}},
+    "provider_meta": {
+        "env": {"LLM_PROVIDER": "meta", "META_API_KEY": "sk-meta-secret", "META_MODEL": "muse-test"}
+    },
+    "provider_openrouter": {
+        "env": {
+            "LLM_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "sk-or-secret",
+            "OPENROUTER_MODEL": "openai/test-model",
+        }
+    },
+    "provider_gemini": {
+        "env": {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "sk-gem-secret", "GEMINI_MODEL": "gemini-test"}
+    },
+    "provider_ollama": {"env": {"LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen-test"}},
+    "provider_none": {"env": {"LLM_PROVIDER": "none"}},
+    "history_and_custom": {
+        "env": {
+            "LLM_PROVIDER": "openrouter",
+            "OPENROUTER_MODEL_HISTORY": "alpha,beta,alpha",
+            "META_MODEL_HISTORY": "one,two",
+            "GEMINI_MODEL_HISTORY": "g1,g2",
+            "OLLAMA_MODEL_HISTORY": "o1",
+            "OPENROUTER_REASONING_EFFORT": "law",
+            "OPENROUTER_PROVIDER_SORT": "price",
+            "LLM_MAX_TOKENS": "2048",
+            "LLM_NUM_CTX": "4096",
+            "LLM_API_BASE": "http://localhost:11434",
+        }
+    },
+    "hotkey_short": {"env": {"HOTKEY_TOGGLE": "false", "LLM_PROVIDER": "none"}},
+    "stt_gemini": {
+        "env": {"STT_PROVIDER": "gemini", "GEMINI_TRANSCRIBE_MODE": "verbatim", "LLM_PROVIDER": "none"}
+    },
+    "prompt_from_file": {"env": {"LLM_PROVIDER": "none"}, "prompt_txt": "PROMPT-FROM-FILE-MARKER"},
+    "prompt_from_inline_env": {
+        "env": {"LLM_PROVIDER": "none"},
+        "system_prompt": "INLINE-PROMPT-MARKER",
+        "present": ("SYSTEM_PROMPT",),
+    },
+    "msg_ok": {"env": {"LLM_PROVIDER": "none"}, "message": "Saved.", "message_kind": "ok"},
+    "msg_err": {"env": {"LLM_PROVIDER": "none"}, "message": "Could not write.", "message_kind": "err"},
+    "msg_neutral": {"env": {"LLM_PROVIDER": "none"}, "message": "Hello there", "message_kind": "neutral"},
+}
+
+_PROVIDER_ATTRS = {
+    "meta": {
+        "LLM_PROVIDER": "meta",
+        "META_MODEL": "m1",
+        "META_API_KEY": "k",
+        "META_REASONING_EFFORT": "low",
+    },
+    "openrouter": {
+        "LLM_PROVIDER": "openrouter",
+        "OPENROUTER_MODEL": "o1",
+        "OPENROUTER_API_KEY": "k",
+        "OPENROUTER_REASONING_EFFORT": "high",
+    },
+    "gemini": {
+        "LLM_PROVIDER": "gemini",
+        "GEMINI_MODEL": "g1",
+        "GEMINI_API_KEY": "k",
+        "GEMINI_THINKING_LEVEL": "medium",
+    },
+    "ollama": {"LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "q1"},
+    "none": {"LLM_PROVIDER": "none"},
+}
+
+
+def _render_page(state: dict) -> str:
+    """Render ``setup_web._page()`` with every machine-dependent input pinned."""
+    tmp = tempfile.mkdtemp(prefix="odicto-equiv-")
+    prompt_dir = os.path.join(tmp, "prompts")
+    os.makedirs(prompt_dir)
+    if state.get("prompt_txt"):
+        with open(os.path.join(prompt_dir, "prompt.txt"), "w", encoding="utf-8") as handle:
+            handle.write(state["prompt_txt"])
+    env_path = os.path.join(tmp, ".env")
+    with open(env_path, "w", encoding="utf-8") as handle:
+        for key, value in state.get("env", {}).items():
+            handle.write("%s=%s\n" % (key, value))
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(config, "_prompt_dir", lambda: prompt_dir))
+        stack.enter_context(mock.patch.object(setup_web, "ENV_PATH", env_path))
+        stack.enter_context(
+            mock.patch.object(config, "_PRESENT_AT_IMPORT", frozenset(state.get("present", ())))
+        )
+        stack.enter_context(mock.patch.object(config.Config, "SYSTEM_PROMPT", state.get("system_prompt", "")))
+        stack.enter_context(mock.patch.object(config.Config, "SYSTEM_PROMPT_FILE", ""))
+        sink = io.StringIO()
+        stack.enter_context(contextlib.redirect_stdout(sink))
+        stack.enter_context(contextlib.redirect_stderr(sink))
+        return setup_web._page(state.get("message", ""), state.get("message_kind", "neutral"))
+
+
+def _pure_values() -> dict:
+    """Deterministic config values. See the module docstring on why each pin is required."""
+    config_cls = config.Config
+    out: dict = {}
+    global_pins = (
+        (config, "_PRESENT_AT_IMPORT", frozenset()),
+        (config_cls, "LLM_MODEL", ""),
+        (config_cls, "LLM_API_BASE", ""),
+        (config_cls, "LLM_REASONING_EFFORT", ""),
+        (config_cls, "LLM_MAX_TOKENS", "1024"),
+        (config_cls, "META_API_BASE", ""),
+        (config_cls, "OPENROUTER_API_BASE", ""),
+    )
+    with contextlib.ExitStack() as stack:
+        for target, attr, value in global_pins:
+            stack.enter_context(mock.patch.object(target, attr, value))
+        sink = io.StringIO()
+        stack.enter_context(contextlib.redirect_stdout(sink))
+        stack.enter_context(contextlib.redirect_stderr(sink))
+
+        out["parse_hold_hotkey_default"] = config.parse_hold_hotkey("ctrl+grave")
+        out["parse_hold_hotkey_ai"] = config.parse_hold_hotkey("ctrl+shift+grave")
+        out["sanitize_hash_tail"] = config._sanitize_model_id("openai/gpt-5.6-luna#oops")
+        out["sanitize_plain"] = config._sanitize_model_id("  plain/model  ")
+        out["normalize_key_aliases"] = [
+            config.normalize_key_name(key)
+            for key in ("right ctrl", "left shift", "grave", "ctrl", "f7")
+        ]
+        for label, attrs in _PROVIDER_ATTRS.items():
+            with contextlib.ExitStack() as inner:
+                for key, value in attrs.items():
+                    inner.enter_context(mock.patch.object(config_cls, key, value))
+                out["eff_%s" % label] = [
+                    config_cls.effective_llm_model(),
+                    config_cls.effective_llm_api_base(),
+                    config_cls.effective_api_key(),
+                    config_cls.effective_max_output_tokens(),
+                    config_cls.effective_reasoning_effort(),
+                ]
+    return out
+
+
+def _normalized(values: dict) -> str:
+    """Tuples compare unequal to lists, either of which json round-trips; compare as JSON."""
+    return json.dumps(values, sort_keys=True, default=str)
+
+
+def _top_level_exports(tree: ast.Module):
+    """Names a star-import would pick up, plus the modules it would star-import from."""
+    names, stars = set(), []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    if node.module:
+                        stars.append(node.module)
+                else:
+                    names.add(alias.asname or alias.name)
+    return {name for name in names if not name.startswith("_")}, stars
+
+
+def _backend_exports(module_name: str, seen=None) -> set:
+    """The set of names ``from platforms.<backend> import *`` would bind.
+
+    Uses ``__all__`` when the module declares one, otherwise walks the module's own
+    top-level names and recurses through its star-imports (windows.py/linux.py pull
+    most of their surface from _keyboard.py).
+    """
+    seen = seen if seen is not None else set()
+    if module_name in seen:
+        return set()
+    seen.add(module_name)
+    relative = module_name.replace("platforms.", "", 1)
+    path = os.path.join(REPO_ROOT, "platforms", *relative.split(".")) + ".py"
+    with open(path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), path)
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    return {el.value for el in node.value.elts if isinstance(el, ast.Constant)}
+
+    names, stars = _top_level_exports(tree)
+    for star in stars:
+        if star.startswith("platforms."):
+            names |= _backend_exports(star, seen)
+    return names
+
+
+def _referenced_platform_names() -> set:
+    """Every ``platforms.<name>`` / ``from platforms import <name>`` in the repo."""
+    names = set()
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in {".venv", "__pycache__", ".git", "node_modules"}]
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, filename)
+            with open(path, encoding="utf-8") as handle:
+                tree = ast.parse(handle.read(), path)
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "platforms"
+                ):
+                    names.add(node.attr)
+                elif isinstance(node, ast.ImportFrom) and node.module == "platforms":
+                    names.update(alias.name for alias in node.names)
+    return names
+
+
+class TestSetupPageEquivalence(unittest.TestCase):
+    """The setup page must render byte-for-byte identically to the pre-refactor tree."""
+
+    def test_page_matches_pre_refactor_golden(self) -> None:
+        for name, state in _PAGE_STATES.items():
+            with self.subTest(state=name):
+                page = _render_page(state)
+                digest = hashlib.sha256(page.encode("utf-8")).hexdigest()
+                if digest != _GOLDEN_PAGE_HASHES[name]:
+                    dump = os.path.join(tempfile.gettempdir(), "odicto-page-%s.html" % name)
+                    with open(dump, "w", encoding="utf-8") as handle:
+                        handle.write(page)
+                    self.fail(
+                        "state %r no longer renders identically\n  expected sha256 %s\n"
+                        "  actual   sha256 %s\n  rendered page written to %s"
+                        % (name, _GOLDEN_PAGE_HASHES[name], digest, dump)
+                    )
+
+    def test_goldens_cover_every_state(self) -> None:
+        """Guards against a state being added without capturing its golden."""
+        self.assertEqual(sorted(_PAGE_STATES), sorted(_GOLDEN_PAGE_HASHES))
+
+    def test_every_provider_is_rendered(self) -> None:
+        hashes = [_GOLDEN_PAGE_HASHES["provider_%s" % p] for p in ("meta", "openrouter", "gemini", "ollama")]
+        self.assertEqual(len(set(hashes)), 4, "each provider must render a distinct page")
+
+
+class TestConfigEquivalence(unittest.TestCase):
+    """Cascade resolvers and helpers must return exactly the pre-refactor values."""
+
+    def test_pure_values_match_pre_refactor_golden(self) -> None:
+        actual = _pure_values()
+        self.assertEqual(_normalized(_GOLDEN_PURE_VALUES), _normalized(actual))
+
+    def test_provider_specific_override_beats_generic(self) -> None:
+        with mock.patch.object(config, "_PRESENT_AT_IMPORT", frozenset()), mock.patch.object(
+            config.Config, "LLM_PROVIDER", "meta"
+        ), mock.patch.object(config.Config, "META_MODEL", "specific"), mock.patch.object(
+            config.Config, "LLM_MODEL", "generic"
+        ):
+            self.assertEqual("specific", config.Config.effective_llm_model())
+
+    def test_generic_tier_applies_when_provider_key_is_blank(self) -> None:
+        with mock.patch.object(config, "_PRESENT_AT_IMPORT", frozenset()), mock.patch.object(
+            config.Config, "LLM_PROVIDER", "meta"
+        ), mock.patch.object(config.Config, "META_MODEL", ""), mock.patch.object(
+            config.Config, "LLM_MODEL", "generic"
+        ):
+            self.assertEqual("generic", config.Config.effective_llm_model())
+
+    def test_builtin_default_is_the_last_tier(self) -> None:
+        with mock.patch.object(config, "_PRESENT_AT_IMPORT", frozenset()), mock.patch.object(
+            config.Config, "LLM_PROVIDER", "meta"
+        ), mock.patch.object(config.Config, "META_MODEL", ""), mock.patch.object(
+            config.Config, "LLM_MODEL", ""
+        ):
+            self.assertEqual(config.ENV_DEFAULTS["META_MODEL"], config.Config.effective_llm_model())
+
+
+class TestPlatformExportSurface(unittest.TestCase):
+    """Guard for the declared platform interface (see docs/architecture.md).
+
+    This is an ``ast`` scan rather than an import on purpose: ``platforms.KEY_DOWN``
+    and ``platforms.KEY_UP`` are read *inside* the hotkey handlers in main.py, which
+    only run when the real global hook fires. A backend ``__all__`` that drops them
+    passes ``import main`` and all of test_units on every OS, and fails only in
+    production - so this scan is the only gate that catches it.
+    """
+
+    def test_every_referenced_name_is_exported_by_the_active_backend(self) -> None:
+        backend = _BACKEND_FOR_PLATFORM.get(sys.platform, "linux")
+        required = _referenced_platform_names() - _SUBMODULE_NAMES - _BASE_REEXPORTS
+        exported = _backend_exports("platforms.%s" % backend)
+        missing = sorted(required - exported)
+        self.assertEqual(
+            [],
+            missing,
+            "platforms.%s must export these names (referenced elsewhere in the repo): %s"
+            % (backend, missing),
+        )
+
+    def test_key_constants_are_exported(self) -> None:
+        """The specific production-only failure mode: these are read inside handlers."""
+        backend = _BACKEND_FOR_PLATFORM.get(sys.platform, "linux")
+        exported = _backend_exports("platforms.%s" % backend)
+        for name in ("KEY_DOWN", "KEY_UP"):
+            self.assertIn(name, exported, "%s must be exported by platforms.%s" % (name, backend))
+
+
+class TestSendTextCap(unittest.TestCase):
+    """Regression guard for the 256-character cap that a de-dup could silently drop."""
+
+    def test_over_cap_text_is_rejected_without_typing(self) -> None:
+        import platforms
+
+        # Returns False *before* any key injection, so this cannot type into the desktop.
+        self.assertFalse(platforms.send_text("x" * 257))
+
+    def test_empty_text_is_a_no_op(self) -> None:
+        import platforms
+
+        self.assertTrue(platforms.send_text(""))
+
+
+if __name__ == "__main__":
+    unittest.main()

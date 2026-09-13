@@ -43,3 +43,17 @@ jobs:
         run: .venv/bin/python -m unittest test_units -v
         env:
           QT_QPA_PLATFORM: offscreen
+
+      # Independent equivalence oracle for the refactor: pins the rendered setup
+      # page and the config cascade resolvers. Must be byte-identical on all OSes.
+      - name: Run equivalence oracle (Windows)
+        if: runner.os == 'Windows'
+        run: .venv\Scripts\python.exe -m unittest test_equivalence -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Run equivalence oracle (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: .venv/bin/python -m unittest test_equivalence -v
+        env:
+          QT_QPA_PLATFORM: offscreen
