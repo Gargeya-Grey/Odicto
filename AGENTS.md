@@ -116,12 +116,29 @@ supplied it) with:
 
 ## Runtime notes for agents
 
-- Default hotkeys: hold **Ctrl+`** (`HOTKEY=ctrl+grave`) for dictation;
-  hold **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for a **fresh** AI reply
-  (no previous conversation). Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
+- Default hotkeys: tap **Ctrl+`** (`HOTKEY=ctrl+grave`) for dictation;
+  tap **Ctrl+Shift+`** (`AI_HOTKEY=ctrl+shift+grave`) for a **fresh** AI reply
+  (no previous conversation). Tap the same chord again to stop and paste
+  (`HOTKEY_TOGGLE=true`). Set `HOTKEY_TOGGLE=false` to hold the chord while
+  speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
   dictation; tap again to stop and paste. Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
+- **Terminals are typed into, not pasted into.** No paste chord is universal
+  (`Ctrl+V` on Windows Terminal/conhost, `Shift+Insert` on mintty/Git Bash,
+  `Ctrl+Shift+V` on most Linux terminals, `Cmd+V` on macOS, and a TUI claims
+  the chord outright), and `Ctrl+C` is SIGINT there. So when the focused window
+  is a terminal, `paste_text` calls `send_text_bulk` and never touches the
+  clipboard, and the AI selection probe sends `Ctrl+Shift+C`
+  (`send_copy_terminal`) instead of Ctrl+C. Detection is best-effort:
+  `platforms.base.is_terminal_identifier` matches window class / process name /
+  macOS bundle id against the tables in `platforms/base.py`; Windows reads them
+  in `platforms/_keyboard.py`, Linux via `xdotool`/`xprop` in
+  `platforms/linux.py` (X11 only — Wayland returns False), macOS via
+  `NSWorkspace` in `platforms/macos.py`. An unresolved window falls back to the
+  chord, so it must never raise. `TYPE_IN_TERMINAL=false` disables the whole
+  path; `EXTRA_TERMINAL_APPS` adds a terminal the tables miss. Newlines are
+  typed as-is, so a multi-line dictation into a shell runs each line.
 - **STT is independent of `LLM_PROVIDER`:** `STT_PROVIDER=whisper|gemini|auto`
   (default `whisper`). Gemini STT reuses `GEMINI_API_KEY` and does **not** require
   `LLM_PROVIDER=gemini`. `GEMINI_TRANSCRIBE_MODE=smart|verbatim` is the setup-page
@@ -156,10 +173,19 @@ supplied it) with:
   empty. Do not store a second copy of the body in `.env`.
 - **OpenRouter:** set `LLM_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and
   `OPENROUTER_MODEL`. Localhost `LLM_API_BASE` is auto-rewritten to
-  `OPENROUTER_API_BASE`. Odicto will **not** spawn Ollama in this mode.
+  `OPENROUTER_API_BASE`. Every chat call sends `provider.sort=latency` (lowest
+  time-to-first-token host, not cheapest) and `reasoning.effort=none` (skip
+  thinking when the model allows it). Override with `OPENROUTER_PROVIDER_SORT`
+  (`latency|throughput|price`) and `OPENROUTER_REASONING_EFFORT`
+  (`none|minimal|low|medium|high|xhigh|max`). Models that require reasoning
+  reject `none`. Odicto fetches OpenRouter `GET /api/v1/models` (cached) and
+  clamps effort to that model's `supported_efforts` / `mandatory` flag; GLM-5.3
+  is only a fallback when the catalog has not loaded. A 400 "reasoning is
+  mandatory" still retries at `low`. Odicto will **not** spawn Ollama in this
+  mode.
 - **Meta:** set `META_API_KEY` and `META_MODEL`. Default
-  model is `muse-spark-1.2-contributor` — do not silently fall back to the
-  base `muse-spark-1.2` SKU.
+  model is `muse-spark-1.3-contributor` — do not silently fall back to the
+  base `muse-spark-1.3` SKU.
 - **Gemini:** set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`,
   and `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Uses the GA Interactions API
   via the `google-genai` SDK (`client.interactions.create`). Optional
@@ -174,13 +200,16 @@ supplied it) with:
   per-provider keys — use `OLLAMA_MODEL` for Ollama only (hand-edit `LLM_MODEL` is
   the legacy generic tier that the setup page no longer writes).
 - **OpenRouter default model** is `openai/gpt-5.6-luna` (override with `OPENROUTER_MODEL`).
+  Default routing is lowest-latency + no thinking (`OPENROUTER_PROVIDER_SORT=latency`,
+  `OPENROUTER_REASONING_EFFORT=none`).
 - **Provider `none`:** raw dictation only; no LLM client; Ollama not started.
 - macOS requires **Accessibility** and **Input Monitoring** permissions for
   `pynput` global hooks and synthetic copy/paste.
 - Linux global suppression usually requires root or `input` group; prefer X11.
-- GPU: if CUDA is available, Whisper uses it automatically
-  (`WHISPER_DEVICE=auto`). macOS uses CPU (int8) — faster-whisper has no Metal
-  backend.
+- GPU: `WHISPER_DEVICE=auto` keeps **tiny/base on CPU** so login does not pay a
+  ~1GB CUDA context for a 75MB model. Larger models (`small` and up) still try
+  CUDA first. Set `WHISPER_DEVICE=cuda` to force GPU. macOS uses CPU (int8) —
+  faster-whisper has no Metal backend.
 - Stop with `stop_dictation.bat` / `./stop_dictation.sh`, or
   `.venv/bin/python odicto.py stop`.
 

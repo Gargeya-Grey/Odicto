@@ -30,6 +30,7 @@ ENV_DEFAULTS: dict[str, str] = {
     # Hotkeys
     "HOTKEY": "ctrl+grave",
     "AI_HOTKEY": "ctrl+shift+grave",
+    "HOTKEY_TOGGLE": "true",
     "AI_MODIFIER": "",
     "RESET_CONTEXT_HOTKEY": "f5",
     "CTRL_KEEP_CONTEXT_KEYS": "f6",
@@ -61,16 +62,20 @@ ENV_DEFAULTS: dict[str, str] = {
     "OPENROUTER_API_BASE": "https://openrouter.ai/api/v1",
     "OPENROUTER_MODEL": "",
     "OPENROUTER_MODEL_HISTORY": "",
+    # latency = lowest time-to-first-token host; throughput/price are the other sorts.
+    "OPENROUTER_PROVIDER_SORT": "latency",
+    # none = skip thinking when the model allows it (fastest). Mandatory-
+    # reasoning SKUs (GLM-5.3) reject none; the client retries at low.
+    "OPENROUTER_REASONING_EFFORT": "none",
     # Ollama override
     "OLLAMA_MODEL": "qwen2.5:1.5b-instruct",
     "OLLAMA_MODEL_HISTORY": "",
     # Meta overrides
     "META_API_KEY": "",
     "META_API_BASE": "https://api.meta.ai/v1",
-    "META_MODEL": "muse-spark-1.2-contributor",
+    "META_MODEL": "muse-spark-1.3-contributor",
     "META_MODEL_HISTORY": "",
     "META_REASONING_EFFORT": "low",
-    "META_MAX_OUTPUT_TOKENS": "4096",
     # Gemini overrides
     "GEMINI_API_KEY": "",
     "GEMINI_MODEL": "gemini-3.5-flash-lite",
@@ -83,6 +88,9 @@ ENV_DEFAULTS: dict[str, str] = {
     "SHOW_VISUAL_INDICATOR": "true",
     "MIN_HOLD_MS": "80",
     "RETRIGGER_COOLDOWN_MS": "120",
+    # Terminal text injection
+    "TYPE_IN_TERMINAL": "true",
+    "EXTRA_TERMINAL_APPS": "",
     # AI prompt
     "SYSTEM_PROMPT": "",
     "SYSTEM_PROMPT_FILE": "",
@@ -331,6 +339,9 @@ class Config:
     # (keyboard lib name for ` is "grave")
     HOTKEY: str = _default_env("HOTKEY")
     AI_HOTKEY: str = _default_env("AI_HOTKEY").strip()
+    # true = tap the chord to start, tap again to stop (like F7).
+    # false = classic hold-to-talk: keep the chord down while speaking.
+    HOTKEY_TOGGLE: bool = _env_bool("HOTKEY_TOGGLE", _def("HOTKEY_TOGGLE"))
     # Legacy optional third key (unused when AI_HOTKEY is set). Prefer AI_HOTKEY.
     AI_MODIFIER: str = _default_env("AI_MODIFIER").strip().lower()
     # Plain hotkey (no modifiers required) that clears the AI multi-turn memory
@@ -412,25 +423,30 @@ class Config:
     OPENROUTER_API_BASE: str = _default_env("OPENROUTER_API_BASE").strip()
     # OpenRouter-only model slug override (e.g. openai/gpt-5.6-luna).
     OPENROUTER_MODEL: str = _sanitize_model_id(_default_env("OPENROUTER_MODEL"))
-    # Generic output cap for EVERY provider; META_MAX_OUTPUT_TOKENS /
-    # GEMINI_MAX_OUTPUT_TOKENS remain as per-provider ceiling overrides.
+    # Generic output cap for EVERY provider; GEMINI_MAX_OUTPUT_TOKENS remains
+    # as a per-provider ceiling override. Meta reasoning is uncapped (the
+    # effort knob is the only control), so Meta has no output-cap override.
     LLM_MAX_TOKENS: int = int(_default_env("LLM_MAX_TOKENS"))
     # Ollama context window (higher = smarter multi-turn, slightly slower)
     LLM_NUM_CTX: int = int(_default_env("LLM_NUM_CTX"))
     OPENROUTER_API_KEY: str = _clean_secret("OPENROUTER_API_KEY")
+    OPENROUTER_PROVIDER_SORT: str = _default_env("OPENROUTER_PROVIDER_SORT").strip().lower()
+    OPENROUTER_REASONING_EFFORT: str = _default_env(
+        "OPENROUTER_REASONING_EFFORT"
+    ).strip().lower()
     META_API_KEY: str = _clean_secret("META_API_KEY")
     META_API_BASE: str = _default_env("META_API_BASE").strip().rstrip("/")
     META_MODEL: str = _sanitize_model_id(_default_env("META_MODEL"))
     META_REASONING_EFFORT: str = _default_env("META_REASONING_EFFORT").strip().lower()
-    META_MAX_OUTPUT_TOKENS: int = int(_default_env("META_MAX_OUTPUT_TOKENS"))
     # Google Gemini API (https://ai.google.dev/gemini-api) — Interactions API via google-genai SDK.
     GEMINI_API_KEY: str = _clean_secret("GEMINI_API_KEY")
     GEMINI_MODEL: str = _sanitize_model_id(_default_env("GEMINI_MODEL"))
     GEMINI_THINKING_LEVEL: str = _default_env("GEMINI_THINKING_LEVEL").strip().lower()
     GEMINI_MAX_OUTPUT_TOKENS: int = int(_default_env("GEMINI_MAX_OUTPUT_TOKENS"))
-    # Unified reasoning knob. Mapped onto Meta's reasoning.effort and Gemini's
-    # thinking_level; ignored by ollama/openrouter. Provider-specific knobs
-    # (META_REASONING_EFFORT / GEMINI_THINKING_LEVEL) override when set.
+    # Unified reasoning knob. Mapped onto Meta's reasoning.effort, Gemini's
+    # thinking_level, and OpenRouter's reasoning.effort. Ignored by ollama.
+    # Provider-specific knobs (META_REASONING_EFFORT / GEMINI_THINKING_LEVEL /
+    # OPENROUTER_REASONING_EFFORT) override when set.
     LLM_REASONING_EFFORT: str = _default_env("LLM_REASONING_EFFORT").strip().lower()
     # AI-mode system prompt. Runtime prefers prompt.txt, then prompt.txt.example.
     # These .env keys are kept for setup Save (pointer vs empty) and legacy installs.
@@ -447,6 +463,17 @@ class Config:
     MIN_HOLD_MS: int = int(_default_env("MIN_HOLD_MS"))
     # Debounce between consecutive capture cycles (ms)
     RETRIGGER_COOLDOWN_MS: int = int(_default_env("RETRIGGER_COOLDOWN_MS"))
+
+    # Terminals have no shared paste chord and treat Ctrl+C as SIGINT, so when
+    # the focused window is one Odicto types the text instead of pasting it.
+    TYPE_IN_TERMINAL: bool = _env_bool("TYPE_IN_TERMINAL", _def("TYPE_IN_TERMINAL"))
+    # Comma-separated window classes / process names that also count as
+    # terminals — the escape hatch for one this build does not know.
+    EXTRA_TERMINAL_APPS: tuple = tuple(
+        part.strip().lower()
+        for part in _default_env("EXTRA_TERMINAL_APPS").split(",")
+        if part.strip()
+    )
 
     @classmethod
     def _explicit(cls, attr: str, env_keys: tuple = ()) -> bool:
@@ -549,10 +576,6 @@ class Config:
         """
         provider = cls.LLM_PROVIDER
         try:
-            if provider == "meta" and cls._explicit(
-                "META_MAX_OUTPUT_TOKENS", ("META_MAX_OUTPUT_TOKENS",)
-            ):
-                return max(64, int(cls.META_MAX_OUTPUT_TOKENS))
             if provider == "gemini" and cls._explicit(
                 "GEMINI_MAX_OUTPUT_TOKENS", ("GEMINI_MAX_OUTPUT_TOKENS",)
             ):
@@ -565,10 +588,11 @@ class Config:
     def effective_reasoning_effort(cls) -> str:
         """Raw unified reasoning effort for the active provider.
 
-        Cascade: META_REASONING_EFFORT / GEMINI_THINKING_LEVEL override →
-        LLM_REASONING_EFFORT → provider-appropriate default. Use
-        meta_reasoning_effort() / gemini_thinking_level() for the mapped,
-        provider-safe value.
+        Cascade: META_REASONING_EFFORT / GEMINI_THINKING_LEVEL /
+        OPENROUTER_REASONING_EFFORT override → LLM_REASONING_EFFORT →
+        provider-appropriate default. Use meta_reasoning_effort() /
+        gemini_thinking_level() / openrouter_reasoning_effort() for the
+        mapped, provider-safe value.
         """
         provider = cls.LLM_PROVIDER
         if (
@@ -583,12 +607,22 @@ class Config:
             and cls.GEMINI_THINKING_LEVEL
         ):
             return cls.GEMINI_THINKING_LEVEL
+        if (
+            provider == "openrouter"
+            and cls._explicit(
+                "OPENROUTER_REASONING_EFFORT", ("OPENROUTER_REASONING_EFFORT",)
+            )
+            and cls.OPENROUTER_REASONING_EFFORT
+        ):
+            return cls.OPENROUTER_REASONING_EFFORT
         if cls.LLM_REASONING_EFFORT:
             return cls.LLM_REASONING_EFFORT
         if provider == "meta":
             return _def("META_REASONING_EFFORT")
         if provider == "gemini":
             return _def("GEMINI_THINKING_LEVEL")
+        if provider == "openrouter":
+            return _def("OPENROUTER_REASONING_EFFORT")
         return ""
 
     @classmethod
@@ -606,6 +640,62 @@ class Config:
         if level in ("minimal", "low", "medium", "high"):
             return level
         return "minimal"
+
+    @classmethod
+    def openrouter_reasoning_effort(cls) -> str:
+        """OpenRouter-safe reasoning effort (invalid→none, the fastest default).
+
+        ``none`` disables thinking when the model allows it. Models that
+        require reasoning reject ``none`` (GLM-5.3 accepts only
+        ``low``/``high``/``max``). The OpenRouter client retries at ``low``.
+        """
+        if cls.LLM_PROVIDER == "openrouter":
+            effort = (cls.effective_reasoning_effort() or "none").strip().lower()
+        elif (
+            cls._explicit(
+                "OPENROUTER_REASONING_EFFORT", ("OPENROUTER_REASONING_EFFORT",)
+            )
+            and cls.OPENROUTER_REASONING_EFFORT
+        ):
+            effort = cls.OPENROUTER_REASONING_EFFORT.strip().lower()
+        else:
+            effort = (_def("OPENROUTER_REASONING_EFFORT") or "none").strip().lower()
+        if effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+            return effort
+        return "none"
+
+    @classmethod
+    def openrouter_provider_sort(cls) -> str:
+        """OpenRouter provider.sort (latency|throughput|price; invalid→latency)."""
+        sort = (cls.OPENROUTER_PROVIDER_SORT or "latency").strip().lower()
+        if sort in ("latency", "throughput", "price"):
+            return sort
+        return "latency"
+
+    @classmethod
+    def openrouter_extra_body(cls, effort: str | None = None) -> dict:
+        """Chat Completions extras: lowest-latency host + lowest thinking.
+
+        OpenRouter's default routing is cheapest, not fastest. ``sort=latency``
+        picks the host with the lowest time-to-first-token for the chosen
+        model. ``reasoning.effort`` defaults to ``none``. Pass ``effort`` to
+        override for a single call (mandatory-reasoning retry uses ``low``).
+        """
+        chosen = (effort or cls.openrouter_reasoning_effort()).strip().lower()
+        if chosen not in (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ):
+            chosen = cls.openrouter_reasoning_effort()
+        return {
+            "provider": {"sort": cls.openrouter_provider_sort()},
+            "reasoning": {"effort": chosen},
+        }
 
     @classmethod
     def effective_stt_provider(cls) -> Literal["whisper", "gemini"]:
@@ -810,7 +900,7 @@ class Config:
         )
         add("Model & generation", "Model", model, model_src)
         cap = cls.effective_max_output_tokens()
-        cap_override = {"meta": "META_MAX_OUTPUT_TOKENS", "gemini": "GEMINI_MAX_OUTPUT_TOKENS"}.get(provider)
+        cap_override = {"gemini": "GEMINI_MAX_OUTPUT_TOKENS"}.get(provider)
         cap_src = (
             f".env ({cap_override})"
             if cap_override and cls._explicit(cap_override, (cap_override,))
@@ -820,11 +910,13 @@ class Config:
         effort_display = {
             "meta": cls.meta_reasoning_effort,
             "gemini": cls.gemini_thinking_level,
+            "openrouter": cls.openrouter_reasoning_effort,
         }.get(provider)
         if effort_display is not None:
             eff_override = {
                 "meta": "META_REASONING_EFFORT",
                 "gemini": "GEMINI_THINKING_LEVEL",
+                "openrouter": "OPENROUTER_REASONING_EFFORT",
             }.get(provider)
             eff_src = (
                 f".env ({eff_override})"
@@ -836,6 +928,13 @@ class Config:
                 )
             )
             add("Model & generation", "Reasoning effort", effort_display(), eff_src)
+        if provider == "openrouter":
+            add(
+                "Model & generation",
+                "OpenRouter provider sort",
+                cls.openrouter_provider_sort(),
+                _source_of("OPENROUTER_PROVIDER_SORT"),
+            )
         if provider == "ollama":
             add("Model & generation", "Ollama context window", cls.LLM_NUM_CTX, _source_of("LLM_NUM_CTX"))
 
@@ -851,6 +950,12 @@ class Config:
             "AI reply chord",
             ai_hotkey_display,
             _source_of("AI_HOTKEY"),
+        )
+        add(
+            "Hotkeys",
+            "Chord tap-to-toggle",
+            cls.HOTKEY_TOGGLE,
+            _source_of("HOTKEY_TOGGLE"),
         )
         add(
             "Hotkeys",
@@ -929,6 +1034,13 @@ class Config:
         add("Timing", "Visual HUD", cls.SHOW_VISUAL_INDICATOR, _source_of("SHOW_VISUAL_INDICATOR"))
         add("Timing", "Min hold (ms)", cls.MIN_HOLD_MS, _source_of("MIN_HOLD_MS"))
         add("Timing", "Retrigger cooldown (ms)", cls.RETRIGGER_COOLDOWN_MS, _source_of("RETRIGGER_COOLDOWN_MS"))
+        add("Timing", "Type in terminal", cls.TYPE_IN_TERMINAL, _source_of("TYPE_IN_TERMINAL"))
+        add(
+            "Timing",
+            "Extra terminal apps",
+            ", ".join(cls.EXTRA_TERMINAL_APPS) or "(none)",
+            _source_of("EXTRA_TERMINAL_APPS"),
+        )
 
         prompt = cls.effective_system_prompt()
         prompt_src = cls.prompt_source_label()
@@ -985,11 +1097,34 @@ class Config:
             )
         if cls.META_REASONING_EFFORT not in ("low", "medium", "high", "none", ""):
             raise ValueError(f"META_REASONING_EFFORT must be low|medium|high|none, got {cls.META_REASONING_EFFORT!r}")
-        if cls.META_MAX_OUTPUT_TOKENS < 64:
-            raise ValueError(f"META_MAX_OUTPUT_TOKENS must be >= 64, got {cls.META_MAX_OUTPUT_TOKENS}")
         if cls.GEMINI_THINKING_LEVEL not in ("minimal", "low", "medium", "high", ""):
             raise ValueError(
                 f"GEMINI_THINKING_LEVEL must be minimal|low|medium|high, got {cls.GEMINI_THINKING_LEVEL!r}"
+            )
+        if cls.OPENROUTER_REASONING_EFFORT not in (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "",
+        ):
+            raise ValueError(
+                "OPENROUTER_REASONING_EFFORT must be "
+                "none|minimal|low|medium|high|xhigh|max, got "
+                f"{cls.OPENROUTER_REASONING_EFFORT!r}"
+            )
+        if cls.OPENROUTER_PROVIDER_SORT not in (
+            "latency",
+            "throughput",
+            "price",
+            "",
+        ):
+            raise ValueError(
+                "OPENROUTER_PROVIDER_SORT must be latency|throughput|price, got "
+                f"{cls.OPENROUTER_PROVIDER_SORT!r}"
             )
         if cls.GEMINI_MAX_OUTPUT_TOKENS < 64:
             raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 64, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
@@ -1073,7 +1208,6 @@ _IMPORT_SNAPSHOT.update(
             "OPENROUTER_MODEL",
             "META_MODEL",
             "META_REASONING_EFFORT",
-            "META_MAX_OUTPUT_TOKENS",
             "GEMINI_MODEL",
             "GEMINI_THINKING_LEVEL",
             "GEMINI_MAX_OUTPUT_TOKENS",

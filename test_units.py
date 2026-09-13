@@ -1,5 +1,6 @@
 import sys
 import os
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from unittest import skipUnless
@@ -14,7 +15,7 @@ import config
 from config import Config, parse_hold_hotkey, _sanitize_model_id
 from recorder import AudioRecorder, play_beep
 from transcriber import GeminiTranscriber, WhisperTranscriber, float32_to_wav_bytes
-from refiner import TextRefiner
+from refiner import TextRefiner, reset_openrouter_effort_cache
 from typer import paste_text, get_selected_text
 from app_state import AppState
 from main import (
@@ -41,6 +42,20 @@ class TestOdicto(unittest.TestCase):
         # Odicto and take the Global mutex for the duration of the test run.
         self._real_lock_held = main_mod._INSTANCE_LOCK_HELD
         main_mod._INSTANCE_LOCK_HELD = True  # bypass lock acquisition + orphan kill in initialize_app
+
+        # Terminal detection reads the real foreground window — under the test
+        # runner that is a console, which would flip paste_text onto the typing
+        # path. Force it off; terminal-specific tests patch it themselves.
+        self._terminal_patch = patch("typer.foreground_is_terminal", return_value=False)
+        self._terminal_patch.start()
+        self.addCleanup(self._terminal_patch.stop)
+        reset_openrouter_effort_cache()
+        self._catalog_patch = patch(
+            "openrouter_catalog.fetch_openrouter_catalog",
+            return_value={"ok": True, "models": [], "reasoning": {}},
+        )
+        self._catalog_patch.start()
+        self.addCleanup(self._catalog_patch.stop)
 
     def tearDown(self) -> None:
         Config.STT_PROVIDER = self._real_stt
@@ -265,11 +280,13 @@ class TestOdicto(unittest.TestCase):
         )
         recorder.close()
 
+    @patch("transcriber.Config.WHISPER_DEVICE", "auto")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "small.en")
     @patch("transcriber.WhisperModel")
     def test_whisper_transcriber_loading_fallback(
         self, mock_whisper_model: MagicMock
     ) -> None:
-        """Verifies that WhisperTranscriber falls back to CPU if CUDA fails."""
+        """Larger models under auto fall back to CPU if CUDA fails."""
         mock_whisper_model.side_effect = [
             Exception("CUDA initialization failed"),
             MagicMock(),
@@ -339,6 +356,140 @@ class TestOdicto(unittest.TestCase):
             transcriber.transcribe(audio)
         kwargs = mock_model_instance.transcribe.call_args[1]
         self.assertTrue(kwargs.get("vad_filter"))
+
+    @patch("recorder.sd.InputStream")
+    def test_audio_recorder_retries_when_device_not_ready(
+        self, mock_input_stream: MagicMock
+    ) -> None:
+        """Login-time WASAPI misses must retry instead of killing init."""
+        good = MagicMock()
+        mock_input_stream.side_effect = [OSError("Device unavailable"), good]
+        with patch("recorder.time.sleep"):
+            recorder = AudioRecorder(sample_rate=16000, channels=1)
+        self.assertIs(recorder._stream, good)
+        self.assertEqual(mock_input_stream.call_count, 2)
+        recorder.close()
+
+    @patch("recorder.sd.InputStream")
+    def test_audio_recorder_status_callback_does_not_raise(
+        self, mock_input_stream: MagicMock
+    ) -> None:
+        """PortAudio status in the callback must not throw (pythonw crash dialog)."""
+        recorder = AudioRecorder(sample_rate=16000, channels=1)
+        chunk = np.array([[0.1], [0.2]], dtype=np.float32)
+        recorder._callback(chunk, len(chunk), None, "input overflow")
+        recorder._callback(chunk, len(chunk), None, "input overflow")
+        recorder.close()
+
+    @patch("transcriber.Config.WHISPER_DEVICE", "auto")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "tiny.en")
+    @patch("transcriber.wait_for_cuda_driver")
+    def test_whisper_auto_tiny_stays_on_cpu(
+        self, mock_wait: MagicMock
+    ) -> None:
+        """tiny/base under auto skip CUDA so login does not pay a ~1GB GPU context."""
+        factory = MagicMock(name="WhisperModel")
+        with patch("transcriber.WhisperModel", factory):
+            transcriber = WhisperTranscriber()
+        self.assertEqual(transcriber.device, "cpu")
+        self.assertEqual(transcriber.compute_type, "int8")
+        self.assertEqual(factory.call_args.kwargs["device"], "cpu")
+        mock_wait.assert_not_called()
+
+    @patch("transcriber.Config.WHISPER_DEVICE", "auto")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "base.en")
+    @patch("transcriber.wait_for_cuda_driver")
+    def test_whisper_auto_base_stays_on_cpu(
+        self, mock_wait: MagicMock
+    ) -> None:
+        factory = MagicMock(name="WhisperModel")
+        with patch("transcriber.WhisperModel", factory):
+            transcriber = WhisperTranscriber()
+        self.assertEqual(transcriber.device, "cpu")
+        mock_wait.assert_not_called()
+
+    @patch("transcriber.Config.WHISPER_DEVICE", "cuda")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "tiny.en")
+    @patch("transcriber.wait_for_cuda_driver")
+    def test_whisper_explicit_cuda_still_uses_gpu(
+        self, mock_wait: MagicMock
+    ) -> None:
+        factory = MagicMock(name="WhisperModel")
+        with patch("transcriber.WhisperModel", factory):
+            transcriber = WhisperTranscriber()
+        self.assertEqual(transcriber.device, "cuda")
+        mock_wait.assert_called()
+
+    @patch("transcriber.Config.WHISPER_DEVICE", "auto")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "small.en")
+    @patch("transcriber.time.sleep")
+    @patch("transcriber._probe_cuda_subprocess")
+    def test_whisper_waits_for_cuda_then_loads_gpu(
+        self,
+        mock_probe: MagicMock,
+        mock_sleep: MagicMock,
+    ) -> None:
+        """Larger models under auto still wait for the GPU driver, then load CUDA."""
+        mock_probe.side_effect = [False, False, True]
+        factory = MagicMock(name="WhisperModel")
+        factory.__module__ = "faster_whisper"
+        with patch("transcriber.WhisperModel", factory), patch(
+            "transcriber.CUDA_WAIT_SECONDS", 30.0
+        ):
+            transcriber = WhisperTranscriber()
+        self.assertEqual(transcriber.device, "cuda")
+        self.assertEqual(factory.call_args.kwargs["device"], "cuda")
+        self.assertGreaterEqual(mock_probe.call_count, 3)
+        mock_sleep.assert_called()
+
+    def test_cuda_probe_skipped_for_injected_model(self) -> None:
+        import transcriber as transcriber_mod
+
+        with patch.object(transcriber_mod, "_probe_cuda_subprocess") as probe:
+            self.assertTrue(transcriber_mod.wait_for_cuda_driver())
+            probe.assert_not_called()
+
+    def test_stdout_is_discarded_for_nul(self) -> None:
+        """Setup restarts pythonw with stdout pointed at NUL, not None."""
+        fake = MagicMock()
+        fake.name = "nul"
+        with patch.object(sys, "stdout", fake):
+            self.assertTrue(main_mod._stdout_is_discarded())
+        fake.name = "stdout"
+        with patch.object(sys, "stdout", fake):
+            self.assertFalse(main_mod._stdout_is_discarded())
+        with patch.object(sys, "stdout", None):
+            self.assertTrue(main_mod._stdout_is_discarded())
+
+    def test_timestamp_writer_prefixes_lines(self) -> None:
+        import io
+
+        buf = io.StringIO()
+        writer = main_mod._TimestampWriter(buf)
+        writer.write("hello\nmore")
+        text = buf.getvalue()
+        self.assertIn(" hello\n", text)
+        self.assertTrue(text[0].isdigit())
+        self.assertTrue(text.endswith("more"))
+
+    def test_trim_log_keeps_tail(self) -> None:
+        import tempfile
+
+        handle, path = tempfile.mkstemp()
+        os.close(handle)
+        try:
+            with open(path, "wb") as f:
+                f.write(b"OLD-HEAD\n" + (b"n" * 80) + b"\nKEEP-ME\n")
+            with patch.object(main_mod, "_LOG_MAX_BYTES", 40), patch.object(
+                main_mod, "_LOG_KEEP_BYTES", 24
+            ):
+                main_mod._trim_log(path)
+            with open(path, "rb") as f:
+                data = f.read()
+            self.assertIn(b"KEEP-ME", data)
+            self.assertNotIn(b"OLD-HEAD", data)
+        finally:
+            os.remove(path)
 
     def test_float32_to_wav_bytes_header(self) -> None:
         audio = np.zeros(1600, dtype=np.float32)
@@ -554,6 +705,9 @@ class TestOdicto(unittest.TestCase):
     @patch("refiner.Config.OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
     @patch("refiner.Config.LLM_API_BASE", "http://localhost:11434/v1")
     @patch("refiner.Config.OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+    @patch("refiner.Config.OPENROUTER_PROVIDER_SORT", "latency")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
     @patch("refiner.OpenAI")
     def test_text_refiner_openrouter(self, mock_openai: MagicMock) -> None:
         """OpenRouter uses cloud base URL + key and the OPENROUTER_MODEL slug."""
@@ -575,8 +729,187 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(result, "Cloud reply")
         kwargs = mock_client.chat.completions.create.call_args[1]
         self.assertEqual(kwargs["model"], "google/gemini-2.0-flash-001")
-        # Ollama-only extra_body must not be attached for openrouter
-        self.assertNotIn("extra_body", kwargs)
+        extra = kwargs["extra_body"]
+        self.assertEqual(extra["provider"]["sort"], "latency")
+        self.assertEqual(extra["reasoning"]["effort"], "none")
+        self.assertNotIn("keep_alive", extra)
+        self.assertNotIn("options", extra)
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
+    @patch("refiner.Config.OPENROUTER_MODEL", "deepseek/deepseek-v4.1-flash")
+    @patch("refiner.Config.LLM_MAX_TOKENS", "512")
+    @patch("refiner.Config.OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+    @patch("refiner.OpenAI")
+    def test_openrouter_retries_when_reasoning_eats_the_token_budget(
+        self, mock_openai: MagicMock
+    ) -> None:
+        """Empty first reply (all tokens spent on reasoning) must not paste raw."""
+        mock_client = mock_openai.return_value
+        empty = MagicMock()
+        empty.choices = [MagicMock()]
+        empty.choices[0].message.content = None
+        empty.choices[0].finish_reason = "error"
+        empty.usage = MagicMock(completion_tokens=382)
+        filled = MagicMock()
+        filled.choices = [MagicMock()]
+        filled.choices[0].message.content = "Rewritten selected text."
+        filled.choices[0].finish_reason = "stop"
+        mock_client.chat.completions.create.side_effect = [empty, filled]
+
+        refiner = TextRefiner()
+        result = refiner.refine("Please reformat this.")
+        self.assertEqual(result, "Rewritten selected text.")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+        first_tokens = mock_client.chat.completions.create.call_args_list[0][1]["max_tokens"]
+        retry_tokens = mock_client.chat.completions.create.call_args_list[1][1]["max_tokens"]
+        self.assertEqual(first_tokens, 512)
+        self.assertGreaterEqual(retry_tokens, 2048)
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    def test_openrouter_glm53_starts_at_low(self) -> None:
+        """GLM-5.3 rejects none/minimal; start at the lightest accepted effort."""
+        from refiner import openrouter_effort_for_model
+
+        self.assertEqual(openrouter_effort_for_model("z-ai/glm-5.3-flash"), "low")
+        self.assertEqual(openrouter_effort_for_model("z-ai/glm-5.3"), "low")
+        self.assertEqual(openrouter_effort_for_model("z-ai/glm-5.3-flash:free"), "low")
+        self.assertEqual(
+            openrouter_effort_for_model("z-ai/glm-5.3-flash", configured="none"),
+            "low",
+        )
+        self.assertEqual(
+            openrouter_effort_for_model("z-ai/glm-5.3-flash", configured="minimal"),
+            "low",
+        )
+        self.assertEqual(
+            openrouter_effort_for_model("z-ai/glm-5.3-flash", configured="medium"),
+            "low",
+        )
+        self.assertEqual(
+            openrouter_effort_for_model("z-ai/glm-5.3-flash", configured="max"),
+            "max",
+        )
+        self.assertEqual(openrouter_effort_for_model("openai/gpt-5.6-luna"), "none")
+        self.assertEqual(openrouter_effort_for_model("deepseek/deepseek-v4.1-flash"), "none")
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "high")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    def test_openrouter_glm53_keeps_explicit_high(self) -> None:
+        from refiner import openrouter_effort_for_model
+
+        self.assertEqual(openrouter_effort_for_model("z-ai/glm-5.3-flash"), "high")
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
+    @patch("refiner.Config.OPENROUTER_MODEL", "z-ai/glm-5.3-flash")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    @patch("refiner.OpenAI")
+    def test_openrouter_glm53_does_not_send_none(self, mock_openai: MagicMock) -> None:
+        mock_client = mock_openai.return_value
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "ok"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        refiner = TextRefiner()
+        self.assertEqual(refiner.refine("hello"), "ok")
+        extra = mock_client.chat.completions.create.call_args[1]["extra_body"]
+        self.assertEqual(extra["reasoning"]["effort"], "low")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    @patch("refiner.OpenAI")
+    def test_test_provider_retries_when_reasoning_is_mandatory(
+        self, mock_openai: MagicMock
+    ) -> None:
+        from refiner import test_provider
+
+        mock_client = mock_openai.return_value
+        err = Exception(
+            "Error code: 400 - {'error': {'message': "
+            "'Reasoning is mandatory for this endpoint and cannot be disabled.', "
+            "'code': 400, 'metadata': {'provider_name': None}}}"
+        )
+        mock_client.chat.completions.create.side_effect = [err, MagicMock()]
+        self.assertEqual(
+            test_provider("openrouter", "sk-or-test", "acme/thinker-1", ""),
+            "ok",
+        )
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+        first_effort = mock_client.chat.completions.create.call_args_list[0][1][
+            "extra_body"
+        ]["reasoning"]["effort"]
+        retry_effort = mock_client.chat.completions.create.call_args_list[1][1][
+            "extra_body"
+        ]["reasoning"]["effort"]
+        self.assertEqual(first_effort, "none")
+        self.assertEqual(retry_effort, "low")
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    @patch("refiner.OpenAI")
+    def test_test_provider_glm53_sends_low(self, mock_openai: MagicMock) -> None:
+        """Setup Test for GLM-5.3 Flash must not send effort=none."""
+        from refiner import test_provider
+
+        mock_client = mock_openai.return_value
+        mock_client.chat.completions.create.return_value = MagicMock()
+        self.assertEqual(
+            test_provider("openrouter", "sk-or-test", "z-ai/glm-5.3-flash", ""),
+            "ok",
+        )
+        extra = mock_client.chat.completions.create.call_args[1]["extra_body"]
+        self.assertEqual(extra["reasoning"]["effort"], "low")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.Config.LLM_REASONING_EFFORT", "")
+    @patch("refiner.OpenAI")
+    def test_test_provider_glm53_ping_stays_low_when_max_requested(
+        self, mock_openai: MagicMock
+    ) -> None:
+        """Setup Test is a 1-token ping — do not run GLM max thinking."""
+        from refiner import test_provider
+
+        mock_client = mock_openai.return_value
+        mock_client.chat.completions.create.return_value = MagicMock()
+        self.assertEqual(
+            test_provider(
+                "openrouter",
+                "sk-or-test",
+                "z-ai/glm-5.3-flash",
+                "",
+                reasoning_effort="max",
+            ),
+            "ok",
+        )
+        extra = mock_client.chat.completions.create.call_args[1]["extra_body"]
+        self.assertEqual(extra["reasoning"]["effort"], "low")
+
+    @patch("refiner.Config.LLM_PROVIDER", "openrouter")
+    @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")
+    @patch("refiner.OpenAI")
+    def test_test_provider_does_not_retry_other_400s(
+        self, mock_openai: MagicMock
+    ) -> None:
+        from refiner import test_provider
+
+        mock_client = mock_openai.return_value
+        mock_client.chat.completions.create.side_effect = Exception(
+            "Error code: 400 - {'error': {'message': 'max_tokens too large'}}"
+        )
+        result = test_provider("openrouter", "sk-or-test", "openai/gpt-5.6-luna", "")
+        self.assertIn("400", result)
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
 
     @patch("refiner.Config.LLM_PROVIDER", "gemini")
     @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
@@ -640,6 +973,95 @@ class TestOdicto(unittest.TestCase):
             self.assertIn("SELECTED CONTEXT:\n<<<\nSelected sample text\n>>>", input_payload[0]["content"][0]["text"])
             self.assertEqual(input_payload[1]["role"], "user")
             self.assertEqual(input_payload[1]["content"][0]["text"], "translate to french")
+
+    def test_extract_meta_text_ignores_echoed_input(self) -> None:
+        """1.3 Responses payloads echo the user turn; that must not become the paste."""
+        import refiner
+
+        data = {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Please restructure this properly and remove the AI slop.",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "The rewritten post."}],
+                },
+            ]
+        }
+        self.assertEqual(refiner._extract_meta_text(data), "The rewritten post.")
+
+    def test_extract_meta_text_skips_input_when_assistant_missing(self) -> None:
+        import refiner
+
+        data = {
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Please restructure this properly and remove the AI slop.",
+                        }
+                    ],
+                },
+            ]
+        }
+        self.assertIsNone(refiner._extract_meta_text(data))
+
+    def test_meta_client_sends_no_output_cap(self) -> None:
+        """Reasoning is uncapped; the effort knob is the only thinking control."""
+        import refiner
+
+        client = refiner._MetaClient(
+            api_key="sk-test", base_url="https://api.meta.ai/v1", model="m"
+        )
+        captured: dict = {}
+
+        def fake_post(url: str, payload: dict, timeout) -> dict:
+            captured.update(payload)
+            return {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Rewritten."}],
+                    }
+                ],
+            }
+
+        with patch.object(refiner._MetaClient, "_post_payload", side_effect=fake_post):
+            text = client.create_responses(
+                [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+            )
+        self.assertEqual(text, "Rewritten.")
+        self.assertNotIn("max_output_tokens", captured)
+        self.assertEqual(captured["reasoning"], {"effort": "low"})
+
+    def test_meta_client_uncapped_timeout_allows_long_reasoning(self) -> None:
+        """Medium/high effort can think 60s+; a 30s read timeout would kill it."""
+        import inspect
+
+        import refiner
+
+        sig = inspect.signature(refiner._MetaClient.create_responses)
+        default_timeout = sig.parameters["timeout"].default
+        self.assertGreaterEqual(
+            default_timeout[1],
+            120.0,
+            f"Meta read timeout {default_timeout} is too short for uncapped reasoning",
+        )
 
     @patch("refiner.Config.LLM_PROVIDER", "gemini")
     @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
@@ -815,23 +1237,95 @@ class TestOdicto(unittest.TestCase):
         self.assertEqual(user_msgs[0]["content"], "hello world")
 
     @patch("typer.send_paste")
+    @patch("typer._wait_modifiers_up")
     @patch("typer.clipboard_read")
     @patch("typer.clipboard_write")
     def test_paste_text_flow(
         self,
         mock_clipboard_write: MagicMock,
         mock_clipboard_read: MagicMock,
+        mock_wait_mods: MagicMock,
         mock_send_paste: MagicMock,
     ) -> None:
         """Verifies clipboard injection backup, paste command execution, and clipboard restore."""
-        mock_clipboard_read.return_value = "original clipboard data"
-        mock_clipboard_write.return_value = True
+        state = {"clip": "original clipboard data"}
+        mock_clipboard_read.side_effect = lambda: state["clip"]
+
+        def fake_write(text: str) -> bool:
+            state["clip"] = text
+            return True
+
+        mock_clipboard_write.side_effect = fake_write
 
         paste_text("injected text")
 
         mock_clipboard_write.assert_any_call("injected text")
         mock_send_paste.assert_called()
         mock_clipboard_write.assert_any_call("original clipboard data")
+        self.assertEqual(state["clip"], "original clipboard data")
+
+    def test_clipboard_write_verified_retries_busy_clipboard(self) -> None:
+        """Transient clipboard-busy writes are retried and then verified."""
+        import typer
+
+        state = {"clip": "original", "writes": 0}
+
+        def fake_write(text: str) -> bool:
+            state["writes"] += 1
+            if state["writes"] < 3:
+                return False
+            state["clip"] = text
+            return True
+
+        with patch("typer._clipboard_write", side_effect=fake_write), patch(
+            "typer._clipboard_read", side_effect=lambda: state["clip"]
+        ), patch("typer.time.sleep"):
+            self.assertTrue(typer._clipboard_write_verified("payload"))
+        self.assertEqual(state["clip"], "payload")
+        self.assertGreaterEqual(state["writes"], 3)
+
+    def test_paste_text_aborts_when_clipboard_write_fails(self) -> None:
+        """A busy clipboard never triggers a paste of stale content."""
+        with patch("typer._clipboard_read", return_value="user clip"), patch(
+            "typer._clipboard_write_verified", return_value=False
+        ), patch("typer.send_paste") as mock_paste, patch(
+            "typer._wait_modifiers_up"
+        ), patch(
+            "typer.time.sleep"
+        ):
+            paste_text("payload")
+            mock_paste.assert_not_called()
+
+    @patch("typer.send_paste")
+    @patch("typer._wait_modifiers_up")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
+    def test_paste_text_restores_clipboard_with_verified_write(
+        self,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_wait_mods: MagicMock,
+        mock_send_paste: MagicMock,
+    ) -> None:
+        """Restore is verified (not blind) and waits out slow web apps."""
+        import typer
+
+        state = {"clip": "original clipboard data"}
+        mock_clipboard_read.side_effect = lambda: state["clip"]
+
+        def fake_write(text: str) -> bool:
+            state["clip"] = text
+            return True
+
+        mock_clipboard_write.side_effect = fake_write
+        sleeps: list = []
+        with patch("typer.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            paste_text("injected text")
+
+        mock_clipboard_write.assert_any_call("injected text")
+        mock_send_paste.assert_called()
+        self.assertEqual(state["clip"], "original clipboard data")
+        self.assertTrue(any(s >= 0.15 for s in sleeps), sleeps)
 
     @patch("typer.force_release_modifiers")
     @patch("typer.wm_copy_foreground", return_value=False)
@@ -1627,6 +2121,199 @@ class TestOdicto(unittest.TestCase):
             finally:
                 main_mod._INSTANCE_LOCK_HELD = was_held
 
+    def _grave_handler(self, mock_keyboard):
+        binds = [
+            c for c in mock_keyboard.hook_key.call_args_list if c[0][0] == "grave"
+        ]
+        self.assertTrue(binds, "grave primary key not bound via hook_key")
+        return binds[0][0][1]
+
+    @staticmethod
+    def _key_evt(kind: str):
+        return type("Evt", (), {"event_type": kind})()
+
+    @patch("main.Config.HOTKEY_TOGGLE", True)
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_hotkey_toggle_tap_starts_and_second_tap_stops(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """HOTKEY_TOGGLE: down starts, up does not stop, second down runs the pipeline."""
+        mock_keyboard.KEY_UP = "up"
+        mock_keyboard.KEY_DOWN = "down"
+        mock_keyboard.lock_is_held.return_value = True
+        mock_keyboard.is_pressed.side_effect = lambda k: k == "ctrl"
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("threading.Thread"):
+            app = DictationApp()
+            app.initialize_app()
+        app.ready = True
+        handler = self._grave_handler(mock_keyboard)
+
+        handler(self._key_evt("down"))
+        self.assertEqual(app.state, AppState.RECORDING)
+        self.assertFalse(app.use_llm)
+        handler(self._key_evt("up"))
+        self.assertEqual(app.state, AppState.RECORDING)
+
+        app._record_started_at = 0.0
+        app.recorder.stop.return_value = True
+        app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+        with patch("threading.Thread") as mock_thread:
+            handler(self._key_evt("down"))
+        self.assertEqual(app.state, AppState.PROCESSING)
+        args = mock_thread.call_args[1].get("args") or mock_thread.call_args[0][1:]
+        self.assertEqual(args[1], False)
+
+    @patch("main.Config.HOTKEY_TOGGLE", True)
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_hotkey_toggle_ai_chord_keeps_llm_mode(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        mock_keyboard.KEY_UP = "up"
+        mock_keyboard.KEY_DOWN = "down"
+        mock_keyboard.lock_is_held.return_value = True
+        mock_keyboard.is_pressed.side_effect = lambda k: k in ("ctrl", "shift")
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("threading.Thread"):
+            app = DictationApp()
+            app.initialize_app()
+        app.ready = True
+        handler = self._grave_handler(mock_keyboard)
+
+        handler(self._key_evt("down"))
+        self.assertEqual(app.state, AppState.RECORDING)
+        self.assertTrue(app.use_llm)
+        handler(self._key_evt("up"))
+        self.assertTrue(app.use_llm)
+
+        app._record_started_at = 0.0
+        app.recorder.stop.return_value = True
+        app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+        with patch("threading.Thread") as mock_thread:
+            handler(self._key_evt("down"))
+        args = mock_thread.call_args[1].get("args") or mock_thread.call_args[0][1:]
+        self.assertEqual(args[1], True)
+
+    @patch("main.Config.HOTKEY_TOGGLE", False)
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_hotkey_hold_mode_stops_on_release(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        mock_keyboard.KEY_UP = "up"
+        mock_keyboard.KEY_DOWN = "down"
+        mock_keyboard.lock_is_held.return_value = True
+        mock_keyboard.is_pressed.side_effect = lambda k: k == "ctrl"
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("threading.Thread"):
+            app = DictationApp()
+            app.initialize_app()
+        app.ready = True
+        handler = self._grave_handler(mock_keyboard)
+
+        handler(self._key_evt("down"))
+        self.assertEqual(app.state, AppState.RECORDING)
+        app._record_started_at = 0.0
+        app.recorder.stop.return_value = True
+        app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+        with patch("threading.Thread") as mock_thread:
+            handler(self._key_evt("up"))
+        self.assertEqual(app.state, AppState.PROCESSING)
+        mock_thread.assert_called()
+
+    @patch("main.Config.HOTKEY_TOGGLE", True)
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_hotkey_toggle_does_not_steal_live_session(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        mock_keyboard.KEY_UP = "up"
+        mock_keyboard.KEY_DOWN = "down"
+        mock_keyboard.lock_is_held.return_value = True
+        mock_keyboard.is_pressed.side_effect = lambda k: k == "ctrl"
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch("main.Config.LIVE_HOTKEY", "f7"), patch.object(
+            Config, "effective_live_stt_provider", return_value="whisper"
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.on_live_toggle()
+            self.assertTrue(app.live_active)
+            self.assertEqual(app.state, AppState.RECORDING)
+
+            handler = self._grave_handler(mock_keyboard)
+            with patch("threading.Thread") as mock_thread:
+                handler(self._key_evt("down"))
+                mock_thread.assert_not_called()
+            self.assertTrue(app.live_active)
+            self.assertEqual(app.state, AppState.RECORDING)
+
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
     @patch("socket.socket")
@@ -2079,6 +2766,93 @@ class TestOdicto(unittest.TestCase):
             self.assertIn("live", written)
             self.assertNotIn("user clip", written)
 
+    def test_paste_text_types_into_terminal_without_touching_clipboard(self) -> None:
+        """A focused terminal is typed into: no paste chord, no clipboard churn."""
+        with patch("typer._terminal_target", return_value=True), patch(
+            "typer.send_text_bulk", return_value=True
+        ) as mock_type, patch("typer.send_paste") as mock_paste, patch(
+            "typer._clipboard_write_verified"
+        ) as mock_write, patch("typer._wait_modifiers_up"), patch("typer.time.sleep"):
+            paste_text("hello terminal")
+
+        mock_type.assert_called_once_with("hello terminal")
+        mock_paste.assert_not_called()
+        mock_write.assert_not_called()
+
+    def test_paste_text_falls_back_to_chord_when_terminal_typing_fails(self) -> None:
+        """Typing can fail; the clipboard chord is still the safety net."""
+        state = {"clip": "original"}
+
+        def fake_write(text: str) -> bool:
+            state["clip"] = text
+            return True
+
+        with patch("typer._terminal_target", return_value=True), patch(
+            "typer.send_text_bulk", return_value=False
+        ), patch("typer._clipboard_read", side_effect=lambda: state["clip"]), patch(
+            "typer._clipboard_write", side_effect=fake_write
+        ), patch("typer.send_paste") as mock_paste, patch(
+            "typer._wait_modifiers_up"
+        ), patch("typer.time.sleep"):
+            paste_text("payload")
+
+        mock_paste.assert_called()
+        self.assertEqual(state["clip"], "original")
+
+    def test_terminal_detection_respects_config_toggle(self) -> None:
+        import typer
+
+        with patch("typer.foreground_is_terminal", return_value=True), patch.object(
+            Config, "TYPE_IN_TERMINAL", False
+        ):
+            self.assertFalse(typer._terminal_target())
+        with patch("typer.foreground_is_terminal", return_value=True):
+            self.assertTrue(typer._terminal_target())
+
+    def test_terminal_detection_failure_defaults_to_paste(self) -> None:
+        """An unreadable foreground window must not disable pasting everywhere."""
+        import typer
+
+        with patch("typer.foreground_is_terminal", side_effect=OSError("no display")):
+            self.assertFalse(typer._terminal_target())
+
+    @patch("typer.force_release_modifiers")
+    @patch("typer.wm_copy_foreground", return_value=False)
+    @patch("typer.send_copy_terminal")
+    @patch("typer.send_copy")
+    @patch("typer.clipboard_read")
+    @patch("typer.clipboard_write")
+    def test_get_selected_text_uses_terminal_copy_chord(
+        self,
+        mock_clipboard_write: MagicMock,
+        mock_clipboard_read: MagicMock,
+        mock_send_copy: MagicMock,
+        mock_send_copy_terminal: MagicMock,
+        mock_wm: MagicMock,
+        mock_release: MagicMock,
+    ) -> None:
+        """In a terminal the probe sends Ctrl+Shift+C; plain Ctrl+C is SIGINT."""
+        last_written = {"v": ""}
+
+        def fake_write(v: str) -> bool:
+            last_written["v"] = v
+            return True
+
+        def fake_read() -> str:
+            if "odicto-sel-" in (last_written["v"] or ""):
+                return "terminal selection"
+            return last_written["v"]
+
+        mock_clipboard_write.side_effect = fake_write
+        mock_clipboard_read.side_effect = fake_read
+
+        with patch("typer.foreground_is_terminal", return_value=True):
+            result = get_selected_text(timeout=0.15)
+
+        self.assertEqual(result, "terminal selection")
+        mock_send_copy_terminal.assert_called()
+        mock_send_copy.assert_not_called()
+
     def test_indicator_reset_label(self) -> None:
         """F5 reset shows a distinct HUD label."""
         from indicator import GuiState, status_label
@@ -2191,6 +2965,75 @@ class TestDictationIndicator(unittest.TestCase):
 class TestCrossPlatform(unittest.TestCase):
     """Facade dispatch, env merge, and provider-test helpers."""
 
+    def test_terminal_identifier_matches_classes_processes_and_extras(self) -> None:
+        from platforms.base import is_terminal_identifier
+
+        # Window classes first (the strongest Windows signal), then processes.
+        self.assertTrue(is_terminal_identifier(("CASCADIA_HOSTING_WINDOW_CLASS", "")))
+        self.assertTrue(is_terminal_identifier(("ConsoleWindowClass", "")))
+        self.assertTrue(is_terminal_identifier(("", "WindowsTerminal.exe")))
+        self.assertTrue(is_terminal_identifier(("", "mintty.exe")))
+        self.assertTrue(is_terminal_identifier(("", "gnome-terminal-server")))
+        # macOS bundle ids.
+        self.assertTrue(is_terminal_identifier(("", "com.googlecode.iterm2")))
+        # EXTRA_TERMINAL_APPS is the user's escape hatch for an unknown terminal.
+        self.assertTrue(is_terminal_identifier(("My-Term",), ("my-term",)))
+        self.assertFalse(is_terminal_identifier(("Chrome_WidgetWin_1", "chrome.exe")))
+        self.assertFalse(is_terminal_identifier(("SunAwtFrame", "idea64.exe")))
+        self.assertFalse(is_terminal_identifier(("", "")))
+
+    def test_terminal_config_shape(self) -> None:
+        self.assertIsInstance(Config.TYPE_IN_TERMINAL, bool)
+        self.assertIsInstance(Config.EXTRA_TERMINAL_APPS, tuple)
+
+    def test_kill_other_skips_venv_parent(self) -> None:
+        """The Windows venv launcher stub must not be taskkilled /T (self-kill)."""
+        if sys.platform == "win32":
+            import platforms.windows as backend
+            enumerate_name = "_enumerate_odicto_pids"
+        else:
+            import platforms._posix as backend
+            enumerate_name = "enumerate_odicto_pids"
+
+        handle, path = tempfile.mkstemp()
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="ascii") as f:
+                f.write("99")
+            with patch.object(backend, enumerate_name, return_value=set()), patch.object(
+                backend.os, "getpid", return_value=100
+            ), patch.object(backend.os, "getppid", return_value=99), patch.object(
+                backend.subprocess, "run"
+            ) as mock_run:
+                killed = backend.kill_other_odicto_processes(path)
+            self.assertEqual(killed, [])
+            mock_run.assert_not_called()
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_kill_other_still_kills_foreign_pid(self) -> None:
+        if sys.platform == "win32":
+            import platforms.windows as backend
+            enumerate_name = "_enumerate_odicto_pids"
+        else:
+            import platforms._posix as backend
+            enumerate_name = "enumerate_odicto_pids"
+
+        with patch.object(backend, enumerate_name, return_value={333}), patch.object(
+            backend.os, "getpid", return_value=100
+        ), patch.object(backend.os, "getppid", return_value=99), patch.object(
+            backend.subprocess, "run"
+        ) as mock_run:
+            if sys.platform != "win32":
+                with patch.object(backend, "kill_process_tree") as mock_tree:
+                    killed = backend.kill_other_odicto_processes(None)
+                    mock_tree.assert_called_once_with(333)
+            else:
+                killed = backend.kill_other_odicto_processes(None)
+                mock_run.assert_called()
+        self.assertEqual(killed, [333])
+
     def test_keyboard_backend_normalizes_aliases(self) -> None:
         from config import normalize_key_name
 
@@ -2291,6 +3134,23 @@ class TestCrossPlatform(unittest.TestCase):
                 except Exception:
                     pass
 
+    def test_setup_web_merge_env_writes_hotkey_toggle(self) -> None:
+        import setup_web
+
+        with patch.object(setup_web, "ENV_PATH", new=os.path.join(os.getcwd(), ".env.test")):
+            try:
+                with open(setup_web.ENV_PATH, "w", encoding="utf-8") as f:
+                    f.write("LLM_PROVIDER=none\n")
+                setup_web.merge_env({"HOTKEY_TOGGLE": "false"})
+                with open(setup_web.ENV_PATH, encoding="utf-8") as f:
+                    text = f.read()
+                self.assertIn("HOTKEY_TOGGLE=false", text)
+            finally:
+                try:
+                    os.remove(setup_web.ENV_PATH)
+                except Exception:
+                    pass
+
     def test_setup_web_page_includes_system_prompt(self) -> None:
         import setup_web
 
@@ -2304,6 +3164,10 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn('id="stt-gemini-fields"', html_page)
         self.assertIn("function syncSttProvider", html_page)
         self.assertIn('name="LIVE_HOTKEY"', html_page)
+        self.assertIn('name="HOTKEY_TOGGLE"', html_page)
+        self.assertIn("gearbox", html_page)
+        self.assertIn("Long ride", html_page)
+        self.assertIn("Short ride", html_page)
         self.assertIn("function syncTranscribeMode", html_page)
         self.assertIn('id="prompt_slot"', html_page)
         self.assertIn('id="prompt_overlay"', html_page)
@@ -2313,6 +3177,18 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn("prompt.txt", html_page)
         self.assertIn("prompt.txt.example", html_page)
         self.assertIn("restarts Odicto", html_page)
+        from config import ENV_DEFAULTS as _env_defaults
+        self.assertIn(_env_defaults["META_MODEL"], html_page)
+        self.assertIn("MODEL_DEFAULTS.meta", html_page)
+        self.assertIn('name="OPENROUTER_REASONING_EFFORT"', html_page)
+        self.assertIn('name="OPENROUTER_PROVIDER_SORT"', html_page)
+        self.assertIn('id="openrouter_reasoning_select"', html_page)
+        self.assertIn('id="openrouter_sort_select"', html_page)
+        self.assertIn("Backend default (none)", html_page)
+        self.assertIn("Backend default (latency)", html_page)
+        with open(setup_web.__file__, encoding="utf-8") as src_file:
+            setup_src = src_file.read()
+        self.assertNotIn("muse-spark-1.2", setup_src)
 
     def test_restart_odicto_stops_then_starts(self) -> None:
         import setup_web
@@ -2354,6 +3230,16 @@ class TestCrossPlatform(unittest.TestCase):
                     text = f.read()
                 self.assertIn("LLM_PROVIDER=openrouter", text)
                 self.assertIn("OPENROUTER_API_KEY=sk-or-test", text)
+                setup_web.merge_env(
+                    {
+                        "OPENROUTER_REASONING_EFFORT": "none",
+                        "OPENROUTER_PROVIDER_SORT": "latency",
+                    }
+                )
+                with open(setup_web.ENV_PATH) as f:
+                    text = f.read()
+                self.assertIn("OPENROUTER_REASONING_EFFORT=none", text)
+                self.assertIn("OPENROUTER_PROVIDER_SORT=latency", text)
                 # Unknown keys are appended under the preservation marker.
                 self.assertIn("CUSTOM_KEY=keep", text)
                 self.assertIn("kept from your previous", text)
@@ -2425,6 +3311,13 @@ class TestCrossPlatform(unittest.TestCase):
         self.assertIn("function showProvider", js)
         self.assertIn("function syncSttProvider", js)
         self.assertIn("function togglePromptExpand", js)
+        self.assertIn("function initGearbox", js)
+        self.assertIn("function setHotkeyToggle", js)
+        self.assertIn("OPENROUTER_REASONING_EFFORT", js)
+        self.assertIn("OPENROUTER_PROVIDER_SORT", js)
+        self.assertIn("function filterOpenrouterEffort", js)
+        self.assertIn("function loadOpenrouterCatalog", js)
+        self.assertIn("/openrouter-models", js)
         self.assertIn("function syncPromptPanelHeight", js)
         self.assertIn("function setTestTag", js)
         self.assertIn("test_tag", page)
@@ -2582,11 +3475,17 @@ class TestConfigCascade(unittest.TestCase):
             Config, "LLM_MAX_TOKENS", 333
         ):
             self.assertEqual(Config.effective_max_output_tokens(), 333)
-        # Explicit Meta ceiling overrides it.
-        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
-            Config, "META_MAX_OUTPUT_TOKENS", 777
+        # Explicit Gemini ceiling overrides it.
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "GEMINI_MAX_OUTPUT_TOKENS", 777
         ), patch.object(Config, "LLM_MAX_TOKENS", 333):
             self.assertEqual(Config.effective_max_output_tokens(), 777)
+        # Meta has no output cap: reasoning is uncapped, so the generic value
+        # is only a display label, and no META ceiling knob exists.
+        with patch.object(Config, "LLM_PROVIDER", "meta"), patch.object(
+            Config, "LLM_MAX_TOKENS", 333
+        ):
+            self.assertEqual(Config.effective_max_output_tokens(), 333)
 
     def test_reasoning_effort_mapping(self) -> None:
         # Unified knob reaches the resolvers...
@@ -2611,6 +3510,34 @@ class TestConfigCascade(unittest.TestCase):
             Config, "META_REASONING_EFFORT", ""
         ), patch.object(Config, "LLM_REASONING_EFFORT", "bogus"):
             self.assertEqual(Config.meta_reasoning_effort(), "low")
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "minimal"):
+            self.assertEqual(Config.openrouter_reasoning_effort(), "minimal")
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", ""):
+            self.assertEqual(Config.openrouter_reasoning_effort(), "none")
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", "bogus"):
+            self.assertEqual(Config.openrouter_reasoning_effort(), "none")
+        with patch.object(Config, "OPENROUTER_PROVIDER_SORT", "throughput"):
+            self.assertEqual(Config.openrouter_provider_sort(), "throughput")
+        with patch.object(Config, "OPENROUTER_PROVIDER_SORT", "bogus"):
+            self.assertEqual(Config.openrouter_provider_sort(), "latency")
+        with patch.object(Config, "LLM_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_REASONING_EFFORT", ""
+        ), patch.object(Config, "LLM_REASONING_EFFORT", ""), patch.object(
+            Config, "OPENROUTER_PROVIDER_SORT", "latency"
+        ):
+            body = Config.openrouter_extra_body()
+            self.assertEqual(body["provider"]["sort"], "latency")
+            self.assertEqual(body["reasoning"]["effort"], "none")
+            self.assertEqual(
+                Config.openrouter_extra_body(effort="low")["reasoning"]["effort"],
+                "low",
+            )
 
     def test_prompt_txt_wins_over_example(self) -> None:
         import tempfile
@@ -2716,6 +3643,106 @@ class TestConfigCascade(unittest.TestCase):
         secret_rows = [r for r in rows if r["label"] == "API key"]
         self.assertEqual(len(secret_rows), 1)
         self.assertTrue(secret_rows[0]["secret"])
+
+
+class TestOpenrouterCatalog(unittest.TestCase):
+    def setUp(self) -> None:
+        from openrouter_catalog import reset_openrouter_catalog
+
+        reset_openrouter_catalog()
+
+    def tearDown(self) -> None:
+        from openrouter_catalog import reset_openrouter_catalog
+
+        reset_openrouter_catalog()
+
+    def test_parse_reasoning_and_clamp_from_live_shape(self) -> None:
+        from openrouter_catalog import (
+            clamp_openrouter_effort,
+            parse_openrouter_models,
+            peek_openrouter_reasoning,
+        )
+        import openrouter_catalog as oc
+
+        payload = parse_openrouter_models(
+            {
+                "data": [
+                    {
+                        "id": "z-ai/glm-5.3-flash",
+                        "name": "Z.ai: GLM 5.3 Flash",
+                        "reasoning": {
+                            "mandatory": True,
+                            "default_enabled": True,
+                            "supported_efforts": ["max", "high", "low"],
+                            "default_effort": "max",
+                        },
+                    },
+                    {
+                        "id": "deepseek/deepseek-v4.1-flash",
+                        "name": "DeepSeek V4.1 Flash",
+                        "reasoning": {
+                            "mandatory": False,
+                            "default_enabled": True,
+                            "supported_efforts": ["max", "high", "low"],
+                            "default_effort": "high",
+                        },
+                    },
+                    {
+                        "id": "openai/gpt-5.6-luna",
+                        "name": "GPT-5.6 Luna",
+                        "reasoning": {
+                            "mandatory": False,
+                            "supported_efforts": [
+                                "max",
+                                "xhigh",
+                                "high",
+                                "medium",
+                                "low",
+                                "none",
+                            ],
+                            "default_effort": "medium",
+                        },
+                    },
+                ]
+            }
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(len(payload["models"]), 3)
+        oc._cache = payload
+        oc._cache_at = 1.0
+        glm = peek_openrouter_reasoning("z-ai/glm-5.3-flash:batch")
+        self.assertIsNotNone(glm)
+        self.assertTrue(glm["mandatory"])
+        self.assertEqual(
+            clamp_openrouter_effort("z-ai/glm-5.3-flash", "none"), "low"
+        )
+        self.assertEqual(
+            clamp_openrouter_effort("z-ai/glm-5.3-flash", "minimal"), "low"
+        )
+        self.assertEqual(
+            clamp_openrouter_effort("z-ai/glm-5.3-flash", "medium"), "low"
+        )
+        self.assertEqual(
+            clamp_openrouter_effort("z-ai/glm-5.3-flash", "max"), "max"
+        )
+        self.assertEqual(
+            clamp_openrouter_effort("deepseek/deepseek-v4.1-flash", "none"),
+            "none",
+        )
+        self.assertEqual(
+            clamp_openrouter_effort("openai/gpt-5.6-luna", "none"), "none"
+        )
+
+    def test_fetch_error_is_soft(self) -> None:
+        from openrouter_catalog import fetch_openrouter_catalog
+
+        with patch(
+            "openrouter_catalog.urllib.request.urlopen",
+            side_effect=OSError("offline"),
+        ):
+            payload = fetch_openrouter_catalog()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reasoning"], {})
 
 
 if __name__ == "__main__":

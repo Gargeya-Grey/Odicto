@@ -1,10 +1,127 @@
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from datetime import datetime
+from typing import Optional, TextIO
+
+
+_LOG_MAX_BYTES = 1_000_000
+_LOG_KEEP_BYTES = 256_000
+
+
+class _TimestampWriter:
+    """Prefix each log line with a local timestamp (pythonw has no console)."""
+
+    def __init__(self, raw: TextIO) -> None:
+        self._raw = raw
+        self._at_bol = True
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out = []
+        for line in s.splitlines(keepends=True):
+            if self._at_bol and line not in ("\n", "\r\n"):
+                out.append(f"{stamp} {line}")
+            else:
+                out.append(line)
+            self._at_bol = line.endswith("\n")
+        self._raw.write("".join(out))
+        return len(s)
+
+    def flush(self) -> None:
+        try:
+            self._raw.flush()
+        except Exception:
+            pass
+
+    def fileno(self) -> int:
+        return self._raw.fileno()
+
+    def reconfigure(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        reconf = getattr(self._raw, "reconfigure", None)
+        if reconf is not None:
+            reconf(**kwargs)
+
+
+def _session_log_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "dictation.log")
+
+
+def _trim_log(path: str) -> None:
+    """Keep dictation.log from growing without bound across logins."""
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) <= _LOG_MAX_BYTES:
+            return
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - _LOG_KEEP_BYTES))
+            tail = f.read()
+        nl = tail.find(b"\n")
+        if nl >= 0:
+            tail = tail[nl + 1 :]
+        with open(path, "wb") as f:
+            f.write(tail)
+    except Exception:
+        pass
+
+
+def _stdout_is_discarded() -> bool:
+    """True when this process has no console to write to.
+
+    pythonw starts with stdout is None. Setup's spawn_detached instead points
+    stdout/stderr at NUL, which is not None — so a naive None-check would skip
+    dictation.log and swallow every AI error after a setup-page restart.
+    """
+    if sys.stdout is None:
+        return True
+    try:
+        name = str(getattr(sys.stdout, "name", "") or "").lower()
+        if name in ("nul", "/dev/null"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def attach_pythonw_log() -> None:
+    """pythonw has no console; append stdout/stderr to dictation.log.
+
+    Must run before heavy imports so a PortAudio/Qt/CUDA failure at login is
+    still on disk. Append (do not overwrite) so a later restart cannot erase
+    the boot crash that just happened.
+    """
+    if not _stdout_is_discarded():
+        return
+    try:
+        path = _session_log_path()
+        _trim_log(path)
+        raw = open(path, "a", encoding="utf-8", buffering=1)
+        raw.write(
+            f"----- session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"pid={os.getpid()} -----\n"
+        )
+        raw.flush()
+        wrapped = _TimestampWriter(raw)
+        sys.stdout = wrapped  # type: ignore[assignment]
+        sys.stderr = wrapped  # type: ignore[assignment]
+        try:
+            import faulthandler
+
+            faulthandler.enable(file=raw, all_threads=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# Redirect before importing sounddevice / Qt / ctranslate2 so login crashes
+# land in dictation.log instead of vanishing with pythonw.
+attach_pythonw_log()
 
 from app_state import AppState
 from config import Config, parse_hold_hotkey
@@ -22,17 +139,6 @@ from typer import (
 )
 
 import platforms
-
-# Redirect stdout/stderr to a log file if running under pythonw.exe (no console)
-if sys.stdout is None:
-    try:
-        log_filepath = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "dictation.log"
-        )
-        sys.stdout = open(log_filepath, "w", encoding="utf-8", buffering=1)
-        sys.stderr = sys.stdout
-    except Exception:
-        pass
 
 
 # Re-export hotkey helpers so existing callers/tests can import them from main.
@@ -110,6 +216,27 @@ class DictationApp:
         print("==================================================")
         print("              Initializing Odicto               ")
         print("==================================================")
+        try:
+            rev = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            ).stdout.strip()
+            if rev:
+                print(f"Code version: git {rev}")
+        except Exception:
+            pass
+        try:
+            print(
+                f"Resolved: provider={Config.LLM_PROVIDER} "
+                f"model={Config.effective_llm_model()} "
+                f"effort={Config.effective_reasoning_effort() or '(default)'} "
+                f"prompt={Config.prompt_source_label()}"
+            )
+        except Exception as e:
+            print(f"Warning: could not resolve config at boot: {e}")
 
         self.temp_dir: str = tempfile.gettempdir()
         self.audio_filepath: str = os.path.join(
@@ -419,20 +546,26 @@ class DictationApp:
             else "Whisper"
         )
         mode_name = Config.gemini_transcribe_mode()
+        chord_verb = "Tap" if Config.HOTKEY_TOGGLE else "Hold"
+        chord_how = (
+            "tap again to stop"
+            if Config.HOTKEY_TOGGLE
+            else "release to stop"
+        )
         print(
-            f"  - Hold '{Config.HOTKEY}': RECORD and paste transcript "
-            f"({stt_name}, {mode_name})."
+            f"  - {chord_verb} '{Config.HOTKEY}': RECORD and paste transcript "
+            f"({stt_name}, {mode_name}; {chord_how})."
         )
         if Config.AI_HOTKEY:
             print(
-                f"  - Hold '{Config.AI_HOTKEY}': RECORD and paste a fresh AI reply "
-                "(local Whisper STT, then LLM; no previous conversation)."
+                f"  - {chord_verb} '{Config.AI_HOTKEY}': RECORD and paste a fresh AI reply "
+                f"(local Whisper STT, then LLM; no previous conversation; {chord_how})."
             )
         elif Config.AI_MODIFIER:
             print(
-                f"  - Hold '{Config.HOTKEY}+{Config.AI_MODIFIER}': "
+                f"  - {chord_verb} '{Config.HOTKEY}+{Config.AI_MODIFIER}': "
                 "RECORD and paste a fresh AI reply "
-                "(local Whisper STT, then LLM; no previous conversation)."
+                f"(local Whisper STT, then LLM; no previous conversation; {chord_how})."
             )
         keep_keys = ", ".join(k for k in Config.CTRL_KEEP_CONTEXT_KEYS if k)
         if keep_keys:
@@ -542,13 +675,20 @@ class DictationApp:
                 if self._hotkey_physically_held:
                     return False  # key-repeat while held
                 self._hotkey_physically_held = True
-                self.on_press(use_llm=match)
+                if Config.HOTKEY_TOGGLE:
+                    if self.state == AppState.RECORDING and not self.live_active:
+                        self.on_release()
+                    else:
+                        self.on_press(use_llm=match)
+                else:
+                    self.on_press(use_llm=match)
                 return False  # suppress so ` does not leak into the focused app
             if event_type == platforms.KEY_UP:
                 if not self._hotkey_physically_held:
                     return True
                 self._hotkey_physically_held = False
-                self.on_release()
+                if not Config.HOTKEY_TOGGLE:
+                    self.on_release()
                 return False
             return True
 
@@ -729,6 +869,7 @@ class DictationApp:
         if any(k in keep_keys for k in self._pressed_mods_at_press):
             self._capture_mode_override = True
             self._keep_history = True
+            print("Context: F6 held — AI reply keeps conversation memory", flush=True)
 
     # ----------------------------------------------------------- hotkey handlers
     def on_press(self, event: object = None, use_llm: Optional[bool] = None) -> None:
@@ -783,7 +924,12 @@ class DictationApp:
                 return
 
             mode_str = "AI refined" if self.use_llm else "raw dictation"
-            print(f"\n>>> Recording ({mode_str})... (Hold key and speak)")
+            hint = (
+                "tap the same chord again when finished"
+                if Config.HOTKEY_TOGGLE
+                else "Hold key and speak"
+            )
+            print(f"\n>>> Recording ({mode_str})... ({hint})")
 
     def on_release(self, event: object = None) -> None:
         """Handler triggered when the hotkey is physically released."""
@@ -796,6 +942,8 @@ class DictationApp:
 
             if self.state != AppState.RECORDING or self.recorder is None:
                 return
+            if self.live_active:
+                return  # F7 live tap owns the mic
 
             hold_ms = (time.monotonic() - self._record_started_at) * 1000.0
             if hold_ms < Config.MIN_HOLD_MS:
@@ -1163,6 +1311,11 @@ class DictationApp:
                 return
 
             if use_llm and self.refiner is not None:
+                if not keep_history and getattr(self.refiner, "conversation_history", None):
+                    print(
+                        f"Context: fresh AI reply (history {len(self.refiner.conversation_history)} msgs ignored)",
+                        flush=True,
+                    )
                 refined_text = self.refiner.refine(
                     raw_text,
                     context=context,

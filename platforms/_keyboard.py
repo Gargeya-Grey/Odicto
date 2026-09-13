@@ -6,6 +6,7 @@ therefore does not import this module.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from typing import Tuple
@@ -198,6 +199,82 @@ def wm_copy_foreground() -> bool:
         return False
 
 
+def _win_foreground_window_info() -> Tuple[str, str]:
+    """(window class, process image name) for the foreground window, lowercased."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return "", ""
+
+    class_buf = ctypes.create_unicode_buffer(256)
+    if not user32.GetClassNameW(hwnd, class_buf, 256):
+        return "", ""
+    window_class = class_buf.value.lower()
+
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return window_class, ""
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return window_class, ""
+
+    try:
+        query = getattr(kernel32, "QueryFullProcessImageNameW", None)
+        if query is None:
+            return window_class, ""
+        query.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        query.restype = wintypes.BOOL
+        size = wintypes.DWORD(1024)
+        path_buf = ctypes.create_unicode_buffer(size.value)
+        if not query(handle, 0, path_buf, ctypes.byref(size)):
+            return window_class, ""
+        return window_class, os.path.basename(path_buf.value).lower()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def foreground_is_terminal(extra=()) -> bool:
+    """True when the focused window is a terminal emulator.
+
+    Terminals have no shared paste chord and treat Ctrl+C as SIGINT, so callers
+    type the text instead. Linux overrides this in ``platforms.linux`` with an
+    X11 lookup; ``extra`` is the user's EXTRA_TERMINAL_APPS list.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        info = _win_foreground_window_info()
+    except Exception:
+        return False
+    from platforms.base import is_terminal_identifier
+
+    return is_terminal_identifier(info, extra)
+
+
 def copy_chord() -> None:
     press("ctrl")
     time.sleep(0.01)
@@ -219,6 +296,25 @@ def send_copy() -> None:
         copy_chord()
     except Exception:
         send("ctrl+c")
+
+
+def send_copy_terminal() -> None:
+    """Copy chord for a focused terminal — Ctrl+Shift+C, never plain Ctrl+C.
+
+    Plain Ctrl+C is SIGINT: sending it would interrupt whatever is running
+    instead of copying the terminal's selection.
+    """
+    try:
+        press("ctrl")
+        time.sleep(0.01)
+        press("shift")
+        time.sleep(0.01)
+        press_and_release("c")
+        time.sleep(0.01)
+        release("shift")
+        release("ctrl")
+    except Exception:
+        send("ctrl+shift+c")
 
 
 def send_paste() -> None:
@@ -255,6 +351,27 @@ def send_text(text: str) -> bool:
     try:
         kb = _require_keyboard()
         kb.write(text, delay=0, restore_state_after=False)
+        return True
+    except Exception:
+        return False
+
+
+def send_text_bulk(text: str) -> bool:
+    """Type arbitrary-length text at the caret, without touching the clipboard.
+
+    Used for terminals, where no paste chord is dependable. Windows batches the
+    whole string through SendInput; the ``keyboard`` backend types with a small
+    inter-character delay because a terminal drops characters written at zero
+    delay. Newlines are sent as-is — callers accept that a shell treats them as
+    Enter.
+    """
+    if not text:
+        return True
+    if sys.platform == "win32" and _win_send_text(text):
+        return True
+    try:
+        kb = _require_keyboard()
+        kb.write(text, delay=0.002, restore_state_after=False)
         return True
     except Exception:
         return False

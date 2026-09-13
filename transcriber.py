@@ -3,6 +3,8 @@ import base64
 import io
 import os
 import queue
+import subprocess
+import sys
 import threading
 import time
 import wave
@@ -12,12 +14,11 @@ import numpy as np
 
 from config import Config
 
-try:
-    from google import genai as google_genai
-    from google.genai import types as google_genai_types
-except Exception:  # pragma: no cover
-    google_genai = None  # type: ignore
-    google_genai_types = None  # type: ignore
+# Lazy: importing google-genai pulls pydantic + HTTP stacks. Whisper-only
+# boots never need that, so the SDK is loaded on first Gemini STT/Live use.
+google_genai = None  # type: ignore
+google_genai_types = None  # type: ignore
+_google_genai_import_tried = False
 
 # Filled on first Whisper load so Gemini-only boots skip ctranslate2 import.
 WhisperModel = None  # type: ignore
@@ -28,6 +29,43 @@ _genai_client_key: Optional[str] = None
 _genai_client_factory = None
 
 
+def _ensure_google_genai() -> None:
+    """Import google-genai once. Tests that patch ``google_genai`` skip this."""
+    global google_genai, google_genai_types, _google_genai_import_tried
+    if google_genai is not None or _google_genai_import_tried:
+        return
+    _google_genai_import_tried = True
+    try:
+        from google import genai as _genai
+        from google.genai import types as _types
+
+        google_genai = _genai
+        google_genai_types = _types
+    except Exception:
+        google_genai = None  # type: ignore
+        google_genai_types = None  # type: ignore
+
+
+def whisper_device_attempts(
+    model_size: str, configured_device: str
+) -> List[Tuple[str, str]]:
+    """Device/quantization chain for Whisper load.
+
+    ``auto`` keeps tiny/base on CPU (int8). Those models are small enough that
+    CUDA's process-wide context (~1GB commit) costs more RAM than it saves.
+    Larger models still try CUDA first. Explicit ``cuda`` / ``cpu`` win.
+    """
+    device = (configured_device or "auto").strip().lower()
+    if device == "cuda":
+        return [("cuda", "float16")]
+    if device == "cpu":
+        return [("cpu", "int8")]
+    size = (model_size or "").strip().lower()
+    if size.startswith("tiny") or size.startswith("base"):
+        return [("cpu", "int8")]
+    return [("cuda", "float16"), ("cpu", "int8")]
+
+
 def get_genai_client(api_key: str):
     """One SDK client per process for the same API key.
 
@@ -36,7 +74,10 @@ def get_genai_client(api_key: str):
     """
     global _genai_client, _genai_client_key, _genai_client_factory
     key = (api_key or "").strip()
-    if google_genai is None or not key:
+    if not key:
+        return None
+    _ensure_google_genai()
+    if google_genai is None:
         return None
     factory = getattr(google_genai, "Client", None)
     if factory is None:
@@ -56,6 +97,90 @@ def get_genai_client(api_key: str):
         _genai_client_key = key
         _genai_client_factory = factory
         return client
+
+
+# Login can beat the NVIDIA driver. Today's working boot had CUDA up ~86s after
+# explorer.exe; 5 minutes is the ceiling. Probe succeeds → return immediately
+# (manual start / warm machine waits 0s). Never switch the session to CPU just
+# because the driver was late — that would slow STT until another restart.
+CUDA_WAIT_SECONDS = 300.0
+
+
+def wait_for_cuda_driver(max_wait_s: Optional[float] = None) -> bool:
+    """Block until a child process can init CUDA, or until ``max_wait_s``.
+
+    ``cuInit`` / ctranslate2 can heap-corrupt this process (WER ``0xc0000374``)
+    if the driver is still coming up. Probe out-of-process. Returns True when
+    the probe succeeds. A timeout still means "try CUDA in this process next"
+    — it must not force CPU. Tests that inject a mock ``WhisperModel`` skip
+    the subprocess.
+    """
+    mod = getattr(WhisperModel, "__module__", "") or "" if WhisperModel is not None else ""
+    if "faster_whisper" not in mod:
+        return True
+    if _probe_cuda_subprocess():
+        return True
+    budget = CUDA_WAIT_SECONDS if max_wait_s is None else max(0.0, float(max_wait_s))
+    if budget <= 0:
+        return False
+    print(
+        f"CUDA not ready (GPU driver still starting). "
+        f"Waiting up to {int(budget)}s, then loading Whisper on GPU...",
+        flush=True,
+    )
+    deadline = time.monotonic() + budget
+    delay = 2.0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(delay, remaining))
+        if _probe_cuda_subprocess():
+            waited = budget - max(0.0, deadline - time.monotonic())
+            print(
+                f"CUDA ready after {waited:.0f}s. Loading Whisper on GPU.",
+                flush=True,
+            )
+            return True
+        delay = min(delay * 1.5, 10.0)
+        left = max(0, int(deadline - time.monotonic()))
+        print(f"CUDA still not ready ({left}s left)...", flush=True)
+    print(
+        "CUDA probe timed out after wait; trying GPU load anyway.",
+        flush=True,
+    )
+    return False
+
+
+def cuda_is_safe_to_load() -> bool:
+    """Back-compat alias used by tests; waits then reports whether the probe passed."""
+    return wait_for_cuda_driver()
+
+
+def _probe_cuda_subprocess(timeout: float = 20.0) -> bool:
+    code = (
+        "import sys\n"
+        "try:\n"
+        "    import ctranslate2\n"
+        "    n = int(ctranslate2.get_cuda_device_count())\n"
+        "    sys.exit(0 if n > 0 else 2)\n"
+        "except Exception:\n"
+        "    sys.exit(2)\n"
+    )
+    kwargs = {
+        "args": [sys.executable, "-c", code],
+        "timeout": timeout,
+        "capture_output": True,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(
+            subprocess, "CREATE_NO_WINDOW", 0x08000000
+        )
+    try:
+        result = subprocess.run(**kwargs)
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def float32_to_pcm16_bytes(audio: np.ndarray) -> bytes:
@@ -108,15 +233,9 @@ class WhisperTranscriber:
         """
         model_size: str = Config.WHISPER_MODEL_SIZE
         configured_device: str = Config.WHISPER_DEVICE.lower()
-
-        # Device/quantization fallback chain
-        devices_to_try: List[Tuple[str, str]] = []
-        if configured_device == "cuda":
-            devices_to_try = [("cuda", "float16")]
-        elif configured_device == "cpu":
-            devices_to_try = [("cpu", "int8")]
-        else:  # "auto"
-            devices_to_try = [("cuda", "float16"), ("cpu", "int8")]
+        devices_to_try: List[Tuple[str, str]] = whisper_device_attempts(
+            model_size, configured_device
+        )
 
         last_error: Optional[Exception] = None
         global WhisperModel
@@ -124,6 +243,16 @@ class WhisperTranscriber:
             from faster_whisper import WhisperModel as _WhisperModel
 
             WhisperModel = _WhisperModel
+        if any(device == "cuda" for device, _ in devices_to_try):
+            # Wait for the GPU driver. Do not drop CUDA from the chain — CPU
+            # is only the existing exception fallback if the CUDA load raises.
+            wait_for_cuda_driver()
+        elif configured_device == "auto":
+            print(
+                f"Whisper '{model_size}' uses CPU under auto "
+                "(skips CUDA context; set WHISPER_DEVICE=cuda to force GPU).",
+                flush=True,
+            )
         for device, compute_type in devices_to_try:
             try:
                 print(
@@ -245,6 +374,7 @@ class GeminiTranscriber:
         self._client = None
         self._whisper: Optional[WhisperTranscriber] = None
         api_key = Config.GEMINI_API_KEY.strip()
+        _ensure_google_genai()
         if google_genai is None:
             print(
                 "Warning: google-genai is not installed — Gemini STT unavailable.",
@@ -377,6 +507,7 @@ class GeminiLiveSession:
             print(f"Gemini Live STT thread failed: {e}", flush=True)
 
     async def _run(self) -> None:
+        _ensure_google_genai()
         if google_genai is None or google_genai_types is None:
             self._error = "google-genai not installed"
             return

@@ -37,10 +37,26 @@ def _mutex_name_for_install() -> str:
     return _mutex_names_for_install()[0]
 
 
+def _self_and_parent_pids() -> set:
+    """This interpreter and its launcher stub.
+
+    Windows venv ``pythonw.exe`` is a parent stub plus a child that actually
+    runs ``main.py``. ``taskkill /T`` on the parent kills this process too.
+    """
+    pids = {os.getpid()}
+    try:
+        ppid = os.getppid()
+        if ppid and ppid > 0:
+            pids.add(ppid)
+    except Exception:
+        pass
+    return pids
+
+
 def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
-    my_pid = os.getpid()
-    if exclude_pid is None:
-        exclude_pid = my_pid
+    protected = _self_and_parent_pids()
+    if exclude_pid is not None:
+        protected.add(exclude_pid)
     root_fwd = os.path.normcase(os.path.normpath(base.install_root())).replace("\\", "/")
     found: set = set()
 
@@ -72,7 +88,7 @@ def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
             if not pid_s.isdigit():
                 continue
             pid = int(pid_s)
-            if pid == exclude_pid:
+            if pid in protected:
                 continue
             cmd_n = os.path.normcase(cmd.replace('"', "").replace("\\", "/"))
             if "main.py" in cmd_n and root_fwd in cmd_n:
@@ -84,14 +100,14 @@ def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
 
 
 def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
-    my_pid = os.getpid()
+    protected = _self_and_parent_pids()
     pids_to_kill: set = set()
 
     if pid_file and os.path.exists(pid_file):
         try:
             with open(pid_file) as f:
                 old_pid = int(f.read().strip())
-            if old_pid != my_pid:
+            if old_pid not in protected:
                 pids_to_kill.add(old_pid)
         except Exception as e:
             print(f"Warning: Could not read PID file: {e}")
@@ -101,6 +117,7 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
             pass
 
     pids_to_kill |= _enumerate_odicto_pids()
+    pids_to_kill -= protected
 
     killed: list = []
     for pid in sorted(pids_to_kill):
@@ -118,6 +135,34 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
 
     if killed:
         time.sleep(0.45)
+        # Robust: taskkill returns before the tree is fully gone. Wait until
+        # every target PID is actually dead (or a bounded timeout expires) so
+        # the new instance never boots while the old one still holds hooks.
+        deadline = time.time() + 8.0
+        pending = set(killed)
+        while pending and time.time() < deadline:
+            still_alive = set()
+            for pid in sorted(pending):
+                try:
+                    out = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        creationflags=_CREATE_NO_WINDOW,
+                    )
+                    if str(pid) in (out.stdout or ""):
+                        still_alive.add(pid)
+                except Exception:
+                    still_alive.add(pid)
+            pending = still_alive
+            if pending:
+                time.sleep(0.5)
+        if pending:
+            print(
+                f"Warning: PIDs still alive after kill wait: {sorted(pending)} "
+                "(old hooks may still own hotkeys)"
+            )
     return killed
 
 

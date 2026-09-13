@@ -11,6 +11,7 @@ available through pynput's public API and degrades to ``is_pressed(key)``.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Dict
@@ -270,6 +271,11 @@ def send_copy() -> None:
         send("cmd+c")
 
 
+def send_copy_terminal() -> None:
+    """Copy chord for a focused terminal. Cmd+C is already terminal-safe here."""
+    send_copy()
+
+
 def send_paste() -> None:
     try:
         paste_chord()
@@ -301,6 +307,40 @@ def send_text(text: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def send_text_bulk(text: str) -> bool:
+    """Type arbitrary-length text at the caret, without touching the clipboard.
+
+    Used for terminals, where no paste chord is dependable. Newlines are sent
+    as-is — callers accept that a shell treats them as Enter.
+    """
+    if not text:
+        return True
+    try:
+        pynput = _require_pynput()
+        pynput.Controller().type(text)
+        return True
+    except Exception:
+        return False
+
+
+def foreground_is_terminal(extra=()) -> bool:
+    """True when the frontmost macOS app is a terminal emulator."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from AppKit import NSWorkspace
+
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return False
+        identifiers = [app.bundleIdentifier() or "", app.localizedName() or ""]
+    except Exception:
+        return False
+    from platforms.base import is_terminal_identifier
+
+    return is_terminal_identifier(identifiers, extra)
 
 
 def apply_window_exstyles(widget) -> None:

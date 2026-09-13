@@ -11,11 +11,14 @@ from platforms import (
     clipboard_read,
     clipboard_write,
     force_release_modifiers,
+    foreground_is_terminal,
     is_pressed,
     send_backspaces,
     send_copy,
+    send_copy_terminal,
     send_paste,
     send_text,
+    send_text_bulk,
     wm_copy_foreground,
 )
 
@@ -51,16 +54,47 @@ def _clipboard_write(text: str) -> bool:
         return False
 
 
+def _clipboard_write_verified(text: str, attempts: int = 3) -> bool:
+    """Write the clipboard and read it back, retrying while it is busy.
+
+    On Windows ``OpenClipboard`` fails transiently when another app (clipboard
+    manager, remote desktop, browser) holds the clipboard open. A blind write
+    then pastes stale content, so every write is verified with a read-back.
+    """
+    for _ in range(max(1, int(attempts))):
+        if _clipboard_write(text) and _clipboard_read() == text:
+            return True
+        time.sleep(0.02)
+    return _clipboard_read() == text
+
+
 def clipboard_snapshot() -> str:
     """Read the clipboard under the process-wide clipboard lock."""
     with _CLIPBOARD_LOCK:
         return _clipboard_read()
 
 
+def _terminal_target() -> bool:
+    """True when the focused window is a terminal.
+
+    Terminals share no paste chord (Ctrl+V / Ctrl+Shift+V / Shift+Insert all
+    differ, and a TUI can claim the chord outright) and treat Ctrl+C as SIGINT,
+    so Odicto types into them instead. Detection is best-effort: an unresolved
+    window reports False and the caller keeps the normal chord behavior.
+    """
+    if not Config.TYPE_IN_TERMINAL:
+        return False
+    try:
+        return bool(foreground_is_terminal(Config.EXTRA_TERMINAL_APPS))
+    except Exception:
+        return False
+
+
 def clipboard_restore(text: str) -> None:
     """Write the clipboard under the process-wide clipboard lock."""
     with _CLIPBOARD_LOCK:
-        _clipboard_write(text or "")
+        if not _clipboard_write_verified(text or ""):
+            print("Warning: Failed to restore clipboard", flush=True)
 
 
 def _wait_modifiers_up(timeout: float = 0.08) -> None:
@@ -90,7 +124,9 @@ def get_selected_text(timeout: float = 0.35) -> str:
        the selection already equals the previous clipboard contents.
     2. Release held modifiers so a synthetic copy chord is not polluted by the
        AI chord.
-    3. Check native foreground copy (WM_COPY) or trigger platform copy chord.
+    3. Check native foreground copy (WM_COPY) or trigger platform copy chord —
+       Ctrl+Shift+C instead of Ctrl+C when the target is a terminal, where
+       plain Ctrl+C is SIGINT.
     4. Poll clipboard with low latency for the captured selection.
     5. Always restore the user's original clipboard.
 
@@ -109,6 +145,7 @@ def get_selected_text(timeout: float = 0.35) -> str:
 
 
 def _get_selected_text_locked(timeout: float) -> str:
+    terminal = _terminal_target()
     original_clipboard = _clipboard_read()
     if original_clipboard is None:
         original_clipboard = ""
@@ -116,7 +153,7 @@ def _get_selected_text_locked(timeout: float) -> str:
     sentinel = f"\ufeffodicto-sel-{uuid.uuid4().hex}\ufeff"
     if not _clipboard_write(sentinel):
         print("Warning: could not write clipboard sentinel; selection probe degraded", flush=True)
-        return _get_selected_text_legacy(original_clipboard, timeout)
+        return _get_selected_text_legacy(original_clipboard, timeout, terminal)
 
     selected = sentinel
     path = "empty"
@@ -133,20 +170,25 @@ def _get_selected_text_locked(timeout: float) -> str:
                 path = "WM_COPY"
 
         # Path B: synthetic copy chord (fastest & universal for modern apps).
+        # In a terminal this is Ctrl+Shift+C — plain Ctrl+C is SIGINT and would
+        # interrupt the running command instead of copying the selection.
+        copy_label = "ctrl+shift+c" if terminal else "ctrl+c"
         if selected == sentinel:
-            selected = _copy_chord_until_change(sentinel, timeout)
+            selected = _copy_chord_until_change(sentinel, timeout, terminal)
             if selected != sentinel and (selected or "").strip():
-                path = "ctrl+c"
+                path = copy_label
 
         # One retry: chord still polluted or the app was slow to copy.
         if selected == sentinel:
             _wait_modifiers_up(0.08)
-            selected = _copy_chord_until_change(sentinel, min(timeout, 0.25))
+            selected = _copy_chord_until_change(
+                sentinel, min(timeout, 0.25), terminal
+            )
             if selected != sentinel and (selected or "").strip():
-                path = "ctrl+c-retry"
+                path = f"{copy_label}-retry"
 
     finally:
-        if not _clipboard_write(original_clipboard):
+        if not _clipboard_write_verified(original_clipboard, attempts=5):
             print("Warning: Failed to restore original clipboard after selection probe", flush=True)
 
     if not selected or selected == sentinel or not selected.strip():
@@ -156,10 +198,15 @@ def _get_selected_text_locked(timeout: float) -> str:
     return selected
 
 
-def _copy_chord_until_change(sentinel: str, timeout: float) -> str:
+def _copy_chord_until_change(
+    sentinel: str, timeout: float, terminal: bool = False
+) -> str:
     force_release_modifiers()
     try:
-        send_copy()
+        if terminal:
+            send_copy_terminal()
+        else:
+            send_copy()
     except Exception as e:
         print(f"Error: Failed to send copy chord for selection: {e}", flush=True)
         return sentinel
@@ -181,12 +228,17 @@ def _poll_clipboard_change(sentinel: str, timeout: float) -> str:
     return last
 
 
-def _get_selected_text_legacy(original_clipboard: str, timeout: float) -> str:
+def _get_selected_text_legacy(
+    original_clipboard: str, timeout: float, terminal: bool = False
+) -> str:
     """Fallback when sentinel write fails: old change-vs-original logic."""
     selected = original_clipboard
     try:
         force_release_modifiers()
-        send_copy()
+        if terminal:
+            send_copy_terminal()
+        else:
+            send_copy()
         deadline = time.time() + max(0.05, float(timeout))
         while time.time() < deadline:
             time.sleep(0.02)
@@ -200,7 +252,7 @@ def _get_selected_text_legacy(original_clipboard: str, timeout: float) -> str:
         print(f"Error: Failed to copy selection: {e}", flush=True)
         selected = original_clipboard
     finally:
-        _clipboard_write(original_clipboard)
+        _clipboard_write_verified(original_clipboard, attempts=5)
 
     if selected == original_clipboard or not (selected or "").strip():
         return ""
@@ -208,23 +260,36 @@ def _get_selected_text_legacy(original_clipboard: str, timeout: float) -> str:
 
 
 def paste_text(text: str, restore_clipboard: bool = True) -> None:
-    """Inject text at the cursor via clipboard + paste chord.
+    """Inject text at the cursor, typing into terminals and pasting elsewhere.
 
-    Hold-to-talk restores the user's clipboard after a settle delay. Live
-    caret updates pass ``restore_clipboard=False`` and restore once at F7 stop.
+    Terminals reject or reassign the paste chord, so there the text is typed
+    directly and the user's clipboard is never touched. Everywhere else the
+    text goes through the clipboard + paste chord; hold-to-talk restores the
+    clipboard after a settle delay, while live caret updates pass
+    ``restore_clipboard=False`` and restore once at F7 stop.
     """
     if not text:
         return
 
     with _CLIPBOARD_LOCK:
+        if _terminal_target():
+            _wait_modifiers_up(0.08)
+            if send_text_bulk(text):
+                print(">>> Terminal target: typed text (clipboard untouched)", flush=True)
+                return
+            print(
+                "Warning: typing into terminal failed; falling back to paste chord",
+                flush=True,
+            )
+
         original_clipboard = _clipboard_read() if restore_clipboard else None
 
         try:
-            if not _clipboard_write(text):
+            if not _clipboard_write_verified(text):
                 print("Error: Failed to write paste payload to clipboard", flush=True)
                 return
 
-            force_release_modifiers()
+            _wait_modifiers_up(0.08)
 
             time.sleep(0.02 if restore_clipboard else 0.008)
             try:
@@ -233,7 +298,12 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                 print(f"Error: Failed to perform paste simulation: {e}", flush=True)
 
             if restore_clipboard:
-                delay = max(0.02, float(Config.PASTE_DELAY_SECONDS))
+                # Floor 0.15s: SendInput only queues the paste chord — a
+                # browser contenteditable (X, etc.) drains it async, so a
+                # 0.05s settle can restore the clipboard before the app has
+                # read the payload (truncation) or leave the payload behind
+                # for the next compose to resurrect.
+                delay = max(0.15, float(Config.PASTE_DELAY_SECONDS))
                 time.sleep(delay)
             else:
                 time.sleep(0.015)
@@ -241,7 +311,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             print(f"Error: Failed to perform paste simulation: {e}", flush=True)
         finally:
             if restore_clipboard:
-                if not _clipboard_write(original_clipboard or ""):
+                if not _clipboard_write_verified(original_clipboard or "", attempts=5):
                     print(
                         "Warning: Failed to restore original clipboard after paste",
                         flush=True,

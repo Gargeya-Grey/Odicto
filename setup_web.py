@@ -53,6 +53,8 @@ EDITABLE_KEYS = {
     "OPENROUTER_MODEL",
     "OPENROUTER_MODEL_HISTORY",
     "OPENROUTER_API_BASE",
+    "OPENROUTER_PROVIDER_SORT",
+    "OPENROUTER_REASONING_EFFORT",
     "GEMINI_API_KEY",
     "GEMINI_MODEL",
     "GEMINI_MODEL_HISTORY",
@@ -69,6 +71,7 @@ EDITABLE_KEYS = {
     "LIVE_HOTKEY",
     "HOTKEY",
     "AI_HOTKEY",
+    "HOTKEY_TOGGLE",
     "SYSTEM_PROMPT",
     "SYSTEM_PROMPT_FILE",
 }
@@ -299,6 +302,10 @@ def write_prompt_file(file_ref: str, text: str) -> str:
     ``file_ref`` may be a bare filename or a relative subpath inside the
     install directory; absolute paths and ``..`` escapes are rejected.
 
+    Browser form posts arrive with CRLF; normalize to LF and write with
+    newline="" so Windows text-mode translation cannot stack CR on CR on
+    every save (the prompt.txt blank-line growth bug).
+
     Returns "" on success or an error message.
     """
     ref = (file_ref or "").strip()
@@ -310,8 +317,9 @@ def write_prompt_file(file_ref: str, text: str) -> str:
     try:
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
         tmp = target + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text.strip() + "\n")
+        body = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(body + "\n")
         os.replace(tmp, target)
     except OSError as e:
         return f"Could not write prompt file '{ref}': {e}"
@@ -457,6 +465,8 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     gemini_model_raw = env_raw("GEMINI_MODEL")
     meta_reasoning = env_raw("META_REASONING_EFFORT")
     gemini_thinking_raw = env_raw("GEMINI_THINKING_LEVEL")
+    or_reasoning = env_raw("OPENROUTER_REASONING_EFFORT")
+    or_sort = env_raw("OPENROUTER_PROVIDER_SORT")
     # Legacy seed: a hand-set LLM_MODEL/LLM_REASONING_EFFORT is shown once so
     # the next save migrates it visibly into the per-backend slot.
     legacy_model = env_raw("LLM_MODEL")
@@ -505,6 +515,8 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     ollama_model_seed = ollama_model or legacy_model
     meta_reasoning_seed = meta_reasoning or legacy_reasoning
     gemini_thinking_seed = gemini_thinking_raw or legacy_reasoning
+    or_reasoning_seed = or_reasoning or legacy_reasoning
+    or_sort_seed = or_sort
     # For the saved-hint underline.
     already_meta = bool(meta_model.strip())
     already_or = bool(or_model_raw.strip())
@@ -539,6 +551,8 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     live_hotkey = env_or("LIVE_HOTKEY")
     hotkey = env_or("HOTKEY")
     ai_hotkey = env_or("AI_HOTKEY")
+    hotkey_toggle_raw = env_or("HOTKEY_TOGGLE").strip().lower()
+    hotkey_toggle_on = hotkey_toggle_raw not in ("false", "0", "no", "off")
     system_prompt = Config.effective_system_prompt()
     prompt_source = Config.prompt_source_label()
 
@@ -1128,6 +1142,99 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
 .test-modal h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
 .test-modal p {{ margin: 0; font-size: 0.92rem; color: var(--muted); white-space: pre-wrap; word-break: break-word; }}
 .test-modal .actions {{ margin-top: 0.9rem; display:flex; justify-content:flex-end; }}
+.gearbox {{
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 80;
+  width: 13.75rem;
+}}
+.gearbox-plate {{
+  background: linear-gradient(165deg, #1c1b18 0%, #11110f 100%);
+  color: #f8f4ea;
+  border: 2px solid #f5c542;
+  border-radius: 18px;
+  padding: 0.8rem 0.85rem 0.95rem;
+  box-shadow: 0 0 0 4px rgba(245, 197, 66, 0.38), 0 18px 40px -12px rgba(0,0,0,0.55);
+}}
+.gearbox-badge {{
+  display: inline-block;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #1a1404;
+  background: #f5c542;
+  border-radius: 999px;
+  padding: 0.16rem 0.52rem;
+}}
+.gearbox-lede {{
+  margin: 0.45rem 0 0.7rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #d9d0b8;
+}}
+.shifter {{
+  display: grid;
+  grid-template-columns: 2.1rem 1fr;
+  gap: 0.55rem 0.7rem;
+  align-items: stretch;
+}}
+.gate-track {{
+  position: relative;
+  grid-row: 1 / span 2;
+  width: 2.1rem;
+  border-radius: 999px;
+  background: #2a271f;
+  border: 1px solid #5a5138;
+}}
+.gate-track .knob {{
+  position: absolute;
+  left: 50%;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin-left: -0.775rem;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffe38a, #e0a106 55%, #8a5a00);
+  box-shadow: 0 2px 0 #6b4500, 0 6px 10px rgba(0,0,0,0.45);
+  transition: top 0.18s ease;
+  top: 0.28rem;
+}}
+.gearbox.short .gate-track .knob {{ top: calc(100% - 1.83rem); }}
+.gear {{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+  color: #d9d0b8;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}}
+.gear:hover {{ border-color: rgba(245, 197, 66, 0.45); background: rgba(245, 197, 66, 0.08); }}
+.gear.selected {{
+  color: #1a1404;
+  background: #f5c542;
+  border-color: #f5c542;
+}}
+.gear-name {{ font-size: 0.88rem; font-weight: 650; line-height: 1.15; }}
+.gear-hint {{ font-size: 0.68rem; font-weight: 400; opacity: 0.85; }}
+.gear.selected .gear-hint {{ opacity: 0.75; }}
+@media (min-width: 1200px) {{
+  body {{ padding-left: 16rem; }}
+}}
+@media (max-width: 900px) {{
+  .gearbox {{
+    position: static;
+    width: 100%;
+    margin: 0 0 1.1rem;
+  }}
+}}
 </style>
 </head>
 <body>
@@ -1140,6 +1247,24 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
   <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v6 · per-provider keys</p>
 
   <form id="setupForm" method="post" action="/save">
+    <aside class="gearbox {'long' if hotkey_toggle_on else 'short'}" id="gearbox">
+      <input type="hidden" name="HOTKEY_TOGGLE" id="HOTKEY_TOGGLE" value="{'true' if hotkey_toggle_on else 'false'}">
+      <div class="gearbox-plate">
+        <span class="gearbox-badge">Gearbox</span>
+        <p class="gearbox-lede">Pick a ride for Ctrl+` and the AI chord. Save to apply.</p>
+        <div class="shifter" role="radiogroup" aria-label="Hotkey ride">
+          <span class="gate-track" aria-hidden="true"><span class="knob"></span></span>
+          <button type="button" class="gear{' selected' if hotkey_toggle_on else ''}" data-toggle="true" aria-pressed="{'true' if hotkey_toggle_on else 'false'}">
+            <span class="gear-name">Long ride</span>
+            <span class="gear-hint">tap, speak, tap again</span>
+          </button>
+          <button type="button" class="gear{'' if hotkey_toggle_on else ' selected'}" data-toggle="false" aria-pressed="{'false' if hotkey_toggle_on else 'true'}">
+            <span class="gear-name">Short ride</span>
+            <span class="gear-hint">hold while you talk</span>
+          </button>
+        </div>
+      </div>
+    </aside>
     <div class="layout">
     <div class="col">
     <label for="LLM_PROVIDER">AI backend</label>
@@ -1165,11 +1290,11 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
         <input type="password" name="META_API_KEY" value="{html.escape(meta_key)}" placeholder="paste your Meta API key — quotes are fine">
         <label>Model · Meta</label>
         <select id="meta_model_select" onchange="syncModelSelect('meta')" style="margin-top:0.35rem;"></select>
-        <input type="text" id="meta_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id, e.g. muse-spark-1.2">
+        <input type="text" id="meta_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id, e.g. {html.escape(ENV_DEFAULTS['META_MODEL'])}">
         <input type="hidden" name="META_MODEL" id="META_MODEL" value="{html.escape(meta_model_seed)}">
         <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="{html.escape(",".join(meta_hist))}">
         <div id="meta_model_chips" class="model-chips" aria-label="Saved models"></div>
-        <p class="panel-note">Backend default: <code>muse-spark-1.2-contributor</code>{' · saved value shown' if already_meta else ''}</p>
+        <p class="panel-note">Backend default: <code>{html.escape(ENV_DEFAULTS["META_MODEL"])}</code>{' · saved value shown' if already_meta else ''}</p>
         <label>Reasoning effort</label>
         <select id="meta_reasoning_select" onchange="syncEffort('meta')">
           <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
@@ -1186,6 +1311,18 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
         <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="{html.escape(",".join(or_hist))}">
         <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
         <p class="panel-note">Backend default: <code>openai/gpt-5.6-luna</code>{' · saved value shown' if already_or else ''}</p>
+        <label>Reasoning effort</label>
+        <select id="openrouter_reasoning_select" onchange="syncEffort('openrouter')">
+          <option value="">Backend default (none)</option><option value="none">none (no thinking)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
+        </select>
+        <input type="hidden" name="OPENROUTER_REASONING_EFFORT" id="OPENROUTER_REASONING_EFFORT" value="{html.escape(or_reasoning_seed)}">
+        <p class="panel-note" id="openrouter_effort_note">Default is no thinking. Allowed levels load from OpenRouter for the selected model.</p>
+        <label>Host ranking</label>
+        <select id="openrouter_sort_select" onchange="syncEffort('openrouter_sort')">
+          <option value="">Backend default (latency)</option><option value="latency">latency — fastest host</option><option value="throughput">throughput — highest tokens/sec</option><option value="price">price — cheapest host</option>
+        </select>
+        <input type="hidden" name="OPENROUTER_PROVIDER_SORT" id="OPENROUTER_PROVIDER_SORT" value="{html.escape(or_sort_seed)}">
+        <p class="panel-note">Default is lowest time-to-first-token for the chosen model, not cheapest.</p>
       </div>
       <div class="field" id="field-gemini">
         <label>Gemini API key{ ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if gemini_key else ''}</label>
@@ -1303,7 +1440,7 @@ code {{ background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 
         <option value="gemini"{" selected" if live_stt_provider == "gemini" else ""}>gemini — Google Gemini Live (real-time caret streaming)</option>
         <option value="whisper"{" selected" if live_stt_provider == "whisper" else ""}>whisper — Local Whisper (offline batch recording)</option>
       </select>
-      <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">Hold-to-talk: press and hold the modifier(s), then the main key. Live tap: press once to start, press again to stop and paste (default F7). While Odicto is running, F7 is captured so it does not fire in other apps.</p>
+      <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">The gearbox (top left) sets chord style: Long ride taps to start and tap to stop; Short ride holds while you speak. Live tap (F7) is always press once to start, press again to stop. While Odicto is running, F7 is captured so it does not fire in other apps.</p>
     </details>
 
     <div class="actions">
@@ -1344,19 +1481,30 @@ var DEFAULT_SYSTEM_PROMPT = __DEFAULT_SYSTEM_PROMPT_JSON__;
 // the provider's default appears as the placeholder + hint text below it.
 var MODEL_DEFAULTS = __MODEL_DEFAULTS_JSON__;
 var MODEL_CATALOGS = __MODEL_CATALOGS_JSON__;
+var OPENROUTER_REASONING = {{}};
+var OPENROUTER_NAMES = {{}};
+var OPENROUTER_ALL_EFFORTS = ['none','minimal','low','medium','high','xhigh','max'];
 function restoreDefaultPrompt() {{
   var el = document.getElementById('SYSTEM_PROMPT');
   el.value = DEFAULT_SYSTEM_PROMPT;
 }}
 function initModelSelects() {{
-  var defaultLabels = {{ meta: 'Backend default (muse-spark-1.2-contributor)', openrouter: 'Backend default (openai/gpt-5.6-luna)', gemini: 'Backend default (gemini-3.5-flash-lite)', ollama: 'Backend default (qwen2.5:1.5b-instruct)' }};
+  var defaultLabels = {{
+    meta: 'Backend default (' + (MODEL_DEFAULTS.meta || '') + ')',
+    openrouter: 'Backend default (' + (MODEL_DEFAULTS.openrouter || '') + ')',
+    gemini: 'Backend default (' + (MODEL_DEFAULTS.gemini || '') + ')',
+    ollama: 'Backend default (' + (MODEL_DEFAULTS.ollama || '') + ')'
+  }};
   ['meta','openrouter','gemini','ollama'].forEach(function(p) {{
     var sel = document.getElementById(p + '_model_select');
     if (!sel) return;
     sel.innerHTML = '';
     var o0 = document.createElement('option'); o0.value = ''; o0.textContent = defaultLabels[p] || 'Backend default'; sel.appendChild(o0);
     (MODEL_CATALOGS[p] || []).forEach(function(m) {{
-      var o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o);
+      var o = document.createElement('option'); o.value = m;
+      o.textContent = (p === 'openrouter' && OPENROUTER_NAMES[m]) ? OPENROUTER_NAMES[m] : m;
+      if (p === 'openrouter') o.title = m;
+      sel.appendChild(o);
     }});
     var oc = document.createElement('option'); oc.value = '__custom__'; oc.textContent = 'Custom\\u2026'; sel.appendChild(oc);
     var hid = document.getElementById(p.toUpperCase() + '_MODEL');
@@ -1374,14 +1522,21 @@ function syncModelSelect(p) {{
   var val = sel ? sel.value : '';
   if (val === '__custom__') {{ if (cust) {{ cust.style.display = ''; cust.focus(); }} if (hid && cust) hid.value = cust.value; }}
   else {{ if (cust) cust.style.display = 'none'; if (hid) hid.value = val; }}
+  if (p === 'openrouter') filterOpenrouterEffort();
 }}
 function syncCustomModel(p) {{
   var cust = document.getElementById(p + '_model_custom');
   var hid = document.getElementById(p.toUpperCase() + '_MODEL');
   if (cust && hid) hid.value = cust.value;
+  if (p === 'openrouter') filterOpenrouterEffort();
 }}
 function initEffortSelects() {{
-  var map = {{ meta: ['meta_reasoning_select','META_REASONING_EFFORT'], gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'] }};
+  var map = {{
+    meta: ['meta_reasoning_select','META_REASONING_EFFORT'],
+    gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'],
+    openrouter: ['openrouter_reasoning_select','OPENROUTER_REASONING_EFFORT'],
+    openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
+  }};
   Object.keys(map).forEach(function(p) {{
     var sel = document.getElementById(map[p][0]), hid = document.getElementById(map[p][1]);
     if (sel && hid && hid.value) {{
@@ -1390,8 +1545,105 @@ function initEffortSelects() {{
     }}
   }});
 }}
+function openrouterReasoningFor(id) {{
+  if (!id) return null;
+  if (OPENROUTER_REASONING[id]) return OPENROUTER_REASONING[id];
+  var lower = id.toLowerCase();
+  if (OPENROUTER_REASONING[lower]) return OPENROUTER_REASONING[lower];
+  var base = id.replace(/:(free|batch|nitro|floor|extended|exacto|online)$/i, '');
+  if (base !== id) {{
+    if (OPENROUTER_REASONING[base]) return OPENROUTER_REASONING[base];
+    if (OPENROUTER_REASONING[base.toLowerCase()]) return OPENROUTER_REASONING[base.toLowerCase()];
+  }}
+  return null;
+}}
+function lightestOpenrouterEffort(spec) {{
+  var allowed = (spec && spec.supported_efforts && spec.supported_efforts.length)
+    ? spec.supported_efforts.slice()
+    : OPENROUTER_ALL_EFFORTS.slice();
+  if (spec && spec.mandatory) allowed = allowed.filter(function(e){{ return e !== 'none'; }});
+  for (var i = 0; i < OPENROUTER_ALL_EFFORTS.length; i++) {{
+    if (allowed.indexOf(OPENROUTER_ALL_EFFORTS[i]) >= 0) return OPENROUTER_ALL_EFFORTS[i];
+  }}
+  return 'low';
+}}
+function filterOpenrouterEffort() {{
+  var hidModel = document.getElementById('OPENROUTER_MODEL');
+  var model = hidModel ? hidModel.value : '';
+  var spec = openrouterReasoningFor(model);
+  var sel = document.getElementById('openrouter_reasoning_select');
+  var hidden = document.getElementById('OPENROUTER_REASONING_EFFORT');
+  var note = document.getElementById('openrouter_effort_note');
+  if (!sel) return;
+  var current = hidden ? hidden.value : '';
+  var allowed;
+  if (!spec) {{
+    allowed = OPENROUTER_ALL_EFFORTS.slice();
+  }} else {{
+    allowed = (spec.supported_efforts && spec.supported_efforts.length)
+      ? spec.supported_efforts.slice()
+      : OPENROUTER_ALL_EFFORTS.slice();
+    if (!spec.mandatory && allowed.indexOf('none') < 0) allowed = ['none'].concat(allowed);
+    if (spec.mandatory) allowed = allowed.filter(function(e){{ return e !== 'none'; }});
+  }}
+  sel.innerHTML = '';
+  var o0 = document.createElement('option');
+  o0.value = '';
+  o0.textContent = (spec && spec.mandatory)
+    ? ('Fastest allowed (' + lightestOpenrouterEffort(spec) + ')')
+    : 'Backend default (none)';
+  sel.appendChild(o0);
+  allowed.forEach(function(e) {{
+    var o = document.createElement('option');
+    o.value = e;
+    o.textContent = e === 'none' ? 'none (no thinking)' : e;
+    sel.appendChild(o);
+  }});
+  if (current && allowed.indexOf(current) >= 0) {{
+    sel.value = current;
+  }} else if (current && spec && spec.mandatory) {{
+    sel.value = '';
+    if (hidden) hidden.value = '';
+  }} else {{
+    sel.value = '';
+  }}
+  if (note) {{
+    if (!model) note.textContent = 'Default is no thinking. Allowed levels load from OpenRouter for the selected model.';
+    else if (!spec) note.textContent = 'Catalog has no reasoning info for this slug yet — Odicto still skips illegal none/minimal on Test.';
+    else if (spec.mandatory) note.textContent = 'This model requires thinking. Allowed: ' + allowed.join(', ') + '.';
+    else note.textContent = 'Allowed: ' + allowed.join(', ') + '.';
+  }}
+}}
+function loadOpenrouterCatalog() {{
+  fetch('/openrouter-models').then(function(resp) {{
+    if (!resp.ok) throw new Error('catalog ' + resp.status);
+    return resp.json();
+  }}).then(function(data) {{
+    if (!data || !data.ok) return;
+    OPENROUTER_REASONING = data.reasoning || {{}};
+    if (!MODEL_CATALOGS.openrouter) MODEL_CATALOGS.openrouter = [];
+    (data.models || []).forEach(function(m) {{
+      if (!m || !m.id) return;
+      OPENROUTER_NAMES[m.id] = m.name || m.id;
+    }});
+    var extra = (data.models || []).slice(0, 40).map(function(m){{ return m.id; }}).filter(Boolean);
+    extra.forEach(function(id) {{
+      if (MODEL_CATALOGS.openrouter.indexOf(id) < 0) MODEL_CATALOGS.openrouter.push(id);
+    }});
+    initModelSelects();
+    initEffortSelects();
+    filterOpenrouterEffort();
+  }}).catch(function() {{
+    filterOpenrouterEffort();
+  }});
+}}
 function syncEffort(p) {{
-  var map = {{ meta: ['meta_reasoning_select','META_REASONING_EFFORT'], gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'] }};
+  var map = {{
+    meta: ['meta_reasoning_select','META_REASONING_EFFORT'],
+    gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'],
+    openrouter: ['openrouter_reasoning_select','OPENROUTER_REASONING_EFFORT'],
+    openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
+  }};
   var pair = map[p]; if (!pair) return;
   var sel = document.getElementById(pair[0]), hid = document.getElementById(pair[1]);
   if (sel && hid) hid.value = sel.value;
@@ -1411,6 +1663,33 @@ function initTranscribeMode() {{
   var tog = document.getElementById('stt_mode_toggle');
   if (tog && hid) tog.checked = (hid.value || 'smart') !== 'verbatim';
   syncTranscribeMode();
+}}
+function setHotkeyToggle(on) {{
+  var hid = document.getElementById('HOTKEY_TOGGLE');
+  if (hid) hid.value = on ? 'true' : 'false';
+  var box = document.getElementById('gearbox');
+  if (box) {{
+    box.classList.toggle('long', on);
+    box.classList.toggle('short', !on);
+  }}
+  var gears = document.querySelectorAll('#gearbox .gear');
+  for (var i = 0; i < gears.length; i++) {{
+    var isLong = gears[i].getAttribute('data-toggle') === 'true';
+    var selected = isLong === on;
+    gears[i].classList.toggle('selected', selected);
+    gears[i].setAttribute('aria-pressed', selected ? 'true' : 'false');
+  }}
+}}
+function initGearbox() {{
+  var hid = document.getElementById('HOTKEY_TOGGLE');
+  var raw = hid ? (hid.value || 'true') : 'true';
+  setHotkeyToggle(raw.toLowerCase() !== 'false');
+  var gears = document.querySelectorAll('#gearbox .gear');
+  for (var i = 0; i < gears.length; i++) {{
+    gears[i].addEventListener('click', function() {{
+      setHotkeyToggle(this.getAttribute('data-toggle') === 'true');
+    }});
+  }}
 }}
 function syncSttProvider() {{
   var sel = document.getElementById('STT_PROVIDER');
@@ -1596,7 +1875,9 @@ function initCustomSelect() {{
 initCustomSelect();
 initModelSelects();
 initEffortSelects();
+loadOpenrouterCatalog();
 initTranscribeMode();
+initGearbox();
 syncSttProvider();
 ['meta','openrouter','gemini','ollama'].forEach(function(p){{
   var ci=document.getElementById(p+'_model_custom');
@@ -1864,6 +2145,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/pull-status":
             self._send_json(pull_status())
             return
+        if self.path == "/openrouter-models":
+            from openrouter_catalog import ensure_openrouter_catalog
+
+            self._send_json(ensure_openrouter_catalog())
+            return
         if self.path != "/":
             self.send_error(404)
             return
@@ -1929,6 +2215,8 @@ class _Handler(BaseHTTPRequestHandler):
         if provider in ("gemini", "gemini_api", "google", "google_api", "google-api"):
             provider = "gemini"
 
+        reasoning_effort = ""
+
         def pick(key: str, default: str = "") -> str:
             raw = (form.get(key) or [""])[0]
             value = _clean_submitted_value(key, raw)
@@ -1950,6 +2238,7 @@ class _Handler(BaseHTTPRequestHandler):
             api_key = pick("OPENROUTER_API_KEY")
             model = pick("OPENROUTER_MODEL", OPENROUTER_FALLBACK_MODEL)
             api_base = pick("OPENROUTER_API_BASE", ENV_DEFAULTS["OPENROUTER_API_BASE"])
+            reasoning_effort = pick("OPENROUTER_REASONING_EFFORT")
         elif provider == "gemini":
             api_key = pick("GEMINI_API_KEY")
             model = pick("GEMINI_MODEL", ENV_DEFAULTS["GEMINI_MODEL"])
@@ -1962,8 +2251,14 @@ class _Handler(BaseHTTPRequestHandler):
             api_key = ""
             model = ""
             api_base = ""
+            reasoning_effort = ""
 
-        result = test_provider(provider, api_key, model, api_base)
+        if provider == "openrouter":
+            result = test_provider(
+                provider, api_key, model, api_base, reasoning_effort=reasoning_effort
+            )
+        else:
+            result = test_provider(provider, api_key, model, api_base)
         ok = result == "ok"
         if not ok and any(s in result.lower() for s in ("401", "unauthorized", "403", "forbidden")):
             result = result + " — check the key is valid and was pasted without extra quotes around it."

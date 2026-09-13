@@ -51,23 +51,70 @@ class AudioRecorder:
         # of each captured mono chunk; listeners must never block.
         self._chunk_listeners: List[Callable[[np.ndarray], None]] = []
 
-        # Open the device once; if it fails here, the app fails fast at startup
-        # instead of discovering a broken mic on the first hotkey press.
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            callback=self._callback,
-            dtype="float32",
-            blocksize=1024,
-            latency="low",
-        )
-        self._stream.start()
+        # Open the device once. At login the WASAPI endpoint may not exist yet,
+        # so retry with backoff instead of failing the whole app on first try.
+        self._open_persistent_stream()
+
+    def _open_persistent_stream(self) -> None:
+        """Open and start the always-on input stream, retrying a cold audio stack."""
+        last_error: Optional[BaseException] = None
+        delays = (0.0, 0.5, 1.0, 2.0, 4.0)
+        for attempt, delay in enumerate(delays):
+            if delay:
+                time.sleep(delay)
+            stream = None
+            try:
+                stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    callback=self._callback,
+                    dtype="float32",
+                    blocksize=1024,
+                    latency="low",
+                )
+                stream.start()
+                self._stream = stream
+                if attempt:
+                    print(
+                        f"Microphone ready after {attempt + 1} attempts.",
+                        flush=True,
+                    )
+                return
+            except Exception as e:
+                last_error = e
+                print(f"Microphone not ready ({e}); retrying...", flush=True)
+                if stream is not None:
+                    try:
+                        stream.abort()
+                    except Exception:
+                        pass
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+        raise RuntimeError(
+            f"Could not open microphone after {len(delays)} attempts: {last_error}"
+        ) from last_error
+
+    def _log_status_throttled(self, status: object) -> None:
+        """Log PortAudio status from the callback without flooding the audio thread."""
+        now = time.monotonic()
+        if (now - self._last_status_log) < self._STATUS_LOG_MIN_INTERVAL:
+            return
+        self._last_status_log = now
+        try:
+            print(f"Audio stream status: {status}", flush=True)
+        except Exception:
+            pass
 
     def _callback(self, indata: np.ndarray, frames: int, time: object, status: object) -> None:
         """Internal callback for sounddevice input stream to capture audio chunks."""
         if status:
             # Minor buffer underflows are non-fatal; keep capturing.
-            self._log_status_throttled(status)
+            try:
+                self._log_status_throttled(status)
+            except Exception:
+                pass
         # Live meter (outside lock first for RMS compute, then short lock for store).
         try:
             peak = float(np.max(np.abs(indata))) if indata.size else 0.0

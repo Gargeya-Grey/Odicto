@@ -5,23 +5,57 @@ import time
 from typing import Optional, Union
 
 from config import OPENROUTER_FALLBACK_MODEL, ENV_DEFAULTS, Config
+from openrouter_catalog import (
+    clamp_openrouter_effort,
+    ensure_openrouter_catalog,
+    lightest_openrouter_effort,
+    peek_openrouter_reasoning,
+    prefetch_openrouter_catalog,
+    reset_openrouter_catalog,
+)
 
-try:
-    from openai import OpenAI  # noqa: F401 — exposed as refiner.OpenAI for tests/mocking
-except Exception:  # pragma: no cover
-    OpenAI = None  # type: ignore
+# Lazy: openai / google-genai stay unloaded until an LLM provider needs them.
+# Tests patch ``refiner.OpenAI`` / ``refiner.google_genai``; a non-None patch
+# skips the real import.
+OpenAI = None  # type: ignore
+google_genai = None  # type: ignore
+_openai_import_tried = False
+_google_genai_import_tried = False
 
-try:
-    from google import genai as google_genai  # noqa: F401 — exposed as refiner.google_genai for tests/mocking
-except Exception:  # pragma: no cover
-    google_genai = None  # type: ignore
+
+def _ensure_openai():
+    global OpenAI, _openai_import_tried
+    if OpenAI is not None or _openai_import_tried:
+        return OpenAI
+    _openai_import_tried = True
+    try:
+        from openai import OpenAI as _OpenAI
+
+        OpenAI = _OpenAI
+    except Exception:
+        OpenAI = None  # type: ignore
+    return OpenAI
+
+
+def _ensure_google_genai():
+    global google_genai, _google_genai_import_tried
+    if google_genai is not None or _google_genai_import_tried:
+        return google_genai
+    _google_genai_import_tried = True
+    try:
+        from google import genai as _genai
+
+        google_genai = _genai
+    except Exception:
+        google_genai = None  # type: ignore
+    return google_genai
 
 
 # Hard constraints — output is pasted verbatim into the user's document/chat box.
-# max_tokens: callers pass Config.effective_max_output_tokens() (the resolved
-# cascade cap; the 64 floor lives there). The prompt comes from
-# Config.effective_system_prompt() (prompt.txt, else prompt.txt.example,
-# else the built-in default).
+# The Meta Responses call sends no max_output_tokens: reasoning budget is
+# uncapped and the effort knob (META_REASONING_EFFORT) is the only control.
+# The prompt comes from Config.effective_system_prompt() (prompt.txt, else
+# prompt.txt.example, else the built-in default).
 
 # Spoken reset phrases — clear multi-turn memory without an LLM call.
 _RESET_PHRASES = {
@@ -38,6 +72,88 @@ _RESET_PHRASES = {
 }
 _RESET_REPLY = "Chat memory cleared. Starting fresh."
 
+# OpenRouter default is reasoning.effort=none. GLM-5.3 / GLM-5.3-Flash (and
+# other always-on SKUs) reject that with HTTP 400. They accept low|high|max
+# only — not none or minimal — so the lightest retry is low.
+_OPENROUTER_MANDATORY_REASONING_FALLBACK = "low"
+_OPENROUTER_FORCED_EFFORT: dict[str, str] = {}
+_MANDATORY_REASONING_MARKERS = (
+    "reasoning is mandatory",
+    "cannot be disabled",
+    "always engages in thinking",
+    "always on and cannot be disabled",
+)
+
+
+def reset_openrouter_effort_cache() -> None:
+    """Drop per-model reasoning overrides and the live catalog (tests)."""
+    _OPENROUTER_FORCED_EFFORT.clear()
+    reset_openrouter_catalog()
+
+
+def _is_mandatory_reasoning_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _MANDATORY_REASONING_MARKERS)
+
+
+def openrouter_effort_for_model(
+    model: str, configured: str | None = None
+) -> str:
+    """Effort to send for this OpenRouter slug.
+
+    Uses a process-local override after a model rejects disabled reasoning,
+    then the live OpenRouter catalog (mandatory + supported_efforts). GLM-5.3
+    remains a fallback when the catalog has not loaded yet.
+    """
+    slug = (model or "").strip()
+    cached = _OPENROUTER_FORCED_EFFORT.get(slug.lower())
+    if cached:
+        return cached
+    if configured is None:
+        effort = Config.openrouter_reasoning_effort()
+    else:
+        effort = str(configured).strip().lower()
+        if effort not in (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ):
+            effort = Config.openrouter_reasoning_effort()
+    return clamp_openrouter_effort(slug, effort or "none")
+
+
+def _remember_openrouter_effort(model: str, effort: str) -> None:
+    slug = (model or "").strip().lower()
+    if slug:
+        _OPENROUTER_FORCED_EFFORT[slug] = effort
+
+
+def _openrouter_create(client, kwargs: dict, timeout):
+    """chat.completions.create, retrying once if the model forbids effort=none."""
+    model = kwargs.get("model") or ""
+    extra = kwargs.get("extra_body") or {}
+    raw = (extra.get("reasoning") or {}).get("effort")
+    effort = openrouter_effort_for_model(model, configured=raw)
+    call_kwargs = dict(kwargs)
+    call_kwargs["extra_body"] = Config.openrouter_extra_body(effort=effort)
+    try:
+        return client.chat.completions.create(**call_kwargs, timeout=timeout)
+    except Exception as e:
+        fallback = _OPENROUTER_MANDATORY_REASONING_FALLBACK
+        if effort != fallback and _is_mandatory_reasoning_error(e):
+            _remember_openrouter_effort(model, fallback)
+            print(
+                f"Notice: {model} requires reasoning; retrying with effort={fallback}.",
+                flush=True,
+            )
+            call_kwargs["extra_body"] = Config.openrouter_extra_body(effort=fallback)
+            return client.chat.completions.create(**call_kwargs, timeout=timeout)
+        raise
+
 
 def _extract_meta_text(data: dict) -> Optional[str]:
     if not isinstance(data, dict):
@@ -50,25 +166,41 @@ def _extract_meta_text(data: dict) -> Optional[str]:
         for item in output:
             if not isinstance(item, dict):
                 continue
+            # Muse Spark 1.3 echoes the request in `output` as input_text / user
+            # messages. Taking those made AI mode paste the spoken instruction.
+            if item.get("role") == "user":
+                continue
+            if item.get("type") in ("reasoning", "function_call", "file_search_call"):
+                continue
             content = item.get("content")
             if isinstance(content, list):
                 for c in content:
-                    if isinstance(c, dict) and c.get("text") and isinstance(c["text"], str):
-                        if c.get("type") in ("output_text", "input_text", "text") or "type" not in c:
-                            texts.append(c["text"])
+                    if not isinstance(c, dict):
+                        continue
+                    text = c.get("text")
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                    ctype = c.get("type")
+                    if ctype == "input_text":
+                        continue
+                    if ctype in ("output_text", "text") or ctype is None:
+                        texts.append(text)
             elif isinstance(content, str) and content.strip():
-                texts.append(content)
-            if isinstance(item.get("text"), str) and item["text"].strip():
+                if item.get("role") != "user":
+                    texts.append(content)
+            elif (
+                item.get("role") == "assistant"
+                and isinstance(item.get("text"), str)
+                and item["text"].strip()
+            ):
                 texts.append(item["text"])
         if texts:
             joined = "\n".join(t.strip() for t in texts if t and t.strip())
             if joined.strip():
                 return joined.strip()
-        # Some implementations return output as list of strings
         str_items = [str(x).strip() for x in output if isinstance(x, str) and str(x).strip()]
         if str_items:
             return "\n".join(str_items)
-    # OpenAI-compatible fallback
     try:
         choices = data.get("choices")
         if isinstance(choices, list) and choices:
@@ -80,6 +212,53 @@ def _extract_meta_text(data: dict) -> Optional[str]:
     if isinstance(data.get("content"), str) and data["content"].strip():
         return data["content"].strip()
     return None
+
+
+def _choice_content(response: object) -> str:
+    """Visible assistant text from a Chat Completions response."""
+    try:
+        raw = response.choices[0].message.content
+    except Exception:
+        return ""
+    return (raw or "").strip()
+
+
+def _choice_finish_reason(response: object) -> str:
+    try:
+        return str(getattr(response.choices[0], "finish_reason", "") or "")
+    except Exception:
+        return ""
+
+
+def _describe_meta_response(data: dict) -> str:
+    """One-line summary of a Responses payload for dictation.log."""
+    try:
+        status = data.get("status", "?")
+        output = data.get("output", [])
+        kinds: list[str] = []
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    kinds.append("str")
+                    continue
+                t = str(item.get("type", "?"))
+                r = str(item.get("role", ""))
+                kinds.append(f"{t}/{r}" if r else t)
+        usage = data.get("usage", {})
+        tok = f" usage={usage}" if isinstance(usage, dict) and usage else ""
+        return f"status={status} output=[{', '.join(kinds)}]{tok}"
+    except Exception:
+        return "status=? (unparseable)"
+
+
+def _log_meta_response(data: dict, budget: object) -> None:
+    """Print what the model actually returned so dictation.log shows why."""
+    print(f"Meta response: {_describe_meta_response(data)} (budget={budget})", flush=True)
+    if data.get("status") not in (None, "completed"):
+        print(
+            f"Meta incomplete details: {str(data.get('incomplete_details', ''))[:300]}",
+            flush=True,
+        )
 
 
 class _MetaClient:
@@ -117,41 +296,16 @@ class _MetaClient:
     def _url(self) -> str:
         return f"{self.base_url}/responses"
 
-    def create_responses(
-        self, input_payload: list[dict], max_tokens: int, timeout: tuple[float, float] = (5.0, 30.0)
-    ) -> Optional[str]:
-        url = self._url()
-        # reasoning.effort=high burns output_tokens on reasoning (your hi-reasoning
-        # model produced 61 reasoning tokens for a 64-budget → immediate truncation).
-        # Keep a generous floor and default effort=low for fastest + robust dictation.
-        # Cascade: META_REASONING_EFFORT → LLM_REASONING_EFFORT → "low" (clamped).
-        effort = Config.meta_reasoning_effort()
-        # Meta reasoning models (like muse-spark-1.2-contributor) deduct internal
-        # reasoning tokens from max_output_tokens. If the caller requested max_tokens
-        # (e.g. 512), ensure a floor of 2048 during normal refinement so reasoning
-        # tokens do not prematurely truncate the response into status: incomplete.
-        if max_tokens > 16:
-            effective_max = max(2048, int(max_tokens))
-        else:
-            effective_max = max(16, int(max_tokens) if max_tokens else 16)
-        payload: dict = {
-            "model": self.model,
-            "input": input_payload,
-            "stream": False,
-        }
-        if effort and effort != "none":
-            payload["reasoning"] = {"effort": effort}
-        if effective_max:
-            payload["max_output_tokens"] = int(effective_max)
-
+    def _post_payload(
+        self, url: str, payload: dict, timeout: tuple[float, float]
+    ) -> dict:
         if self._has_requests and self._session is not None:
             import requests as _req  # type: ignore
 
             try:
                 resp = self._session.post(url, json=payload, timeout=timeout)
                 resp.raise_for_status()
-                data = resp.json()
-                return _extract_meta_text(data)
+                return resp.json()
             except _req.exceptions.RequestException as e:
                 # Surface body for debugging if present
                 body = ""
@@ -160,34 +314,62 @@ class _MetaClient:
                 except Exception:
                     pass
                 raise RuntimeError(f"Meta API error: {e} {body}".strip()) from e
-        else:
-            import json as _json
-            import urllib.request as _urllib
-            import urllib.error as _uerr
+        import json as _json
+        import urllib.request as _urllib
+        import urllib.error as _uerr
 
-            body_bytes = _json.dumps(payload).encode("utf-8")
-            req = _urllib.Request(url, data=body_bytes, method="POST")
-            req.add_header("Authorization", f"Bearer {self.api_key}")
-            req.add_header("Content-Type", "application/json")
+        body_bytes = _json.dumps(payload).encode("utf-8")
+        req = _urllib.Request(url, data=body_bytes, method="POST")
+        req.add_header("Authorization", f"Bearer {self.api_key}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            # urllib has no connect/read split; use read timeout as overall
+            with _urllib.urlopen(req, timeout=timeout[1]) as r:  # type: ignore
+                raw = r.read()
+                return _json.loads(raw.decode("utf-8"))
+        except _uerr.HTTPError as e:
             try:
-                # urllib has no connect/read split; use read timeout as overall
-                with _urllib.urlopen(req, timeout=timeout[1]) as r:  # type: ignore
-                    raw = r.read()
-                    data = _json.loads(raw.decode("utf-8"))
-                    return _extract_meta_text(data)
-            except _uerr.HTTPError as e:
-                try:
-                    err_body = e.read().decode("utf-8")[:500]
-                except Exception:
-                    err_body = str(e)
-                raise RuntimeError(f"Meta API error: {e.code} {err_body}") from e
+                err_body = e.read().decode("utf-8")[:500]
+            except Exception:
+                err_body = str(e)
+            raise RuntimeError(f"Meta API error: {e.code} {err_body}") from e
+
+    def create_responses(
+        self, input_payload: list[dict], timeout: tuple[float, float] = (5.0, 120.0)
+    ) -> Optional[str]:
+        url = self._url()
+        # No max_output_tokens is sent: reasoning is uncapped and the effort
+        # knob (META_REASONING_EFFORT → LLM_REASONING_EFFORT → "low") is the
+        # only control over thinking depth. Timeout is generous because
+        # medium/high effort can think for 60s+ before answering.
+        effort = Config.meta_reasoning_effort()
+        payload: dict = {
+            "model": self.model,
+            "input": input_payload,
+            "stream": False,
+        }
+        if effort and effort != "none":
+            payload["reasoning"] = {"effort": effort}
+
+        def _extract_with_log(data: dict) -> Optional[str]:
+            _log_meta_response(data, "uncapped")
+            text = _extract_meta_text(data)
+            if not text:
+                reply_preview = str(data)[:400].replace("\n", " ")
+                print(
+                    f"Meta returned no extractable text; reply dump: {reply_preview}",
+                    flush=True,
+                )
+            return text
+
+        data = self._post_payload(url, payload, timeout)
+        return _extract_with_log(data)
 
     def ping(self) -> None:
         try:
             self.create_responses(
                 input_payload=[{"role": "user", "content": [{"type": "input_text", "text": "ping"}]}],
-                max_tokens=16,
-                timeout=(3.0, 10.0),
+                timeout=(5.0, 45.0),
             )
         except Exception as e:
             raise e
@@ -224,6 +406,7 @@ class _GeminiClient:
         self.model = model
         self.client = None
         self._last_interaction_id: Optional[str] = None
+        _ensure_google_genai()
         if google_genai is None:
             self.client = None
             return
@@ -306,6 +489,7 @@ class TextRefiner:
         self.conversation_history: list[dict[str, str]] = []
 
         if self.provider == "ollama":
+            _ensure_openai()
             if OpenAI is None:
                 raise RuntimeError("openai package not installed")
             self.client = OpenAI(
@@ -323,6 +507,7 @@ class TextRefiner:
                 )
                 self.client = None
             else:
+                _ensure_openai()
                 if OpenAI is None:
                     raise RuntimeError("openai package not installed")
                 self.client = OpenAI(
@@ -334,6 +519,7 @@ class TextRefiner:
                         "X-Title": "Odicto",
                     },
                 )
+                prefetch_openrouter_catalog()
         elif self.provider == "meta":
             if not Config.effective_api_key():
                 print(
@@ -393,9 +579,11 @@ class TextRefiner:
             try:
                 print(f"Pre-loading LLM model '{self.model}' in the background...")
                 if self.provider == "meta":
-                    assert isinstance(self.client, _MetaClient)
-                    self.client.ping()
-                    print(f"LLM model '{self.model}' pre-loaded successfully!")
+                    # A real "ping" still thinks at full effort and can take
+                    # 60s+ on medium/high, blocking nothing but logging noise
+                    # on every boot. Skip the network round-trip: the client
+                    # is stateless (requests Session) and needs no warm-up.
+                    print(f"LLM model '{self.model}' ready (stateless client, no pre-load needed).")
                     return
                 if self.provider == "gemini":
                     assert isinstance(self.client, _GeminiClient)
@@ -419,7 +607,14 @@ class TextRefiner:
                             "num_predict": 1,
                         },
                     }
-                self.client.chat.completions.create(**kwargs, timeout=(3.0, 20.0))
+                    self.client.chat.completions.create(**kwargs, timeout=(3.0, 20.0))
+                elif self.provider == "openrouter":
+                    kwargs["extra_body"] = Config.openrouter_extra_body(
+                        effort=openrouter_effort_for_model(self.model)
+                    )
+                    _openrouter_create(self.client, kwargs, timeout=(3.0, 20.0))
+                else:
+                    self.client.chat.completions.create(**kwargs, timeout=(3.0, 20.0))
                 print(f"LLM model '{self.model}' pre-loaded successfully!")
             except Exception as e:
                 print(f"Notice: Background LLM pre-load did not complete: {e}")
@@ -471,12 +666,13 @@ class TextRefiner:
             return _RESET_REPLY
 
         try:
-            # Single cascade-resolved cap for every provider; provider-specific
-            # ceilings are already folded in by the resolver.
             max_tokens = Config.effective_max_output_tokens()
+            # Meta ignores this (uncapped; effort knob controls thinking).
+            # Every other provider uses it as the answer cap.
+            budget_label = "uncapped" if self.provider == "meta" else max_tokens
             print(
                 f"Sending query to {self.provider} ({self.model}) "
-                f"max_tokens={max_tokens} keep_history={keep_history} "
+                f"max_tokens={budget_label} keep_history={keep_history} "
                 f"for LLM response..."
             )
 
@@ -511,7 +707,7 @@ class TextRefiner:
                 )
                 llm_started = time.time()
                 refined_text: Optional[str] = self.client.create_responses(
-                    input_payload, max_tokens=max_tokens, timeout=(5.0, 30.0)
+                    input_payload, timeout=(5.0, 120.0)
                 )
                 print(f"Meta responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
@@ -599,16 +795,48 @@ class TextRefiner:
                     },
                     "keep_alive": -1,
                 }
+            elif self.provider == "openrouter":
+                kwargs["extra_body"] = Config.openrouter_extra_body(
+                    effort=openrouter_effort_for_model(self.model)
+                )
 
+            read_timeout = 90.0 if self.provider == "openrouter" else 30.0
             llm_started = time.time()
-            response = self.client.chat.completions.create(
-                **kwargs, timeout=(5.0, 30.0)
-            )
+            if self.provider == "openrouter":
+                response = _openrouter_create(
+                    self.client, kwargs, timeout=(5.0, read_timeout)
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    **kwargs, timeout=(5.0, read_timeout)
+                )
             print(f"{self.provider} responded in {time.time() - llm_started:.2f}s")
 
-            refined_text = response.choices[0].message.content
+            refined_text = _choice_content(response)
+            if not refined_text and self.provider == "openrouter":
+                retry_tokens = max(int(max_tokens) * 4, 2048)
+                print(
+                    f"Notice: openrouter returned empty content "
+                    f"(finish_reason={_choice_finish_reason(response)!r}, "
+                    f"usage={getattr(response, 'usage', None)}). "
+                    f"Retrying with max_tokens={retry_tokens}.",
+                    flush=True,
+                )
+                kwargs["max_tokens"] = retry_tokens
+                kwargs["extra_body"] = Config.openrouter_extra_body(
+                    effort=openrouter_effort_for_model(self.model)
+                )
+                llm_started = time.time()
+                response = _openrouter_create(
+                    self.client, kwargs, timeout=(5.0, read_timeout)
+                )
+                print(
+                    f"{self.provider} retry responded in "
+                    f"{time.time() - llm_started:.2f}s"
+                )
+                refined_text = _choice_content(response)
+
             if refined_text:
-                refined_text = refined_text.strip()
                 if keep_history:
                     with self._history_lock:
                         self.conversation_history.append(
@@ -616,6 +844,12 @@ class TextRefiner:
                         )
                 return refined_text
 
+            print(
+                f"Notice: {self.provider} returned no answer text "
+                f"(finish_reason={_choice_finish_reason(response)!r}); "
+                f"pasting the raw transcript.",
+                flush=True,
+            )
             if keep_history:
                 with self._history_lock:
                     if (
@@ -643,9 +877,16 @@ class TextRefiner:
             return text
 
 
-def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -> str:
+def test_provider(
+    provider: str,
+    api_key: str,
+    model: str,
+    api_base: str = "",
+    reasoning_effort: str = "",
+) -> str:
     """Ping a provider using explicit values, without touching the running Config.
 
+    ``reasoning_effort`` is the setup-page OpenRouter dropdown (may be empty).
     Returns ``"ok"`` on success or a human-readable error string.
     """
     provider = provider.strip().lower().replace("-", "_")
@@ -658,6 +899,7 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
         if provider == "none":
             return "ok"
         if provider == "ollama":
+            _ensure_openai()
             if OpenAI is None:
                 return "openai package not installed"
             base = api_base.strip() or ENV_DEFAULTS["LLM_API_BASE"]
@@ -670,6 +912,7 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
             )
             return "ok"
         if provider == "openrouter":
+            _ensure_openai()
             if OpenAI is None:
                 return "openai package not installed"
             if not api_key.strip():
@@ -684,11 +927,25 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
                     "X-Title": "Odicto",
                 },
             )
-            client.chat.completions.create(
-                model=model or OPENROUTER_FALLBACK_MODEL,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-                timeout=(3.0, 10.0),
+            ping_model = model or OPENROUTER_FALLBACK_MODEL
+            ensure_openrouter_catalog()
+            ping_effort = openrouter_effort_for_model(
+                ping_model, configured=reasoning_effort.strip() or None
+            )
+            spec = peek_openrouter_reasoning(ping_model)
+            if spec:
+                ping_effort = lightest_openrouter_effort(spec)
+            elif "glm-5.3" in ping_model.lower():
+                ping_effort = _OPENROUTER_MANDATORY_REASONING_FALLBACK
+            _openrouter_create(
+                client,
+                {
+                    "model": ping_model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                    "extra_body": Config.openrouter_extra_body(effort=ping_effort),
+                },
+                timeout=(3.0, 20.0),
             )
             return "ok"
         if provider == "meta":
@@ -703,6 +960,7 @@ def test_provider(provider: str, api_key: str, model: str, api_base: str = "") -
             client.ping()
             return "ok"
         if provider == "gemini":
+            _ensure_google_genai()
             if google_genai is None:
                 return "google-genai package not installed"
             if not api_key.strip():

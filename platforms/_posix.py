@@ -29,6 +29,17 @@ except ImportError:  # pragma: no cover
 _lock_file_obj = None
 
 
+def _self_and_parent_pids() -> set:
+    pids = {os.getpid()}
+    try:
+        ppid = os.getppid()
+        if ppid and ppid > 0:
+            pids.add(ppid)
+    except Exception:
+        pass
+    return pids
+
+
 def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
     """PIDs running this install's ``main.py`` (best-effort via psutil).
 
@@ -37,9 +48,9 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
     working directory, which the start scripts set to the install root.
     """
     found = set()
-    my_pid = os.getpid()
-    if exclude_pid is None:
-        exclude_pid = my_pid
+    protected = _self_and_parent_pids()
+    if exclude_pid is not None:
+        protected.add(exclude_pid)
     if psutil is None:
         return found
 
@@ -52,7 +63,7 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
                 cwd = proc.info.get("cwd")
             except Exception:
                 continue
-            if pid in (0, exclude_pid):
+            if pid in protected or pid == 0:
                 continue
             cmd = " ".join(cmdline)
             if "main.py" not in cmd:
@@ -74,7 +85,7 @@ def kill_process_tree(pid: int) -> None:
     Prefers psutil so arbitrary process trees are handled correctly even when
     ``pid`` is not a process-group leader. Falls back to ``os.kill``/``killpg``.
     """
-    if pid == os.getpid():
+    if pid in _self_and_parent_pids():
         return
 
     if psutil is not None:
@@ -108,14 +119,14 @@ def kill_process_tree(pid: int) -> None:
 
 def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     """Kill every other ``main.py`` for this install; returns attempted PIDs."""
-    my_pid = os.getpid()
+    protected = _self_and_parent_pids()
     pids = set()
 
     if pid_file and os.path.exists(pid_file):
         try:
             with open(pid_file) as f:
                 old_pid = int(f.read().strip())
-            if old_pid != my_pid:
+            if old_pid not in protected:
                 pids.add(old_pid)
         except Exception:
             pass
@@ -125,6 +136,7 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
             pass
 
     pids |= enumerate_odicto_pids()
+    pids -= protected
 
     killed = []
     for pid in sorted(pids):

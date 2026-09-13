@@ -26,25 +26,25 @@
 Most dictation tools are either cloud-bound, locked to one app, or slow.  
 **Odicto** is a small background service that:
 
-1. Records while you **hold** a global hotkey (or **tap F7** to talk until you tap again)  
+1. Records when you **tap** a global hotkey (tap again to stop), **hold** it if `HOTKEY_TOGGLE=false`, or **tap F7** for live captions
 2. Transcribes with **local Whisper** or **Gemini 3.5 Transcribe** (`STT_PROVIDER`)  
 3. Pastes into the focused field via clipboard  
 4. Optionally answers with an LLM — local Ollama, Meta API, OpenRouter, or **Google Gemini** (one-line switch)  
 5. Shows a slim **bottom-center HUD** while it works (live captions on F7)  
 
 ```text
-  Hold hotkey ──► mic ──► Whisper or Gemini STT ──► (optional LLM) ──► Ctrl+V paste
-  Tap F7      ──► live stream ──► same STT mode ─────────────────────► Ctrl+V paste
+  Tap (or hold) hotkey ──► mic ──► Whisper or Gemini STT ──► (optional LLM) ──► Ctrl+V paste
+  Tap F7               ──► live stream ──► same STT mode ─────────────────────► Ctrl+V paste
                               │
                          glass HUD
 ```
 
 | Mode | How | Result |
 |------|-----|--------|
-| **Dictation** | Hold **Ctrl+\`**, speak, release | Transcript pasted (smart or verbatim) |
-| **AI reply** | Hold **Ctrl+Shift+\`**, speak, release | Local Whisper, then a fresh model answer |
+| **Dictation** | Tap **Ctrl+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Transcript pasted (smart or verbatim) |
+| **AI reply** | Tap **Ctrl+Shift+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Local Whisper, then a fresh model answer |
 | **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Live text at the caret; tap again when done |
-| **AI with memory** | Hold **F6** + **Ctrl+\`**, speak, release | Continues the F6 conversation |
+| **AI with memory** | Tap **F6** + **Ctrl+\`**, speak, tap again | Continues the F6 conversation |
 | **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
 ---
@@ -58,9 +58,12 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 | **Linux (X11 recommended)** | Supported (root or `input` group for global hooks) |
 
 Notes:
-- **macOS** runs Whisper on CPU by default. `faster-whisper` does not currently
-  expose an Apple Silicon Metal device, so `WHISPER_DEVICE=auto` falls back to
+- **macOS** runs Whisper on CPU. `faster-whisper` does not currently
+  expose an Apple Silicon Metal device, so `WHISPER_DEVICE=auto` uses
   `cpu` (int8).
+- **Windows / Linux:** `WHISPER_DEVICE=auto` keeps **tiny/base on CPU** to
+  avoid a ~1GB CUDA context at login. Larger models still try CUDA first.
+  Set `WHISPER_DEVICE=cuda` to force GPU.
 - **Linux Wayland** needs `wl-clipboard` and may have compositor-specific
   synthetic-keyboard limits; an X11 session is the most reliable target.
 
@@ -257,7 +260,7 @@ is selected.
 
 ```env
 # Per-backend models (selected via the setup page’s categorized dropdowns):
-# META_MODEL=muse-spark-1.2-contributor
+# META_MODEL=muse-spark-1.3-contributor
 # GEMINI_MODEL=gemini-3.5-flash-lite
 # OPENROUTER_MODEL=openai/gpt-5.6-luna
 # OLLAMA_MODEL= (blank → qwen2.5:1.5b-instruct)
@@ -285,12 +288,15 @@ OPENROUTER_API_KEY=sk-or-...
 | `OPENROUTER_MODEL` | OpenRouter model slug ([model list](https://openrouter.ai/models)) |
 | `OPENROUTER_API_KEY` | Required for openrouter (app refuses to start if missing) |
 | `OPENROUTER_API_BASE` | Defaults to `https://openrouter.ai/api/v1` |
+| `OPENROUTER_PROVIDER_SORT` | Always `latency` by default — pick the lowest time-to-first-token host for the chosen model (`throughput` / `price` also valid) |
+| `OPENROUTER_REASONING_EFFORT` | Always `none` by default — skip thinking when the model allows it. Odicto fetches OpenRouter's live model catalog and clamps illegal values (GLM-5.3 requires `low`/`high`/`max`) |
 | `LLM_MODEL` / `LLM_API_BASE` | Stay as your Ollama settings for easy switch-back |
 | `META_API_KEY` | Placeholder for Meta — paste real key in `.env` (never commit it) |
-| `META_MODEL` | Meta model id (default `muse-spark-1.2-contributor`) |
+| `META_MODEL` | Meta model id (default `muse-spark-1.3-contributor`) |
 
 Notes:
 - If `OPENROUTER_MODEL` is blank, the app falls back to `LLM_MODEL` (must be a valid OpenRouter id).
+- Every OpenRouter chat call sends `provider.sort=latency` and `reasoning.effort=none` so answers come from the fastest host with thinking turned off. The setup page loads OpenRouter's model list and per-model reasoning levels; mandatory-reasoning models are clamped to the lightest allowed effort. OpenRouter's own default is cheapest, not fastest.
 - For `meta`, `META_MODEL` is used; `LLM_MODEL` stays as the Ollama fallback when meta keys are not set.
 - Localhost `LLM_API_BASE` is ignored for openrouter so you do **not** need to edit the API path by hand.
 
@@ -352,7 +358,7 @@ Default `STT_PROVIDER=whisper` so existing local-only installs do not change.
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
-| **Whisper (STT)** | When `STT_PROVIDER=whisper`, as fallback, or for the AI chord | Local — skipped at boot if Gemini STT is selected; tiny/base may warm after ready when an LLM is configured |
+| **Whisper (STT)** | When `STT_PROVIDER=whisper`, as fallback, or for the AI chord | Local — skipped at boot if Gemini STT is selected; tiny/base may warm after ready when an LLM is configured. `auto` device keeps tiny/base on CPU (int8) so idle RAM is not a CUDA context |
 | **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
 | **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
@@ -419,6 +425,33 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 5. Watch the HUD: **Listening -> Transcribing -> Done**  
 6. Text is pasted at the cursor  
 
+### Terminals
+
+There is no paste chord that works in every terminal — Windows Terminal and
+`cmd`/PowerShell take **Ctrl+V**, Git Bash/mintty defaults to **Shift+Insert**,
+most Linux terminals use **Ctrl+Shift+V**, macOS takes **Cmd+V**, and inside a
+TUI (vim, an agent CLI, an SSH session) the foreground app claims **Ctrl+V**
+outright. Plain **Ctrl+C** is worse: in a terminal it is **SIGINT** and kills
+whatever is running.
+
+So when the focused window is a terminal, Odicto **types the text** instead of
+pasting it — the same path your keyboard uses, which every terminal accepts —
+and leaves your clipboard untouched. For the same reason AI mode's
+"refine the selected text" probe sends **Ctrl+Shift+C**, never Ctrl+C.
+
+Detection is best-effort: a window it cannot identify falls back to the normal
+paste chord. Add your terminal with `EXTRA_TERMINAL_APPS` if it is not
+recognized. Notes:
+
+| Situation | Behavior |
+|-----------|----------|
+| Windows Terminal, `cmd`, PowerShell, Git Bash, WSL | Detected |
+| macOS Terminal, iTerm2, Warp, kitty | Detected |
+| Linux X11 (`xdotool` or `xprop` installed) | Detected |
+| Linux Wayland | Not detectable — paste chord is used; set `TYPE_IN_TERMINAL=false` if it misbehaves |
+| VS Code / JetBrains built-in terminal | Not distinguishable from the editor — paste chord is used |
+| Multi-line dictation in a shell | Typed as-is, so each newline is **Enter** and the line runs |
+
 ### Ask the AI
 
 1. Hold **Ctrl+Shift+\`** (the backtick key under Esc, plus **Shift**)  
@@ -433,7 +466,7 @@ To keep talking about the same task, hold **F6** together with **Ctrl+\`** (or w
 
 | Tip | Detail |
 |-----|--------|
-| **Hold, don't tap** | Very short holds are ignored (anti-accidental) |
+| **Too-short clips are ignored** | Start+stop faster than `MIN_HOLD_MS` is dropped (anti-accidental) |
 | **Wait for Ready** | Hotkeys do nothing until models finish loading |
 | **One utterance at a time** | System is busy while processing; wait for **Done** |
 | **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in F6/AI mode — both wipe the multi-turn history |
@@ -474,9 +507,9 @@ Core knobs:
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `LLM_PROVIDER` | `none` | `none` · `ollama` · `openrouter` · `meta` (also `meta-api`) · `gemini` (also `google`) |
-| `LLM_MODEL` | provider default | Model id for any provider (`qwen2.5:1.5b-instruct` / `muse-spark-1.2-contributor` / `gemini-3.5-flash-lite` / an OpenRouter slug) |
+| `LLM_MODEL` | provider default | Model id for any provider (`qwen2.5:1.5b-instruct` / `muse-spark-1.3-contributor` / `gemini-3.5-flash-lite` / an OpenRouter slug) |
 | `LLM_MAX_TOKENS` | `1024` | Output cap for every provider (~750 words) |
-| `LLM_REASONING_EFFORT` | provider default | Unified thinking knob; maps to Meta `reasoning.effort` / Gemini `thinking_level` (`minimal\|low\|medium\|high\|none`) |
+| `LLM_REASONING_EFFORT` | provider default | Unified thinking knob; maps to Meta `reasoning.effort` / Gemini `thinking_level` / OpenRouter `reasoning.effort` (`minimal\|low\|medium\|high\|none`) |
 
 Per-provider credentials — each starts empty, is saved independently, and is
 **remembered across provider switches** (the setup page masks stored keys):
@@ -491,9 +524,10 @@ Optional overrides:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `OPENROUTER_MODEL` / `META_MODEL` / `GEMINI_MODEL` / `OLLAMA_MODEL` | `openai/gpt-5.6-luna` (fallback) / `muse-spark-1.2-contributor` / `gemini-3.5-flash-lite` / `qwen2.5:1.5b-instruct` | Pin a model per backend; OLLAMA is blank-by-default → falls back to `LLM_MODEL` |
-| `META_MAX_OUTPUT_TOKENS` / `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Per-provider ceilings over `LLM_MAX_TOKENS` |
-| `META_REASONING_EFFORT` / `GEMINI_THINKING_LEVEL` | `low` / `minimal` | Per-provider effort over `LLM_REASONING_EFFORT` |
+| `OPENROUTER_MODEL` / `META_MODEL` / `GEMINI_MODEL` / `OLLAMA_MODEL` | `openai/gpt-5.6-luna` (fallback) / `muse-spark-1.3-contributor` / `gemini-3.5-flash-lite` / `qwen2.5:1.5b-instruct` | Pin a model per backend; OLLAMA is blank-by-default → falls back to `LLM_MODEL` |
+| `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Per-provider ceiling over `LLM_MAX_TOKENS` (Meta reasoning is uncapped; effort knob only) |
+| `META_REASONING_EFFORT` / `GEMINI_THINKING_LEVEL` / `OPENROUTER_REASONING_EFFORT` | `low` / `minimal` / `none` | Per-provider effort over `LLM_REASONING_EFFORT` |
+| `OPENROUTER_PROVIDER_SORT` | `latency` | OpenRouter host ranking: `latency` (fastest TTFT), `throughput`, or `price` |
 | `LLM_API_BASE` | `http://localhost:11434/v1` | Ollama endpoint (OpenRouter auto-switches to its own root) |
 
 Behavior & UI:
@@ -502,10 +536,11 @@ Behavior & UI:
 |----------|---------|---------|
 | `HOTKEY` | `ctrl+grave` | Dictation chord (`grave` = the `` ` `` key) |
 | `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
+| `HOTKEY_TOGGLE` | `true` | `true` = tap chord to start, tap again to stop. `false` = hold while speaking |
 | `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
 | `CTRL_KEEP_CONTEXT_KEYS` | `f6` | Key held during a capture keeps AI conversation memory (default AI is always fresh) |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
-| `WHISPER_DEVICE` | `auto` | `auto` · `cuda` · `cpu` |
+| `WHISPER_DEVICE` | `auto` | `auto` (tiny/base → CPU; larger → CUDA then CPU) · `cuda` · `cpu` |
 | `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SYSTEM_PROMPT_FILE` | *(empty)* | Set to `prompt.txt` when you have a private live prompt. Do not point this at other files. |
@@ -514,6 +549,8 @@ Behavior & UI:
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
 | `MIN_HOLD_MS` | `80` | Ignore shorter presses |
 | `PASTE_DELAY_SECONDS` | `0.05` | Clipboard settle before restore |
+| `TYPE_IN_TERMINAL` | `true` | Type the text (clipboard untouched) when the focused window is a terminal |
+| `EXTRA_TERMINAL_APPS` | *(empty)* | Comma-separated window classes / process names to also treat as terminals |
 
 ---
 
@@ -525,7 +562,7 @@ Behavior & UI:
 | `recorder.py` | Low-latency mic capture + level meter |
 | `transcriber.py` | `faster-whisper` STT |
 | `refiner.py` | LLM replies (fresh by default; F6 keeps history) |
-| `typer.py` | Clipboard paste |
+| `typer.py` | Text injection: clipboard paste, or typing into terminals |
 | `indicator.py` | PySide6 glass HUD |
 | `config.py` | Env-backed settings |
 | `app_state.py` | Shared state enum (import-safe) |
@@ -561,6 +598,9 @@ Behavior & UI:
 | Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
 | Linux hotkey/paste doesn't work | Run as root or add your user to the `input` group; on Wayland prefer X11 |
+| Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |
+| Terminal pastes but never types | `TYPE_IN_TERMINAL=false` is set, or the window wasn't detected. On Linux X11 install `xdotool` or `xprop`; Wayland can't be detected |
+| Multi-line text ran as commands in the shell | Newlines are typed as-is, so each is **Enter**. Dictate a single line, or set `TYPE_IN_TERMINAL=false` to paste instead |
 
 ---
 
