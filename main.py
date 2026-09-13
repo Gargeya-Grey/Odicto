@@ -585,6 +585,12 @@ class DictationApp:
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
 
+    def _beep(self, frequency: float, name: str) -> None:
+        """Play a short audio cue off the hot path."""
+        threading.Thread(
+            target=play_beep, args=(frequency, 0.08), daemon=True, name=name
+        ).start()
+
     def _mods_in_snapshot(self, mods: tuple) -> bool:
         """True if every modifier was physically down at primary-key press time."""
         if not mods:
@@ -896,9 +902,7 @@ class DictationApp:
             self._set_state(AppState.RECORDING)
 
             if Config.PLAY_AUDIO_CUES:
-                threading.Thread(
-                    target=play_beep, args=(880.0, 0.08), daemon=True, name="beep-start"
-                ).start()
+                self._beep(880.0, "beep-start")
 
             try:
                 self.recorder.start()
@@ -950,9 +954,7 @@ class DictationApp:
             self._set_state(AppState.PROCESSING)
 
             if Config.PLAY_AUDIO_CUES:
-                threading.Thread(
-                    target=play_beep, args=(440.0, 0.08), daemon=True, name="beep-stop"
-                ).start()
+                self._beep(440.0, "beep-stop")
 
             # Hot path: keep audio in memory only (no disk write).
             success: bool = self.recorder.stop(filepath=None)
@@ -998,9 +1000,7 @@ class DictationApp:
                     return  # hold-to-talk owns the mic
                 hold_ms = (time.monotonic() - self._record_started_at) * 1000.0
                 if Config.PLAY_AUDIO_CUES:
-                    threading.Thread(
-                        target=play_beep, args=(440.0, 0.08), daemon=True, name="beep-stop"
-                    ).start()
+                    self._beep(440.0, "beep-stop")
                 success = False
                 try:
                     success = self.recorder.stop(filepath=None)
@@ -1056,9 +1056,7 @@ class DictationApp:
                 self._ensure_live_caret_worker()
                 self._set_state(AppState.RECORDING)
                 if Config.PLAY_AUDIO_CUES:
-                    threading.Thread(
-                        target=play_beep, args=(880.0, 0.08), daemon=True, name="beep-start"
-                    ).start()
+                    self._beep(880.0, "beep-start")
                 try:
                     self.recorder.start()
                 except Exception as e:
@@ -1193,11 +1191,8 @@ class DictationApp:
         finally:
             self._live_cleanup_done.set()
 
-    def _capture_selection(self, pre_context: str = "") -> tuple[str, Optional[bytes]]:
+    def _capture_selection(self) -> tuple[str, Optional[bytes]]:
         """Capture highlighted text and/or clipboard image off the hook thread."""
-        context = (pre_context or "").strip()
-        if context:
-            return context[:12000], None
         self._live_cleanup_done.wait(timeout=0.25)
         # Brief settle so physical modifier key-ups finish after the chord.
         time.sleep(0.02)
@@ -1240,7 +1235,7 @@ class DictationApp:
             sel_future = None
             if use_llm and self.refiner is not None and not context:
                 sel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odicto-sel")
-                sel_future = sel_pool.submit(self._capture_selection, "")
+                sel_future = sel_pool.submit(self._capture_selection)
 
             # Prefer the in-memory buffer; fall back to disk only if missing.
             audio_source = audio

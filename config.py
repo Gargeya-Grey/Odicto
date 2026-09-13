@@ -475,6 +475,36 @@ class Config:
         if part.strip()
     )
 
+    # provider -> the attribute that overrides the generic tier. Adding a provider
+    # is a one-row change in these two tables.
+    _REASONING_ATTR = {
+        "meta": "META_REASONING_EFFORT",
+        "gemini": "GEMINI_THINKING_LEVEL",
+        "openrouter": "OPENROUTER_REASONING_EFFORT",
+    }
+    _MODEL_ATTR = {
+        "ollama": "OLLAMA_MODEL",
+        "openrouter": "OPENROUTER_MODEL",
+        "meta": "META_MODEL",
+        "gemini": "GEMINI_MODEL",
+    }
+
+    @classmethod
+    def _provider_override(cls, attr_map: dict, require_nonblank: bool = False) -> str:
+        """The active provider's override attribute, or "" when it was not set explicitly.
+
+        Mirrors the historical per-provider ladder: an override only wins when
+        ``_explicit()`` reports it as provided, so ``patch.object(Config, ...)`` in the
+        unit tests keeps counting as an override.
+        """
+        attr = attr_map.get(cls.LLM_PROVIDER)
+        if not attr or not cls._explicit(attr, (attr,)):
+            return ""
+        value = getattr(cls, attr)
+        if require_nonblank and not value.strip():
+            return ""
+        return value if value else ""
+
     @classmethod
     def _explicit(cls, attr: str, env_keys: tuple = ()) -> bool:
         """True when a setting was explicitly provided (not just a default).
@@ -498,30 +528,9 @@ class Config:
         built-in provider default.
         """
         provider = cls.LLM_PROVIDER
-        if (
-            provider == "ollama"
-            and cls._explicit("OLLAMA_MODEL", ("OLLAMA_MODEL",))
-            and cls.OLLAMA_MODEL.strip()
-        ):
-            return cls.OLLAMA_MODEL
-        if (
-            provider == "openrouter"
-            and cls._explicit("OPENROUTER_MODEL", ("OPENROUTER_MODEL",))
-            and cls.OPENROUTER_MODEL.strip()
-        ):
-            return cls.OPENROUTER_MODEL
-        if (
-            provider == "meta"
-            and cls._explicit("META_MODEL", ("META_MODEL",))
-            and cls.META_MODEL.strip()
-        ):
-            return cls.META_MODEL
-        if (
-            provider == "gemini"
-            and cls._explicit("GEMINI_MODEL", ("GEMINI_MODEL",))
-            and cls.GEMINI_MODEL.strip()
-        ):
-            return cls.GEMINI_MODEL
+        override = cls._provider_override(cls._MODEL_ATTR, require_nonblank=True)
+        if override:
+            return override
         if cls.LLM_MODEL.strip():
             return cls.LLM_MODEL
         return {
@@ -594,36 +603,13 @@ class Config:
         gemini_thinking_level() / openrouter_reasoning_effort() for the
         mapped, provider-safe value.
         """
-        provider = cls.LLM_PROVIDER
-        if (
-            provider == "meta"
-            and cls._explicit("META_REASONING_EFFORT", ("META_REASONING_EFFORT",))
-            and cls.META_REASONING_EFFORT
-        ):
-            return cls.META_REASONING_EFFORT
-        if (
-            provider == "gemini"
-            and cls._explicit("GEMINI_THINKING_LEVEL", ("GEMINI_THINKING_LEVEL",))
-            and cls.GEMINI_THINKING_LEVEL
-        ):
-            return cls.GEMINI_THINKING_LEVEL
-        if (
-            provider == "openrouter"
-            and cls._explicit(
-                "OPENROUTER_REASONING_EFFORT", ("OPENROUTER_REASONING_EFFORT",)
-            )
-            and cls.OPENROUTER_REASONING_EFFORT
-        ):
-            return cls.OPENROUTER_REASONING_EFFORT
+        override = cls._provider_override(cls._REASONING_ATTR)
+        if override:
+            return override
         if cls.LLM_REASONING_EFFORT:
             return cls.LLM_REASONING_EFFORT
-        if provider == "meta":
-            return _def("META_REASONING_EFFORT")
-        if provider == "gemini":
-            return _def("GEMINI_THINKING_LEVEL")
-        if provider == "openrouter":
-            return _def("OPENROUTER_REASONING_EFFORT")
-        return ""
+        attr = cls._REASONING_ATTR.get(cls.LLM_PROVIDER)
+        return _def(attr) if attr else ""
 
     @classmethod
     def meta_reasoning_effort(cls) -> str:

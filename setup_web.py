@@ -112,33 +112,28 @@ def _clean_submitted_value(key: str, value: str) -> str:
     return v
 
 
+_PROVIDER_KEY_REQUIREMENTS = {
+    "meta": ("META_API_KEY", "META_API_KEY is required when LLM_PROVIDER=meta. Paste your Meta API key and save."),
+    "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter."),
+    "gemini": ("GEMINI_API_KEY", "GEMINI_API_KEY is required when LLM_PROVIDER=gemini."),
+}
+
+
 def validate_provider_requirements(provider: str, updates: dict, merged: dict) -> str:
     """Return '' when satisfied, otherwise the error message to show.
 
     Extracted so unit tests exercise it without a live HTTP handler.
     """
-    p = (provider or "none").strip().lower()
-    if p == "meta":
-        src = updates.get("META_API_KEY")
-        if src == _MASKED:
-            return ""
-        key = src if src is not None else merged.get("META_API_KEY", "")
-        if not (key or "").strip():
-            return "META_API_KEY is required when LLM_PROVIDER=meta. Paste your Meta API key and save."
-    if p == "openrouter":
-        src = updates.get("OPENROUTER_API_KEY")
-        if src == _MASKED:
-            return ""
-        key = src if src is not None else merged.get("OPENROUTER_API_KEY", "")
-        if not (key or "").strip():
-            return "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter."
-    if p == "gemini":
-        src = updates.get("GEMINI_API_KEY")
-        if src == _MASKED:
-            return ""
-        key = src if src is not None else merged.get("GEMINI_API_KEY", "")
-        if not (key or "").strip():
-            return "GEMINI_API_KEY is required when LLM_PROVIDER=gemini."
+    row = _PROVIDER_KEY_REQUIREMENTS.get((provider or "none").strip().lower())
+    if not row:
+        return ""
+    env_key, message = row
+    src = updates.get(env_key)
+    if src == _MASKED:
+        return ""
+    key = src if src is not None else merged.get(env_key, "")
+    if not (key or "").strip():
+        return message
     return ""
 
 

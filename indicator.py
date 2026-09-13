@@ -845,19 +845,8 @@ class DictationIndicator(QWidget):
     def _draw_ai_chip(
         self, p: QPainter, x: float, y: float, w: float, h: float
     ) -> None:
-        """Neutral glass chip — no purple fill."""
-        rect = QRectF(x, y, w, h)
-        path = QPainterPath()
-        path.addRoundedRect(rect, h * 0.5, h * 0.5)
-        p.fillPath(path, _Theme.chip_fill)
-        pen = QPen(_Theme.chip_border)
-        pen.setWidthF(1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-        p.setFont(self._font_chip)
-        p.setPen(_Theme.chip_text)
-        p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "AI")
+        """Neutral glass chip (no purple fill) — the named chip, labelled "AI"."""
+        self._draw_named_chip(p, x, y, w, h, "AI")
 
     def _draw_eq_bars(
         self,
