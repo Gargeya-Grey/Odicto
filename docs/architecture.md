@@ -205,14 +205,23 @@ sequenceDiagram
     end
     Hook->>App: on_live_toggle() again
     App->>Sess: stop(timeout=8.0)
-    Note over App: odicto-live-stop thread joins the session
-    App->>App: _finish_live_session on success or error path
-    App->>Typ: paste final text
+    Note over App: odicto-live-polish thread joins the session
+    App->>App: _polish_live_session -> _polish_caret_text
+    Note over App: re-transcribes the buffered clip with the<br/>official smart-mode API and swaps the draft
+    App->>Typ: apply_live_text (streamed draft -> smart final)
 ```
 
 **Epoch guard.** Every live callback carries `_live_epoch`. If a stale worker finishes after
 you already started a new session, it must not touch the new one — that is why
 `_cleanup_live_session` deliberately does *not* call `_finish_cycle()` for a stale epoch.
+
+**Smart final (`LIVE_POLISH`, default true).** The streamed draft is raw ASR. On stop,
+`_polish_live_session` re-transcribes the buffered clip through the official unary
+transcribe API (`GeminiTranscriber`, honoring `GEMINI_TRANSCRIBE_MODE`) and swaps the
+caret draft for that result in place via `apply_live_text`. If polish fails or yields
+nothing, the streamed draft is kept as-is; `LIVE_POLISH=false` skips the swap entirely
+(`_cleanup_live_session` keep-text path). Both stop threads run off the hook thread —
+`session.stop()` is never called there.
 
 ## 6. Application and HUD states
 

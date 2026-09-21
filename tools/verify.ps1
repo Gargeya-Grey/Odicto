@@ -30,12 +30,16 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
 # Hash of test_units.py. It is frozen so its assertions cannot be quietly weakened to make a
-# change pass. It was re-based exactly once, deliberately: test_openrouter_glm53_keeps_explicit_high
-# relied on the developer's shell exporting OPENROUTER_REASONING_EFFORT, so it passed locally and
-# failed on CI. That edit pinned _PRESENT_AT_IMPORT inside the test. The test count (150) and every
-# other assertion are unchanged.
-$ExpectedTestUnitsHash = '4586445D62DF3979347CC970113FBB729EE17DB42FDA76FC38A8F6345CDEBC93'
-$ExpectedUnitTestCount = 150
+# change pass. It has been re-based twice, each deliberately and documented here:
+# (1) test_openrouter_glm53_keeps_explicit_high relied on the developer's shell exporting
+#     OPENROUTER_REASONING_EFFORT, so it passed locally and failed on CI. That edit pinned
+#     _PRESENT_AT_IMPORT inside the test.
+# (2) The F7 live polish feature (LIVE_POLISH: swap the streamed draft for the official
+#     smart-mode final) updated two live-stop tests to the new intended behavior and added
+#     five (150 -> 155). No existing assertion was weakened: both updated tests still hold
+#     under LIVE_POLISH=false, and the new tests pin swap, failure-keeps-draft, and routing.
+$ExpectedTestUnitsHash = '307D96A5409B0EA1DF85B4E8EFC114395B8519CA99FE76373A3925C6753DAE6D'
+$ExpectedUnitTestCount = 155
 
 $Script:Failures = @()
 

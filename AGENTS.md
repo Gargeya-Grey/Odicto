@@ -128,7 +128,10 @@ supplied it) with:
   (`HOTKEY_TOGGLE=true`). Set `HOTKEY_TOGGLE=false` to hold the chord while
   speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
-  dictation; tap again to stop and paste. Keyboard lib name for `` ` `` is `grave`.
+  dictation; tap again to stop and paste. On stop the streamed draft is swapped
+  in place for the official smart-mode transcription of the buffered clip
+  (`LIVE_POLISH=true` default; set false to keep the raw streamed draft).
+  Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
 - **Terminals are typed into, not pasted into.** No paste chord is universal
   (`Ctrl+V` on Windows Terminal/conhost, `Shift+Insert` on mintty/Git Bash,

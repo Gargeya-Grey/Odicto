@@ -2443,7 +2443,7 @@ class TestOdicto(unittest.TestCase):
             "main.Config.SHOW_VISUAL_INDICATOR", False
         ), patch.object(Config, "STT_PROVIDER", "whisper"), patch.object(
             Config, "effective_stt_provider", return_value="whisper"
-        ):
+        ), patch.object(Config, "LIVE_POLISH", False):
             with patch("threading.Thread"):
                 app = DictationApp()
                 app.initialize_app()
@@ -2493,7 +2493,7 @@ class TestOdicto(unittest.TestCase):
             "main.Config.SHOW_VISUAL_INDICATOR", False
         ), patch.object(Config, "STT_PROVIDER", "whisper"), patch.object(
             Config, "effective_stt_provider", return_value="whisper"
-        ):
+        ), patch.object(Config, "LIVE_POLISH", False):
             with patch("threading.Thread"):
                 app = DictationApp()
                 app.initialize_app()
@@ -2619,6 +2619,256 @@ class TestOdicto(unittest.TestCase):
             with patch.object(app, "process_and_paste") as mock_pap:
                 app._finish_live_session(session, None, app._live_epoch + 99)
                 mock_pap.assert_not_called()
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_stop_routes_to_polish(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """F7 stop with on-screen text spawns the polish final off the hook thread."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "whisper"), patch.object(
+            Config, "effective_stt_provider", return_value="whisper"
+        ), patch.object(
+            Config, "effective_live_stt_provider", return_value="gemini"
+        ), patch("main.GeminiLiveSession") as mock_live_cls:
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            app.recorder.stop.return_value = True
+            app.recorder.last_audio_array = np.zeros(1600, dtype=np.float32)
+            session = MagicMock()
+            mock_live_cls.return_value = session
+            app.on_live_toggle()
+            self.assertTrue(app.live_active)
+            self.assertIs(app._live_session, session)
+            app._record_started_at = 0.0
+            with app._live_caret_lock:
+                app._live_caret_current = "raw draft"
+                app._live_caret_desired = "raw draft"
+            with patch("threading.Thread") as mock_thread:
+                app.on_live_toggle()
+            self.assertFalse(app.live_active)
+            self.assertEqual(app.state, AppState.PROCESSING)
+            self.assertEqual(app.last_status, "success")
+            session.stop.assert_not_called()
+            target = (
+                mock_thread.call_args[1].get("target")
+                if mock_thread.call_args[1]
+                else mock_thread.call_args[0][0]
+            )
+            self.assertEqual(getattr(target, "__name__", ""), "_polish_live_session")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_polish_swaps_caret_text(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """_polish_caret_text replaces the streamed draft with the smart final."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            with app._live_caret_lock:
+                app._live_caret_current = "raw rambling draft"
+                app._live_caret_desired = "raw rambling draft"
+            polisher = MagicMock()
+            polisher.transcribe.return_value = "clean smart final"
+            app._polish_transcriber = polisher
+            with patch.object(app, "_flush_live_caret"):
+                self.assertTrue(
+                    app._polish_caret_text(
+                        np.zeros(100, dtype=np.float32), app._live_epoch
+                    )
+                )
+            polisher.transcribe.assert_called_once()
+            self.assertEqual(app._live_caret_desired, "clean smart final")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_polish_failure_keeps_draft(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """No polish result (error / empty / stale epoch / no audio) keeps the draft."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            with app._live_caret_lock:
+                app._live_caret_current = "kept draft"
+                app._live_caret_desired = "kept draft"
+            polisher = MagicMock()
+            polisher.transcribe.side_effect = RuntimeError("API down")
+            app._polish_transcriber = polisher
+            with patch.object(app, "_flush_live_caret"):
+                self.assertFalse(
+                    app._polish_caret_text(
+                        np.zeros(100, dtype=np.float32), app._live_epoch
+                    )
+                )
+            self.assertEqual(app._live_caret_desired, "kept draft")
+            polisher.transcribe.side_effect = None
+            polisher.transcribe.return_value = "   "
+            with patch.object(app, "_flush_live_caret"):
+                self.assertFalse(
+                    app._polish_caret_text(
+                        np.zeros(100, dtype=np.float32), app._live_epoch
+                    )
+                )
+            self.assertEqual(app._live_caret_desired, "kept draft")
+            stale = MagicMock()
+            stale.transcribe.return_value = "other text"
+            app._polish_transcriber = stale
+            with patch.object(app, "_flush_live_caret"):
+                self.assertFalse(
+                    app._polish_caret_text(
+                        np.zeros(100, dtype=np.float32), app._live_epoch + 9
+                    )
+                )
+            stale.transcribe.assert_not_called()
+            self.assertFalse(app._polish_caret_text(None, app._live_epoch))
+            stale.transcribe.assert_not_called()
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_live_polish_disabled_keeps_streamed_text(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """LIVE_POLISH=false restores the keep-the-draft stop behavior."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            session = MagicMock()
+            session.stop.return_value = "live finals"
+            polisher = MagicMock()
+            app._polish_transcriber = polisher
+            with app._live_caret_lock:
+                app._live_caret_desired = "streamed draft"
+            with patch.object(Config, "LIVE_POLISH", False):
+                app._finish_live_session(session, np.zeros(100), app._live_epoch)
+            self.assertEqual(app._live_caret_desired, "streamed draft")
+            self.assertEqual(app.last_status, "success")
+            polisher.transcribe.assert_not_called()
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_polish_live_session_flow(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_transcriber: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        """_polish_live_session stops the socket, swaps the text, and tears down."""
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            session = MagicMock()
+            polisher = MagicMock()
+            polisher.transcribe.return_value = "smart final"
+            app._polish_transcriber = polisher
+            with app._live_caret_lock:
+                app._live_caret_current = "streamed draft"
+                app._live_caret_desired = "streamed draft"
+            with patch.object(app, "_flush_live_caret"):
+                app._polish_live_session(session, np.zeros(100), app._live_epoch)
+            session.stop.assert_called_once()
+            self.assertEqual(app._live_caret_desired, "smart final")
+            self.assertEqual(app.last_status, "success")
+            self.assertEqual(app.state, AppState.IDLE)
+            self.assertTrue(app._live_cleanup_done.is_set())
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")

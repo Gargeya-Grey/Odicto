@@ -49,6 +49,8 @@ ENV_DEFAULTS: dict[str, str] = {
     "GEMINI_TRANSCRIBE_MODE": "smart",
     "GEMINI_TRANSCRIBE_LANGUAGE": "",
     "GEMINI_TRANSCRIBE_VOCABULARY": "",
+    # true = on F7 stop, swap the streamed draft for the official smart-mode final
+    "LIVE_POLISH": "true",
     "LIVE_HOTKEY": "f7",
     # LLM — generic knobs (apply to the active provider)
     "LLM_PROVIDER": "none",
@@ -399,6 +401,9 @@ class Config:
     )
     GEMINI_TRANSCRIBE_LANGUAGE: str = _default_env("GEMINI_TRANSCRIBE_LANGUAGE").strip()
     GEMINI_TRANSCRIBE_VOCABULARY: str = _default_env("GEMINI_TRANSCRIBE_VOCABULARY").strip()
+    # Live tap-to-talk: true = on stop, replace the streamed draft with the official
+    # smart-mode Gemini transcription of the buffered clip. false = keep the draft.
+    LIVE_POLISH: bool = _env_bool("LIVE_POLISH", _def("LIVE_POLISH"))
     # Tap-to-talk (press once to start, press again to stop and paste). Empty disables.
     LIVE_HOTKEY: str = _default_env("LIVE_HOTKEY").strip().lower()
 
@@ -999,6 +1004,12 @@ class Config:
             "Live transcribe model",
             cls.GEMINI_TRANSCRIBE_LIVE_MODEL,
             _source_of("GEMINI_TRANSCRIBE_LIVE_MODEL"),
+        )
+        add(
+            "Speech to text",
+            "Live polish final pass",
+            cls.LIVE_POLISH,
+            _source_of("LIVE_POLISH"),
         )
         lang = ", ".join(cls.gemini_transcribe_language_codes()) or "(auto)"
         add(

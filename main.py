@@ -289,6 +289,8 @@ class DictationApp:
         # Lazy Whisper used by the AI chord when dictation STT is Gemini.
         self._whisper: Optional[WhisperTranscriber] = None
         self._whisper_lock = threading.Lock()
+        # Lazy official-API transcriber for the F7 live polish final pass.
+        self._polish_transcriber: Optional[GeminiTranscriber] = None
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -391,6 +393,42 @@ class DictationApp:
         else:
             self._live_committed = piece
         self._set_live_caret_desired(self._live_committed)
+
+    def _ensure_polish_transcriber(self) -> GeminiTranscriber:
+        """Official unary transcriber for the F7 smart final (reuses dictation's)."""
+        if isinstance(self.transcriber, GeminiTranscriber):
+            return self.transcriber
+        if self._polish_transcriber is None:
+            self._polish_transcriber = GeminiTranscriber()
+        return self._polish_transcriber
+
+    def _polish_caret_text(self, audio, epoch: int) -> bool:
+        """Swap the streamed live draft for the official smart-mode transcript.
+
+        Returns True when the caret text was replaced.
+        """
+        if epoch != self._live_epoch:
+            return False
+        if audio is None or not getattr(audio, "size", 0):
+            return False
+        with self._live_caret_lock:
+            on_screen = (
+                self._live_caret_desired or self._live_caret_current or ""
+            ).strip()
+        if not on_screen:
+            return False
+        print(">>> Polishing live draft with official smart transcription...", flush=True)
+        try:
+            processed = (self._ensure_polish_transcriber().transcribe(audio) or "").strip()
+        except Exception as e:
+            print(f"Warning: live polish transcription failed: {e}", flush=True)
+            return False
+        if not processed or processed == on_screen:
+            return False
+        self._set_live_caret_desired(processed)
+        self._flush_live_caret(timeout=2.0)
+        print(f'>>> Live text replaced with smart final ("{processed[:80]}").', flush=True)
+        return True
 
     def _capture_live_clipboard(self) -> None:
         try:
@@ -1094,14 +1132,23 @@ class DictationApp:
                 print(">>> Live text already at the caret — skip extra STT/paste.")
                 self.last_status = "success"
                 if live_session is not None:
-                    self._last_cycle_end = time.monotonic()
-                    self._set_state(AppState.IDLE)
-                    threading.Thread(
-                        target=self._cleanup_live_session,
-                        args=(live_session, epoch),
-                        daemon=True,
-                        name="odicto-live-cleanup",
-                    ).start()
+                    if Config.LIVE_POLISH and audio is not None:
+                        self._set_state(AppState.PROCESSING)
+                        threading.Thread(
+                            target=self._polish_live_session,
+                            args=(live_session, audio, epoch),
+                            daemon=True,
+                            name="odicto-live-polish",
+                        ).start()
+                    else:
+                        self._last_cycle_end = time.monotonic()
+                        self._set_state(AppState.IDLE)
+                        threading.Thread(
+                            target=self._cleanup_live_session,
+                            args=(live_session, epoch),
+                            daemon=True,
+                            name="odicto-live-cleanup",
+                        ).start()
                 else:
                     self._restore_live_clipboard(epoch)
                     self._live_cleanup_done.set()
@@ -1169,6 +1216,11 @@ class DictationApp:
                     self._live_caret_desired or self._live_caret_current or ""
                 ).strip()
             if frozen:
+                if Config.LIVE_POLISH and self._polish_caret_text(audio, epoch):
+                    self._restore_live_clipboard(epoch)
+                    self.last_status = "success"
+                    self._finish_cycle()
+                    return
                 self._flush_live_caret(timeout=0.3)
                 self._restore_live_clipboard(epoch)
                 print(f'>>> Live text kept at caret ("{frozen[:80]}").')
@@ -1185,6 +1237,35 @@ class DictationApp:
             self.process_and_paste(audio, False, "", False, "")
         except Exception as e:
             print(f"!!! Live finish failed: {e}", file=sys.stderr)
+            self.last_status = "error"
+            self._restore_live_clipboard(epoch)
+            self._finish_cycle()
+        finally:
+            self._live_cleanup_done.set()
+
+    def _polish_live_session(
+        self, session: GeminiLiveSession, audio, epoch: int
+    ) -> None:
+        """Close the Live socket, then swap the streamed draft for the smart final."""
+        try:
+            session.stop(timeout=1.0)
+            if epoch != self._live_epoch:
+                return
+            self._flush_live_caret(timeout=0.3)
+            polished = self._polish_caret_text(audio, epoch)
+            if epoch != self._live_epoch:
+                return
+            if not polished:
+                with self._live_caret_lock:
+                    frozen = (
+                        self._live_caret_desired or self._live_caret_current or ""
+                    ).strip()
+                print(f'>>> Live text kept at caret ("{frozen[:80]}").', flush=True)
+            self._restore_live_clipboard(epoch)
+            self.last_status = "success"
+            self._finish_cycle()
+        except Exception as e:
+            print(f"!!! Live polish failed: {e}", file=sys.stderr)
             self.last_status = "error"
             self._restore_live_clipboard(epoch)
             self._finish_cycle()
