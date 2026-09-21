@@ -38,8 +38,13 @@ Set-Location $RepoRoot
 #     smart-mode final) updated two live-stop tests to the new intended behavior and added
 #     five (150 -> 155). No existing assertion was weakened: both updated tests still hold
 #     under LIVE_POLISH=false, and the new tests pin swap, failure-keeps-draft, and routing.
-$ExpectedTestUnitsHash = '307D96A5409B0EA1DF85B4E8EFC114395B8519CA99FE76373A3925C6753DAE6D'
-$ExpectedUnitTestCount = 155
+# (3) The LIVE_POLISH pass was removed: per the official Gemini Live transcription docs,
+#     SMART-mode `input_transcription` finals are already the authoritative cleaned text,
+#     so the whole-clip unary re-transcription on stop only added latency. The five polish
+#     tests shrank to two: keep-streamed-text when no final exists, and cleanup swapping
+#     the interim draft for the authoritative final (155 -> 151). No weakened assertion.
+$ExpectedTestUnitsHash = '6E974D81CC75574D072551874FFA576DD6B8C8D6D8AC1FED73EDCE7A9AE78C45'
+$ExpectedUnitTestCount = 151
 
 $Script:Failures = @()
 
@@ -145,7 +150,7 @@ if ($actualHash -ne $ExpectedTestUnitsHash) {
     Add-Pass 'test_units.py matches the checkpoint hash'
 }
 
-# ------------------------------------------------------------- 2. the 150 unit tests
+# ------------------------------------------------------------- 2. the unit tests
 Write-Step 'Gate 2: unit tests (test_units)'
 $units = Invoke-Python @('-m', 'unittest', 'test_units')
 $runCount = Get-RunCount $units.Text

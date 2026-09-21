@@ -128,9 +128,12 @@ supplied it) with:
   (`HOTKEY_TOGGLE=true`). Set `HOTKEY_TOGGLE=false` to hold the chord while
   speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
-  dictation; tap again to stop and paste. On stop the streamed draft is swapped
-  in place for the official smart-mode transcription of the buffered clip
-  (`LIVE_POLISH=true` default; set false to keep the raw streamed draft).
+  dictation; tap again to stop and paste. While streaming you see interim ASR;
+  on stop Odicto waits up to ~2.5s for the same single call's finalized
+  `input_transcription` and swaps it over the draft in place — with
+  `GEMINI_TRANSCRIBE_MODE=smart` that final already is the cleaned output
+  (official Gemini Live transcription docs). Nothing re-transcribes the
+  buffered clip on stop.
   Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
 - **Terminals are typed into, not pasted into.** No paste chord is universal

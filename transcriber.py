@@ -460,6 +460,7 @@ class GeminiLiveSession:
         self._error: Optional[str] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._session = None
+        self._final_wait_s: float = 0.8
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -482,7 +483,10 @@ class GeminiLiveSession:
             except queue.Full:
                 pass
 
-    def stop(self, timeout: float = 8.0) -> str:
+    def stop(self, timeout: float = 8.0, final_wait_s: float = 0.8) -> str:
+        """Join the session. ``final_wait_s`` bounds how long the single Live
+        call may keep streaming its authoritative final after stream end."""
+        self._final_wait_s = max(0.0, final_wait_s)
         self._stop.set()
         try:
             self._chunks.put_nowait(None)  # type: ignore[arg-type]
@@ -555,7 +559,9 @@ class GeminiLiveSession:
                 except Exception:
                     pass
                 try:
-                    await asyncio.wait_for(asyncio.shield(receiver), timeout=0.8)
+                    await asyncio.wait_for(
+                        asyncio.shield(receiver), timeout=self._final_wait_s
+                    )
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:

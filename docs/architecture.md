@@ -204,24 +204,27 @@ sequenceDiagram
         Caret->>Typ: apply_live_text (edits only the tail)
     end
     Hook->>App: on_live_toggle() again
-    App->>Sess: stop(timeout=8.0)
-    Note over App: odicto-live-polish thread joins the session
-    App->>App: _polish_live_session -> _polish_caret_text
-    Note over App: re-transcribes the buffered clip with the<br/>official smart-mode API and swaps the draft
-    App->>Typ: apply_live_text (streamed draft -> smart final)
+    App->>Sess: stop() — waits up to ~2.5s for the<br/>single call's finalized transcript
+    Note over App: odicto-live-cleanup thread joins the session off the hook
+    Note over App: finalized SMART input_transcription replaces<br/>the interim draft in place (same single call)
+    App->>Typ: apply_live_text (interim draft -> smart final)
 ```
 
 **Epoch guard.** Every live callback carries `_live_epoch`. If a stale worker finishes after
 you already started a new session, it must not touch the new one — that is why
 `_cleanup_live_session` deliberately does *not* call `_finish_cycle()` for a stale epoch.
 
-**Smart final (`LIVE_POLISH`, default true).** The streamed draft is raw ASR. On stop,
-`_polish_live_session` re-transcribes the buffered clip through the official unary
-transcribe API (`GeminiTranscriber`, honoring `GEMINI_TRANSCRIBE_MODE`) and swaps the
-caret draft for that result in place via `apply_live_text`. If polish fails or yields
-nothing, the streamed draft is kept as-is; `LIVE_POLISH=false` skips the swap entirely
-(`_cleanup_live_session` keep-text path). Both stop threads run off the hook thread —
-`session.stop()` is never called there.
+**Streamed final is authoritative (no second API call).** The Live session requests
+`mode=SMART` in `input_audio_transcription`; per the official Gemini Live transcription
+docs, `interim_input_transcription` events are speculative raw hypotheses while the
+finalized `input_transcription` is the model's authoritative transcript and, in smart
+mode, already carries the cleaned, formatted response — it lands at turn end, i.e. right
+when you tap stop. On stop the cleanup path waits up to ~2.5s for that single call's
+final and swaps the streamed draft for it in place when the two differ (equal or missing
+final -> draft stays). Nothing ever re-transcribes the buffered clip. If nothing streamed
+at all, `_finish_live_session` pastes the final directly, and only falls back to the
+dictation pipeline when the Live API produced nothing. Stop threads always run off the
+hook thread — `session.stop()` is never called there.
 
 ## 6. Application and HUD states
 
