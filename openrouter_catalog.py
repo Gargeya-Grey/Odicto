@@ -1,4 +1,4 @@
-"""Live OpenRouter model catalog: names + per-model reasoning levels.
+"""Live OpenRouter model catalog: names, release dates, reasoning levels.
 
 GET /api/v1/models includes a ``reasoning`` object (mandatory, supported_efforts,
 default_effort). Cached in-process so setup and the OpenRouter client can clamp
@@ -123,7 +123,7 @@ def parse_openrouter_models(raw: Any) -> dict[str, Any]:
     rows = raw.get("data") if isinstance(raw, dict) else None
     if not isinstance(rows, list):
         return {"ok": False, "models": [], "reasoning": {}, "error": "unexpected catalog shape"}
-    models: list[dict[str, str]] = []
+    models: list[dict[str, Any]] = []
     reasoning: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
     for row in rows:
@@ -134,7 +134,11 @@ def parse_openrouter_models(raw: Any) -> dict[str, Any]:
             continue
         seen.add(mid)
         name = str(row.get("name") or mid).strip() or mid
-        models.append({"id": mid, "name": name})
+        try:
+            created = int(row.get("created") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        models.append({"id": mid, "name": name, "created": created})
         spec = _normalize_reasoning(row.get("reasoning"))
         if spec is not None:
             reasoning[mid] = spec

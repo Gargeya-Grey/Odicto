@@ -12,431 +12,703 @@
   font-weight: 200 700;
   src: url(https://cdn.jsdelivr.net/fontsource/fonts/stack-sans-text:vf@5.3.0/latin-wght-normal.woff2) format('woff2-variations');
 }
+
+/* Quiet Console — one visual system: matte neutrals, hairline edges,
+   a single pine signal color that only lights where commitment happens. */
 :root {
   color-scheme: light dark;
-  --bg: #f5f4f2;
-  --card: #ffffff;
-  --ink: #1b1b1f;
-  --muted: #6b6a70;
-  --line: #e3e1dd;
-  --accent: #0f766e;
-  --accent-soft: #e6f4f2;
-  --ok: #15803d;
-  --ok-bg: #e7f6ec;
-  --err: #b42318;
-  --err-bg: #fdeceb;
-  --radius: 16px;
-  --radius-sm: 10px;
+  --canvas: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #faf9f7;
+  --inset: #f1efea;
+  --line: #e6e3de;
+  --line-strong: #d6d2cb;
+  --ink: #1c1b1f;
+  --muted: #6e6c75;
+  --faint: #9a98a0;
 
-  --prompt-panel-bg: linear-gradient(165deg, rgba(15, 118, 110, 0.05) 0%, rgba(248, 247, 245, 0.9) 42%, rgba(240, 239, 236, 0.95) 100%);
-  --prompt-panel-border: rgba(15, 118, 110, 0.22);
-  --prompt-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 24px -12px rgba(0, 0, 0, 0.08);
-  --prompt-chip-color: #0f766e;
-  --prompt-chip-bg: #ccfbf1;
-  --prompt-chip-border: rgba(15, 118, 110, 0.25);
-  --prompt-textarea-bg: #ffffff;
-  --prompt-textarea-ink: #1b1b1f;
-  --prompt-textarea-border: #d5d3ce;
-  --prompt-file-border: rgba(0, 0, 0, 0.08);
+  --accent: #14746b;
+  --accent-ink: #ffffff;
+  --accent-soft: #e7f1ef;
+  --accent-line: #14746b;
+
+  --ok: #46805c;
+  --ok-dot: #6ca880;
+  --ok-soft: #e9f2ec;
+  --warn: #8a6a1f;
+  --warn-dot: #c9a15a;
+  --warn-soft: #f5efdf;
+  --err: #a8443e;
+  --err-dot: #c45c56;
+  --err-soft: #f7eae9;
+  --info: #7a7395;
+  --info-dot: #948ea8;
+  --info-soft: #eeecf3;
+  --pending: #7b8398;
+  --pending-dot: #8c94a8;
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --shadow-float: 0 14px 36px -20px rgba(28, 27, 31, 0.38), 0 2px 8px -4px rgba(28, 27, 31, 0.16);
+  --shadow-menu: 0 20px 44px -16px rgba(28, 27, 31, 0.34), 0 6px 14px -8px rgba(28, 27, 31, 0.22);
+
+  --t-fast: 0.12s;
+  --t-med: 0.22s;
+  --t-slow: 0.26s;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17171a;
-    --card: #222226;
+    --canvas: #121214;
+    --surface: #1c1c1f;
+    --surface-2: #232327;
+    --inset: #26262b;
+    --line: #2e2e34;
+    --line-strong: #3a3a42;
     --ink: #ececf0;
-    --muted: #a3a3ab;
-    --line: #34343a;
-    --accent: #2dd4bf;
-    --accent-soft: #123a36;
-    --ok: #4ade80;
-    --ok-bg: #12281a;
-    --err: #fca5a5;
-    --err-bg: #331a1a;
+    --muted: #a2a2ac;
+    --faint: #7c7c86;
 
-    --prompt-panel-bg: linear-gradient(165deg, rgba(45, 212, 191, 0.09) 0%, rgba(24, 24, 28, 0.55) 42%, rgba(18, 18, 22, 0.72) 100%);
-    --prompt-panel-border: rgba(45, 212, 191, 0.28);
-    --prompt-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 32px -24px rgba(0, 0, 0, 0.7);
-    --prompt-chip-color: #99f6e4;
-    --prompt-chip-bg: rgba(15, 118, 110, 0.35);
-    --prompt-chip-border: rgba(45, 212, 191, 0.3);
-    --prompt-textarea-bg: rgba(10, 10, 14, 0.55);
-    --prompt-textarea-ink: #ececf0;
-    --prompt-textarea-border: rgba(45, 212, 191, 0.2);
-    --prompt-file-border: rgba(255, 255, 255, 0.08);
+    --accent: #5fc7b7;
+    --accent-ink: #0f2f2b;
+    --accent-soft: #17322f;
+    --accent-line: #5fc7b7;
+
+    --ok: #7fbf95;
+    --ok-dot: #7fbf95;
+    --ok-soft: #1a2a20;
+    --warn: #d3b173;
+    --warn-dot: #c9a15a;
+    --warn-soft: #2a2417;
+    --err: #d08079;
+    --err-dot: #d08079;
+    --err-soft: #2e1c1b;
+    --info: #a9a2c4;
+    --info-dot: #a9a2c4;
+    --info-soft: #232030;
+    --pending: #9aa2b6;
+    --pending-dot: #8c94a8;
+
+    --shadow-float: 0 16px 40px -22px rgba(0, 0, 0, 0.8), 0 2px 8px -4px rgba(0, 0, 0, 0.5);
+    --shadow-menu: 0 24px 52px -18px rgba(0, 0, 0, 0.85), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
   }
 }
+html[data-motion="reduced"] {
+  --t-fast: 0.1s;
+  --t-med: 0.1s;
+  --t-slow: 0.1s;
+}
+html[data-motion="off"] {
+  --t-fast: 0s;
+  --t-med: 0s;
+  --t-slow: 0s;
+}
+
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
 body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
   font-family: 'Stack Sans', ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--bg);
-  color: var(--ink);
-  margin: 0;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem 1rem;
+  font-size: 13.5px;
+  font-weight: 400;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
-.card {
-  width: 100%;
-  max-width: min(1100px, calc(100vw - 2rem));
-  background: var(--card);
+h1, h2, h3, p { margin: 0; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--inset);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: 0 24px 60px -32px rgba(0,0,0,0.35);
-  padding: 2.2rem 2.4rem 2.5rem;
+  border-radius: 6px;
+  padding: 0.05rem 0.32rem;
 }
-.layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 1.7rem;
-  align-items: stretch;
-}
-.layout > .col {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.layout > .col > label:first-child { margin-top: 0; }
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
-  .card { padding: 1.6rem 1.25rem 1.7rem; }
-}
-#none-note {
-  display: none;
-  margin-top: 1.1rem;
-  padding: 0.85rem 1rem;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-#none-note.show { display: block; }
-#sec-ai { margin-top: 0.85rem; }
-#sec-prompt { margin-top: 0; }
-.prompt-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  position: relative;
-  padding: 0.9rem 1.05rem 1rem 1.2rem;
-  border-radius: 16px;
-  background: var(--prompt-panel-bg);
-  border: 1px solid var(--prompt-panel-border);
-  box-shadow: var(--prompt-panel-shadow);
-}
-.prompt-panel::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--accent), #0f766e);
-}
-.prompt-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin: 0 0 0.4rem;
-}
-.prompt-head .prompt-title {
-  margin: 0;
-  font-size: 0.92rem;
-  font-weight: 480;
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
   color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  padding: 0.22rem 0.5rem;
+  white-space: nowrap;
 }
-.prompt-chip {
-  flex: 0 0 auto;
-  font-size: 0.64rem;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--prompt-chip-color);
-  background: var(--prompt-chip-bg);
-  border: 1px solid var(--prompt-chip-border);
-  border-radius: 999px;
-  padding: 0.18rem 0.5rem;
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
-.prompt-lede {
-  margin: 0 0 0.7rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-  line-height: 1.4;
+
+/* ---------------------------------------------------------------- shell */
+.app {
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  min-height: 100vh;
 }
-#prompt_slot {
-  flex: 1;
+
+/* ------------------------------------------------------------------ rail */
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
   display: flex;
-  min-height: 0;
+  flex-direction: column;
+  gap: 36px;
+  padding: 24px 16px 16px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
 }
-.prompt-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  margin-top: 0.7rem;
-}
-.prompt-toolbar .secondary {
-  flex: 0 0 auto;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.84rem;
-  background: var(--card);
-}
-.prompt-toolbar .link {
-  margin: 0;
-  width: auto;
-  padding: 0.35rem 0.2rem;
-  font-size: 0.8rem;
-}
-.prompt-file {
-  margin-top: 0.75rem;
-  padding-top: 0.7rem;
-  border-top: 1px dashed var(--prompt-file-border);
-}
-.prompt-file label { margin-top: 0; }
-.panel-note { font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0 0; }
-.ai-hidden { display: none !important; }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 1.25rem;
-}
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
 .logo {
   width: 30px;
   height: 30px;
   border-radius: 9px;
-  background: linear-gradient(145deg, #14b8a6, #0f766e);
+  background: var(--accent);
+  color: var(--accent-ink);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: white;
   font-weight: 560;
   font-size: 15px;
-}
-h1 { font-size: 1.35rem; margin: 0; letter-spacing: -0.01em; }
-.sub { color: var(--muted); margin: 0.25rem 0 0; font-size: 0.95rem; }
-label { display: block; margin: 1.15rem 0 0.4rem; font-weight: 480; font-size: 0.92rem; }
-select, input[type=text], input[type=password], textarea {
-  width: 100%;
-  padding: 0.62rem 0.8rem;
-  font-size: 0.98rem;
-  font-family: inherit;
-  color: var(--ink);
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 2.5rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6a70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.85rem center;
-  cursor: pointer;
-}
-select:hover {
-  border-color: var(--accent);
-}
-textarea {
-  line-height: 1.45;
-  font-size: 0.86rem;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  overflow-y: auto;
-  resize: none;
-}
-#prompt_slot textarea {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  max-height: none;
-  height: auto;
-  color: var(--prompt-textarea-ink);
-  background: var(--prompt-textarea-bg);
-  border: 1px solid var(--prompt-textarea-border);
-}
-.prompt-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 6vh 6vw;
-  background: rgba(8, 8, 10, 0.52);
-}
-.prompt-overlay[hidden] { display: none !important; }
-.prompt-overlay-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 28px 80px -24px rgba(0, 0, 0, 0.65);
-  padding: 0.9rem 1rem 1rem;
-}
-.prompt-overlay-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 0.7rem;
-}
-.prompt-overlay-head span {
-  font-size: 0.92rem;
-  font-weight: 520;
-}
-.prompt-overlay-head button {
   flex: 0 0 auto;
-  width: auto;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.86rem;
 }
-#prompt_overlay_body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
+.brand-name { font-size: 15px; font-weight: 560; letter-spacing: -0.01em; }
+.brand-build { display: block; font-size: 11px; color: var(--faint); font-weight: 400; }
+
+.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.nav-eyebrow {
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 0 10px 8px;
 }
-#prompt_overlay_body textarea {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-  height: auto;
-  font-size: 0.92rem;
+.nav-pill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  transform: translateY(0);
+  transition: transform var(--t-slow) var(--ease);
+  pointer-events: none;
+  z-index: 0;
 }
-select:focus, input:focus, textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.field { display: none; }
-.field.active { display: block; }
-.custom-select { position: relative; width: 100%; }
-.select-trigger {
-  width: 100%;
+.nav-item {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.62rem 0.8rem;
-  font-size: 0.98rem;
-  font-family: inherit;
-  color: var(--ink);
-  background: var(--card);
-  border: 1px solid var(--line);
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  background: none;
+  border: none;
   border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 480;
+  color: var(--muted);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: color var(--t-fast) ease;
 }
-.select-trigger:hover { border-color: var(--accent); }
-.select-trigger:focus-visible {
+.nav-item:hover { color: var(--ink); }
+.nav-item[aria-current="true"] { color: var(--accent); }
+.nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pending-dot);
+  flex: 0 0 auto;
+}
+.nav-dot.ok { background: var(--ok-dot); }
+.nav-dot.warn { background: var(--warn-dot); }
+.nav-dot.err { background: var(--err-dot); }
+
+.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 14px; padding: 0 4px; }
+.motion-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.motion-label { font-size: 11.5px; color: var(--faint); }
+.motion-group {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--surface);
+}
+.motion-group button {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 480;
+  color: var(--muted);
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.motion-group button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.link {
+  display: inline-block;
+  width: auto;
+  padding: 4px 6px;
+  margin: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+.link:hover { color: var(--err); }
+.link:disabled { opacity: 0.55; cursor: default; }
+
+/* ------------------------------------------------------------------ main */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.main-inner {
+  flex: 1;
+  width: 100%;
+  max-width: 1060px;
+  padding: 36px 40px 72px;
+}
+.view { display: none; }
+.view.active { display: block; }
+.view.active > .group {
+  animation: view-in var(--t-med) var(--ease) backwards;
+}
+.view.active > .group:nth-child(2) { animation-delay: 25ms; }
+.view.active > .group:nth-child(3) { animation-delay: 50ms; }
+.view.active > .group:nth-child(4) { animation-delay: 75ms; }
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.view-head { margin-bottom: 24px; }
+.view-title { font-size: 20px; font-weight: 560; letter-spacing: -0.015em; }
+.view-sub { color: var(--muted); margin-top: 4px; max-width: 68ch; }
+.eyebrow {
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.group { margin-top: 36px; }
+.group:first-of-type { margin-top: 0; }
+.group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.group-title { font-size: 13.5px; font-weight: 560; }
+.group-note { font-size: 12px; color: var(--muted); max-width: 72ch; }
+.group-note code { white-space: nowrap; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+}
+.card + .card { margin-top: 16px; }
+.card-title { font-size: 15px; font-weight: 560; }
+.card-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ---------------------------------------------------------------- fields */
+.field { margin-top: 16px; }
+.field:first-child { margin-top: 0; }
+.field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13.5px;
+  font-weight: 480;
+}
+.field-hint { font-weight: 400; color: var(--faint); font-size: 12px; }
+.field-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.field-note code { white-space: nowrap; }
+.saved-hint { font-weight: 400; font-size: 12px; color: var(--ok); }
+input[type=text], input[type=password], textarea, .cselect-trigger {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 11px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+input::placeholder, textarea::placeholder { color: var(--faint); }
+input[type=text]:hover, input[type=password]:hover, textarea:hover { border-color: var(--muted); }
+input:focus, textarea:focus, .cselect-trigger:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.select-trigger .chevron {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  transition: transform 0.15s ease;
+input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+
+.key-input { position: relative; }
+.key-input input { padding-right: 72px; }
+.reveal-btn {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 28px;
+  padding: 2px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 480;
   color: var(--muted);
+  cursor: pointer;
 }
-.custom-select.open .chevron { transform: rotate(180deg); }
-.select-menu {
+.reveal-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.row-2 > .field, .row-3 > .field { margin-top: 0; }
+.row-2:not(:first-child), .row-3:not(:first-child) { margin-top: 16px; }
+.row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px 16px; }
+
+/* -------------------------------------------------------- custom select */
+.cselect { position: relative; }
+.cselect select { display: none; }
+.cselect-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.cselect-trigger:hover { border-color: var(--muted); }
+.cselect-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cselect-value.placeholder { color: var(--faint); }
+.cselect .chevron {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--t-fast) ease;
+}
+.cselect.open .chevron { transform: rotate(180deg); }
+.cselect-menu {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  z-index: 20;
-  background: var(--card);
+  z-index: 300;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  box-shadow: 0 16px 40px -20px rgba(0,0,0,0.4);
-  padding: 0.35rem;
-  opacity: 0;
-  transform: translateY(-4px);
-  pointer-events: none;
-  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: var(--shadow-menu);
+  border-color: var(--line-strong);
+  transform-origin: top center;
 }
-.custom-select.open .select-menu {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+.cselect-menu.drop-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+  transform-origin: bottom center;
 }
-.select-option {
+.cselect-menu[hidden] { display: none !important; }
+.cselect.open .cselect-menu { animation: menu-in var(--t-fast) var(--ease) backwards; }
+.cselect.closing .cselect-menu { animation: menu-out 90ms ease both; }
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.98) translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes menu-out {
+  from { opacity: 1; }
+  to { opacity: 0; transform: scale(0.99) translateY(-2px); }
+}
+.cselect-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 10px;
   width: 100%;
-  padding: 0.55rem 0.65rem;
-  font-size: 0.95rem;
-  font-family: inherit;
-  color: var(--ink);
-  background: transparent;
+  min-height: 34px;
+  padding: 6px 9px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
   cursor: pointer;
   text-align: left;
 }
-.select-option:hover { background: var(--accent-soft); }
-.select-option.selected { background: var(--accent-soft); color: var(--accent); font-weight: 480; }
-.select-option .hint { font-size: 0.78rem; color: var(--muted); font-weight: 400; }
-.hotkey-row { display: flex; gap: 0.5rem; align-items: center; }
-.hotkey-row input { flex: 1; }
-.hotkey-row button { flex: 0 0 auto; }
-.mode-switch {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin-top: 0.35rem;
-  height: 28px;
-  user-select: none;
+.cselect-option:hover, .cselect-option.active { background: var(--accent-soft); }
+.cselect-option.selected { color: var(--accent); font-weight: 480; }
+.cselect-option.selected .check { opacity: 1; }
+.cselect-option .check { width: 14px; height: 14px; flex: 0 0 auto; opacity: 0; color: var(--accent); }
+.cselect-search {
+  position: sticky;
+  top: -5px;
+  z-index: 1;
+  padding: 2px 0 8px;
+  background: var(--surface);
 }
-.mode-switch .mode-label {
+.cselect-search input {
+  min-height: 32px;
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+}
+.cselect-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.cselect-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+/* ------------------------------------------------------- provider cards */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.provider-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast) ease, background var(--t-fast) ease, transform var(--t-fast) ease;
+}
+.provider-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.provider-card[aria-checked="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pc-name { font-size: 14px; font-weight: 480; }
+.pc-check { width: 15px; height: 15px; color: var(--accent); opacity: 0; transition: opacity var(--t-fast) ease; }
+.provider-card[aria-checked="true"] .pc-check { opacity: 1; }
+.pc-hint { font-size: 11.5px; color: var(--faint); }
+.pc-meta { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pending-dot);
+  flex: 0 0 auto;
+}
+.dot.ok { background: var(--ok-dot); }
+.dot.warn { background: var(--warn-dot); }
+.dot.err { background: var(--err-dot); }
+.dot.info { background: var(--info-dot); }
+
+/* ---------------------------------------------------------- model chips */
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.model-chip {
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  margin: 0;
-  font-size: 0.88rem;
-  line-height: 24px;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 5px 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.model-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-chip.active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.model-chip button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  color: var(--faint);
+  border-radius: 50%;
+}
+.model-chip button:hover { color: var(--err); }
+
+/* ------------------------------------------------------------- overview */
+.meters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 18px 18px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast) ease, transform var(--t-fast) ease;
+}
+.meter:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.meter-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.meter-value {
+  font-size: 17px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  margin-top: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meter-sub {
+  font-size: 12px;
   color: var(--muted);
-  font-weight: 480;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.mode-switch .mode-label.on { color: var(--ink); }
-.mode-switch > label.switch {
-  display: block;
+.meter-value.swapping, .meter-sub.swapping { animation: text-swap 150ms ease both; }
+@keyframes text-swap {
+  from { opacity: 0.2; filter: blur(2px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+.keycap-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  align-items: center;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.keycap-item { display: flex; align-items: center; gap: 8px; }
+.keycap-label { font-size: 11.5px; color: var(--faint); }
+.keycaps { display: inline-flex; gap: 4px; }
+.keycaps kbd { animation: key-pop 240ms var(--ease) both; }
+@keyframes key-pop {
+  0% { opacity: 0; transform: scale(0.95); }
+  60% { opacity: 0.8; transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ------------------------------------------------------------- controls */
+.gearbox .segmented {
   position: relative;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 24px;
-  margin: 0;
-  padding: 0;
-  line-height: 0;
-  font-size: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
-.switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
+.seg-knob {
   position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  transition: transform var(--t-slow) var(--ease);
 }
+.gearbox.short .seg-knob { transform: translateX(100%); }
+.gear {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-height: 52px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--t-fast) ease;
+}
+.gear:hover { color: var(--ink); }
+.gear.selected { color: var(--accent); }
+.gear-name { font-size: 13.5px; font-weight: 480; }
+.gear-hint { font-size: 11.5px; color: var(--faint); }
+.gear.selected .gear-hint { color: var(--muted); }
+
+.hotkey-row { display: flex; gap: 8px; align-items: center; }
+.hotkey-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; }
+.btn.recording { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.shake { animation: shake 300ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
+
+/* ------------------------------------------------------- verbatim toggle */
+.mode-switch { display: flex; align-items: center; gap: 12px; }
+.mode-label {
+  font-size: 13px;
+  color: var(--faint);
+  font-weight: 480;
+  transition: color var(--t-fast) ease;
+}
+.mode-label.on { color: var(--ink); }
+.switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: 0 0 auto; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch .slider {
   position: absolute;
   inset: 0;
-  background: var(--line);
+  background: var(--line-strong);
   border-radius: 999px;
-  cursor: pointer;
-  transition: background 0.15s ease;
+  pointer-events: none;
+  transition: background var(--t-fast) ease;
 }
 .switch .slider::before {
   content: "";
@@ -445,481 +717,1232 @@ select:focus, input:focus, textarea:focus {
   height: 18px;
   left: 3px;
   top: 3px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  background: #fff;
   border-radius: 50%;
-  transition: transform 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 200ms cubic-bezier(0.2, 1.2, 0.4, 1);
 }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(20px); }
-.switch input:focus-visible + .slider { box-shadow: 0 0 0 3px var(--accent-soft); }
+.switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ prompt */
+.prompt-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 22px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.prompt-panel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.prompt-title { font-size: 15px; font-weight: 560; }
+.prompt-chip {
+  font-size: 10.5px;
+  font-weight: 560;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.prompt-lede { font-size: 12px; color: var(--muted); margin-top: 6px; max-width: 78ch; }
+#prompt_slot { flex: 1; display: flex; min-height: 0; margin-top: 14px; }
+#prompt_slot textarea {
+  flex: 1;
+  min-height: 240px;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.prompt-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+
+.prompt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 3vh 3.5vw;
+  background: rgba(8, 8, 10, 0.52);
+}
+.prompt-overlay[hidden] { display: none !important; }
+.prompt-overlay-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  padding: 18px 20px;
+  animation: modal-in var(--t-med) var(--ease) both;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.prompt-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.prompt-overlay-head span { font-size: 14px; font-weight: 560; }
+#prompt_overlay_body { flex: 1; min-height: 0; display: flex; }
+#prompt_overlay_body textarea {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 14px;
+}
+
+/* --------------------------------------------------------------- buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 480;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--t-fast) ease, border-color var(--t-fast) ease, box-shadow var(--t-fast) ease, transform var(--t-fast) ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { box-shadow: 0 6px 18px -10px var(--accent); }
+.btn.ghost { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
+.btn.ghost:hover { border-color: var(--muted); }
+.btn.quiet { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+.btn.quiet:hover { color: var(--ink); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+
+/* ----------------------------------------------------------------- dock */
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 -40px;
+  padding: 12px 40px;
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line);
+}
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  .dock { background: var(--canvas); }
+}
+.dock-left { display: flex; align-items: center; gap: 10px; }
+.dock-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chip.dirty { border-color: var(--warn-dot); color: var(--warn); background: var(--warn-soft); }
+
 .result-tag {
   display: none;
   align-items: center;
-  gap: 0.4rem;
-  flex: 0 0 auto;
-  padding: 0.34rem 0.72rem;
+  gap: 6px;
+  padding: 4px 10px;
   border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 520;
-  line-height: 1;
-  max-width: 16rem;
+  font-size: 11.5px;
+  font-weight: 480;
+  max-width: 22rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .result-tag.show { display: inline-flex; }
-.result-tag.loading {
-  background: var(--accent-soft);
-  color: var(--muted);
-  border: 1px solid var(--line);
-}
-.result-tag.ok {
-  background: var(--ok-bg);
-  color: var(--ok);
-  border: 1px solid rgba(74, 222, 128, 0.35);
-}
-.result-tag.err {
-  background: var(--err-bg);
-  color: var(--err);
-  border: 1px solid rgba(252, 165, 165, 0.35);
-}
-.actions { align-items: center; }
-button.recording { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-.actions { display: flex; gap: 0.7rem; margin-top: 1.6rem; }
-button {
-  flex: 1;
-  padding: 0.68rem 1rem;
-  font-size: 0.98rem;
-  font-family: inherit;
-  font-weight: 480;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: transform 0.06s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-button:active { transform: translateY(1px); }
-.primary { background: var(--accent); color: #fff; }
-.primary:hover { box-shadow: 0 8px 20px -10px rgba(15,118,110,0.7); }
-.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
-.secondary:hover { background: var(--accent-soft); }
-button:disabled { opacity: 0.55; cursor: default; }
-.link {
-  display: block;
-  width: 100%;
-  margin-top: 1rem;
-  padding: 0.5rem;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 0.86rem;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  font-weight: 400;
-}
-.link:hover { color: var(--err); }
-.link:disabled { opacity: 0.55; cursor: default; }
-.status {
-  margin-top: 1.1rem;
-  padding: 0.7rem 0.9rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.92rem;
-  display: none;
-}
-.status.show { display: flex; align-items: center; gap: 0.5rem; }
-.status.ok { background: var(--ok-bg); color: var(--ok); }
-.status.err { background: var(--err-bg); color: var(--err); }
-.status.neutral { background: var(--accent-soft); color: var(--muted); }
+.result-tag.loading { background: var(--inset); color: var(--muted); border: 1px solid var(--line); }
+.result-tag.ok { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok-dot); }
+.result-tag.err { background: var(--err-soft); color: var(--err); border: 1px solid var(--err-dot); }
+
 .spinner {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   display: inline-block;
+  flex: 0 0 auto;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.pull-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: 0.9rem;
+.check-pop { width: 14px; height: 14px; flex: 0 0 auto; animation: check-in 400ms var(--ease) both; }
+.check-pop path {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: check-draw 400ms var(--ease) 80ms both;
 }
-.pull-row .secondary { flex: 0 0 auto; padding: 0.45rem 0.8rem; }
-.pull-row .hint { font-size: 0.78rem; color: var(--muted); }
+@keyframes check-in {
+  from { opacity: 0; transform: scale(0.7) rotate(-12deg); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: blur(0); }
+}
+@keyframes check-draw { to { stroke-dashoffset: 0; } }
+
+.status {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  max-width: 44rem;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+.status.show { display: inline-flex; }
+.status.ok { background: var(--ok-soft); color: var(--ok); }
+.status.err { background: var(--err-soft); color: var(--err); }
+.status.neutral { background: var(--inset); color: var(--muted); }
+
+.toast-region {
+  position: fixed;
+  right: 20px;
+  bottom: 84px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(30rem, calc(100vw - 40px));
+}
+.toast-region .status {
+  box-shadow: var(--shadow-float);
+  border: 1px solid var(--line);
+  animation: toast-in var(--t-med) var(--ease) both;
+}
+.toast-region .status.leaving { animation: toast-out 150ms ease both; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes toast-out {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateY(4px); }
+}
+
 .pull-status {
-  margin-top: 0.7rem;
+  margin-top: 12px;
   max-height: 12rem;
   overflow-y: auto;
   white-space: pre-wrap;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.78rem;
+  font-size: 11.5px;
   line-height: 1.5;
   color: var(--muted);
-  background: var(--accent-soft);
+  background: var(--inset);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 0.6rem 0.8rem;
+  padding: 10px 12px;
 }
-details { margin-top: 1.5rem; }
-summary { cursor: pointer; font-weight: 480; color: var(--muted); font-size: 0.92rem; }
-code { background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 6px; }
-.model-chips { display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.45rem; }
-.model-chip { display:inline-flex; align-items:center; gap:0.3rem; padding:0.18rem 0.45rem; border:1px solid var(--line); border-radius:999px; font-size:0.78rem; background: var(--accent-soft); color: var(--ink); }
-.model-chip button { border:none; background:transparent; cursor:pointer; font-size:0.85rem; line-height:1; padding:0 0.1rem; color: var(--muted); }
-.model-chip button:hover { color: var(--err); }
-.model-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-.test-modal-backdrop { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.35); z-index: 120; padding: 1rem; }
-.test-modal-backdrop[hidden] { display: none !important; }
-.test-modal { width: min(520px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 1.1rem 1.2rem; box-shadow: 0 24px 60px -20px rgba(0,0,0,0.4); }
-.test-modal h3 { margin: 0 0 0.35rem; font-size: 1rem; }
-.test-modal p { margin: 0; font-size: 0.92rem; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
-.test-modal .actions { margin-top: 0.9rem; display:flex; justify-content:flex-end; }
-.gearbox {
-  position: fixed;
-  top: 1rem;
-  left: 1rem;
-  z-index: 80;
-  width: 13.75rem;
+.pull-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.pull-row .hint { font-size: 11.5px; color: var(--faint); }
+
+.notice {
+  display: none;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
 }
-.gearbox-plate {
-  background: linear-gradient(165deg, #1c1b18 0%, #11110f 100%);
-  color: #f8f4ea;
-  border: 2px solid #f5c542;
-  border-radius: 18px;
-  padding: 0.8rem 0.85rem 0.95rem;
-  box-shadow: 0 0 0 4px rgba(245, 197, 66, 0.38), 0 18px 40px -12px rgba(0,0,0,0.55);
-}
-.gearbox-badge {
-  display: inline-block;
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: #1a1404;
-  background: #f5c542;
-  border-radius: 999px;
-  padding: 0.16rem 0.52rem;
-}
-.gearbox-lede {
-  margin: 0.45rem 0 0.7rem;
-  font-size: 0.72rem;
-  line-height: 1.35;
-  color: #d9d0b8;
-}
-.shifter {
-  display: grid;
-  grid-template-columns: 2.1rem 1fr;
-  gap: 0.55rem 0.7rem;
-  align-items: stretch;
-}
-.gate-track {
-  position: relative;
-  grid-row: 1 / span 2;
-  width: 2.1rem;
-  border-radius: 999px;
-  background: #2a271f;
-  border: 1px solid #5a5138;
-}
-.gate-track .knob {
-  position: absolute;
-  left: 50%;
-  width: 1.55rem;
-  height: 1.55rem;
-  margin-left: -0.775rem;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffe38a, #e0a106 55%, #8a5a00);
-  box-shadow: 0 2px 0 #6b4500, 0 6px 10px rgba(0,0,0,0.45);
-  transition: top 0.18s ease;
-  top: 0.28rem;
-}
-.gearbox.short .gate-track .knob { top: calc(100% - 1.83rem); }
-.gear {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.05rem;
-  width: 100%;
-  padding: 0.4rem 0.5rem;
-  font-family: inherit;
-  color: #d9d0b8;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  cursor: pointer;
-  text-align: left;
-}
-.gear:hover { border-color: rgba(245, 197, 66, 0.45); background: rgba(245, 197, 66, 0.08); }
-.gear.selected {
-  color: #1a1404;
-  background: #f5c542;
-  border-color: #f5c542;
-}
-.gear-name { font-size: 0.88rem; font-weight: 650; line-height: 1.15; }
-.gear-hint { font-size: 0.68rem; font-weight: 400; opacity: 0.85; }
-.gear.selected .gear-hint { opacity: 0.75; }
-@media (min-width: 1200px) {
-  body { padding-left: 16rem; }
-}
-@media (max-width: 900px) {
-  .gearbox {
-    position: static;
-    width: 100%;
-    margin: 0 0 1.1rem;
+.notice.show { display: block; }
+
+/* ------------------------------------------------------------- responsive */
+@media (max-width: 1199px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 70;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
   }
+  .nav { flex-direction: row; gap: 2px; flex: 1; }
+  .nav-eyebrow { display: none; }
+  .nav-pill { display: none; }
+  .nav-item { width: auto; padding: 0 14px; white-space: nowrap; }
+  .nav-item[aria-current="true"] { background: var(--accent-soft); }
+  .rail-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; gap: 12px; }
+  .meters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .main-inner { padding: 24px 20px 28px; }
+  .dock { margin: 0 -20px; padding: 12px 20px; }
 }
+@media (max-width: 760px) {
+  .row-2, .row-3 { grid-template-columns: 1fr; }
+  .provider-grid { grid-template-columns: 1fr 1fr; }
+  .motion-row { display: none; }
+}
+@media (max-width: 560px) {
+  .meters { grid-template-columns: 1fr; }
+  .provider-grid { grid-template-columns: 1fr; }
+  .dock { flex-wrap: wrap; }
+  .dock-right { width: 100%; }
+  .toast-region { left: 12px; right: 12px; bottom: 120px; max-width: none; }
+  input[type=text], input[type=password], textarea, .cselect-trigger { font-size: 16px; }
+  .btn { font-size: 15px; }
+  .prompt-overlay { padding: 0; }
+  .prompt-overlay-panel { border-radius: 0; border: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-fast: 0.1s; --t-med: 0.1s; --t-slow: 0.1s; }
+  .view.active > .group { animation: fade-in 0.1s linear both; }
+  .keycaps kbd { animation: fade-in 0.1s linear both; }
+  .meter-value.swapping, .meter-sub.swapping { animation: fade-in 0.1s linear both; }
+  .check-pop, .check-pop path { animation: fade-in 0.1s linear both; }
+  .shake { animation: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html[data-motion="reduced"] .view.active > .group,
+  html[data-motion="reduced"] .keycaps kbd,
+  html[data-motion="reduced"] .meter-value.swapping,
+  html[data-motion="reduced"] .meter-sub.swapping,
+  html[data-motion="reduced"] .check-pop,
+  html[data-motion="reduced"] .check-pop.path { animation: fade-in 0.1s linear both; }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 </style>
 </head>
 <body>
-<main class="card">
-  <div class="brand">
-    <span class="logo">O</span>
-    <h1>Odicto Setup</h1>
-  </div>
-  <p class="sub">Pick a backend and paste its key — each backend remembers its own key, so you only ever enter it once. Everything saves to your local <code>.env</code> file.</p>
-  <p style="margin:0;font-size:0.78rem;color:var(--muted);">build v6 · per-provider keys</p>
-
-  <form id="setupForm" method="post" action="/save">
-    <aside class="gearbox __HOTKEY_GEAR_CLASS__" id="gearbox">
-      <input type="hidden" name="HOTKEY_TOGGLE" id="HOTKEY_TOGGLE" value="__HOTKEY_TOGGLE_TRUE__">
-      <div class="gearbox-plate">
-        <span class="gearbox-badge">Gearbox</span>
-        <p class="gearbox-lede">Pick a ride for Ctrl+` and the AI chord. Save to apply.</p>
-        <div class="shifter" role="radiogroup" aria-label="Hotkey ride">
-          <span class="gate-track" aria-hidden="true"><span class="knob"></span></span>
-          <button type="button" class="gear__HOTKEY_LONG_SELECTED__" data-toggle="true" aria-pressed="__HOTKEY_LONG_ARIA__">
-            <span class="gear-name">Long ride</span>
-            <span class="gear-hint">tap, speak, tap again</span>
-          </button>
-          <button type="button" class="gear__HOTKEY_SHORT_SELECTED__" data-toggle="false" aria-pressed="__HOTKEY_SHORT_ARIA__">
-            <span class="gear-name">Short ride</span>
-            <span class="gear-hint">hold while you talk</span>
-          </button>
-        </div>
-      </div>
-    </aside>
-    <div class="layout">
-    <div class="col">
-    <label for="LLM_PROVIDER">AI backend</label>
-    <div class="custom-select" id="provider_select">
-      <button type="button" class="select-trigger" id="provider_trigger" aria-haspopup="listbox" aria-expanded="false">
-        <span id="provider_label">AI backend</span>
-        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
-      <div class="select-menu" role="listbox" id="provider_menu">
-        <button type="button" class="select-option" data-value="meta" role="option"><span>Meta API</span><span class="hint">cloud</span></button>
-        <button type="button" class="select-option" data-value="openrouter" role="option"><span>OpenRouter</span><span class="hint">cloud</span></button>
-        <button type="button" class="select-option" data-value="gemini" role="option"><span>Google Gemini</span><span class="hint">cloud</span></button>
-        <button type="button" class="select-option" data-value="ollama" role="option"><span>Ollama</span><span class="hint">local</span></button>
-        <button type="button" class="select-option" data-value="none" role="option"><span>None</span><span class="hint">raw dictation</span></button>
-      </div>
-      <input type="hidden" name="LLM_PROVIDER" id="LLM_PROVIDER" value="__PROVIDER__">
-    </div>
-    <p style="margin:0.4rem 0 0;font-size:0.78rem;color:var(--muted);">Only the selected backend's settings are shown below. Keys are saved per backend and kept when you switch.</p>
-    <div id="none-note"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
-    <div id="sec-ai">
-      <div class="field" id="field-meta">
-        <label>Meta API key__META_KEY_SAVED_HINT__</label>
-        <input type="password" name="META_API_KEY" value="__META_KEY__" placeholder="paste your Meta API key — quotes are fine">
-        <label>Model · Meta</label>
-        <select id="meta_model_select" onchange="syncModelSelect('meta')" style="margin-top:0.35rem;"></select>
-        <input type="text" id="meta_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id, e.g. __META_MODEL_DEFAULT__">
-        <input type="hidden" name="META_MODEL" id="META_MODEL" value="__META_MODEL_SEED__">
-        <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="__META_HISTORY_CSV__">
-        <div id="meta_model_chips" class="model-chips" aria-label="Saved models"></div>
-        <p class="panel-note">Backend default: <code>__META_MODEL_DEFAULT_NOTE__</code>__META_SAVED_HINT__</p>
-        <label>Reasoning effort</label>
-        <select id="meta_reasoning_select" onchange="syncEffort('meta')">
-          <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
-        </select>
-        <input type="hidden" name="META_REASONING_EFFORT" id="META_REASONING_EFFORT" value="__META_REASONING_SEED__">
-      </div>
-      <div class="field" id="field-openrouter">
-        <label>OpenRouter API key__OPENROUTER_KEY_SAVED_HINT__</label>
-        <input type="password" name="OPENROUTER_API_KEY" value="__OR_KEY__" placeholder="paste your OpenRouter key — quotes are fine">
-        <label>Model · OpenRouter</label>
-        <select id="openrouter_model_select" onchange="syncModelSelect('openrouter')" style="margin-top:0.35rem;"></select>
-        <input type="text" id="openrouter_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom slug, e.g. openai/gpt-4o-mini">
-        <input type="hidden" name="OPENROUTER_MODEL" id="OPENROUTER_MODEL" value="__OR_MODEL_SEED__">
-        <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="__OPENROUTER_HISTORY_CSV__">
-        <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
-        <p class="panel-note">Backend default: <code>openai/gpt-5.6-luna</code>__OPENROUTER_SAVED_HINT__</p>
-        <label>Reasoning effort</label>
-        <select id="openrouter_reasoning_select" onchange="syncEffort('openrouter')">
-          <option value="">Backend default (none)</option><option value="none">none (no thinking)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
-        </select>
-        <input type="hidden" name="OPENROUTER_REASONING_EFFORT" id="OPENROUTER_REASONING_EFFORT" value="__OR_REASONING_SEED__">
-        <p class="panel-note" id="openrouter_effort_note">Default is no thinking. Allowed levels load from OpenRouter for the selected model.</p>
-        <label>Host ranking</label>
-        <select id="openrouter_sort_select" onchange="syncEffort('openrouter_sort')">
-          <option value="">Backend default (latency)</option><option value="latency">latency — fastest host</option><option value="throughput">throughput — highest tokens/sec</option><option value="price">price — cheapest host</option>
-        </select>
-        <input type="hidden" name="OPENROUTER_PROVIDER_SORT" id="OPENROUTER_PROVIDER_SORT" value="__OR_SORT_SEED__">
-        <p class="panel-note">Default is lowest time-to-first-token for the chosen model, not cheapest.</p>
-      </div>
-      <div class="field" id="field-gemini">
-        <label>Gemini API key__GEMINI_KEY_SAVED_HINT__</label>
-        <input type="password" name="GEMINI_API_KEY" value="__GEMINI_KEY__" placeholder="paste your Gemini API key — quotes are fine">
-        <label>Model · Gemini</label>
-        <select id="gemini_model_select" onchange="syncModelSelect('gemini')" style="margin-top:0.35rem;"></select>
-        <input type="text" id="gemini_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom model id">
-        <input type="hidden" name="GEMINI_MODEL" id="GEMINI_MODEL" value="__GEMINI_MODEL_SEED__">
-        <input type="hidden" name="GEMINI_MODEL_HISTORY" id="GEMINI_MODEL_HISTORY" value="__GEMINI_HISTORY_CSV__">
-        <div id="gemini_model_chips" class="model-chips" aria-label="Saved models"></div>
-        <p class="panel-note">Backend default: <code>gemini-3.5-flash-lite</code>__GEMINI_SAVED_HINT__</p>
-        <label>Thinking level</label>
-        <select id="gemini_thinking_select" onchange="syncEffort('gemini')">
-          <option value="">Backend default (minimal)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
-        </select>
-        <input type="hidden" name="GEMINI_THINKING_LEVEL" id="GEMINI_THINKING_LEVEL" value="__GEMINI_THINKING_SEED__">
-      </div>
-      <div class="field" id="field-ollama">
-        <label>Model · Ollama</label>
-        <select id="ollama_model_select" onchange="syncModelSelect('ollama')" style="margin-top:0.35rem;"></select>
-        <input type="text" id="ollama_model_custom" style="display:none;margin-top:0.4rem;" placeholder="custom tag, e.g. llama3.2:3b">
-        <input type="hidden" name="OLLAMA_MODEL" id="OLLAMA_MODEL" value="__OLLAMA_MODEL_SEED__">
-        <input type="hidden" name="OLLAMA_MODEL_HISTORY" id="OLLAMA_MODEL_HISTORY" value="__OLLAMA_HISTORY_CSV__">
-        <div id="ollama_model_chips" class="model-chips" aria-label="Saved models"></div>
-        <p class="panel-note">Backend default: <code>qwen2.5:1.5b-instruct</code>__OLLAMA_SAVED_HINT__ · no key needed</p>
-        <label>Ollama API base</label>
-        <input type="text" name="LLM_API_BASE" value="__OLLAMA_BASE__">
-        <label>Context window <span style="font-weight:400;color:var(--muted);">(higher = better memory, slower)</span></label>
-        <input type="text" name="LLM_NUM_CTX" value="__LLM_NUM_CTX__" placeholder="2048">
-        <div class="pull-row">
-          <button type="button" id="pull_button" class="secondary" onclick="startPull()">Download local model</button>
-          <span class="hint">pulls the model selected for Ollama above</span>
-        </div>
-        <div id="pull_status" class="pull-status" hidden></div>
-      </div>
-      <label>Max output tokens <span style="font-weight:400;color:var(--muted);">(shared cap for every backend)</span></label>
-      <input type="text" name="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="1024">
-    </div><!-- /#sec-ai -->
-    </div><!-- /.col left -->
-    <div class="col" id="sec-prompt">
-      <section class="prompt-panel" aria-labelledby="prompt_title">
-        <div class="prompt-head">
-          <label class="prompt-title" id="prompt_title">AI system prompt</label>
-          <span class="prompt-chip">persona</span>
-        </div>
-        <p class="prompt-lede">AI-mode assistant, not the transcriber. Edit here or in <code>prompt.txt</code>. Save writes that private file (not in git) and restarts Odicto. Restore default, then Save, to use the shipped <code>prompt.txt.example</code>.</p>
-        <p class="panel-note">Using __PROMPT_SOURCE__.</p>
-        <div id="prompt_slot">
-          <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
-        </div>
-        <div class="prompt-toolbar">
-          <button type="button" class="secondary" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
-          <button type="button" class="link" onclick="restoreDefaultPrompt()">Restore default</button>
-        </div>
-      </section>
-    </div><!-- /.col prompt -->
-    </div><!-- /.layout -->
-
-    <details open>
-      <summary>Speech to text</summary>
-      <p style="margin:0.45rem 0 0.5rem;font-size:0.8rem;color:var(--muted);">Independent of the AI backend. Gemini STT reuses <code>GEMINI_API_KEY</code>.</p>
-      <label>STT provider</label>
-      <select name="STT_PROVIDER" id="STT_PROVIDER" onchange="syncSttProvider()">
-        <option value="whisper"__STT_WHISPER_SELECTED__>whisper — local, offline</option>
-        <option value="gemini"__STT_GEMINI_SELECTED__>gemini — Gemini 3.5 Transcribe (cloud)</option>
-        <option value="auto"__STT_AUTO_SELECTED__>auto — Gemini when a key is saved, else Whisper</option>
-      </select>
-      <div id="stt-gemini-fields"__STT_WHISPER_HIDDEN__>
-        <label>Transcription mode</label>
-        <div class="mode-switch" role="group" aria-label="Transcription mode">
-          <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
-          <label class="switch">
-            <input type="checkbox" id="stt_mode_toggle" __TRANSCRIBE_SMART_CHECKED__ onchange="syncTranscribeMode()">
-            <span class="slider"></span>
-          </label>
-          <span class="mode-label" id="mode_label_smart">Smart</span>
-        </div>
-        <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="__TRANSCRIBE_MODE__">
-        <p class="panel-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on both hold-to-talk chords and the live tap key.</p>
-        <label>Language hint <span style="font-weight:400;color:var(--muted);">(blank = auto-detect)</span></label>
-        <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" value="__TRANSCRIBE_LANG__" placeholder="en-US">
-        <label>Custom vocabulary <span style="font-weight:400;color:var(--muted);">(comma-separated, optional)</span></label>
-        <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" value="__TRANSCRIBE_VOCAB__" placeholder="Odicto, Kubernetes">
-      </div>
-      <div id="stt-whisper-fields">
-        <label>Whisper model</label>
-        <input type="text" name="WHISPER_MODEL_SIZE" value="__WHISPER__">
-        <label>Whisper device</label>
-        <input type="text" name="WHISPER_DEVICE" value="__WHISPER_DEVICE__" placeholder="auto">
-        <p class="panel-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Used if Gemini STT is unavailable (no key, rate limit, or network).</p>
-      </div>
-    </details>
-
-    <details>
-      <summary>Advanced (hotkeys)</summary>
-      <label>Dictation hotkey</label>
-      <div class="hotkey-row">
-        <input type="text" name="HOTKEY" id="HOTKEY" value="__HOTKEY__" readonly>
-        <button type="button" class="secondary" data-record-for="HOTKEY" onclick="recordHotkey(this)">Press key</button>
-      </div>
-
-      <label>AI hotkey</label>
-      <div class="hotkey-row">
-        <input type="text" name="AI_HOTKEY" id="AI_HOTKEY" value="__AI_HOTKEY__" readonly>
-        <button type="button" class="secondary" data-record-for="AI_HOTKEY" onclick="recordHotkey(this)">Press key</button>
-      </div>
-      <label>Live tap-to-talk hotkey</label>
-      <div class="hotkey-row">
-        <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="__LIVE_HOTKEY__" readonly>
-        <button type="button" class="secondary" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Press key</button>
-      </div>
-      <label>Live dictation engine (F7)</label>
-      <select name="LIVE_STT_PROVIDER" id="LIVE_STT_PROVIDER">
-        <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto — Google Gemini Live if key is saved, else Local Whisper</option>
-        <option value="gemini"__LIVE_STT_GEMINI_SELECTED__>gemini — Google Gemini Live (real-time caret streaming)</option>
-        <option value="whisper"__LIVE_STT_WHISPER_SELECTED__>whisper — Local Whisper (offline batch recording)</option>
-      </select>
-      <p style="margin:0.4rem 0 0;font-size:0.8rem;color:var(--muted);">The gearbox (top left) sets chord style: Long ride taps to start and tap to stop; Short ride holds while you speak. Live tap (F7) is always press once to start, press again to stop. While Odicto is running, F7 is captured so it does not fire in other apps.</p>
-    </details>
-
-    <div class="actions">
-      <button type="submit" class="primary">Save settings</button>
-      <button type="button" id="test_button" class="secondary" onclick="testConnection()">Test connection</button>
-      <span id="test_tag" class="result-tag" role="status" aria-live="polite"></span>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <span class="logo">O</span>
+      <span>
+        <span class="brand-name">Odicto</span>
+        <span class="brand-build">build v7 · per-provider keys</span>
+      </span>
     </div>
 
-    <div id="status" class="status" role="status"></div>
-    __SERVER_STATUS__
-    <button type="button" class="link" id="reset_button" onclick="resetSettings()">Reset settings to defaults</button>
+    <nav class="nav" aria-label="Setup sections">
+      <span class="nav-eyebrow">Console</span>
+      <span class="nav-pill" aria-hidden="true"></span>
+      <button type="button" class="nav-item" data-view="overview" aria-current="true"><span class="nav-dot" id="nav_dot_overview"></span>Overview</button>
+      <button type="button" class="nav-item" data-view="ai"><span class="nav-dot" id="nav_dot_ai"></span>AI</button>
+      <button type="button" class="nav-item" data-view="speech"><span class="nav-dot" id="nav_dot_speech"></span>Speech</button>
+      <button type="button" class="nav-item" data-view="controls"><span class="nav-dot" id="nav_dot_controls"></span>Controls</button>
+      <button type="button" class="nav-item" data-view="prompt"><span class="nav-dot" id="nav_dot_prompt"></span>Prompt</button>
+    </nav>
 
-    <div id="prompt_overlay" class="prompt-overlay" hidden>
-      <div class="prompt-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="prompt_overlay_title">
-        <div class="prompt-overlay-head">
-          <span id="prompt_overlay_title">AI system prompt</span>
-          <button type="button" class="secondary" id="prompt_overlay_close" onclick="togglePromptExpand()">Close</button>
-        </div>
-        <div id="prompt_overlay_body"></div>
+    <div class="rail-foot">
+      <div class="motion-row">
+        <span class="motion-label">Motion</span>
+        <span class="motion-group" role="group" aria-label="Motion amount">
+          <button type="button" data-motion-level="off" aria-pressed="false">Off</button>
+          <button type="button" data-motion-level="reduced" aria-pressed="false">Reduced</button>
+          <button type="button" data-motion-level="full" aria-pressed="true">Full</button>
+        </span>
       </div>
+      <button type="button" class="link" id="reset_button" onclick="resetSettings()">Reset settings to defaults</button>
     </div>
-  
-  </form>
+  </aside>
 
-  <div id="test_modal" class="test-modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="test_modal_title">
-    <div class="test-modal">
-      <h3 id="test_modal_title">Testing connection…</h3>
-      <p id="test_modal_msg">Contacting the selected backend.</p>
-      <div class="actions"><button type="button" class="secondary" onclick="closeTestModal(); return false;">Close</button></div>
+  <main class="main">
+    <div class="main-inner">
+      <form id="setupForm" method="post" action="/save">
+
+        <!-- ============================================================ overview -->
+        <section class="view active" id="view-overview" aria-label="Overview">
+          <div class="view-head group">
+            <h1 class="view-title">Setup console</h1>
+            <p class="view-sub">Every backend remembers its own key, so you only ever enter it once. Everything saves to your local <code>.env</code> file.</p>
+          </div>
+          <div class="group">
+            <div class="meters">
+              <button type="button" class="meter" data-goto="ai">
+                <span class="meter-top"><span class="eyebrow">AI</span><span class="dot" id="meter_ai_dot"></span></span>
+                <span class="meter-value" id="meter_ai_value">-</span>
+                <span class="meter-sub" id="meter_ai_sub">-</span>
+              </button>
+              <button type="button" class="meter" data-goto="speech">
+                <span class="meter-top"><span class="eyebrow">Speech</span><span class="dot" id="meter_speech_dot"></span></span>
+                <span class="meter-value" id="meter_speech_value">-</span>
+                <span class="meter-sub" id="meter_speech_sub">-</span>
+              </button>
+              <button type="button" class="meter" data-goto="controls">
+                <span class="meter-top"><span class="eyebrow">Controls</span><span class="dot" id="meter_controls_dot"></span></span>
+                <span class="meter-value" id="meter_controls_value">-</span>
+                <span class="meter-sub" id="meter_controls_sub">-</span>
+              </button>
+              <button type="button" class="meter" data-goto="prompt">
+                <span class="meter-top"><span class="eyebrow">Prompt</span><span class="dot" id="meter_prompt_dot"></span></span>
+                <span class="meter-value" id="meter_prompt_value">-</span>
+                <span class="meter-sub" id="meter_prompt_sub">-</span>
+              </button>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-head">
+              <span class="group-title">Chords</span>
+              <span class="group-note">Live tap (F7) is always press once to start, press again to stop.</span>
+            </div>
+            <div class="keycap-strip">
+              <span class="keycap-item"><span class="keycap-label">Dictation</span><span class="keycaps" id="keycaps_hotkey"></span></span>
+              <span class="keycap-item"><span class="keycap-label">AI</span><span class="keycaps" id="keycaps_ai"></span></span>
+              <span class="keycap-item"><span class="keycap-label">Live</span><span class="keycaps" id="keycaps_live"></span></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================ ai -->
+        <section class="view" id="view-ai" aria-label="AI backend">
+          <div class="view-head group">
+            <h1 class="view-title">AI backend</h1>
+            <p class="view-sub">Pick a backend and paste its key. Only the selected backend's settings are shown below.</p>
+          </div>
+          <input type="hidden" name="LLM_PROVIDER" id="LLM_PROVIDER" value="__PROVIDER__">
+          <div class="group">
+            <div class="provider-grid" role="radiogroup" aria-label="AI backend">
+              <button type="button" class="provider-card" role="radio" data-value="meta" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">Meta API</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
+                <span class="pc-hint">cloud</span>
+                <span class="pc-meta"><span class="dot" id="pc_dot_meta"></span><span id="pc_key_meta">no key</span></span>
+              </button>
+              <button type="button" class="provider-card" role="radio" data-value="openrouter" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">OpenRouter</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
+                <span class="pc-hint">cloud</span>
+                <span class="pc-meta"><span class="dot" id="pc_dot_openrouter"></span><span id="pc_key_openrouter">no key</span></span>
+              </button>
+              <button type="button" class="provider-card" role="radio" data-value="gemini" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">Google Gemini</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
+                <span class="pc-hint">cloud</span>
+                <span class="pc-meta"><span class="dot" id="pc_dot_gemini"></span><span id="pc_key_gemini">no key</span></span>
+              </button>
+              <button type="button" class="provider-card" role="radio" data-value="ollama" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">Ollama</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
+                <span class="pc-hint">local</span>
+                <span class="pc-meta"><span class="dot ok" id="pc_dot_ollama"></span><span>no key needed</span></span>
+              </button>
+              <button type="button" class="provider-card" role="radio" data-value="none" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">None</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
+                <span class="pc-hint">raw dictation</span>
+                <span class="pc-meta"><span class="dot"></span><span>no AI replies</span></span>
+              </button>
+            </div>
+            <div id="none-note" class="notice"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
+          </div>
+
+          <div id="sec-ai" class="group">
+            <div class="field" id="field-meta">
+              <div class="card">
+                <div class="card-title">Meta API</div>
+                <div class="card-sub">Backend default: <code>__META_MODEL_DEFAULT_NOTE__</code>__META_SAVED_HINT__</div>
+                <div class="field">
+                  <label class="field-label" for="META_API_KEY">API key__META_KEY_SAVED_HINT__</label>
+                  <div class="key-input">
+                    <input type="password" name="META_API_KEY" id="META_API_KEY" value="__META_KEY__" placeholder="paste your Meta API key - quotes are fine">
+                    <button type="button" class="reveal-btn" data-reveal="META_API_KEY">Show</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="meta_model_select">Model</label>
+                  <div class="cselect">
+                    <select id="meta_model_select" onchange="syncModelSelect('meta')"></select>
+                  </div>
+                  <input type="text" id="meta_model_custom" style="display:none;margin-top:8px;" placeholder="custom model id, e.g. __META_MODEL_DEFAULT__">
+                  <input type="hidden" name="META_MODEL" id="META_MODEL" value="__META_MODEL_SEED__">
+                  <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="__META_HISTORY_CSV__">
+                  <div id="meta_model_chips" class="model-chips" aria-label="Saved models"></div>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="meta_reasoning_select">Reasoning effort</label>
+                  <div class="cselect">
+                    <select id="meta_reasoning_select" onchange="syncEffort('meta')">
+                      <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
+                    </select>
+                  </div>
+                  <input type="hidden" name="META_REASONING_EFFORT" id="META_REASONING_EFFORT" value="__META_REASONING_SEED__">
+                </div>
+              </div>
+            </div>
+
+            <div class="field" id="field-openrouter">
+              <div class="card">
+                <div class="card-title">OpenRouter</div>
+                <div class="card-sub">Backend default: <code>openai/gpt-5.6-luna</code>__OPENROUTER_SAVED_HINT__</div>
+                <div class="field">
+                  <label class="field-label" for="OPENROUTER_API_KEY">API key__OPENROUTER_KEY_SAVED_HINT__</label>
+                  <div class="key-input">
+                    <input type="password" name="OPENROUTER_API_KEY" id="OPENROUTER_API_KEY" value="__OR_KEY__" placeholder="paste your OpenRouter key - quotes are fine">
+                    <button type="button" class="reveal-btn" data-reveal="OPENROUTER_API_KEY">Show</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="openrouter_model_select">Model</label>
+                  <div class="cselect">
+                    <select id="openrouter_model_select" onchange="syncModelSelect('openrouter')"></select>
+                  </div>
+                  <input type="text" id="openrouter_model_custom" style="display:none;margin-top:8px;" placeholder="custom slug, e.g. openai/gpt-4o-mini">
+                  <input type="hidden" name="OPENROUTER_MODEL" id="OPENROUTER_MODEL" value="__OR_MODEL_SEED__">
+                  <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="__OPENROUTER_HISTORY_CSV__">
+                  <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
+                </div>
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="openrouter_reasoning_select">Reasoning effort</label>
+                    <div class="cselect">
+                      <select id="openrouter_reasoning_select" onchange="syncEffort('openrouter')">
+                        <option value="">Backend default (none)</option><option value="none">none (no thinking)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
+                      </select>
+                    </div>
+                    <input type="hidden" name="OPENROUTER_REASONING_EFFORT" id="OPENROUTER_REASONING_EFFORT" value="__OR_REASONING_SEED__">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="openrouter_sort_select">Host ranking</label>
+                    <div class="cselect">
+                      <select id="openrouter_sort_select" onchange="syncEffort('openrouter_sort')">
+                        <option value="">Backend default (latency)</option><option value="latency">latency - fastest host</option><option value="throughput">throughput - highest tokens/sec</option><option value="price">price - cheapest host</option>
+                      </select>
+                    </div>
+                    <input type="hidden" name="OPENROUTER_PROVIDER_SORT" id="OPENROUTER_PROVIDER_SORT" value="__OR_SORT_SEED__">
+                  </div>
+                </div>
+                <p class="field-note" id="openrouter_effort_note">Default is no thinking. Allowed levels load from OpenRouter for the selected model.</p>
+                <p class="field-note">Default host ranking is lowest time-to-first-token for the chosen model, not cheapest.</p>
+              </div>
+            </div>
+
+            <div class="field" id="field-gemini">
+              <div class="card">
+                <div class="card-title">Google Gemini</div>
+                <div class="card-sub">Backend default: <code>gemini-3.5-flash-lite</code>__GEMINI_SAVED_HINT__</div>
+                <div class="field">
+                  <label class="field-label" for="GEMINI_API_KEY">API key__GEMINI_KEY_SAVED_HINT__</label>
+                  <div class="key-input">
+                    <input type="password" name="GEMINI_API_KEY" id="GEMINI_API_KEY" value="__GEMINI_KEY__" placeholder="paste your Gemini API key - quotes are fine">
+                    <button type="button" class="reveal-btn" data-reveal="GEMINI_API_KEY">Show</button>
+                  </div>
+                </div>
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="gemini_model_select">Model</label>
+                    <div class="cselect">
+                      <select id="gemini_model_select" onchange="syncModelSelect('gemini')"></select>
+                    </div>
+                    <input type="text" id="gemini_model_custom" style="display:none;margin-top:8px;" placeholder="custom model id">
+                    <input type="hidden" name="GEMINI_MODEL" id="GEMINI_MODEL" value="__GEMINI_MODEL_SEED__">
+                    <input type="hidden" name="GEMINI_MODEL_HISTORY" id="GEMINI_MODEL_HISTORY" value="__GEMINI_HISTORY_CSV__">
+                    <div id="gemini_model_chips" class="model-chips" aria-label="Saved models"></div>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="gemini_thinking_select">Thinking level</label>
+                    <div class="cselect">
+                      <select id="gemini_thinking_select" onchange="syncEffort('gemini')">
+                        <option value="">Backend default (minimal)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
+                      </select>
+                    </div>
+                    <input type="hidden" name="GEMINI_THINKING_LEVEL" id="GEMINI_THINKING_LEVEL" value="__GEMINI_THINKING_SEED__">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="field" id="field-ollama">
+              <div class="card">
+                <div class="card-title">Ollama</div>
+                <div class="card-sub">Backend default: <code>qwen2.5:1.5b-instruct</code>__OLLAMA_SAVED_HINT__ · no key needed</div>
+                <div class="field">
+                  <label class="field-label" for="ollama_model_select">Model</label>
+                  <div class="cselect">
+                    <select id="ollama_model_select" onchange="syncModelSelect('ollama')"></select>
+                  </div>
+                  <input type="text" id="ollama_model_custom" style="display:none;margin-top:8px;" placeholder="custom tag, e.g. llama3.2:3b">
+                  <input type="hidden" name="OLLAMA_MODEL" id="OLLAMA_MODEL" value="__OLLAMA_MODEL_SEED__">
+                  <input type="hidden" name="OLLAMA_MODEL_HISTORY" id="OLLAMA_MODEL_HISTORY" value="__OLLAMA_HISTORY_CSV__">
+                  <div id="ollama_model_chips" class="model-chips" aria-label="Saved models"></div>
+                </div>
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="LLM_API_BASE">Ollama API base</label>
+                    <input type="text" name="LLM_API_BASE" id="LLM_API_BASE" value="__OLLAMA_BASE__">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="LLM_NUM_CTX">Context window <span class="field-hint">higher = better memory, slower</span></label>
+                    <input type="text" name="LLM_NUM_CTX" id="LLM_NUM_CTX" value="__LLM_NUM_CTX__" placeholder="2048">
+                  </div>
+                </div>
+                <div class="pull-row">
+                  <button type="button" id="pull_button" class="btn quiet small" onclick="startPull()">Download local model</button>
+                  <span class="hint">pulls the model selected for Ollama above</span>
+                </div>
+                <div id="pull_status" class="pull-status" hidden></div>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="card">
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="LLM_MAX_TOKENS">Max output tokens <span class="field-hint">shared cap for every backend</span></label>
+                    <input type="text" name="LLM_MAX_TOKENS" id="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="1024">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ speech -->
+        <section class="view" id="view-speech" aria-label="Speech to text">
+          <div class="view-head group">
+            <h1 class="view-title">Speech to text</h1>
+            <p class="view-sub">Independent of the AI backend. Gemini STT reuses <code>GEMINI_API_KEY</code>.</p>
+          </div>
+          <div class="group">
+            <div class="card">
+              <div class="field">
+                <label class="field-label" for="STT_PROVIDER">STT provider</label>
+                <div class="cselect">
+                  <select name="STT_PROVIDER" id="STT_PROVIDER" onchange="syncSttProvider()">
+                    <option value="whisper"__STT_WHISPER_SELECTED__>whisper - local, offline</option>
+                    <option value="gemini"__STT_GEMINI_SELECTED__>gemini - Gemini 3.5 Transcribe (cloud)</option>
+                    <option value="auto"__STT_AUTO_SELECTED__>auto - Gemini when a key is saved, else Whisper</option>
+                  </select>
+                </div>
+              </div>
+              <div id="stt-gemini-fields"__STT_WHISPER_HIDDEN__>
+                <div class="field">
+                  <span class="field-label">Transcription mode</span>
+                  <div class="mode-switch" role="group" aria-label="Transcription mode">
+                    <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
+                    <label class="switch">
+                      <input type="checkbox" id="stt_mode_toggle" __TRANSCRIBE_SMART_CHECKED__ onchange="syncTranscribeMode()">
+                      <span class="slider"></span>
+                    </label>
+                    <span class="mode-label" id="mode_label_smart">Smart</span>
+                  </div>
+                  <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="__TRANSCRIBE_MODE__">
+                  <p class="field-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on both hold-to-talk chords and the live tap key.</p>
+                </div>
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="GEMINI_TRANSCRIBE_LANGUAGE">Language hint <span class="field-hint">blank = auto-detect</span></label>
+                    <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" id="GEMINI_TRANSCRIBE_LANGUAGE" value="__TRANSCRIBE_LANG__" placeholder="en-US">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="GEMINI_TRANSCRIBE_VOCABULARY">Custom vocabulary <span class="field-hint">comma-separated, optional</span></label>
+                    <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" id="GEMINI_TRANSCRIBE_VOCABULARY" value="__TRANSCRIBE_VOCAB__" placeholder="Odicto, Kubernetes">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Whisper</div>
+              <div class="card-sub">Local, offline transcription.</div>
+              <div class="row-2">
+                <div class="field">
+                  <label class="field-label" for="WHISPER_MODEL_SIZE">Model size</label>
+                  <input type="text" name="WHISPER_MODEL_SIZE" id="WHISPER_MODEL_SIZE" value="__WHISPER__">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="WHISPER_DEVICE">Device</label>
+                  <input type="text" name="WHISPER_DEVICE" id="WHISPER_DEVICE" value="__WHISPER_DEVICE__" placeholder="auto">
+                </div>
+              </div>
+              <p class="field-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Used if Gemini STT is unavailable (no key, rate limit, or network).</p>
+            </div>
+
+            <div class="card">
+              <div class="row-2">
+                <div class="field">
+                  <label class="field-label" for="LIVE_STT_PROVIDER">Live dictation engine (F7)</label>
+                  <div class="cselect">
+                    <select name="LIVE_STT_PROVIDER" id="LIVE_STT_PROVIDER">
+                      <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto - Google Gemini Live if key is saved, else Local Whisper</option>
+                      <option value="gemini"__LIVE_STT_GEMINI_SELECTED__>gemini - Google Gemini Live (real-time caret streaming)</option>
+                      <option value="whisper"__LIVE_STT_WHISPER_SELECTED__>whisper - Local Whisper (offline batch recording)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ========================================================== controls -->
+        <section class="view" id="view-controls" aria-label="Controls">
+          <div class="view-head group">
+            <h1 class="view-title">Controls</h1>
+            <p class="view-sub">Chord style sets how the dictation and AI chords behave. Live tap (F7) is always press once to start, press again to stop. While Odicto is running, F7 is captured so it does not fire in other apps.</p>
+          </div>
+          <div class="group">
+            <div class="card">
+              <div class="gearbox __HOTKEY_GEAR_CLASS__" id="gearbox">
+                <input type="hidden" name="HOTKEY_TOGGLE" id="HOTKEY_TOGGLE" value="__HOTKEY_TOGGLE_TRUE__">
+                <div class="field-label">Chord style</div>
+                <div class="segmented" role="group" aria-label="Chord style">
+                  <span class="seg-knob" aria-hidden="true"></span>
+                  <button type="button" class="gear__HOTKEY_LONG_SELECTED__" data-toggle="true" aria-pressed="__HOTKEY_LONG_ARIA__">
+                    <span class="gear-name">Long ride</span>
+                    <span class="gear-hint">tap, speak, tap again</span>
+                  </button>
+                  <button type="button" class="gear__HOTKEY_SHORT_SELECTED__" data-toggle="false" aria-pressed="__HOTKEY_SHORT_ARIA__">
+                    <span class="gear-name">Short ride</span>
+                    <span class="gear-hint">hold while you talk</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="field">
+                <label class="field-label" for="HOTKEY">Dictation hotkey</label>
+                <div class="hotkey-row">
+                  <input type="text" name="HOTKEY" id="HOTKEY" value="__HOTKEY__" readonly>
+                  <button type="button" class="btn ghost small" data-record-for="HOTKEY" onclick="recordHotkey(this)">Press key</button>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="AI_HOTKEY">AI hotkey</label>
+                <div class="hotkey-row">
+                  <input type="text" name="AI_HOTKEY" id="AI_HOTKEY" value="__AI_HOTKEY__" readonly>
+                  <button type="button" class="btn ghost small" data-record-for="AI_HOTKEY" onclick="recordHotkey(this)">Press key</button>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="LIVE_HOTKEY">Live tap-to-talk hotkey</label>
+                <div class="hotkey-row">
+                  <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="__LIVE_HOTKEY__" readonly>
+                  <button type="button" class="btn ghost small" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Press key</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ prompt -->
+        <section class="view" id="view-prompt" aria-label="AI system prompt">
+          <div class="view-head group">
+            <h1 class="view-title">AI system prompt</h1>
+            <p class="view-sub">AI-mode assistant, not the transcriber. Edit here or in <code>prompt.txt</code>. Save writes that private file (not in git) and restarts Odicto. Restore default, then Save, to use the shipped <code>prompt.txt.example</code>.</p>
+          </div>
+          <div class="group">
+            <section class="prompt-panel" aria-label="Prompt editor">
+              <div class="prompt-head">
+                <span class="prompt-title">System prompt</span>
+                <span class="prompt-chip">persona</span>
+              </div>
+              <p class="prompt-lede">Using __PROMPT_SOURCE__.</p>
+              <div id="prompt_slot">
+                <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
+              </div>
+              <div class="prompt-toolbar">
+                <button type="button" class="btn ghost small" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
+                <button type="button" class="link" onclick="restoreDefaultPrompt()">Restore default</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ============================================================== dock -->
+        <div class="dock">
+          <div class="dock-left">
+            <button type="submit" class="btn primary">Save settings</button>
+            <button type="button" id="test_button" class="btn ghost" onclick="testConnection()">Test connection</button>
+            <span id="test_tag" class="result-tag" role="status" aria-live="polite"></span>
+          </div>
+          <div class="dock-right">
+            <span id="dirty_chip" class="chip dirty" hidden>Unsaved changes</span>
+            <div id="status" class="status" role="status"></div>
+          </div>
+        </div>
+
+        <div id="prompt_overlay" class="prompt-overlay" hidden>
+          <div class="prompt-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="prompt_overlay_title">
+            <div class="prompt-overlay-head">
+              <span id="prompt_overlay_title">AI system prompt</span>
+              <button type="button" class="btn quiet small" id="prompt_overlay_close" onclick="togglePromptExpand()">Close</button>
+            </div>
+            <div id="prompt_overlay_body"></div>
+          </div>
+        </div>
+
+      </form>
     </div>
-  </div>
-</main>
+  </main>
+</div>
+
+<div class="toast-region" id="toast_region" role="status" aria-live="polite">__SERVER_STATUS__</div>
 
 <script>
 var DEFAULT_SYSTEM_PROMPT = __DEFAULT_SYSTEM_PROMPT_JSON__;
-// Per-provider built-in default for the shared Model field. The input only
-// ever shows what is explicitly configured; an unset model renders empty and
-// the provider's default appears as the placeholder + hint text below it.
 var MODEL_DEFAULTS = __MODEL_DEFAULTS_JSON__;
 var MODEL_CATALOGS = __MODEL_CATALOGS_JSON__;
 var OPENROUTER_REASONING = {};
 var OPENROUTER_NAMES = {};
 var OPENROUTER_ALL_EFFORTS = ['none','minimal','low','medium','high','xhigh','max'];
+var PROVIDER_LABELS = {
+  meta: 'Meta API',
+  openrouter: 'OpenRouter',
+  gemini: 'Google Gemini',
+  ollama: 'Ollama',
+  none: 'None'
+};
+var PROVIDER_KEY_IDS = {
+  meta: 'META_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  gemini: 'GEMINI_API_KEY'
+};
+
+function el(id) { return document.getElementById(id); }
+
+// ---------------------------------------------------------------- motion
+function applyMotion(level) {
+  if (level !== 'off' && level !== 'reduced' && level !== 'full') level = 'full';
+  document.documentElement.setAttribute('data-motion', level);
+  var buttons = document.querySelectorAll('[data-motion-level]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].setAttribute('aria-pressed', buttons[i].getAttribute('data-motion-level') === level ? 'true' : 'false');
+  }
+  try { localStorage.setItem('odicto-setup-motion', level); } catch (e) {}
+}
+function initMotion() {
+  var saved = null;
+  try { saved = localStorage.getItem('odicto-setup-motion'); } catch (e) {}
+  applyMotion(saved || 'full');
+  var buttons = document.querySelectorAll('[data-motion-level]');
+  for (var i = 0; i < buttons.length; i++) {
+    (function (btn) {
+      btn.addEventListener('click', function () { applyMotion(btn.getAttribute('data-motion-level')); });
+    })(buttons[i]);
+  }
+}
+
+// ------------------------------------------------------------------ views
+var CURRENT_VIEW = 'overview';
+function showView(name) {
+  if (!el('view-' + name)) name = 'overview';
+  CURRENT_VIEW = name;
+  var views = document.querySelectorAll('.view');
+  for (var i = 0; i < views.length; i++) {
+    views[i].classList.toggle('active', views[i].id === 'view-' + name);
+  }
+  var items = document.querySelectorAll('.nav-item');
+  for (var j = 0; j < items.length; j++) {
+    var isCurrent = items[j].getAttribute('data-view') === name;
+    if (isCurrent) items[j].setAttribute('aria-current', 'true');
+    else items[j].removeAttribute('aria-current');
+  }
+  moveNavPill();
+  if (name === 'prompt') setTimeout(syncPromptPanelHeight, 0);
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+function moveNavPill() {
+  var pill = document.querySelector('.nav-pill');
+  var active = document.querySelector('.nav-item[aria-current="true"]');
+  if (!pill || !active) return;
+  pill.style.height = active.offsetHeight + 'px';
+  pill.style.transform = 'translateY(' + active.offsetTop + 'px)';
+}
+function initNav() {
+  var items = document.querySelectorAll('.nav-item');
+  for (var i = 0; i < items.length; i++) {
+    (function (btn) {
+      btn.addEventListener('click', function () { showView(btn.getAttribute('data-view')); });
+    })(items[i]);
+  }
+  var meters = document.querySelectorAll('.meter[data-goto]');
+  for (var j = 0; j < meters.length; j++) {
+    (function (m) {
+      m.addEventListener('click', function () { showView(m.getAttribute('data-goto')); });
+    })(meters[j]);
+  }
+}
+
+// -------------------------------------------------------- custom selects
+var CUSTOM_SELECTS = [];
+var OPENROUTER_CREATED = {};
+function selectSearchable(entry) {
+  return /_model_select$/.test(entry.sel.id) || entry.sel.options.length > 7;
+}
+function optionMatches(opt, query) {
+  if (!query) return true;
+  return (opt.textContent || '').toLowerCase().indexOf(query) >= 0
+    || (opt.value || '').toLowerCase().indexOf(query) >= 0;
+}
+function chooseOption(entry, opt) {
+  entry.sel.value = opt.value;
+  var evt = document.createEvent('HTMLEvents');
+  evt.initEvent('change', true, false);
+  entry.sel.dispatchEvent(evt);
+  refreshCustomSelect(entry.sel);
+  closeCustomSelect(entry, true);
+}
+function refreshCustomSelect(sel) {
+  var entry = null;
+  for (var i = 0; i < CUSTOM_SELECTS.length; i++) {
+    if (CUSTOM_SELECTS[i].sel === sel) entry = CUSTOM_SELECTS[i];
+  }
+  if (!entry) return;
+  var label = '';
+  var isPlaceholder = false;
+  if (sel.selectedIndex >= 0) {
+    label = sel.options[sel.selectedIndex].textContent;
+    isPlaceholder = sel.options[sel.selectedIndex].value === '';
+  }
+  entry.valueEl.textContent = label || 'Choose...';
+  entry.valueEl.className = 'cselect-value' + (isPlaceholder ? ' placeholder' : '');
+  if (entry.wrap.classList.contains('open')) renderCustomOptions(entry, true);
+}
+function renderCustomOptions(entry, keepActive) {
+  var list = entry.list;
+  list.innerHTML = '';
+  entry.visible = [];
+  var raw = entry.filterInput ? entry.filterInput.value : '';
+  var query = raw.trim().toLowerCase();
+  for (var i = 0; i < entry.sel.options.length; i++) {
+    var opt = entry.sel.options[i];
+    if (!optionMatches(opt, query)) continue;
+    entry.visible.push(opt);
+    (function (opt) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'cselect-option';
+      item.setAttribute('role', 'option');
+      var selected = opt.value === entry.sel.value;
+      item.setAttribute('aria-selected', selected ? 'true' : 'false');
+      if (selected) item.className += ' selected';
+      if (keepActive && opt.value === entry.activeValue) item.className += ' active';
+      var label = document.createElement('span');
+      label.textContent = opt.textContent;
+      item.appendChild(label);
+      var check = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      check.setAttribute('class', 'check');
+      check.setAttribute('viewBox', '0 0 24 24');
+      check.setAttribute('fill', 'none');
+      check.setAttribute('stroke', 'currentColor');
+      check.setAttribute('stroke-width', '2.4');
+      check.setAttribute('stroke-linecap', 'round');
+      check.setAttribute('stroke-linejoin', 'round');
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M5 13l4 4L19 7');
+      check.appendChild(path);
+      item.appendChild(check);
+      item.addEventListener('click', function () { chooseOption(entry, opt); });
+      list.appendChild(item);
+    })(opt);
+  }
+  if (!entry.visible.length) {
+    var empty = document.createElement('div');
+    empty.className = 'cselect-empty';
+    empty.textContent = query ? ('No matches for "' + raw.trim() + '".') : 'No options.';
+    list.appendChild(empty);
+  }
+}
+function menuSpaceBelow(entry) {
+  var rect = entry.trigger.getBoundingClientRect();
+  var space = window.innerHeight - rect.bottom - 12;
+  var dock = document.querySelector('.dock');
+  if (dock) {
+    var dRect = dock.getBoundingClientRect();
+    space = Math.min(space, dRect.top - rect.bottom - 8);
+  }
+  return space;
+}
+function placeCustomMenu(entry) {
+  var menu = entry.menu;
+  menu.classList.remove('drop-up');
+  menu.style.maxHeight = '';
+  var want = 320;
+  var spaceBelow = menuSpaceBelow(entry);
+  if (spaceBelow < want) {
+    var doc = document.documentElement;
+    var canScroll = doc.scrollHeight - window.innerHeight - window.scrollY;
+    var need = Math.min(Math.max(0, want - spaceBelow), Math.max(0, canScroll));
+    if (need > 0) {
+      window.scrollBy(0, need);
+      spaceBelow = menuSpaceBelow(entry);
+    }
+  }
+  var rect = entry.trigger.getBoundingClientRect();
+  var spaceAbove = rect.top - 12;
+  if (spaceBelow >= 140) {
+    menu.style.maxHeight = Math.min(want, spaceBelow) + 'px';
+  } else if (spaceAbove >= 260) {
+    menu.classList.add('drop-up');
+    menu.style.maxHeight = Math.min(want, spaceAbove) + 'px';
+  } else {
+    menu.style.maxHeight = Math.max(120, Math.min(want, spaceBelow)) + 'px';
+  }
+}
+function openCustomSelect(entry) {
+  for (var i = 0; i < CUSTOM_SELECTS.length; i++) {
+    if (CUSTOM_SELECTS[i] !== entry) closeCustomSelect(CUSTOM_SELECTS[i], true);
+  }
+  entry.activeValue = entry.sel.value;
+  entry.wrap.classList.remove('closing');
+  entry.wrap.classList.add('open');
+  entry.trigger.setAttribute('aria-expanded', 'true');
+  entry.menu.hidden = false;
+  entry.menu.innerHTML = '';
+  entry.filterInput = null;
+  if (selectSearchable(entry)) {
+    var search = document.createElement('div');
+    search.className = 'cselect-search';
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Type to search...';
+    input.setAttribute('aria-label', 'Search options');
+    search.appendChild(input);
+    entry.menu.appendChild(search);
+    entry.filterInput = input;
+    input.addEventListener('input', function () {
+      entry.activeValue = '';
+      renderCustomOptions(entry, true);
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveCustomActive(entry, e.key === 'ArrowDown' ? 1 : -1);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        var target = null;
+        for (var i = 0; i < entry.visible.length; i++) {
+          if (entry.visible[i].value === entry.activeValue) target = entry.visible[i];
+        }
+        if (!target && entry.visible.length) target = entry.visible[0];
+        if (target) chooseOption(entry, target);
+      } else if (e.key === 'Escape') {
+        closeCustomSelect(entry, true);
+        entry.trigger.focus();
+      }
+    });
+  }
+  var list = document.createElement('div');
+  list.className = 'cselect-list';
+  entry.menu.appendChild(list);
+  entry.list = list;
+  renderCustomOptions(entry, true);
+  placeCustomMenu(entry);
+  if (entry.filterInput) entry.filterInput.focus({ preventScroll: true });
+}
+function closeCustomSelect(entry, immediate) {
+  if (!entry.wrap.classList.contains('open')) return;
+  entry.trigger.setAttribute('aria-expanded', 'false');
+  entry.menu.hidden = true;
+  entry.wrap.classList.remove('open');
+  entry.wrap.classList.remove('closing');
+  if (!immediate) entry.wrap.classList.add('closing');
+}
+function moveCustomActive(entry, step) {
+  var visible = entry.visible || [];
+  if (!visible.length) return;
+  var idx = -1;
+  for (var i = 0; i < visible.length; i++) {
+    if (visible[i].value === entry.activeValue) idx = i;
+  }
+  if (idx < 0) idx = step > 0 ? -1 : 0;
+  idx = Math.max(0, Math.min(visible.length - 1, idx + step));
+  entry.activeValue = visible[idx].value;
+  renderCustomOptions(entry, true);
+}
+function initCustomSelect() {
+  var wraps = document.querySelectorAll('.cselect');
+  for (var i = 0; i < wraps.length; i++) {
+    (function (wrap) {
+      var sel = wrap.querySelector('select');
+      if (!sel) return;
+      if (sel.id !== 'STT_PROVIDER' && sel.id !== 'LIVE_STT_PROVIDER') {
+        sel.setAttribute('aria-label', sel.id.replace(/_/g, ' '));
+      }
+      var trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'cselect-trigger';
+      trigger.setAttribute('aria-haspopup', 'listbox');
+      trigger.setAttribute('aria-expanded', 'false');
+      var valueEl = document.createElement('span');
+      valueEl.className = 'cselect-value';
+      trigger.appendChild(valueEl);
+      var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      chevron.setAttribute('class', 'chevron');
+      chevron.setAttribute('viewBox', '0 0 24 24');
+      chevron.setAttribute('fill', 'none');
+      chevron.setAttribute('stroke', 'currentColor');
+      chevron.setAttribute('stroke-width', '2');
+      chevron.setAttribute('stroke-linecap', 'round');
+      chevron.setAttribute('stroke-linejoin', 'round');
+      var chevPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      chevPath.setAttribute('d', 'M6 9l6 6 6-6');
+      chevron.appendChild(chevPath);
+      trigger.appendChild(chevron);
+      var menu = document.createElement('div');
+      menu.className = 'cselect-menu';
+      menu.setAttribute('role', 'listbox');
+      menu.hidden = true;
+      menu.addEventListener('click', function (e) { e.stopPropagation(); });
+      wrap.appendChild(trigger);
+      wrap.appendChild(menu);
+      var entry = { wrap: wrap, sel: sel, trigger: trigger, valueEl: valueEl, menu: menu, activeValue: '', filterInput: null, list: null, visible: [] };
+      CUSTOM_SELECTS.push(entry);
+      trigger.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (wrap.classList.contains('open')) closeCustomSelect(entry, false);
+        else openCustomSelect(entry);
+      });
+      trigger.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!wrap.classList.contains('open')) openCustomSelect(entry);
+          moveCustomActive(entry, e.key === 'ArrowDown' ? 1 : -1);
+        } else if (e.key === 'Enter' && wrap.classList.contains('open')) {
+          e.preventDefault();
+          var visible = entry.visible || [];
+          var target = null;
+          for (var i = 0; i < visible.length; i++) {
+            if (visible[i].value === entry.activeValue) target = visible[i];
+          }
+          if (!target && visible.length) target = visible[0];
+          if (target) chooseOption(entry, target);
+        } else if (e.key === 'Escape') {
+          closeCustomSelect(entry, true);
+        }
+      });
+      refreshCustomSelect(sel);
+    })(wraps[i]);
+  }
+  document.addEventListener('click', function () {
+    for (var i = 0; i < CUSTOM_SELECTS.length; i++) closeCustomSelect(CUSTOM_SELECTS[i], false);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      for (var i = 0; i < CUSTOM_SELECTS.length; i++) closeCustomSelect(CUSTOM_SELECTS[i], true);
+    }
+  });
+}
+function refreshAllCustomSelects() {
+  for (var i = 0; i < CUSTOM_SELECTS.length; i++) refreshCustomSelect(CUSTOM_SELECTS[i].sel);
+}
+function modelOptionOrder(p, ids) {
+  if (p === 'openrouter') {
+    return ids.slice().sort(function (a, b) {
+      var ca = OPENROUTER_CREATED[a] || 0;
+      var cb = OPENROUTER_CREATED[b] || 0;
+      if (ca !== cb) return cb - ca;
+      return String(a).localeCompare(String(b));
+    });
+  }
+  return ids.slice().reverse();
+}
+
+// -------------------------------------------------------------- provider
+function providerKeySaved(provider) {
+  var id = PROVIDER_KEY_IDS[provider];
+  if (!id) return false;
+  var input = el(id);
+  return !!(input && input.value);
+}
+function updateProviderCards() {
+  var hidden = el('LLM_PROVIDER');
+  var current = hidden ? (hidden.value || 'none') : 'none';
+  var cards = document.querySelectorAll('.provider-card');
+  for (var i = 0; i < cards.length; i++) {
+    var value = cards[i].getAttribute('data-value');
+    cards[i].setAttribute('aria-checked', value === current ? 'true' : 'false');
+    cards[i].tabIndex = value === current ? 0 : -1;
+    var dot = el('pc_dot_' + value);
+    var keyLabel = el('pc_key_' + value);
+    if (dot && keyLabel) {
+      var saved = providerKeySaved(value);
+      dot.className = 'dot' + (saved ? ' ok' : ' warn');
+      keyLabel.textContent = saved ? 'key saved' : 'no key';
+    }
+  }
+}
+function selectProvider(value) {
+  var hidden = el('LLM_PROVIDER');
+  if (hidden) hidden.value = value;
+  showProvider(value);
+}
+function initProviderCards() {
+  var cards = document.querySelectorAll('.provider-card');
+  for (var i = 0; i < cards.length; i++) {
+    (function (card) {
+      card.addEventListener('click', function () { selectProvider(card.getAttribute('data-value')); });
+      card.addEventListener('keydown', function (e) {
+        var keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'];
+        if (keys.indexOf(e.key) < 0) return;
+        e.preventDefault();
+        var forward = e.key === 'ArrowRight' || e.key === 'ArrowDown';
+        var all = document.querySelectorAll('.provider-card');
+        var idx = 0;
+        for (var j = 0; j < all.length; j++) {
+          if (all[j] === card) idx = j;
+        }
+        var next = (idx + (forward ? 1 : -1) + all.length) % all.length;
+        selectProvider(all[next].getAttribute('data-value'));
+        all[next].focus();
+      });
+    })(cards[i]);
+  }
+}
+
+function showProvider(v) {
+  ['meta','openrouter','gemini','ollama'].forEach(function(id) {
+    var node = el('field-' + id);
+    if (node) node.classList.toggle('active', id === v);
+    if (node) node.style.display = (id === v) ? '' : 'none';
+  });
+  var noneNote = el('none-note');
+  if (noneNote) noneNote.classList.toggle('show', v === 'none');
+  var secAi = el('sec-ai');
+  if (secAi) secAi.style.display = (v === 'none') ? 'none' : '';
+  var tb = el('test_button');
+  if (tb) tb.disabled = (v === 'none');
+  updateProviderCards();
+  updateMeters();
+}
+
+// ----------------------------------------------------------- model selects
 function restoreDefaultPrompt() {
-  var el = document.getElementById('SYSTEM_PROMPT');
-  el.value = DEFAULT_SYSTEM_PROMPT;
+  var node = el('SYSTEM_PROMPT');
+  node.value = DEFAULT_SYSTEM_PROMPT;
 }
 function initModelSelects() {
   var defaultLabels = {
@@ -929,39 +1952,43 @@ function initModelSelects() {
     ollama: 'Backend default (' + (MODEL_DEFAULTS.ollama || '') + ')'
   };
   ['meta','openrouter','gemini','ollama'].forEach(function(p) {
-    var sel = document.getElementById(p + '_model_select');
+    var sel = el(p + '_model_select');
     if (!sel) return;
     sel.innerHTML = '';
     var o0 = document.createElement('option'); o0.value = ''; o0.textContent = defaultLabels[p] || 'Backend default'; sel.appendChild(o0);
-    (MODEL_CATALOGS[p] || []).forEach(function(m) {
+    modelOptionOrder(p, MODEL_CATALOGS[p] || []).forEach(function(m) {
       var o = document.createElement('option'); o.value = m;
       o.textContent = (p === 'openrouter' && OPENROUTER_NAMES[m]) ? OPENROUTER_NAMES[m] : m;
       if (p === 'openrouter') o.title = m;
       sel.appendChild(o);
     });
-    var oc = document.createElement('option'); oc.value = '__custom__'; oc.textContent = 'Custom\u2026'; sel.appendChild(oc);
-    var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+    var oc = document.createElement('option'); oc.value = '__custom__'; oc.textContent = 'Custom...'; sel.appendChild(oc);
+    var hid = el(p.toUpperCase() + '_MODEL');
     var cv = hid ? hid.value : '';
     var has = [].slice.call(sel.options).some(function(o){ return o.value === cv; });
     if (cv && has) sel.value = cv;
-    else if (cv) { sel.value = '__custom__'; var ci = document.getElementById(p + '_model_custom'); if (ci) { ci.value = cv; ci.style.display = ''; } }
+    else if (cv) { sel.value = '__custom__'; var ci = el(p + '_model_custom'); if (ci) { ci.value = cv; ci.style.display = ''; } }
   });
   ['meta','openrouter','gemini','ollama'].forEach(function(p){ _renderChips(p); });
+  refreshAllCustomSelects();
 }
 function syncModelSelect(p) {
-  var sel = document.getElementById(p + '_model_select');
-  var cust = document.getElementById(p + '_model_custom');
-  var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+  var sel = el(p + '_model_select');
+  var cust = el(p + '_model_custom');
+  var hid = el(p.toUpperCase() + '_MODEL');
   var val = sel ? sel.value : '';
   if (val === '__custom__') { if (cust) { cust.style.display = ''; cust.focus(); } if (hid && cust) hid.value = cust.value; }
   else { if (cust) cust.style.display = 'none'; if (hid) hid.value = val; }
   if (p === 'openrouter') filterOpenrouterEffort();
+  refreshAllCustomSelects();
+  updateMeters();
 }
 function syncCustomModel(p) {
-  var cust = document.getElementById(p + '_model_custom');
-  var hid = document.getElementById(p.toUpperCase() + '_MODEL');
+  var cust = el(p + '_model_custom');
+  var hid = el(p.toUpperCase() + '_MODEL');
   if (cust && hid) hid.value = cust.value;
   if (p === 'openrouter') filterOpenrouterEffort();
+  updateMeters();
 }
 function initEffortSelects() {
   var map = {
@@ -971,13 +1998,16 @@ function initEffortSelects() {
     openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
   };
   Object.keys(map).forEach(function(p) {
-    var sel = document.getElementById(map[p][0]), hid = document.getElementById(map[p][1]);
+    var sel = el(map[p][0]), hid = el(map[p][1]);
     if (sel && hid && hid.value) {
       var ok = [].slice.call(sel.options).some(function(o){ return o.value === hid.value; });
       if (ok) sel.value = hid.value;
     }
   });
+  refreshAllCustomSelects();
 }
+
+// --------------------------------------------------- openrouter reasoning
 function openrouterReasoningFor(id) {
   if (!id) return null;
   if (OPENROUTER_REASONING[id]) return OPENROUTER_REASONING[id];
@@ -1001,12 +2031,12 @@ function lightestOpenrouterEffort(spec) {
   return 'low';
 }
 function filterOpenrouterEffort() {
-  var hidModel = document.getElementById('OPENROUTER_MODEL');
+  var hidModel = el('OPENROUTER_MODEL');
   var model = hidModel ? hidModel.value : '';
   var spec = openrouterReasoningFor(model);
-  var sel = document.getElementById('openrouter_reasoning_select');
-  var hidden = document.getElementById('OPENROUTER_REASONING_EFFORT');
-  var note = document.getElementById('openrouter_effort_note');
+  var sel = el('openrouter_reasoning_select');
+  var hidden = el('OPENROUTER_REASONING_EFFORT');
+  var note = el('openrouter_effort_note');
   if (!sel) return;
   var current = hidden ? hidden.value : '';
   var allowed;
@@ -1042,10 +2072,11 @@ function filterOpenrouterEffort() {
   }
   if (note) {
     if (!model) note.textContent = 'Default is no thinking. Allowed levels load from OpenRouter for the selected model.';
-    else if (!spec) note.textContent = 'Catalog has no reasoning info for this slug yet — Odicto still skips illegal none/minimal on Test.';
+    else if (!spec) note.textContent = 'Catalog has no reasoning info for this slug yet - Odicto still skips illegal none/minimal on Test.';
     else if (spec.mandatory) note.textContent = 'This model requires thinking. Allowed: ' + allowed.join(', ') + '.';
     else note.textContent = 'Allowed: ' + allowed.join(', ') + '.';
   }
+  refreshAllCustomSelects();
 }
 function loadOpenrouterCatalog() {
   fetch('/openrouter-models').then(function(resp) {
@@ -1058,8 +2089,9 @@ function loadOpenrouterCatalog() {
     (data.models || []).forEach(function(m) {
       if (!m || !m.id) return;
       OPENROUTER_NAMES[m.id] = m.name || m.id;
+      OPENROUTER_CREATED[m.id] = m.created || 0;
     });
-    var extra = (data.models || []).slice(0, 40).map(function(m){ return m.id; }).filter(Boolean);
+    var extra = (data.models || []).map(function(m){ return m.id; }).filter(Boolean);
     extra.forEach(function(id) {
       if (MODEL_CATALOGS.openrouter.indexOf(id) < 0) MODEL_CATALOGS.openrouter.push(id);
     });
@@ -1078,29 +2110,45 @@ function syncEffort(p) {
     openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
   };
   var pair = map[p]; if (!pair) return;
-  var sel = document.getElementById(pair[0]), hid = document.getElementById(pair[1]);
+  var sel = el(pair[0]), hid = el(pair[1]);
   if (sel && hid) hid.value = sel.value;
+  refreshAllCustomSelects();
+  updateMeters();
 }
+
+// --------------------------------------------------------- speech toggles
 function syncTranscribeMode() {
-  var tog = document.getElementById('stt_mode_toggle');
-  var hid = document.getElementById('GEMINI_TRANSCRIBE_MODE');
+  var tog = el('stt_mode_toggle');
+  var hid = el('GEMINI_TRANSCRIBE_MODE');
   var on = tog && tog.checked;
   if (hid) hid.value = on ? 'smart' : 'verbatim';
-  var v = document.getElementById('mode_label_verbatim');
-  var s = document.getElementById('mode_label_smart');
+  var v = el('mode_label_verbatim');
+  var s = el('mode_label_smart');
   if (v) v.className = 'mode-label' + (on ? '' : ' on');
   if (s) s.className = 'mode-label' + (on ? ' on' : '');
+  updateMeters();
 }
 function initTranscribeMode() {
-  var hid = document.getElementById('GEMINI_TRANSCRIBE_MODE');
-  var tog = document.getElementById('stt_mode_toggle');
+  var hid = el('GEMINI_TRANSCRIBE_MODE');
+  var tog = el('stt_mode_toggle');
   if (tog && hid) tog.checked = (hid.value || 'smart') !== 'verbatim';
   syncTranscribeMode();
 }
+function syncSttProvider() {
+  var sel = el('STT_PROVIDER');
+  var v = sel ? sel.value : 'whisper';
+  var gem = el('stt-gemini-fields');
+  var note = el('stt-whisper-fallback-note');
+  if (gem) gem.hidden = (v === 'whisper');
+  if (note) note.hidden = (v === 'whisper');
+  updateMeters();
+}
+
+// ----------------------------------------------------------- chord style
 function setHotkeyToggle(on) {
-  var hid = document.getElementById('HOTKEY_TOGGLE');
+  var hid = el('HOTKEY_TOGGLE');
   if (hid) hid.value = on ? 'true' : 'false';
-  var box = document.getElementById('gearbox');
+  var box = el('gearbox');
   if (box) {
     box.classList.toggle('long', on);
     box.classList.toggle('short', !on);
@@ -1112,9 +2160,10 @@ function setHotkeyToggle(on) {
     gears[i].classList.toggle('selected', selected);
     gears[i].setAttribute('aria-pressed', selected ? 'true' : 'false');
   }
+  updateMeters();
 }
 function initGearbox() {
-  var hid = document.getElementById('HOTKEY_TOGGLE');
+  var hid = el('HOTKEY_TOGGLE');
   var raw = hid ? (hid.value || 'true') : 'true';
   setHotkeyToggle(raw.toLowerCase() !== 'false');
   var gears = document.querySelectorAll('#gearbox .gear');
@@ -1124,29 +2173,22 @@ function initGearbox() {
     });
   }
 }
-function syncSttProvider() {
-  var sel = document.getElementById('STT_PROVIDER');
-  var v = sel ? sel.value : 'whisper';
-  var gem = document.getElementById('stt-gemini-fields');
-  var note = document.getElementById('stt-whisper-fallback-note');
-  if (gem) gem.hidden = (v === 'whisper');
-  if (note) note.hidden = (v === 'whisper');
-}
 
+// -------------------------------------------------------- model history
 function _historyTokens(raw){ return (raw||'').split(',').map(function(s){return s.trim();}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}); }
 function _providerHistory(provider){
   var id = provider.toUpperCase() + '_MODEL_HISTORY';
-  var hid = document.getElementById(id);
+  var hid = el(id);
   return _historyTokens(hid ? hid.value : '');
 }
 function _writeHistory(provider, list){
-  var hid = document.getElementById(provider.toUpperCase() + '_MODEL_HISTORY');
+  var hid = el(provider.toUpperCase() + '_MODEL_HISTORY');
   if(hid) hid.value = list.join(', ');
 }
 function _renderChips(provider){
-  var wrap = document.getElementById(provider + '_model_chips');
+  var wrap = el(provider + '_model_chips');
   var curId = provider.toUpperCase() + '_MODEL';
-  var cur = document.getElementById(curId);
+  var cur = el(curId);
   var curVal = cur ? cur.value : '';
   var hist = _providerHistory(provider);
   if(!wrap) return;
@@ -1156,10 +2198,10 @@ function _renderChips(provider){
     chip.className = 'model-chip' + (m === curVal ? ' active' : '');
     chip.title = m;
     var label = document.createElement('span'); label.textContent = m; chip.appendChild(label);
-    var x = document.createElement('button'); x.type='button'; x.setAttribute('aria-label','Remove '+m); x.textContent='×';
-    x.addEventListener('click', function(){ removeModel(provider, m); });
+    var x = document.createElement('button'); x.type='button'; x.setAttribute('aria-label','Remove '+m); x.textContent='\u00d7';
+    x.addEventListener('click', function(e){ e.stopPropagation(); removeModel(provider, m); });
     chip.appendChild(x);
-    chip.addEventListener('click', function(e){ if(e.target===x) return; var sel=document.getElementById(provider+'_model_select'); var hid=document.getElementById(curId); if(hid) hid.value=m; if(sel) { var has=[].slice.call(sel.options).some(function(o){return o.value===m;}); if(!has){ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } sel.value=m; syncModelSelect(provider); _renderChips(provider);} });
+    chip.addEventListener('click', function(){ var sel=el(provider+'_model_select'); var hid=el(curId); if(hid) hid.value=m; if(sel) { var has=[].slice.call(sel.options).some(function(o){return o.value===m;}); if(!has){ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } sel.value=m; syncModelSelect(provider); _renderChips(provider);} });
     wrap.appendChild(chip);
   });
 }
@@ -1169,81 +2211,155 @@ function removeModel(provider, model){
   if(idx === -1) return;
   list.splice(idx,1);
   _writeHistory(provider, list);
-  var sel=document.getElementById(provider+'_model_select');
+  var sel=el(provider+'_model_select');
   if(sel){ var opt=[].slice.call(sel.options).find(function(o){return o.value===model;}); if(opt) opt.remove(); if(sel.value===model) { sel.value=''; syncModelSelect(provider); } }
-  var cur=document.getElementById(provider.toUpperCase()+'_MODEL');
-  if(cur && cur.value===model) { cur.value=''; var sel2=document.getElementById(provider+'_model_select'); if(sel2) sel2.value=''; }
+  var cur=el(provider.toUpperCase()+'_MODEL');
+  if(cur && cur.value===model) { cur.value=''; var sel2=el(provider+'_model_select'); if(sel2) sel2.value=''; }
   _renderChips(provider);
+  updateMeters();
 }
 function rememberModel(provider, model){
   if(!model) return;
   var list=_providerHistory(provider);
-  if(list.indexOf(model)===-1){ list.push(model); _writeHistory(provider, list); var sel=document.getElementById(provider+'_model_select'); if(sel && ![].slice.call(sel.options).some(function(o){return o.value===model;})){ var o=document.createElement('option'); o.value=model; o.textContent=model; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } _renderChips(provider); }
+  if(list.indexOf(model)===-1){ list.push(model); _writeHistory(provider, list); var sel=el(provider+'_model_select'); if(sel && ![].slice.call(sel.options).some(function(o){return o.value===model;})){ var o=document.createElement('option'); o.value=model; o.textContent=model; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } _renderChips(provider); }
+  refreshAllCustomSelects();
 }
-function openTestModal(title, msg){ var m=document.getElementById('test_modal'); if(!m) return; var t=document.getElementById('test_modal_title'); var p=document.getElementById('test_modal_msg'); if(t) t.textContent=title||'Testing connection…'; if(p) p.textContent=msg||'Contacting the selected backend.'; m.hidden=false; m.removeAttribute('hidden'); m.classList.remove('hidden'); m.style.display='flex'; }
-function closeTestModal(){ var m=document.getElementById('test_modal'); if(!m) return; m.hidden=true; m.setAttribute('hidden',''); m.style.display='none'; }
 
-function showProvider(v) {
-  ['meta','openrouter','gemini','ollama'].forEach(function(id) {
-    var el = document.getElementById('field-' + id);
-    if (el) el.classList.toggle('active', id === v);
+// ----------------------------------------------------------- overview UI
+function setMeter(meter, value, sub, tone) {
+  var valueEl = el('meter_' + meter + '_value');
+  var subEl = el('meter_' + meter + '_sub');
+  var dotEl = el('meter_' + meter + '_dot');
+  var navDot = el('nav_dot_' + meter);
+  if (valueEl && valueEl.textContent !== value) {
+    valueEl.textContent = value;
+    valueEl.classList.remove('swapping');
+    void valueEl.offsetWidth;
+    valueEl.classList.add('swapping');
+  }
+  if (subEl && subEl.textContent !== sub) {
+    subEl.textContent = sub;
+    subEl.classList.remove('swapping');
+    void subEl.offsetWidth;
+    subEl.classList.add('swapping');
+  }
+  if (dotEl) dotEl.className = 'dot' + (tone ? ' ' + tone : '');
+  if (navDot) navDot.className = 'nav-dot' + (tone ? ' ' + tone : '');
+}
+function updateMeters() {
+  var hidden = el('LLM_PROVIDER');
+  var provider = hidden ? (hidden.value || 'none') : 'none';
+  var modelId = '';
+  if (provider !== 'none') {
+    var mid = el(provider.toUpperCase() + '_MODEL');
+    modelId = mid ? mid.value : '';
+    if (!modelId) modelId = MODEL_DEFAULTS[provider] || '';
+  }
+  if (provider === 'none') {
+    setMeter('ai', 'None', 'raw dictation', '');
+  } else if (providerKeySaved(provider) || provider === 'ollama') {
+    setMeter('ai', PROVIDER_LABELS[provider] || provider, modelId, 'ok');
+  } else {
+    setMeter('ai', PROVIDER_LABELS[provider] || provider, 'key needed', 'warn');
+  }
+
+  var sttSel = el('STT_PROVIDER');
+  var stt = sttSel ? sttSel.value : 'whisper';
+  var mode = (el('GEMINI_TRANSCRIBE_MODE') || {}).value || 'smart';
+  var sttSub = stt === 'whisper' ? ('whisper ' + ((el('WHISPER_MODEL_SIZE') || {}).value || '')) : (stt + ' - ' + mode);
+  var sttTone = (stt === 'gemini' && !providerKeySaved('gemini')) ? 'warn' : 'ok';
+  setMeter('speech', stt === 'whisper' ? 'Whisper (local)' : (stt === 'gemini' ? 'Gemini Transcribe' : 'Auto'), sttSub, sttTone);
+
+  var chord = (el('HOTKEY') || {}).value || '';
+  var toggle = (el('HOTKEY_TOGGLE') || {}).value || 'true';
+  setMeter('controls', chord, toggle.toLowerCase() === 'false' ? 'Short ride' : 'Long ride', 'ok');
+
+  var srcEl = el('prompt_source_label');
+  var src = srcEl ? srcEl.textContent : '';
+  setMeter('prompt', src === 'prompt.txt' ? 'Custom' : 'Shipped default', src || 'prompt.txt.example', src === 'prompt.txt' ? 'ok' : 'info');
+  updateProviderCards();
+}
+function renderKeycaps(targetId, chord) {
+  var wrap = el(targetId);
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  var parts = (chord || '').split('+').map(function(s){ return s.trim(); }).filter(Boolean);
+  parts.forEach(function(part) {
+    var kbd = document.createElement('kbd');
+    kbd.textContent = part;
+    wrap.appendChild(kbd);
   });
-  var noneNote = document.getElementById('none-note');
-  if (noneNote) noneNote.classList.toggle('show', v === 'none');
-  var secAi = document.getElementById('sec-ai');
-  if (secAi) secAi.style.display = (v === 'none') ? 'none' : '';
-  var secPrompt = document.getElementById('sec-prompt');
-  if (secPrompt) secPrompt.style.display = (v === 'none') ? 'none' : '';
-  var tb = document.getElementById('test_button');
-  if (tb) tb.disabled = (v === 'none');
-  setTimeout(syncPromptPanelHeight, 0);
+}
+function updateKeycaps() {
+  renderKeycaps('keycaps_hotkey', (el('HOTKEY') || {}).value || '');
+  renderKeycaps('keycaps_ai', (el('AI_HOTKEY') || {}).value || '');
+  renderKeycaps('keycaps_live', (el('LIVE_HOTKEY') || {}).value || '');
 }
 
-var PROVIDER_LABELS = {
-  meta: 'Meta API',
-  openrouter: 'OpenRouter',
-  gemini: 'Google Gemini',
-  ollama: 'Ollama',
-  none: 'None'
-};
+// ------------------------------------------------------------- dirty flag
+function markDirty() {
+  var chip = el('dirty_chip');
+  if (chip) chip.hidden = false;
+}
+function initDirtyTracking() {
+  var form = el('setupForm');
+  if (!form) return;
+  form.addEventListener('input', markDirty);
+  form.addEventListener('change', markDirty);
+}
 
+// ---------------------------------------------------------------- key reveal
+function initKeyReveal() {
+  var buttons = document.querySelectorAll('[data-reveal]');
+  for (var i = 0; i < buttons.length; i++) {
+    (function (btn) {
+      btn.addEventListener('click', function () {
+        var input = el(btn.getAttribute('data-reveal'));
+        if (!input) return;
+        var showing = input.type === 'text';
+        input.type = showing ? 'password' : 'text';
+        btn.textContent = showing ? 'Show' : 'Hide';
+      });
+    })(buttons[i]);
+  }
+}
+
+// -------------------------------------------------------------- ollama pull
 var _pullTimer = null;
-
 function pollPullStatus() {
   fetch('/pull-status').then(function(r) { return r.json(); }).then(function(s) {
-    var el = document.getElementById('pull_status');
+    var node = el('pull_status');
     if (s.running || s.done) {
-      el.hidden = false;
-      el.textContent = s.log || 'Preparing...';
+      node.hidden = false;
+      node.textContent = s.log || 'Preparing...';
     }
     if (s.running) {
       _pullTimer = setTimeout(pollPullStatus, 800);
     } else if (s.done) {
       clearTimeout(_pullTimer);
-      var btn = document.getElementById('pull_button');
+      var btn = el('pull_button');
       btn.disabled = false;
       btn.textContent = s.exit_code === 0 ? 'Download complete' : 'Download failed - retry';
-      el.textContent = (s.log ? s.log + '\n' : '') + (s.exit_code === 0 ? 'Done. The model is ready for local AI.' : 'The download failed. Check that Ollama is running and retry.');
+      node.textContent = (s.log ? s.log + '\n' : '') + (s.exit_code === 0 ? 'Done. The model is ready for local AI.' : 'The download failed. Check that Ollama is running and retry.');
     }
-  }).catch(function() { /* server may be busy; keep polling */ _pullTimer = setTimeout(pollPullStatus, 1500); });
+  }).catch(function() { _pullTimer = setTimeout(pollPullStatus, 1500); });
 }
-
 async function startPull() {
-  var btn = document.getElementById('pull_button');
-  var el = document.getElementById('pull_status');
+  var btn = el('pull_button');
+  var node = el('pull_status');
   btn.disabled = true;
-  el.hidden = false;
-  el.textContent = 'Starting download...';
+  node.hidden = false;
+  node.textContent = 'Starting download...';
   try {
     var resp = await fetch('/pull-ollama', {
       method: 'POST',
-      body: new URLSearchParams({ OLLAMA_MODEL: (document.getElementById('OLLAMA_MODEL') ? document.getElementById('OLLAMA_MODEL').value : '') || 'qwen2.5:1.5b-instruct' }),
+      body: new URLSearchParams({ OLLAMA_MODEL: (el('OLLAMA_MODEL') ? el('OLLAMA_MODEL').value : '') || 'qwen2.5:1.5b-instruct' }),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
     });
     var data = await resp.json();
     if (!data.ok) {
       btn.disabled = false;
-      el.textContent = data.message;
+      node.textContent = data.message;
       return;
     }
     btn.textContent = 'Downloading...';
@@ -1251,79 +2367,16 @@ async function startPull() {
     _pullTimer = setTimeout(pollPullStatus, 600);
   } catch (e) {
     btn.disabled = false;
-    el.textContent = 'Could not reach the local server.';
+    node.textContent = 'Could not reach the local server.';
   }
 }
 
-function initCustomSelect() {
-  var trigger = document.getElementById('provider_trigger');
-  var menu = document.getElementById('provider_menu');
-  var select = document.getElementById('provider_select');
-  var hidden = document.getElementById('LLM_PROVIDER');
-  var label = document.getElementById('provider_label');
-
-  function render() {
-    var v = hidden.value || 'none';
-    label.textContent = PROVIDER_LABELS[v] || v;
-    menu.querySelectorAll('.select-option').forEach(function(opt) {
-      opt.classList.toggle('selected', opt.getAttribute('data-value') === v);
-    });
-    showProvider(v);
-  }
-
-  function close() {
-    select.classList.remove('open');
-    trigger.setAttribute('aria-expanded', 'false');
-  }
-
-  trigger.addEventListener('click', function(e) {
-    e.stopPropagation();
-    var isOpen = select.classList.contains('open');
-    close();
-    if (!isOpen) {
-      select.classList.add('open');
-      trigger.setAttribute('aria-expanded', 'true');
-    }
-  });
-
-  menu.addEventListener('click', function(e) {
-    var opt = e.target.closest('.select-option');
-    if (!opt) return;
-    hidden.value = opt.getAttribute('data-value');
-    render();
-    close();
-  });
-
-  document.addEventListener('click', function(e) {
-    if (!select.contains(e.target)) close();
-  });
-
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') close();
-  });
-
-  render();
-}
-
-initCustomSelect();
-initModelSelects();
-initEffortSelects();
-loadOpenrouterCatalog();
-initTranscribeMode();
-initGearbox();
-syncSttProvider();
-['meta','openrouter','gemini','ollama'].forEach(function(p){
-  var ci=document.getElementById(p+'_model_custom');
-  if(ci) ci.addEventListener('input', function(){ syncCustomModel(p); });
-});
-
-// --- System prompt: 5-line preview + margined overlay editor -----------------
-var promptEl = document.getElementById('SYSTEM_PROMPT');
-var expandBtn = document.getElementById('prompt_expand');
-var promptOverlay = document.getElementById('prompt_overlay');
-var promptSlot = document.getElementById('prompt_slot');
-var promptOverlayBody = document.getElementById('prompt_overlay_body');
-
+// ---------------------------------------------------------- prompt editor
+var promptEl = null;
+var expandBtn = null;
+var promptOverlay = null;
+var promptSlot = null;
+var promptOverlayBody = null;
 function promptOverlayOpen() {
   return promptOverlay && !promptOverlay.hidden;
 }
@@ -1331,6 +2384,7 @@ function togglePromptExpand() {
   if (!promptEl || !promptOverlay || !promptSlot || !promptOverlayBody) return;
   if (!promptOverlayOpen()) {
     promptOverlayBody.appendChild(promptEl);
+    promptEl.style.height = '';
     promptOverlay.hidden = false;
     document.body.style.overflow = 'hidden';
     if (expandBtn) expandBtn.textContent = 'Close editor (Esc)';
@@ -1344,45 +2398,23 @@ function togglePromptExpand() {
     setTimeout(syncPromptPanelHeight, 0);
   }
 }
-if (promptOverlay) {
-  promptOverlay.addEventListener('click', function(e) {
-    if (e.target === promptOverlay) togglePromptExpand();
-  });
-}
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && promptOverlayOpen()) {
-    togglePromptExpand();
-  }
-});
 function syncPromptPanelHeight() {
   if (promptOverlayOpen()) return;
-  var left = document.querySelector('.layout > .col');
-  var panel = document.querySelector('.prompt-panel');
-  var slot = document.getElementById('prompt_slot');
-  var ta = document.getElementById('SYSTEM_PROMPT');
-  if (!left || !panel || !slot || !ta) return;
-  if (window.matchMedia('(max-width: 900px)').matches) {
-    panel.style.minHeight = '';
-    ta.style.height = '';
-    return;
-  }
-  panel.style.minHeight = left.offsetHeight + 'px';
-  var used = 0;
-  Array.prototype.forEach.call(panel.children, function(child) {
-    if (child === slot) return;
-    var cs = window.getComputedStyle(child);
-    used += child.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
-  });
-  var pad = parseFloat(getComputedStyle(panel).paddingTop) + parseFloat(getComputedStyle(panel).paddingBottom);
-  var h = Math.max(140, panel.clientHeight - used - pad * 0 - 4);
-  ta.style.height = h + 'px';
+  var view = el('view-prompt');
+  var ta = el('SYSTEM_PROMPT');
+  if (!view || !ta || !view.classList.contains('active')) return;
+  var top = ta.getBoundingClientRect().top;
+  var reserve = 28;
+  var toolbar = document.querySelector('.prompt-toolbar');
+  if (toolbar) reserve += toolbar.offsetHeight + 14;
+  var dock = document.querySelector('.dock');
+  if (dock) reserve += dock.offsetHeight;
+  ta.style.height = Math.max(240, Math.round(window.innerHeight - top - reserve)) + 'px';
 }
-window.addEventListener('resize', syncPromptPanelHeight);
-setTimeout(syncPromptPanelHeight, 0);
 
+// ------------------------------------------------------------ hotkey capture
 var hotkeyRecorder = null;
 var MODIFIER_NAMES = { Control: 'ctrl', Shift: 'shift', Alt: 'alt', Meta: 'cmd' };
-
 function browserKeyToAppKey(key, code) {
   var k = (key || '').toLowerCase();
   if (k === 'control') return 'ctrl';
@@ -1398,10 +2430,8 @@ function browserKeyToAppKey(key, code) {
   if (k === 'arrowright') return 'right';
   if (k === 'pageup') return 'page up';
   if (k === 'pagedown') return 'page down';
-  if (k.length === 1) return k;
   return k;
 }
-
 function recordHotkey(btn) {
   if (hotkeyRecorder) {
     stopHotkeyRecording(true);
@@ -1417,7 +2447,7 @@ function recordHotkey(btn) {
   };
   btn.classList.add('recording');
   btn.textContent = 'Press now...';
-  document.getElementById(hotkeyRecorder.targetId).value = '';
+  el(hotkeyRecorder.targetId).value = '';
 
   hotkeyRecorder.keydown = function(e) {
     e.preventDefault();
@@ -1435,7 +2465,6 @@ function recordHotkey(btn) {
     }
     renderHotkey();
   };
-
   hotkeyRecorder.keyup = function(e) {
     var appKey = MODIFIER_NAMES[e.key] || browserKeyToAppKey(e.key, e.code);
     hotkeyRecorder.pressed.delete(appKey);
@@ -1443,7 +2472,6 @@ function recordHotkey(btn) {
       stopHotkeyRecording(false);
     }
   };
-
   document.addEventListener('keydown', hotkeyRecorder.keydown, true);
   document.addEventListener('keyup', hotkeyRecorder.keyup, true);
   setTimeout(function() {
@@ -1452,15 +2480,14 @@ function recordHotkey(btn) {
     }
   }, 6000);
 }
-
 function renderHotkey() {
   var rec = hotkeyRecorder;
   if (!rec) return;
   var parts = rec.modifiers.slice();
   if (rec.primary) parts.push(rec.primary);
-  document.getElementById(rec.targetId).value = parts.join('+');
+  el(rec.targetId).value = parts.join('+');
+  updateKeycaps();
 }
-
 function stopHotkeyRecording(cancel) {
   var rec = hotkeyRecorder;
   if (!rec) return;
@@ -1469,40 +2496,73 @@ function stopHotkeyRecording(cancel) {
   rec.btn.classList.remove('recording');
   rec.btn.textContent = 'Press key';
   if (cancel) {
-    document.getElementById(rec.targetId).value = '';
+    el(rec.targetId).value = '';
   }
   hotkeyRecorder = null;
+  updateKeycaps();
 }
 
+// ------------------------------------------------------------ status + test
 function setStatus(kind, html) {
-  var el = document.getElementById('status');
-  el.className = 'status show ' + kind;
-  el.innerHTML = html;
+  var node = el('status');
+  node.className = 'status show ' + kind;
+  node.innerHTML = html;
 }
 function setTestTag(kind, text) {
-  var tag = document.getElementById('test_tag');
+  var tag = el('test_tag');
   if (!tag) return;
   if (!kind) { tag.className = 'result-tag'; tag.innerHTML = ''; return; }
-  var spin = kind === 'loading' ? '<span class="spinner"></span>' : '';
+  var icon = '';
+  if (kind === 'loading') icon = '<span class="spinner"></span>';
+  if (kind === 'ok') icon = '<svg class="check-pop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
   tag.className = 'result-tag show ' + kind;
-  tag.innerHTML = spin + (text || '');
+  tag.innerHTML = icon + (text || '');
   tag.title = text || '';
+}
+function toast(kind, text) {
+  var region = el('toast_region');
+  if (!region) return;
+  var node = document.createElement('div');
+  node.className = 'status show ' + kind;
+  node.setAttribute('role', 'status');
+  node.textContent = text;
+  region.appendChild(node);
+  setTimeout(function() {
+    node.classList.add('leaving');
+    setTimeout(function() {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }, 180);
+  }, 7000);
+}
+function initServerToasts() {
+  var region = el('toast_region');
+  if (!region) return;
+  var nodes = region.querySelectorAll('.status');
+  for (var i = 0; i < nodes.length; i++) {
+    (function (node) {
+      node.classList.add('show');
+      setTimeout(function() {
+        node.classList.add('leaving');
+        setTimeout(function() {
+          if (node.parentNode) node.parentNode.removeChild(node);
+        }, 180);
+      }, 7000);
+    })(nodes[i]);
+  }
 }
 
 async function testConnection() {
-  var btn = document.getElementById('test_button');
+  var btn = el('test_button');
   btn.disabled = true;
-  closeTestModal();
-  setTestTag('loading', 'Testing…');
+  setTestTag('loading', 'Testing...');
   setStatus('neutral', '<span class="spinner"></span> Testing connection...');
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, 30000);
   try {
-    // Snapshot the hidden model value's provider so we can grow history on success.
-    var _lpEl = document.getElementById('LLM_PROVIDER'); var provider = (_lpEl && _lpEl.value) ? _lpEl.value : 'none';
+    var _lpEl = el('LLM_PROVIDER'); var provider = (_lpEl && _lpEl.value) ? _lpEl.value : 'none';
     var modelForHistory = '';
-    if(provider !== 'none'){ var hid=document.getElementById(provider.toUpperCase()+'_MODEL'); modelForHistory = hid ? hid.value : ''; }
-    var body = new URLSearchParams(new FormData(document.getElementById('setupForm')));
+    if(provider !== 'none'){ var hid=el(provider.toUpperCase()+'_MODEL'); modelForHistory = hid ? hid.value : ''; }
+    var body = new URLSearchParams(new FormData(el('setupForm')));
     var resp = await fetch('/test', {
       method: 'POST',
       body: body,
@@ -1514,51 +2574,91 @@ async function testConnection() {
     var data = await resp.json();
     if (data.ok) {
       setTestTag('ok', 'Success');
-      setStatus('ok', '&#10003; ' + data.message);
+      setStatus('ok', 'Connected successfully.');
+      toast('ok', data.message);
       if(provider!=='none' && modelForHistory) rememberModel(provider, modelForHistory);
     } else {
       setTestTag('err', 'Error');
-      setStatus('err', '&#9888; ' + data.message);
+      setStatus('err', data.message);
+      var dock = el('test_tag');
+      if (dock) { dock.classList.remove('shake'); void dock.offsetWidth; dock.classList.add('shake'); }
     }
   } catch (e) {
     var msg = (e && e.message) ? e.message : String(e);
     if (e && e.name === 'AbortError') {
       msg = 'Test timed out after 30s. Check your network and key, then try again.';
     } else if (/Failed to fetch|Could not reach/i.test(msg)) {
-      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via .\setup.bat (or odicto.py setup) and retry.';
+      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via .\\setup.bat (or odicto.py setup) and retry.';
     }
     setTestTag('err', 'Error');
-    setStatus('err', '&#9888; ' + msg);
+    setStatus('err', msg);
   } finally {
     clearTimeout(timer);
-    btn.disabled = (document.getElementById('LLM_PROVIDER').value === 'none');
+    btn.disabled = (el('LLM_PROVIDER').value === 'none');
   }
 }
-document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeTestModal(); });
-(function(){ var m=document.getElementById('test_modal'); if(!m) return; m.addEventListener('click', function(e){ if(e.target===m) closeTestModal(); }); if(!m.hasAttribute('hidden')){ m.setAttribute('hidden',''); m.style.display='none'; } })();
 
 async function resetSettings() {
   if (!confirm('Reset settings to defaults? This clears any saved API keys and model choices.')) {
     return;
   }
-  var btn = document.getElementById('reset_button');
+  var btn = el('reset_button');
   btn.disabled = true;
   setStatus('neutral', '<span class="spinner"></span> Resetting to defaults...');
   try {
     var resp = await fetch('/reset', { method: 'POST' });
     var data = await resp.json();
     if (data.ok) {
-      setStatus('ok', '&#10003; ' + data.message);
+      setStatus('ok', data.message);
       location.reload();
     } else {
-      setStatus('err', '&#9888; ' + data.message);
+      setStatus('err', data.message);
       btn.disabled = false;
     }
   } catch (e) {
-    setStatus('err', '&#9888; Could not reach the local server.');
+    setStatus('err', 'Could not reach the local server.');
     btn.disabled = false;
   }
 }
+
+// -------------------------------------------------------------------- boot
+initMotion();
+initNav();
+initProviderCards();
+initCustomSelect();
+initModelSelects();
+initEffortSelects();
+loadOpenrouterCatalog();
+initTranscribeMode();
+initGearbox();
+syncSttProvider();
+showProvider((el("LLM_PROVIDER") || {}).value || "none");
+initKeyReveal();
+initDirtyTracking();
+initServerToasts();
+updateKeycaps();
+['meta','openrouter','gemini','ollama'].forEach(function(p){
+  var ci=el(p+'_model_custom');
+  if(ci) ci.addEventListener('input', function(){ syncCustomModel(p); });
+});
+
+promptEl = el('SYSTEM_PROMPT');
+expandBtn = el('prompt_expand');
+promptOverlay = el('prompt_overlay');
+promptSlot = el('prompt_slot');
+promptOverlayBody = el('prompt_overlay_body');
+if (promptOverlay) {
+  promptOverlay.addEventListener('click', function(e) {
+    if (e.target === promptOverlay) togglePromptExpand();
+  });
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && promptOverlayOpen()) {
+    togglePromptExpand();
+  }
+});
+window.addEventListener('resize', function() { moveNavPill(); syncPromptPanelHeight(); for (var i = 0; i < CUSTOM_SELECTS.length; i++) { if (CUSTOM_SELECTS[i].wrap.classList.contains('open')) placeCustomMenu(CUSTOM_SELECTS[i]); } });
+setTimeout(function() { moveNavPill(); syncPromptPanelHeight(); updateMeters(); }, 0);
 </script>
 </body>
 </html>

@@ -3,6 +3,9 @@
 Pins the rendered setup page and a set of pure config functions so that
 "behaviour is unchanged" is *proved* rather than asserted while the code is
 de-duplicated. Goldens were captured from the pre-refactor tree.
+It was deliberately re-baselined once for the Quiet Console setup-page redesign
+(September 2026): same 14 states, same render harness, same hash mechanism - only the
+recorded page digests moved. Config/platform/token goldens were not touched.
 
 Design notes
 ------------
@@ -45,22 +48,23 @@ _SUBMODULE_NAMES = {"base", "_keyboard", "_posix", "windows", "macos", "linux"}
 # platforms/__init__.py), so they are legitimately absent from a backend's __all__.
 _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 
-# sha256 of setup_web._page() captured from the pre-refactor tree.
+# sha256 of setup_web._page() per state. Captured pre-refactor; re-baselined for the
+# Quiet Console setup-page redesign (same states, same mechanism, new rendering).
 _GOLDEN_PAGE_HASHES = {
-    "fresh_empty_env": "2ac08d35d0afa3c439bcdce31811d29b0feb7f453eb1bf0509ea9cfa8e87b15f",
-    "provider_meta": "bc81492e84d5a9512f1731c210903a6c82c3bb8251fc156942c91580fb699ae6",
-    "provider_openrouter": "7ba502c29ec009a197254c143ac0ee17770da3cd0adb72d0a981d32b611b2eec",
-    "provider_gemini": "6265256a619b1dfba7d5ba63ac2b5b0e745845f8c16ce38976ccb62d4d260e0e",
-    "provider_ollama": "b44fb4b977a8cf01ee1da5167cc05a6c42cd5c526e543e6b1d7f97af629544d6",
-    "provider_none": "2ac08d35d0afa3c439bcdce31811d29b0feb7f453eb1bf0509ea9cfa8e87b15f",
-    "history_and_custom": "b5e67e2568ed61ce47b59fc79e5b250c6ff682b3e5432c6829f3988739f33fd6",
-    "hotkey_short": "28e7e4fc47cf20ec694a669610b3b5d07b6fc265c1e6e97b76e3add1c6d43c91",
-    "stt_gemini": "bcc50eb2b19a63f7a06222c34498e9b3ed6ebcb2f8141f8670c39e57f0b6fcdf",
-    "prompt_from_file": "f8ae555c290ce5dbe5b9fd86855501f53d31a509f9f7fea0cf074c319482cd63",
-    "prompt_from_inline_env": "47eda2a306a3d5942e7da534d9c011c7061dd6900f5f514463b0aba9545d2fc2",
-    "msg_ok": "e30b88cc41851f34ef4f863db0fd4b4ddf489d5f6317c8345fe63b36e0edc6d3",
-    "msg_err": "bf53a712148ff30cc045767b36a7bdb7eeb39f6a23a256b044fc312cb6fb5006",
-    "msg_neutral": "85c14d11a9777d881e5ebc1587b83d6c45d819784326b4a04678fa0f9e623b9c",
+    "fresh_empty_env": "855ddfbecf768e40d4be4d0a28fc4d6cf4e1a7522526ac9259126e0483b97ab2",
+    "provider_meta": "49f5776dec8365f426a1f277d3ad3c9d62e55bc71975d24be081271635287f9a",
+    "provider_openrouter": "3511e561643e2e62cef03334d4f5e4de7f69439b6c613e898229c0df67b21120",
+    "provider_gemini": "456ecf9557344c04134b8704c8fc6d09f8d33f7e4fdb3e63f852361cb614a6da",
+    "provider_ollama": "347259d8a45ebc8ab7580aa29aa36a7d9b4647030b6e78839d3cf70287030488",
+    "provider_none": "855ddfbecf768e40d4be4d0a28fc4d6cf4e1a7522526ac9259126e0483b97ab2",
+    "history_and_custom": "13a6d9618bb149a73e9796fa57ba5d72afead91de14e73dae71296f4a314993b",
+    "hotkey_short": "5b1a419bf12d8c3268804c51fba834b58951dc26642e5b60031d7a531b1dc2dd",
+    "stt_gemini": "8e7e4967d7d7433278c361850eb71f41e45ef38cffe92186014cfebfd770acaf",
+    "prompt_from_file": "ca293af47956c39430bff555952c118f880c7f4e2d6f9f8449059691dfee1dd2",
+    "prompt_from_inline_env": "73f20a40e5c3a472d37ca08254aa4e3290b5f1c138b99a82496c9c66caac4acc",
+    "msg_ok": "07dc9cb25cf4dccf770a4c5a538ea81cf041e9a22b059a4ca6c7e9ea61f5ce13",
+    "msg_err": "73d1d94bc15a4c63a6713a7d3090f09df35043a7a58e2fb51bb80a6ab099be5d",
+    "msg_neutral": "8001d14fb68943d2fdf833aa7f2806bf3295bcf58c4a4fd5a19f2ae282b17c78",
 }
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
@@ -300,7 +304,7 @@ def _referenced_platform_names() -> set:
 
 
 class TestSetupPageEquivalence(unittest.TestCase):
-    """The setup page must render byte-for-byte identically to the pre-refactor tree."""
+    """The setup page must render byte-for-byte identically to its recorded golden."""
 
     def test_page_matches_pre_refactor_golden(self) -> None:
         for name, state in _PAGE_STATES.items():

@@ -67,8 +67,10 @@ graph TD
 ## 3. Module map
 
 Production Python is **9,031 lines** (was 10,623 before the consolidation experiment).
-`setup_template.html` (1,564 lines) holds the setup page markup that used to be an f-string
-inside `setup_web.py`.
+`setup_template.html` (2,518 lines) holds the setup page markup that used to be an f-string
+inside `setup_web.py`. It renders the "Quiet Console" dashboard: a left rail nav over five
+views (Overview status meters, AI, Speech, Controls, Prompt), one form with a sticky
+save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page()`.
 
 | Module | Lines | Responsibility | Public API other modules call |
 |---|---|---|---|

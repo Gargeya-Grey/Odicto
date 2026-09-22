@@ -86,7 +86,10 @@ def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
             pid = int(pid_s)
             if pid in protected:
                 continue
-            cmd_n = os.path.normcase(cmd.replace('"', "").replace("\\", "/"))
+            # normcase folds "/" into "\\" on Windows, so the forward-slash
+            # normalization must happen after it to match root_fwd. Doing it
+            # before silently made every match fail (orphan kill dead-ends).
+            cmd_n = os.path.normcase(cmd.replace('"', "")).replace("\\", "/")
             if "main.py" in cmd_n and root_fwd in cmd_n:
                 found.add(pid)
     except Exception as e:
