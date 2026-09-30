@@ -174,10 +174,10 @@ Write-Host @"
 
 Next steps:
   1. Open the setup page to pick a provider and paste its key:
-     .\setup.bat
+     .\scripts\windows\setup.bat
   2. Start the app:
      .\start_dictation.bat
-     (or run_debug.bat for a console log)
+     (or scripts\windows\run_debug.bat for a console log)
   3. Click into any text field
   4. Hold your hotkey (default: Ctrl+`), speak, release
   5. Optional AI mode: hold Ctrl+Shift+`
@@ -195,6 +195,6 @@ Next steps:
   Meta/OpenRouter/Gemini do not start Ollama. Quit the Ollama tray app
   separately if you want to free local LLM RAM/VRAM.
 
-Stop with stop_dictation.bat
+Stop with scripts\windows\stop_dictation.bat
 
 "@

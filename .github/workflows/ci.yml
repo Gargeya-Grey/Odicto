@@ -34,13 +34,13 @@ jobs:
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m unittest test_units -v
+        run: .venv\Scripts\python.exe -m unittest tests.test_units tests.test_reliability tests.test_layout -v
         env:
           QT_QPA_PLATFORM: offscreen
 
       - name: Run unit tests (macOS/Linux)
         if: runner.os != 'Windows'
-        run: .venv/bin/python -m unittest test_units -v
+        run: .venv/bin/python -m unittest tests.test_units tests.test_reliability tests.test_layout -v
         env:
           QT_QPA_PLATFORM: offscreen
 
@@ -48,12 +48,12 @@ jobs:
       # page and the config cascade resolvers. Must be byte-identical on all OSes.
       - name: Run equivalence oracle (Windows)
         if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m unittest test_equivalence -v
+        run: .venv\Scripts\python.exe -m unittest tests.test_equivalence -v
         env:
           QT_QPA_PLATFORM: offscreen
 
       - name: Run equivalence oracle (macOS/Linux)
         if: runner.os != 'Windows'
-        run: .venv/bin/python -m unittest test_equivalence -v
+        run: .venv/bin/python -m unittest tests.test_equivalence -v
         env:
           QT_QPA_PLATFORM: offscreen

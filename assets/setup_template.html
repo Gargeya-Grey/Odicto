@@ -1159,6 +1159,11 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                 <span class="pc-hint">local</span>
                 <span class="pc-meta"><span class="dot ok" id="pc_dot_ollama"></span><span>no key needed</span></span>
               </button>
+              <button type="button" class="provider-card" role="radio" data-value="groq" aria-checked="false">
+                <span class="pc-top"><span class="pc-name">Groq</span></span>
+                <span class="pc-hint">fast cloud AI</span>
+                <span class="pc-meta">choose your chat model</span>
+              </button>
               <button type="button" class="provider-card" role="radio" data-value="none" aria-checked="false">
                 <span class="pc-top"><span class="pc-name">None</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
                 <span class="pc-hint">raw dictation</span>
@@ -1169,6 +1174,20 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
           </div>
 
           <div id="sec-ai" class="group">
+            <div class="field" id="field-groq">
+              <div class="card">
+                <div class="card-title">Groq AI</div>
+                <label class="field-label" for="GROQ_MODEL">Chat model</label>
+                <input type="text" name="GROQ_MODEL" id="GROQ_MODEL" value="__GROQ_MODEL__" list="groq-chat-models">
+                <datalist id="groq-chat-models"><option value="openai/gpt-oss-20b"></option><option value="openai/gpt-oss-120b"></option></datalist>
+                <p class="field-note">Use a model available to your Groq account. <button type="button" onclick="showView('speech')">Set Groq API key</button> on the Speech page; speech and chat models are independent.</p>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="AI_CLIPBOARD_IMAGE">Attach clipboard screenshot to AI queries</label>
+              <select name="AI_CLIPBOARD_IMAGE" id="AI_CLIPBOARD_IMAGE"><option value="false"__IMAGE_OFF__>Off</option><option value="true"__IMAGE_ON__>On</option></select>
+              <p class="field-note">Requires the visual indicator and an image-capable model. Selected text is still used as AI context.</p>
+            </div>
             <div class="field" id="field-meta">
               <div class="card">
                 <div class="card-title">Meta API</div>
@@ -1332,7 +1351,7 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
         <section class="view" id="view-speech" aria-label="Speech to text">
           <div class="view-head group">
             <h1 class="view-title">Speech to text</h1>
-            <p class="view-sub">Independent of the AI backend. Gemini STT reuses <code>GEMINI_API_KEY</code>.</p>
+            <p class="view-sub">One speech provider and model for raw dictation, AI mode, and the live tap (when live is set to auto). Gemini reuses <code>GEMINI_API_KEY</code>. OpenRouter reuses <code>OPENROUTER_API_KEY</code>.</p>
           </div>
           <div class="group">
             <div class="card">
@@ -1342,11 +1361,21 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                   <select name="STT_PROVIDER" id="STT_PROVIDER" onchange="syncSttProvider()">
                     <option value="whisper"__STT_WHISPER_SELECTED__>whisper - local, offline</option>
                     <option value="gemini"__STT_GEMINI_SELECTED__>gemini - Gemini 3.5 Transcribe (cloud)</option>
+                    <option value="groq"__STT_GROQ_SELECTED__>groq - Groq Whisper (cloud)</option>
+                    <option value="openrouter"__STT_OPENROUTER_SELECTED__>openrouter - OpenRouter speech-to-text</option>
                     <option value="auto"__STT_AUTO_SELECTED__>auto - Gemini when a key is saved, else Whisper</option>
                   </select>
                 </div>
               </div>
-              <div id="stt-gemini-fields"__STT_WHISPER_HIDDEN__>
+              <div class="field">
+                <label class="field-label" for="POLISH_DICTATION">Polish dictated text</label>
+                <select name="POLISH_DICTATION" id="POLISH_DICTATION"><option value="false"__POLISH_OFF__>Off — raw transcription</option><option value="true"__POLISH_ON__>On — grammar, punctuation and capitalization</option></select>
+                <label class="field-label" for="POLISH_MODEL">Polish model <span class="field-hint">optional</span></label>
+                <input type="text" name="POLISH_MODEL" id="POLISH_MODEL" value="__POLISH_MODEL__" placeholder="Blank uses the chosen AI model">
+                <p class="field-note">Uses the selected AI provider. Waits up to two seconds, then inserts raw text if unavailable. Applies to ordinary dictation and F7; Gemini Smart is already polished. AI answers and conversation memory are separate.</p>
+                <p class="field-note">F7 shows interim captions in the HUD and inserts once on stop. Its finalized text stays on the clipboard.</p>
+              </div>
+              <div id="stt-gemini-fields"__STT_GEMINI_FIELDS_HIDDEN__>
                 <div class="field">
                   <span class="field-label">Transcription mode</span>
                   <div class="mode-switch" role="group" aria-label="Transcription mode">
@@ -1358,7 +1387,7 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                     <span class="mode-label" id="mode_label_smart">Smart</span>
                   </div>
                   <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="__TRANSCRIBE_MODE__">
-                  <p class="field-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Used on both hold-to-talk chords and the live tap key.</p>
+                  <p class="field-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Gemini only. Used for raw dictation, AI mode, and the live tap.</p>
                 </div>
                 <div class="row-2">
                   <div class="field">
@@ -1371,22 +1400,68 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                   </div>
                 </div>
               </div>
+              <div id="stt-groq-fields"__STT_GROQ_FIELDS_HIDDEN__>
+                <div class="row-2">
+                  <div class="field">
+                    <label class="field-label" for="GROQ_API_KEY">Groq API key__GROQ_KEY_SAVED_HINT__</label>
+                    <div class="key-input">
+                      <input type="password" name="GROQ_API_KEY" id="GROQ_API_KEY" value="__GROQ_KEY__" placeholder="paste your Groq API key">
+                      <button type="button" class="reveal-btn" data-reveal="GROQ_API_KEY">Show</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="GROQ_STT_MODEL">Groq model</label>
+                    <input type="text" name="GROQ_STT_MODEL" id="GROQ_STT_MODEL" list="groq-stt-models" value="__GROQ_STT_MODEL__">
+                    <datalist id="groq-stt-models">
+                      <option value="whisper-large-v3-turbo"></option>
+                      <option value="whisper-large-v3"></option>
+                    </datalist>
+                  </div>
+                </div>
+                <p class="field-note">Groq hosts Whisper. <code>whisper-large-v3-turbo</code> is the fast default. The same model is used for raw dictation and AI mode.</p>
+              </div>
+              <div id="stt-openrouter-fields"__STT_OPENROUTER_FIELDS_HIDDEN__>
+                <div class="field">
+                  <label class="field-label" for="OPENROUTER_STT_MODEL">OpenRouter transcription model</label>
+                  <input type="text" name="OPENROUTER_STT_MODEL" id="OPENROUTER_STT_MODEL" list="openrouter-stt-models" value="__OPENROUTER_STT_MODEL__">
+                  <datalist id="openrouter-stt-models">
+                    <option value="openai/whisper-large-v3"></option>
+                    <option value="openai/whisper-1"></option>
+                    <option value="openai/gpt-4o-mini-transcribe"></option>
+                    <option value="openai/gpt-4o-transcribe"></option>
+                    <option value="x-ai/grok-stt-1.0"></option>
+                  </datalist>
+                </div>
+                <p class="field-note">Uses the OpenRouter key from the AI backend page. This model is only for speech-to-text, including Grok speech models such as <code>x-ai/grok-stt-1.0</code>. The chat model above stays separate.</p>
+              </div>
             </div>
 
             <div class="card">
               <div class="card-title">Whisper</div>
-              <div class="card-sub">Local, offline transcription.</div>
+              <div class="card-sub">Local, offline transcription. Also the fallback if a cloud speech call fails.</div>
               <div class="row-2">
                 <div class="field">
                   <label class="field-label" for="WHISPER_MODEL_SIZE">Model size</label>
-                  <input type="text" name="WHISPER_MODEL_SIZE" id="WHISPER_MODEL_SIZE" value="__WHISPER__">
+                  <div class="cselect">
+                    <select name="WHISPER_MODEL_SIZE" id="WHISPER_MODEL_SIZE" onchange="updateMeters()">
+                      __WHISPER_MODEL_OPTIONS__
+                    </select>
+                  </div>
                 </div>
                 <div class="field">
                   <label class="field-label" for="WHISPER_DEVICE">Device</label>
-                  <input type="text" name="WHISPER_DEVICE" id="WHISPER_DEVICE" value="__WHISPER_DEVICE__" placeholder="auto">
+                  <div class="cselect">
+                    <select name="WHISPER_DEVICE" id="WHISPER_DEVICE">
+                      __WHISPER_DEVICE_EXTRA__
+                      <option value="auto"__WHISPER_DEVICE_AUTO_SELECTED__>auto - tiny/base on CPU, larger models on GPU</option>
+                      <option value="cuda"__WHISPER_DEVICE_CUDA_SELECTED__>cuda - keep the model in GPU memory</option>
+                      <option value="cpu"__WHISPER_DEVICE_CPU_SELECTED__>cpu - always on the processor</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <p class="field-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Used if Gemini STT is unavailable (no key, rate limit, or network).</p>
+              <p class="field-note">Each size shows approximate GPU memory, including about 1 GB of CUDA runtime, and how it feels in use. More GPU memory means a slower transcription and less room for the rest of the laptop. auto keeps tiny and base off the GPU. cuda loads the chosen model into GPU memory at startup and warms it.</p>
+              <p class="field-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Used if the selected cloud speech service is unavailable (no key, rate limit, or network).</p>
             </div>
 
             <div class="card">
@@ -1395,9 +1470,11 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                   <label class="field-label" for="LIVE_STT_PROVIDER">Live dictation engine (F7)</label>
                   <div class="cselect">
                     <select name="LIVE_STT_PROVIDER" id="LIVE_STT_PROVIDER">
-                      <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto - Google Gemini Live if key is saved, else Local Whisper</option>
+                      <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto - same provider and model as above</option>
                       <option value="gemini"__LIVE_STT_GEMINI_SELECTED__>gemini - Google Gemini Live (real-time caret streaming)</option>
-                      <option value="whisper"__LIVE_STT_WHISPER_SELECTED__>whisper - Local Whisper (offline batch recording)</option>
+                      <option value="groq"__LIVE_STT_GROQ_SELECTED__>groq - Groq, same model, on release</option>
+                      <option value="openrouter"__LIVE_STT_OPENROUTER_SELECTED__>openrouter - OpenRouter, same model, on release</option>
+                      <option value="whisper"__LIVE_STT_WHISPER_SELECTED__>whisper - local Whisper, on release</option>
                     </select>
                   </div>
                 </div>
@@ -1523,12 +1600,14 @@ var PROVIDER_LABELS = {
   openrouter: 'OpenRouter',
   gemini: 'Google Gemini',
   ollama: 'Ollama',
+  groq: 'Groq',
   none: 'None'
 };
 var PROVIDER_KEY_IDS = {
   meta: 'META_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
-  gemini: 'GEMINI_API_KEY'
+  gemini: 'GEMINI_API_KEY',
+  groq: 'GROQ_API_KEY'
 };
 
 function el(id) { return document.getElementById(id); }
@@ -1924,7 +2003,7 @@ function initProviderCards() {
 }
 
 function showProvider(v) {
-  ['meta','openrouter','gemini','ollama'].forEach(function(id) {
+  ['meta','openrouter','gemini','ollama','groq'].forEach(function(id) {
     var node = el('field-' + id);
     if (node) node.classList.toggle('active', id === v);
     if (node) node.style.display = (id === v) ? '' : 'none';
@@ -1936,6 +2015,7 @@ function showProvider(v) {
   var tb = el('test_button');
   if (tb) tb.disabled = (v === 'none');
   updateProviderCards();
+  syncSttProvider();
   updateMeters();
 }
 
@@ -2137,9 +2217,16 @@ function initTranscribeMode() {
 function syncSttProvider() {
   var sel = el('STT_PROVIDER');
   var v = sel ? sel.value : 'whisper';
-  var gem = el('stt-gemini-fields');
+  var show = {
+    'stt-gemini-fields': (v === 'gemini' || v === 'auto'),
+    'stt-groq-fields': v === 'groq' || (el('LLM_PROVIDER') || {}).value === 'groq',
+    'stt-openrouter-fields': v === 'openrouter'
+  };
+  Object.keys(show).forEach(function(id) {
+    var node = el(id);
+    if (node) node.hidden = !show[id];
+  });
   var note = el('stt-whisper-fallback-note');
-  if (gem) gem.hidden = (v === 'whisper');
   if (note) note.hidden = (v === 'whisper');
   updateMeters();
 }
@@ -2266,9 +2353,22 @@ function updateMeters() {
   var sttSel = el('STT_PROVIDER');
   var stt = sttSel ? sttSel.value : 'whisper';
   var mode = (el('GEMINI_TRANSCRIBE_MODE') || {}).value || 'smart';
-  var sttSub = stt === 'whisper' ? ('whisper ' + ((el('WHISPER_MODEL_SIZE') || {}).value || '')) : (stt + ' - ' + mode);
-  var sttTone = (stt === 'gemini' && !providerKeySaved('gemini')) ? 'warn' : 'ok';
-  setMeter('speech', stt === 'whisper' ? 'Whisper (local)' : (stt === 'gemini' ? 'Gemini Transcribe' : 'Auto'), sttSub, sttTone);
+  var sttLabels = {
+    whisper: 'Whisper (local)',
+    gemini: 'Gemini Transcribe',
+    groq: 'Groq',
+    openrouter: 'OpenRouter',
+    auto: 'Auto'
+  };
+  var sttModel = '';
+  if (stt === 'whisper') sttModel = 'whisper ' + ((el('WHISPER_MODEL_SIZE') || {}).value || '');
+  else if (stt === 'groq') sttModel = (el('GROQ_STT_MODEL') || {}).value || '';
+  else if (stt === 'openrouter') sttModel = (el('OPENROUTER_STT_MODEL') || {}).value || '';
+  else sttModel = stt + ' - ' + mode;
+  var sttNeedsKey = (stt === 'gemini' && !providerKeySaved('gemini'))
+    || (stt === 'groq' && !((el('GROQ_API_KEY') || {}).value))
+    || (stt === 'openrouter' && !providerKeySaved('openrouter'));
+  setMeter('speech', sttLabels[stt] || stt, sttModel, sttNeedsKey ? 'warn' : 'ok');
 
   var chord = (el('HOTKEY') || {}).value || '';
   var toggle = (el('HOTKEY_TOGGLE') || {}).value || 'true';
@@ -2588,7 +2688,7 @@ async function testConnection() {
     if (e && e.name === 'AbortError') {
       msg = 'Test timed out after 30s. Check your network and key, then try again.';
     } else if (/Failed to fetch|Could not reach/i.test(msg)) {
-      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via .\\setup.bat (or odicto.py setup) and retry.';
+      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via python odicto.py setup and retry.';
     }
     setTestTag('err', 'Error');
     setStatus('err', msg);

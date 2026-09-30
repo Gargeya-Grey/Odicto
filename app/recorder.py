@@ -1,3 +1,4 @@
+from collections import deque
 import threading
 import time
 from typing import Callable, List, Optional
@@ -43,10 +44,10 @@ class AudioRecorder:
         self._last_status_log: float = 0.0
         self._STATUS_LOG_MIN_INTERVAL = 5.0
         # Ring buffer (persistent, always capturing) and its per-session window.
-        self._ring: List[np.ndarray] = []
+        self._ring = deque()
+        self._ring_frames = 0
         self._ring_samples = int(sample_rate * self.RING_SECONDS)
         self._session_samples = int(sample_rate * self.PRE_ROLL_SECONDS)
-        self._ring_bytes = self._ring_samples * np.dtype(np.float32).itemsize
         # Optional live-STT listeners. Invoked on the audio thread with a copy
         # of each captured mono chunk; listeners must never block.
         self._chunk_listeners: List[Callable[[np.ndarray], None]] = []
@@ -126,12 +127,15 @@ class AudioRecorder:
             chunk = indata.copy()
             # Always keep the ring fresh; drop the oldest data when it overflows.
             self._ring.append(chunk)
-            ring_len = 0
-            for part in self._ring:
-                ring_len += part.size
-            while self._ring and ring_len > self._ring_bytes:
-                dropped = self._ring.pop(0)
-                ring_len -= dropped.size
+            self._ring_frames += len(chunk)
+            while self._ring and self._ring_frames > self._ring_samples:
+                excess = self._ring_frames - self._ring_samples
+                oldest = self._ring[0]
+                if len(oldest) <= excess:
+                    self._ring_frames -= len(self._ring.popleft())
+                else:
+                    self._ring[0] = oldest[excess:].copy()
+                    self._ring_frames -= excess
             if self.recording:
                 # Session buffer is always 1D mono float32 (pre-roll is mixed in
                 # start()); mix multi-channel frames down to mono and flatten so
@@ -196,7 +200,7 @@ class AudioRecorder:
 
     def remove_chunk_listener(self, fn: Callable[[np.ndarray], None]) -> None:
         with self._lock:
-            self._chunk_listeners = [x for x in self._chunk_listeners if x is not fn]
+            self._chunk_listeners = [x for x in self._chunk_listeners if x != fn]
 
     def start(self) -> None:
         """Starts a capture session from the persistent stream (no device re-open)."""
@@ -209,13 +213,13 @@ class AudioRecorder:
             pre_roll: List[np.ndarray] = []
             pre_len = 0
             for part in reversed(self._ring):
-                if pre_len + part.size > self._session_samples:
+                if pre_len + len(part) > self._session_samples:
                     keep = max(0, self._session_samples - pre_len)
                     if keep > 0:
                         pre_roll.insert(0, part[-keep:])
                     break
                 pre_roll.insert(0, part)
-                pre_len += part.size
+                pre_len += len(part)
             # Chunks can be multi-channel (CHANNELS=2); mix the pre-roll to mono
             # now so the session stays 1D and concatenation in stop() is clean.
             if pre_roll:
@@ -230,6 +234,14 @@ class AudioRecorder:
             self.last_audio_array = None
             self._level = 0.0
             self.recording = True
+            # Listener delivery stays ordered with the input callback. Consumers
+            # only enqueue chunks and must not block or re-enter the recorder.
+            for part in pre_roll:
+                for listener in self._chunk_listeners:
+                    try:
+                        listener(part)
+                    except Exception:
+                        pass
 
     def stop(self, filepath: Optional[str] = None) -> bool:
         """Stops recording and keeps the captured buffer in memory.

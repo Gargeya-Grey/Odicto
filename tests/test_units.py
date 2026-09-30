@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 import tempfile
@@ -14,7 +15,13 @@ sys.modules["faster_whisper"] = mock_faster_whisper
 import config
 from config import Config, parse_hold_hotkey, _sanitize_model_id
 from recorder import AudioRecorder, play_beep
-from transcriber import GeminiTranscriber, WhisperTranscriber, float32_to_wav_bytes
+from transcriber import (
+    CloudTranscriber,
+    GeminiLiveSession,
+    GeminiTranscriber,
+    WhisperTranscriber,
+    float32_to_wav_bytes,
+)
 from refiner import TextRefiner, reset_openrouter_effort_cache
 from typer import paste_text, get_selected_text
 from app_state import AppState
@@ -419,6 +426,32 @@ class TestOdicto(unittest.TestCase):
             transcriber = WhisperTranscriber()
         self.assertEqual(transcriber.device, "cuda")
         mock_wait.assert_called()
+        # A test double is not warmed. Only a real faster-whisper model is.
+        factory.return_value.transcribe.assert_not_called()
+
+    @patch("transcriber.Config.WHISPER_DEVICE", "cuda")
+    @patch("transcriber.Config.WHISPER_MODEL_SIZE", "small.en")
+    @patch("transcriber.Config.SAMPLE_RATE", 16000)
+    @patch("transcriber.wait_for_cuda_driver")
+    def test_cuda_load_warms_the_resident_model(self, mock_wait: MagicMock) -> None:
+        """GPU load runs one silent decode so the first hotkey is not cold."""
+
+        class _RealWhisper:
+            def __init__(self, *args, **kwargs) -> None:
+                self.calls = []
+
+            def transcribe(self, audio, **kwargs):
+                self.calls.append(audio)
+                return iter(()), None
+
+        _RealWhisper.__module__ = "faster_whisper.transcribe"
+        factory = MagicMock(side_effect=lambda *a, **k: _RealWhisper())
+        with patch("transcriber.WhisperModel", factory):
+            transcriber = WhisperTranscriber()
+        self.assertEqual(transcriber.device, "cuda")
+        self.assertEqual(len(transcriber.model.calls), 1)
+        self.assertEqual(transcriber.model.calls[0].shape, (4000,))
+        mock_wait.assert_called()
 
     @patch("transcriber.Config.WHISPER_DEVICE", "auto")
     @patch("transcriber.Config.WHISPER_MODEL_SIZE", "small.en")
@@ -429,18 +462,18 @@ class TestOdicto(unittest.TestCase):
         mock_probe: MagicMock,
         mock_sleep: MagicMock,
     ) -> None:
-        """Larger models under auto still wait for the GPU driver, then load CUDA."""
-        mock_probe.side_effect = [False, False, True]
+        """Auto probes once and attempts GPU without waiting for an absent driver."""
+        mock_probe.return_value = False
         factory = MagicMock(name="WhisperModel")
         factory.__module__ = "faster_whisper"
         with patch("transcriber.WhisperModel", factory), patch(
             "transcriber.CUDA_WAIT_SECONDS", 30.0
         ):
             transcriber = WhisperTranscriber()
-        self.assertEqual(transcriber.device, "cuda")
-        self.assertEqual(factory.call_args.kwargs["device"], "cuda")
-        self.assertGreaterEqual(mock_probe.call_count, 3)
-        mock_sleep.assert_called()
+        self.assertEqual(transcriber.device, "cpu")
+        self.assertEqual(factory.call_args.kwargs["device"], "cpu")
+        self.assertEqual(mock_probe.call_count, 0 if sys.platform == "darwin" else 1)
+        mock_sleep.assert_not_called()
 
     def test_cuda_probe_skipped_for_injected_model(self) -> None:
         import transcriber as transcriber_mod
@@ -524,9 +557,26 @@ class TestOdicto(unittest.TestCase):
         ):
             self.assertEqual(Config.effective_live_stt_provider(), "gemini")
         with patch.object(Config, "LIVE_STT_PROVIDER", "auto"), patch.object(
-            Config, "GEMINI_API_KEY", "AIza-test"
-        ):
+            Config, "STT_PROVIDER", "whisper"
+        ), patch.object(Config, "GEMINI_API_KEY", "AIza-test"):
+            # auto follows the speech provider, even when a Gemini key exists.
+            self.assertEqual(Config.effective_live_stt_provider(), "whisper")
+        with patch.object(Config, "LIVE_STT_PROVIDER", "auto"), patch.object(
+            Config, "STT_PROVIDER", "auto"
+        ), patch.object(Config, "GEMINI_API_KEY", "AIza-test"):
             self.assertEqual(Config.effective_live_stt_provider(), "gemini")
+        with patch.object(Config, "STT_PROVIDER", "groq"), patch.object(
+            Config, "GROQ_API_KEY", "gsk-test"
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "groq")
+        with patch.object(Config, "STT_PROVIDER", "groq"), patch.object(
+            Config, "GROQ_API_KEY", ""
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "whisper")
+        with patch.object(Config, "STT_PROVIDER", "openrouter"), patch.object(
+            Config, "OPENROUTER_API_KEY", "sk-or-test"
+        ):
+            self.assertEqual(Config.effective_stt_provider(), "openrouter")
         with patch.object(Config, "LIVE_STT_PROVIDER", "auto"), patch.object(
             Config, "GEMINI_API_KEY", ""
         ):
@@ -545,6 +595,76 @@ class TestOdicto(unittest.TestCase):
             self.assertEqual(
                 Config.gemini_transcribe_language_codes(), ["en-US", "hi-IN"]
             )
+
+    def test_groq_transcriber_posts_multipart_audio(self) -> None:
+        captured = {}
+
+        def _fake_post(url, data, headers, timeout=45.0):
+            captured["url"] = url
+            captured["data"] = data
+            captured["headers"] = headers
+            captured["timeout"] = timeout
+            return {"text": "hello from groq"}
+
+        audio = np.zeros(1600, dtype=np.float32)
+        with patch("transcriber._post_bytes", side_effect=_fake_post), patch.object(
+            Config, "GROQ_API_KEY", "gsk-test"
+        ), patch.object(Config, "GROQ_API_BASE", "https://api.groq.com/openai/v1"), patch.object(
+            Config, "GROQ_STT_MODEL", "whisper-large-v3-turbo"
+        ), patch.object(Config, "GEMINI_TRANSCRIBE_LANGUAGE", "en-US"):
+            text = CloudTranscriber("groq").transcribe(audio)
+        self.assertEqual(text, "hello from groq")
+        self.assertEqual(
+            captured["url"], "https://api.groq.com/openai/v1/audio/transcriptions"
+        )
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer gsk-test")
+        self.assertIn(b'name="model"', captured["data"])
+        self.assertIn(b"whisper-large-v3-turbo", captured["data"])
+        self.assertIn(b'name="language"', captured["data"])
+        self.assertIn(b"filename=\"clip.wav\"", captured["data"])
+        self.assertNotIn(b"gsk-test", captured["data"])
+
+    def test_openrouter_transcriber_posts_json_audio(self) -> None:
+        captured = {}
+
+        def _fake_post(url, data, headers, timeout=45.0):
+            captured["url"] = url
+            captured["body"] = data
+            captured["content_type"] = headers.get("Content-Type")
+            return {"text": "hello from openrouter"}
+
+        audio = np.zeros(1600, dtype=np.float32)
+        with patch("transcriber._post_bytes", side_effect=_fake_post), patch.object(
+            Config, "OPENROUTER_API_KEY", "sk-or-test"
+        ), patch.object(
+            Config, "OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"
+        ), patch.object(
+            Config, "OPENROUTER_STT_MODEL", "openai/whisper-large-v3"
+        ), patch.object(Config, "GEMINI_TRANSCRIBE_LANGUAGE", ""):
+            text = CloudTranscriber("openrouter").transcribe(audio)
+        self.assertEqual(text, "hello from openrouter")
+        self.assertEqual(
+            captured["url"], "https://openrouter.ai/api/v1/audio/transcriptions"
+        )
+        self.assertEqual(captured["content_type"], "application/json")
+        import json as _json
+
+        body = _json.loads(captured["body"].decode("utf-8"))
+        self.assertEqual(body["model"], "openai/whisper-large-v3")
+        self.assertEqual(body["input_audio"]["format"], "wav")
+        self.assertTrue(body["input_audio"]["data"])
+
+    def test_cloud_stt_falls_back_to_whisper(self) -> None:
+        audio = np.zeros(1600, dtype=np.float32)
+        with patch(
+            "transcriber._post_bytes", side_effect=RuntimeError("HTTP 401")
+        ), patch.object(Config, "GROQ_API_KEY", "gsk-test"), patch(
+            "transcriber.WhisperTranscriber"
+        ) as mock_whisper:
+            mock_whisper.return_value.transcribe.return_value = "local fallback"
+            text = CloudTranscriber("groq").transcribe(audio)
+        self.assertEqual(text, "local fallback")
+        mock_whisper.return_value.transcribe.assert_called_once()
 
     @patch("transcriber.google_genai")
     def test_gemini_transcriber_unary_smart(self, mock_genai: MagicMock) -> None:
@@ -1302,7 +1422,8 @@ class TestOdicto(unittest.TestCase):
         ), patch(
             "typer.time.sleep"
         ):
-            paste_text("payload")
+            with self.assertRaises(RuntimeError):
+                paste_text("payload")
             mock_paste.assert_not_called()
 
     @patch("typer.send_paste")
@@ -1582,21 +1703,6 @@ class TestOdicto(unittest.TestCase):
         png_bytes = get_clipboard_image()
         self.assertIsNone(png_bytes)
 
-    @patch("typer._get_clipboard_image_locked")
-    @patch("typer._get_selected_text_locked")
-    def test_capture_ai_context_preserves_image_and_text(
-        self, mock_get_sel: MagicMock, mock_get_img: MagicMock
-    ) -> None:
-        """capture_ai_context retrieves both pre-existing image and highlighted text."""
-        from typer import capture_ai_context
-
-        mock_get_img.return_value = b"\x89PNGfakeimage"
-        mock_get_sel.return_value = "selected code snippet"
-
-        text_ctx, img_bytes = capture_ai_context(timeout=0.1)
-        self.assertEqual(text_ctx, "selected code snippet")
-        self.assertEqual(img_bytes, b"\x89PNGfakeimage")
-
     @patch("refiner.Config.LLM_PROVIDER", "gemini")
     @patch("refiner.Config.GEMINI_API_KEY", "AIza-test")
     def test_text_refiner_gemini_multimodal(self) -> None:
@@ -1619,7 +1725,9 @@ class TestOdicto(unittest.TestCase):
             input_val = call_kwargs["input"]
             self.assertIsInstance(input_val, list)
             self.assertEqual(len(input_val), 2)
-            self.assertEqual(input_val[1], "explain this diagram")
+            self.assertEqual(input_val[1], {"type": "text", "text": "explain this diagram"})
+            self.assertEqual(input_val[0]["type"], "image")
+            self.assertEqual(input_val[0]["mime_type"], "image/png")
 
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
     @patch("refiner.Config.OPENROUTER_API_KEY", "sk-or-test")
@@ -2375,8 +2483,9 @@ class TestOdicto(unittest.TestCase):
             mock_thread.assert_called()
             pipeline_call = mock_thread.call_args
             args = pipeline_call.kwargs.get("args") if hasattr(pipeline_call, "kwargs") else pipeline_call[1].get("args")
-            self.assertEqual(args[1], False)  # use_llm
-            self.assertEqual(args[4], "")  # no live transcript when STT is whisper
+            self.assertIsNone(args[0])  # no Live session when STT is Whisper
+            self.assertIs(args[1], fake_audio)
+            self.assertFalse(args[3])  # accepted recording, not discarded
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2453,20 +2562,15 @@ class TestOdicto(unittest.TestCase):
             app.on_live_toggle()
             self.assertTrue(app.live_active)
             app._record_started_at = 0.0
-            with app._live_caret_lock:
-                app._live_caret_current = "hello from live"
-                app._live_caret_desired = "hello from live"
+            app.live_preview = "hello from live"
             with patch("threading.Thread") as mock_thread:
                 app.on_live_toggle()
             self.assertFalse(app.live_active)
-            self.assertEqual(app.state, AppState.IDLE)
-            self.assertEqual(app.last_status, "success")
+            self.assertEqual(app.state, AppState.PROCESSING)
+            self.assertEqual(app.last_status, "finalizing")
+            mock_paste_text.assert_not_called()
             app.transcriber.transcribe.assert_not_called()
-            for call in mock_thread.call_args_list:
-                target = call[1].get("target") if call[1] else None
-                if target is None and call[0]:
-                    target = call[0][0]
-                self.assertNotEqual(getattr(target, "__name__", ""), "process_and_paste")
+            self.assertEqual(mock_thread.call_args.kwargs["target"].__name__, "_finish_live_session")
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2505,20 +2609,14 @@ class TestOdicto(unittest.TestCase):
             app.live_active = True
             app.state = AppState.RECORDING
             app._record_started_at = 0.0
-            with app._live_caret_lock:
-                app._live_caret_current = "hello from live"
-                app._live_caret_desired = "hello from live"
+            app.live_preview = "hello from live"
             with patch("threading.Thread") as mock_thread:
                 app.on_live_toggle()
             session.stop.assert_not_called()
-            self.assertEqual(app.state, AppState.IDLE)
-            self.assertEqual(app.last_status, "success")
-            target = (
-                mock_thread.call_args[1].get("target")
-                if mock_thread.call_args[1]
-                else mock_thread.call_args[0][0]
-            )
-            self.assertEqual(getattr(target, "__name__", ""), "_cleanup_live_session")
+            mock_paste_text.assert_not_called()
+            self.assertEqual(app.state, AppState.PROCESSING)
+            self.assertEqual(app.last_status, "finalizing")
+            self.assertEqual(mock_thread.call_args.kwargs["target"].__name__, "_finish_live_session")
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2548,30 +2646,19 @@ class TestOdicto(unittest.TestCase):
                 app = DictationApp()
                 app.initialize_app()
             app.ready = True
-            app._ensure_live_caret_worker()
             session = MagicMock()
             session.stop.return_value = "hello world"
-            with app._live_caret_lock:
-                app._live_caret_current = "hello wor"
-                app._live_caret_desired = "hello wor"
-            app._cleanup_live_session(session, app._live_epoch)
-            # The single call's authoritative final replaces the interim draft.
-            self.assertEqual(app._live_caret_desired, "hello world")
+            app.live_preview = "hello wor"
+            app._finish_live_session(session, None, app._live_epoch)
+            mock_paste_text.assert_called_once_with("hello world", restore_clipboard=False)
             session.stop.assert_called_once_with(timeout=4.0, final_wait_s=2.5)
-            # Final identical to on-screen text -> no mutation
-            session.stop.return_value = "But why the money"
-            with app._live_caret_lock:
-                app._live_caret_current = "But why the money"
-                app._live_caret_desired = "But why the money"
-            app._cleanup_live_session(session, app._live_epoch)
-            self.assertEqual(app._live_caret_desired, "But why the money")
-            # No final arrived -> keep the streamed draft
+            app.transcriber.transcribe.assert_not_called()
+            mock_paste_text.reset_mock()
             session.stop.return_value = ""
-            with app._live_caret_lock:
-                app._live_caret_current = "keep me"
-                app._live_caret_desired = "keep me"
-            app._cleanup_live_session(session, app._live_epoch)
-            self.assertEqual(app._live_caret_desired, "keep me")
+            app.live_preview = "keep me"
+            app._finish_live_session(session, None, app._live_epoch)
+            mock_paste_text.assert_called_once_with("keep me", restore_clipboard=False)
+            app.transcriber.transcribe.assert_not_called()
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2603,23 +2690,19 @@ class TestOdicto(unittest.TestCase):
                 app.initialize_app()
             app.ready = True
 
-            # 1. On-screen text present -> keep on-screen text, success status
             session = MagicMock()
             session.stop.return_value = "streamed words"
-            with app._live_caret_lock:
-                app._live_caret_desired = "on-screen text"
+            app.live_preview = "on-screen draft"
             app._finish_live_session(session, None, app._live_epoch)
+            mock_paste_text.assert_called_once_with("streamed words", restore_clipboard=False)
             self.assertEqual(app.last_status, "success")
-
-            # 2. On-screen empty, but session.stop has text -> processes and pastes
-            with app._live_caret_lock:
-                app._live_caret_desired = ""
-                app._live_caret_current = ""
+            app.transcriber.transcribe.assert_not_called()
             with patch.object(app, "process_and_paste") as mock_pap:
-                app._finish_live_session(session, np.zeros(100), app._live_epoch)
-                mock_pap.assert_called_once()
-
-            # 3. Stale epoch -> discarded immediately
+                app.live_preview = ""
+                session.stop.return_value = ""
+                audio = np.zeros(100)
+                app._finish_live_session(session, audio, app._live_epoch)
+                mock_pap.assert_called_once_with(audio, False, "", False, "", live=True)
             with patch.object(app, "process_and_paste") as mock_pap:
                 app._finish_live_session(session, None, app._live_epoch + 99)
                 mock_pap.assert_not_called()
@@ -2634,7 +2717,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.get_selected_text")
     @patch("main.platforms")
     @patch("main.play_beep")
-    def test_live_stop_keeps_streamed_text(
+    def test_live_stop_replaces_draft_with_api_final(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
@@ -2645,7 +2728,7 @@ class TestOdicto(unittest.TestCase):
         mock_recorder: MagicMock,
         mock_socket: MagicMock,
     ) -> None:
-        """F7 stop keeps the streamed smart final; no second API call, no swap."""
+        """F7 stop uses the API's smart final without a second transcription call."""
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
         ):
@@ -2655,55 +2738,35 @@ class TestOdicto(unittest.TestCase):
             app.ready = True
             session = MagicMock()
             session.stop.return_value = "live finals"
-            with app._live_caret_lock:
-                app._live_caret_desired = "streamed draft"
+            app.live_preview = "streamed draft"
             app._finish_live_session(session, np.zeros(100), app._live_epoch)
-            self.assertEqual(app._live_caret_desired, "streamed draft")
+            mock_paste_text.assert_called_once_with("live finals", restore_clipboard=False)
             self.assertEqual(app.last_status, "success")
             session.stop.assert_called_once()
             app.transcriber.transcribe.assert_not_called()
 
-    @patch("main.Config.HOTKEY", "ctrl+grave")
-    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
-    @patch("socket.socket")
-    @patch("main.AudioRecorder")
-    @patch("main.GeminiTranscriber")
-    @patch("main.WhisperTranscriber")
-    @patch("main.TextRefiner")
-    @patch("main.paste_text")
-    @patch("main.get_selected_text")
-    @patch("main.platforms")
-    @patch("main.play_beep")
-    def test_ai_chord_uses_local_whisper_not_gemini_smart(
-        self,
-        mock_play_beep: MagicMock,
-        mock_keyboard: MagicMock,
-        mock_get_selected_text: MagicMock,
-        mock_paste_text: MagicMock,
-        mock_refiner: MagicMock,
-        mock_whisper: MagicMock,
-        mock_gemini: MagicMock,
-        mock_recorder: MagicMock,
-        mock_socket: MagicMock,
-    ) -> None:
-        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
-            "main.Config.SHOW_VISUAL_INDICATOR", False
-        ), patch.object(Config, "STT_PROVIDER", "gemini"), patch.object(
-            Config, "effective_stt_provider", return_value="gemini"
-        ), patch.object(Config, "LLM_PROVIDER", "gemini"):
-            with patch("threading.Thread"):
-                app = DictationApp()
-                app.initialize_app()
-            app.ready = True
-            mock_get_selected_text.return_value = ""
-            mock_whisper.return_value.transcribe.return_value = "ask the model"
-            app.refiner.refine.return_value = "A reply."
-            app.process_and_paste(
-                np.zeros(100, dtype=np.float32), True, "", False, ""
-            )
-            mock_whisper.return_value.transcribe.assert_called()
-            mock_gemini.return_value.transcribe.assert_not_called()
-            mock_paste_text.assert_called_once_with("A reply.")
+    def test_live_sender_drains_queued_audio_after_stop(self) -> None:
+        session = GeminiLiveSession()
+        session._chunks.put_nowait(np.zeros(8, dtype=np.float32))
+        session._chunks.put_nowait(np.zeros(8, dtype=np.float32))
+        session._stop.set()
+        sent = []
+
+        class FakeLiveSession:
+            async def send_realtime_input(self, **kwargs):
+                sent.append(kwargs)
+
+        with patch("transcriber.float32_to_pcm16_bytes", return_value=b"pcm"), patch(
+            "transcriber.google_genai_types"
+        ) as mock_types:
+            mock_types.Blob.return_value = "audio-blob"
+            asyncio.run(session._send_loop(FakeLiveSession(), "audio/pcm;rate=16000"))
+
+        self.assertEqual(
+            [message for message in sent if "audio" in message],
+            [{"audio": "audio-blob"}, {"audio": "audio-blob"}],
+        )
+        self.assertEqual(sent[-1], {"audio_stream_end": True})
 
     @patch("main.Config.HOTKEY", "ctrl+grave")
     @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
@@ -2716,7 +2779,7 @@ class TestOdicto(unittest.TestCase):
     @patch("main.get_selected_text")
     @patch("main.platforms")
     @patch("main.play_beep")
-    def test_ai_chord_falls_back_to_gemini_verbatim(
+    def test_raw_and_ai_share_the_selected_stt(
         self,
         mock_play_beep: MagicMock,
         mock_keyboard: MagicMock,
@@ -2728,6 +2791,7 @@ class TestOdicto(unittest.TestCase):
         mock_recorder: MagicMock,
         mock_socket: MagicMock,
     ) -> None:
+        """AI mode is a second step on the same transcript, not a different engine."""
         with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
             "main.Config.SHOW_VISUAL_INDICATOR", False
         ), patch.object(Config, "STT_PROVIDER", "gemini"), patch.object(
@@ -2738,48 +2802,61 @@ class TestOdicto(unittest.TestCase):
                 app.initialize_app()
             app.ready = True
             mock_get_selected_text.return_value = ""
-            mock_whisper.return_value.transcribe.side_effect = RuntimeError("no model")
-            mock_gemini.return_value.transcribe.return_value = "verbatim words"
+            mock_gemini.return_value.transcribe.return_value = "ask the model"
             app.refiner.refine.return_value = "A reply."
-            app.process_and_paste(
-                np.zeros(100, dtype=np.float32), True, "", False, ""
-            )
-            mock_gemini.return_value.transcribe.assert_called()
-            self.assertEqual(
+            audio = np.zeros(100, dtype=np.float32)
+            app.process_and_paste(audio, False, "", False, "")
+            app.process_and_paste(audio, True, "", False, "")
+            self.assertEqual(mock_gemini.return_value.transcribe.call_count, 2)
+            mock_whisper.return_value.transcribe.assert_not_called()
+            self.assertNotEqual(
                 mock_gemini.return_value.transcribe.call_args.kwargs.get("mode"),
                 "verbatim",
             )
+            mock_paste_text.assert_called_with("A reply.")
+
+    @patch("main.Config.HOTKEY", "ctrl+grave")
+    @patch("main.Config.AI_HOTKEY", "ctrl+shift+grave")
+    @patch("socket.socket")
+    @patch("main.AudioRecorder")
+    @patch("main.CloudTranscriber")
+    @patch("main.WhisperTranscriber")
+    @patch("main.TextRefiner")
+    @patch("main.paste_text")
+    @patch("main.get_selected_text")
+    @patch("main.platforms")
+    @patch("main.play_beep")
+    def test_ai_chord_uses_groq_when_that_is_the_speech_provider(
+        self,
+        mock_play_beep: MagicMock,
+        mock_keyboard: MagicMock,
+        mock_get_selected_text: MagicMock,
+        mock_paste_text: MagicMock,
+        mock_refiner: MagicMock,
+        mock_whisper: MagicMock,
+        mock_cloud: MagicMock,
+        mock_recorder: MagicMock,
+        mock_socket: MagicMock,
+    ) -> None:
+        with patch("main.Config.PLAY_AUDIO_CUES", False), patch(
+            "main.Config.SHOW_VISUAL_INDICATOR", False
+        ), patch.object(Config, "STT_PROVIDER", "groq"), patch.object(
+            Config, "effective_stt_provider", return_value="groq"
+        ), patch.object(Config, "LLM_PROVIDER", "openrouter"):
+            with patch("threading.Thread"):
+                app = DictationApp()
+                app.initialize_app()
+            app.ready = True
+            mock_get_selected_text.return_value = ""
+            mock_cloud.return_value.transcribe.return_value = "ask the model"
+            app.refiner.refine.return_value = "A reply."
+            app.process_and_paste(
+                np.zeros(100, dtype=np.float32), True, "", False, ""
+            )
+            mock_cloud.assert_called_once_with("groq")
+            mock_cloud.return_value.transcribe.assert_called_once()
+            mock_whisper.assert_not_called()
             mock_paste_text.assert_called_once_with("A reply.")
-
-    def test_apply_live_text_edits_tail_only(self) -> None:
-        from typer import apply_live_text
-
-        with patch("typer.send_backspaces") as mock_bs, patch(
-            "typer.paste_text"
-        ) as mock_paste, patch("typer.force_release_modifiers"), patch(
-            "typer.send_text", return_value=True
-        ) as mock_type:
-            out = apply_live_text("hello wo", "hello world")
-            self.assertEqual(out, "hello world")
-            mock_bs.assert_not_called()
-            mock_type.assert_called_once_with("rld")
-            mock_paste.assert_not_called()
-            mock_type.reset_mock()
-            apply_live_text("hello world", "hello")
-            mock_bs.assert_called_once_with(6)
-            mock_paste.assert_not_called()
-            mock_type.assert_not_called()
-
-    def test_apply_live_text_falls_back_to_paste(self) -> None:
-        from typer import apply_live_text
-
-        with patch("typer.send_backspaces"), patch(
-            "typer.paste_text"
-        ) as mock_paste, patch("typer.force_release_modifiers"), patch(
-            "typer.send_text", return_value=False
-        ):
-            apply_live_text("", "hello")
-            mock_paste.assert_called_once_with("hello", restore_clipboard=False)
 
     def test_get_selected_text_retries_when_sentinel_stuck(self) -> None:
         from typer import get_selected_text
@@ -2808,7 +2885,7 @@ class TestOdicto(unittest.TestCase):
             self.assertEqual(get_selected_text(timeout=0.05), "highlighted line")
 
     def test_paste_text_skips_restore_when_asked(self) -> None:
-        with patch("typer._clipboard_read", return_value="user clip"), patch(
+        with patch("typer._clipboard_read", return_value="live"), patch(
             "typer._clipboard_write"
         ) as mock_write, patch("typer.send_paste"), patch(
             "typer.force_release_modifiers"
@@ -2831,8 +2908,8 @@ class TestOdicto(unittest.TestCase):
         mock_paste.assert_not_called()
         mock_write.assert_not_called()
 
-    def test_paste_text_falls_back_to_chord_when_terminal_typing_fails(self) -> None:
-        """Typing can fail; the clipboard chord is still the safety net."""
+    def test_paste_text_reports_failure_without_terminal_paste_chord(self) -> None:
+        """Failed terminal typing must not paste stale clipboard contents."""
         state = {"clip": "original"}
 
         def fake_write(text: str) -> bool:
@@ -2846,9 +2923,10 @@ class TestOdicto(unittest.TestCase):
         ), patch("typer.send_paste") as mock_paste, patch(
             "typer._wait_modifiers_up"
         ), patch("typer.time.sleep"):
-            paste_text("payload")
+            with self.assertRaises(RuntimeError):
+                paste_text("payload")
 
-        mock_paste.assert_called()
+        mock_paste.assert_not_called()
         self.assertEqual(state["clip"], "original")
 
     def test_terminal_detection_respects_config_toggle(self) -> None:
@@ -3008,8 +3086,8 @@ class TestDictationIndicator(unittest.TestCase):
         indicator.gui_state = GuiState.RECORDING
         self.assertFalse(indicator._is_live_layout())
         mock_app.live_active = True
-        # Live captions go to the caret; HUD stays a one-row listening pill.
-        self.assertFalse(indicator._is_live_layout())
+        # Live captions are previewed in the HUD without editing the caret.
+        self.assertTrue(indicator._is_live_layout())
         indicator._tick.stop()
         indicator.close()
 
@@ -3409,9 +3487,9 @@ class TestEnvExampleParity(unittest.TestCase):
     documented key must be one the app actually reads, and vice versa.
     """
 
-    EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example")
+    EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.example")
     PROMPT_EXAMPLE_PATH = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "prompt.txt.example"
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompt.txt.example"
     )
 
     @classmethod

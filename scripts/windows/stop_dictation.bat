@@ -1,9 +1,10 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0"
+for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
+cd /d "%ODICTO_ROOT%"
 echo Stopping all Odicto instances...
 
-set "PY=%~dp0.venv\Scripts\python.exe"
+set "PY=%ODICTO_ROOT%\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
 REM 1) PID file (fast path). Safe if the process is already gone.
@@ -19,7 +20,7 @@ if exist dictation.pid (
     "$rawPid = $env:TARGET_PID; " ^
     "if (-not ($rawPid -match '^\d+$')) { exit 0 }; " ^
     "$targetPid = [int]$rawPid; " ^
-    "$root = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\'); " ^
+    "$root = [System.IO.Path]::GetFullPath('%ODICTO_ROOT%\').TrimEnd('\'); " ^
     "$p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue; " ^
     "if ($null -eq $p) { Write-Output ('  (PID ' + $targetPid + ' already gone)'); exit 0 }; " ^
     "if ($p.ProcessName -ne 'python' -and $p.ProcessName -ne 'pythonw') { Write-Output ('  (PID ' + $targetPid + ' is not python/pythonw - left alone)'); exit 0 }; " ^
@@ -44,7 +45,7 @@ REM    BUG HISTORY: wmic CSV + "tokens=2 delims== " never extracted ProcessId, s
 REM    orphan kill was a no-op and stacked hooks doubled every typed character.
 REM
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$rootN = [System.IO.Path]::GetFullPath('%~dp0').TrimEnd('\').ToLowerInvariant(); " ^
+  "$rootN = [System.IO.Path]::GetFullPath('%ODICTO_ROOT%\').TrimEnd('\').ToLowerInvariant(); " ^
   "$pids = @(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" -ErrorAction SilentlyContinue | " ^
   "  Where-Object { $_.CommandLine -and ($_.CommandLine -match 'main\.py') -and ($_.CommandLine.ToLowerInvariant().Contains($rootN)) } | " ^
   "  ForEach-Object { [int]$_.ProcessId } | Sort-Object -Unique); " ^

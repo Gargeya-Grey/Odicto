@@ -1,8 +1,9 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
+cd /d "%ODICTO_ROOT%"
 
-if not exist "%~dp0.venv\Scripts\python.exe" (
+if not exist "%ODICTO_ROOT%\.venv\Scripts\python.exe" (
   echo ERROR: .venv\Scripts\python.exe not found.
   echo Run install.ps1 first.
   pause
@@ -12,5 +13,5 @@ if not exist "%~dp0.venv\Scripts\python.exe" (
 echo Opening the Odicto setup page in your browser...
 echo Close the window or press Ctrl+C here when you are done.
 echo.
-"%~dp0.venv\Scripts\python.exe" "%~dp0odicto.py" setup
+"%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\odicto.py" setup
 exit /b %ERRORLEVEL%

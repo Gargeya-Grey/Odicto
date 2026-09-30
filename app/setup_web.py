@@ -12,6 +12,7 @@ from __future__ import annotations
 import html
 import json
 import os
+from paths import ROOT
 import re
 import subprocess
 import sys
@@ -34,12 +35,12 @@ try:
 except Exception:  # pragma: no cover
     dotenv_values = None
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-ENV_EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example")
+ENV_PATH = os.path.join(str(ROOT), ".env")
+ENV_EXAMPLE_PATH = os.path.join(str(ROOT), ".env.example")
 
 _TOKEN_RE = re.compile(r"__[A-Z0-9_]+__")
 
-# The page markup lives in setup_template.html beside this module so it can be edited with
+# The page markup lives in assets/setup_template.html so it can be edited with
 # HTML/CSS/JS tooling rather than as an f-string. That f-string's {{ }} doubling once broke
 # the whole script (see test_setup_web_page_js_parses); moving the markup out removes the
 # hazard class. Read once, then cached.
@@ -47,10 +48,10 @@ _TEMPLATE_CACHE = None
 
 
 def _load_template() -> str:
-    """The setup page markup, read from setup_template.html beside this module."""
+    """The setup page markup, read from assets/setup_template.html."""
     global _TEMPLATE_CACHE
     if _TEMPLATE_CACHE is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup_template.html")
+        path = os.path.join(str(ROOT), "assets", "setup_template.html")
         with open(path, "r", encoding="utf-8") as handle:
             _TEMPLATE_CACHE = handle.read()
     return _TEMPLATE_CACHE
@@ -83,6 +84,14 @@ EDITABLE_KEYS = {
     "WHISPER_DEVICE",
     "STT_PROVIDER",
     "LIVE_STT_PROVIDER",
+    "GROQ_API_KEY",
+    "GROQ_API_BASE",
+    "GROQ_STT_MODEL",
+    "GROQ_MODEL",
+    "POLISH_DICTATION",
+    "POLISH_MODEL",
+    "AI_CLIPBOARD_IMAGE",
+    "OPENROUTER_STT_MODEL",
     "GEMINI_TRANSCRIBE_MODE",
     "GEMINI_TRANSCRIBE_MODEL",
     "GEMINI_TRANSCRIBE_LIVE_MODEL",
@@ -110,6 +119,7 @@ def _mask_key(key: str) -> bool:
         "META_API_KEY",
         "OPENROUTER_API_KEY",
         "GEMINI_API_KEY",
+        "GROQ_API_KEY",
     )
 
 
@@ -121,7 +131,50 @@ def _strip_secret_quotes(value: str) -> str:
     return v
 
 
-_SECRET_KEYS = frozenset({"META_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"})
+_SECRET_KEYS = frozenset({
+    "META_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+})
+
+# faster-whisper size ids. GPU figures are approximate peak memory for this
+# app's float16 GPU load, including the ~1 GB CUDA runtime. On device=auto,
+# tiny and base stay on the CPU and do not take that GPU memory. Relative
+# speed is versus large-v3 (OpenAI's published table): bigger GPU use is
+# slower to transcribe.
+_WHISPER_MODEL_CHOICES = (
+    ("tiny.en", "tiny.en - about 1 GB GPU, fastest, least accurate (auto stays on CPU)"),
+    ("tiny", "tiny - about 1 GB GPU, fastest, multilingual (auto stays on CPU)"),
+    ("base.en", "base.en - about 1 GB GPU, fast, low accuracy (auto stays on CPU)"),
+    ("base", "base - about 1 GB GPU, fast, multilingual (auto stays on CPU)"),
+    ("small.en", "small.en - about 2 GB GPU, slower, better accuracy (auto uses GPU)"),
+    ("small", "small - about 2 GB GPU, slower, multilingual (auto uses GPU)"),
+    ("distil-small.en", "distil-small.en - about 2 GB GPU, English, faster than small"),
+    ("medium.en", "medium.en - about 3 GB GPU, slow, heavy on a 4 GB laptop"),
+    ("medium", "medium - about 3 GB GPU, slow, multilingual, heavy on a 4 GB laptop"),
+    ("distil-medium.en", "distil-medium.en - about 2 GB GPU, English, faster than medium"),
+    ("large-v3-turbo", "large-v3-turbo - about 2.5 GB GPU, much faster than large-v3"),
+    ("distil-large-v3", "distil-large-v3 - about 2.5 GB GPU, English, faster than large-v3"),
+    ("large-v3", "large-v3 - about 4 GB GPU, slowest, most accurate, fills a 4 GB laptop"),
+    ("large-v2", "large-v2 - about 4 GB GPU, slow, older large model"),
+)
+
+
+def _whisper_model_options(current: str) -> str:
+    """Select options for the local Whisper size, including a saved custom id."""
+    chosen = (current or "").strip()
+    known = {value for value, _label in _WHISPER_MODEL_CHOICES}
+    lines = []
+    if chosen and chosen not in known:
+        safe = html.escape(chosen)
+        lines.append(f'<option value="{safe}" selected>{safe}</option>')
+    for value, label in _WHISPER_MODEL_CHOICES:
+        selected = " selected" if value == chosen else ""
+        lines.append(
+            f'<option value="{html.escape(value)}"{selected}>{html.escape(label)}</option>'
+        )
+    return "\n".join(lines)
 
 
 def _clean_submitted_value(key: str, value: str) -> str:
@@ -135,6 +188,7 @@ def _clean_submitted_value(key: str, value: str) -> str:
 _PROVIDER_KEY_REQUIREMENTS = {
     "meta": ("META_API_KEY", "META_API_KEY is required when LLM_PROVIDER=meta. Paste your Meta API key and save."),
     "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter."),
+    "groq": ("GROQ_API_KEY", "GROQ_API_KEY is required when LLM_PROVIDER=groq."),
     "gemini": ("GEMINI_API_KEY", "GEMINI_API_KEY is required when LLM_PROVIDER=gemini."),
 }
 
@@ -360,7 +414,7 @@ def restart_odicto() -> str:
     """
     import platforms
 
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = str(ROOT)
     pid_file = os.path.join(root, "dictation.pid")
     try:
         platforms.kill_other_odicto_processes(pid_file)
@@ -618,20 +672,44 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__PROMPT_SOURCE__": html.escape(prompt_source),
         "__STT_WHISPER_SELECTED__": ' selected' if stt_provider == 'whisper' else '',
         "__STT_GEMINI_SELECTED__": ' selected' if stt_provider == 'gemini' else '',
+        "__STT_GROQ_SELECTED__": ' selected' if stt_provider == 'groq' else '',
+        "__STT_OPENROUTER_SELECTED__": ' selected' if stt_provider == 'openrouter' else '',
         "__STT_AUTO_SELECTED__": ' selected' if stt_provider == 'auto' else '',
-        "__STT_WHISPER_HIDDEN__": ' hidden' if stt_provider == 'whisper' else '',
+        "__STT_GEMINI_FIELDS_HIDDEN__": '' if stt_provider in ('gemini', 'auto') else ' hidden',
+        "__STT_GROQ_FIELDS_HIDDEN__": '' if stt_provider == 'groq' or provider == 'groq' else ' hidden',
+        "__STT_OPENROUTER_FIELDS_HIDDEN__": '' if stt_provider == 'openrouter' else ' hidden',
         "__TRANSCRIBE_SMART_CHECKED__": 'checked' if transcribe_mode != 'verbatim' else '',
         "__TRANSCRIBE_MODE__": html.escape(transcribe_mode),
         "__TRANSCRIBE_LANG__": html.escape(transcribe_lang),
         "__TRANSCRIBE_VOCAB__": html.escape(transcribe_vocab),
-        "__WHISPER__": html.escape(whisper),
+        "__WHISPER_MODEL_OPTIONS__": _whisper_model_options(whisper),
         "__WHISPER_DEVICE__": html.escape(whisper_device),
+        "__WHISPER_DEVICE_AUTO_SELECTED__": ' selected' if whisper_device == 'auto' else '',
+        "__WHISPER_DEVICE_CUDA_SELECTED__": ' selected' if whisper_device == 'cuda' else '',
+        "__WHISPER_DEVICE_CPU_SELECTED__": ' selected' if whisper_device == 'cpu' else '',
+        "__WHISPER_DEVICE_EXTRA__": (
+            ''
+            if whisper_device in ('auto', 'cuda', 'cpu')
+            else f'<option value="{html.escape(whisper_device)}" selected>{html.escape(whisper_device)}</option>'
+        ),
         "__STT_WHISPER_HIDDEN_SECOND__": ' hidden' if stt_provider == 'whisper' else '',
+        "__GROQ_KEY__": html.escape(current.get("GROQ_API_KEY", "")),
+        "__GROQ_KEY_SAVED_HINT__": ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if current.get("GROQ_API_KEY") else '',
+        "__GROQ_MODEL__": html.escape(env_or("GROQ_MODEL")),
+        "__POLISH_MODEL__": html.escape(env_raw("POLISH_MODEL")),
+        "__POLISH_ON__": " selected" if env_or("POLISH_DICTATION") == "true" else "",
+        "__POLISH_OFF__": " selected" if env_or("POLISH_DICTATION") != "true" else "",
+        "__IMAGE_ON__": " selected" if env_or("AI_CLIPBOARD_IMAGE") == "true" else "",
+        "__IMAGE_OFF__": " selected" if env_or("AI_CLIPBOARD_IMAGE") != "true" else "",
+        "__GROQ_STT_MODEL__": html.escape(env_or("GROQ_STT_MODEL")),
+        "__OPENROUTER_STT_MODEL__": html.escape(env_or("OPENROUTER_STT_MODEL")),
         "__HOTKEY__": html.escape(hotkey),
         "__AI_HOTKEY__": html.escape(ai_hotkey),
         "__LIVE_HOTKEY__": html.escape(live_hotkey),
         "__LIVE_STT_AUTO_SELECTED__": ' selected' if live_stt_provider == 'auto' else '',
         "__LIVE_STT_GEMINI_SELECTED__": ' selected' if live_stt_provider == 'gemini' else '',
+        "__LIVE_STT_GROQ_SELECTED__": ' selected' if live_stt_provider == 'groq' else '',
+        "__LIVE_STT_OPENROUTER_SELECTED__": ' selected' if live_stt_provider == 'openrouter' else '',
         "__LIVE_STT_WHISPER_SELECTED__": ' selected' if live_stt_provider == 'whisper' else '',
         "__SERVER_STATUS__": server_status,
         "__SYSTEM_PROMPT__": html.escape(system_prompt),
@@ -748,6 +826,10 @@ class _Handler(BaseHTTPRequestHandler):
             model = pick("OPENROUTER_MODEL", OPENROUTER_FALLBACK_MODEL)
             api_base = pick("OPENROUTER_API_BASE", ENV_DEFAULTS["OPENROUTER_API_BASE"])
             reasoning_effort = pick("OPENROUTER_REASONING_EFFORT")
+        elif provider == "groq":
+            api_key = pick("GROQ_API_KEY")
+            model = pick("GROQ_MODEL", ENV_DEFAULTS["GROQ_MODEL"])
+            api_base = pick("GROQ_API_BASE", ENV_DEFAULTS["GROQ_API_BASE"])
         elif provider == "gemini":
             api_key = pick("GEMINI_API_KEY")
             model = pick("GEMINI_MODEL", ENV_DEFAULTS["GEMINI_MODEL"])
@@ -816,7 +898,7 @@ class _Handler(BaseHTTPRequestHandler):
         provider = (
             updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "none"
         ).strip().lower()
-        if provider not in ("meta", "ollama", "openrouter", "gemini", "none"):
+        if provider not in ("meta", "ollama", "openrouter", "gemini", "groq", "none"):
             body = _page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err").encode("utf-8")
             self._send(body)
             return

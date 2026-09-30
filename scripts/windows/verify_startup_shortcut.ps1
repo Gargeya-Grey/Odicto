@@ -18,5 +18,5 @@ try {
   } else { Write-Output "Task Exists: False (Startup shortcut is the fallback)" }
 } catch { Write-Output "Task Exists: unknown ($($_.Exception.Message))" }
 Write-Output "---"
-$repo = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 if (Test-Path (Join-Path $repo 'dictation.pid')) { Write-Output "Running PID: $(Get-Content (Join-Path $repo 'dictation.pid'))"; } else { Write-Output "Running: not detected (dictation.pid missing)" }

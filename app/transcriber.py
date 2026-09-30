@@ -1,12 +1,15 @@
 import asyncio
 import base64
 import io
+import json
 import os
 import queue
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import wave
 from typing import Callable, List, Optional, Tuple, Union
 
@@ -99,11 +102,8 @@ def get_genai_client(api_key: str):
         return client
 
 
-# Login can beat the NVIDIA driver. Today's working boot had CUDA up ~86s after
-# explorer.exe; 5 minutes is the ceiling. Probe succeeds → return immediately
-# (manual start / warm machine waits 0s). Never switch the session to CPU just
-# because the driver was late — that would slow STT until another restart.
-CUDA_WAIT_SECONDS = 300.0
+# Explicit CUDA can briefly wait for a cold driver. Auto never waits at login.
+CUDA_WAIT_SECONDS = 15.0
 
 
 def wait_for_cuda_driver(max_wait_s: Optional[float] = None) -> bool:
@@ -111,9 +111,8 @@ def wait_for_cuda_driver(max_wait_s: Optional[float] = None) -> bool:
 
     ``cuInit`` / ctranslate2 can heap-corrupt this process (WER ``0xc0000374``)
     if the driver is still coming up. Probe out-of-process. Returns True when
-    the probe succeeds. A timeout still means "try CUDA in this process next"
-    — it must not force CPU. Tests that inject a mock ``WhisperModel`` skip
-    the subprocess.
+    the probe succeeds. A failed probe must not load CUDA in this process.
+    Tests that inject a mock ``WhisperModel`` skip the subprocess.
     """
     mod = getattr(WhisperModel, "__module__", "") or "" if WhisperModel is not None else ""
     if "faster_whisper" not in mod:
@@ -146,13 +145,13 @@ def wait_for_cuda_driver(max_wait_s: Optional[float] = None) -> bool:
         left = max(0, int(deadline - time.monotonic()))
         print(f"CUDA still not ready ({left}s left)...", flush=True)
     print(
-        "CUDA probe timed out after wait; trying GPU load anyway.",
+        "CUDA probe timed out; CUDA will not be loaded in this process.",
         flush=True,
     )
     return False
 
 
-def _probe_cuda_subprocess(timeout: float = 20.0) -> bool:
+def _probe_cuda_subprocess(timeout: float = 2.0) -> bool:
     code = (
         "import sys\n"
         "try:\n"
@@ -239,9 +238,11 @@ class WhisperTranscriber:
 
             WhisperModel = _WhisperModel
         if any(device == "cuda" for device, _ in devices_to_try):
-            # Wait for the GPU driver. Do not drop CUDA from the chain — CPU
-            # is only the existing exception fallback if the CUDA load raises.
-            wait_for_cuda_driver()
+            if configured_device == "auto":
+                if sys.platform == "darwin" or not wait_for_cuda_driver(max_wait_s=0.0):
+                    devices_to_try = [("cpu", "int8")]
+            elif not wait_for_cuda_driver():
+                raise RuntimeError("CUDA driver unavailable; select WHISPER_DEVICE=cpu or auto")
         elif configured_device == "auto":
             print(
                 f"Whisper '{model_size}' uses CPU under auto "
@@ -268,6 +269,8 @@ class WhisperTranscriber:
                 print(
                     f"Whisper model loaded successfully on {device} in {elapsed:.2f} seconds."
                 )
+                if device == "cuda":
+                    self._warmup_gpu()
                 return
             except Exception as e:
                 last_error = e
@@ -279,6 +282,32 @@ class WhisperTranscriber:
             raise RuntimeError(
                 f"Could not initialize Whisper model on any device: {last_error}"
             )
+
+    def _warmup_gpu(self) -> None:
+        """One silent decode so the first hotkey does not pay CUDA kernel setup.
+
+        ``WHISPER_DEVICE=cuda`` (and larger models under ``auto``) already
+        keeps the weights in GPU memory. The first real ``transcribe`` still
+        compiles kernels unless something has run. Skipped for test doubles:
+        only a real faster-whisper model is warmed.
+        """
+        model = self.model
+        mod = getattr(type(model), "__module__", "") if model is not None else ""
+        if not isinstance(mod, str) or not mod.startswith("faster_whisper"):
+            return
+        rate = int(Config.SAMPLE_RATE or 16000)
+        silence = np.zeros(max(1, int(rate * 0.25)), dtype=np.float32)
+        started = time.time()
+        try:
+            self.transcribe(silence)
+        except Exception as e:
+            print(f"Warning: Whisper GPU warmup failed: {e}", flush=True)
+            return
+        print(
+            f"Whisper is resident on the GPU. Warmup finished in "
+            f"{time.time() - started:.2f}s.",
+            flush=True,
+        )
 
     def transcribe(self, audio: Union[str, np.ndarray]) -> str:
         """Transcribes audio to text (accepts filepath string or in-memory numpy array).
@@ -346,6 +375,151 @@ class WhisperTranscriber:
             if text:
                 parts.append(text)
         return "".join(parts).strip()
+
+
+def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: bytes) -> tuple:
+    """Build a multipart body. Returns (body, content_type)."""
+    boundary = "----OdictoSttBoundary7f3a9c"
+    chunks: List[bytes] = []
+    for name, value in fields.items():
+        if value is None or value == "":
+            continue
+        chunks.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode("utf-8")
+        )
+    chunks.append(
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
+            f"Content-Type: audio/wav\r\n\r\n"
+        ).encode("utf-8")
+    )
+    chunks.append(file_bytes)
+    chunks.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _post_bytes(url: str, data: bytes, headers: dict, timeout: float = 45.0) -> dict:
+    """POST and parse a JSON object. Raises RuntimeError on HTTP or bad JSON."""
+    req = urllib.request.Request(url, data=data, method="POST")
+    for key, value in headers.items():
+        req.add_header(key, value)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"HTTP {e.code} {detail}".strip()) from e
+    except Exception as e:
+        raise RuntimeError(str(e) or type(e).__name__) from e
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"speech response was not JSON ({e})") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError("speech response was not a JSON object")
+    return payload
+
+
+def _transcript_from_payload(payload: dict) -> str:
+    text = payload.get("text")
+    if isinstance(text, str):
+        return text.strip()
+    return ""
+
+
+class CloudTranscriber:
+    """Batch speech-to-text for Groq and OpenRouter.
+
+    Groq takes an OpenAI-style multipart upload. OpenRouter takes base64
+    JSON at ``/audio/transcriptions``, including Grok speech models by
+    slug. Any failure falls back to local Whisper so dictation still pastes.
+    """
+
+    def __init__(self, kind: str) -> None:
+        self.kind = (kind or "").strip().lower()
+        self._whisper: Optional[WhisperTranscriber] = None
+
+    def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
+        label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
+            self.kind, self.kind or "Cloud"
+        )
+        print(f"{label} STT fallback to Whisper ({reason})", flush=True)
+        if self._whisper is None:
+            self._whisper = WhisperTranscriber()
+        return self._whisper.transcribe(audio)
+
+    def _endpoint(self) -> tuple:
+        """Return (url, api_key, model) for the configured backend."""
+        if self.kind == "groq":
+            return (
+                f"{Config.GROQ_API_BASE}/audio/transcriptions",
+                Config.GROQ_API_KEY.strip(),
+                Config.GROQ_STT_MODEL or "whisper-large-v3-turbo",
+            )
+        base = (Config.OPENROUTER_API_BASE or "https://openrouter.ai/api/v1").strip().rstrip("/")
+        return (
+            f"{base}/audio/transcriptions",
+            Config.OPENROUTER_API_KEY.strip(),
+            Config.OPENROUTER_STT_MODEL or "openai/whisper-large-v3",
+        )
+
+    def transcribe(
+        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+    ) -> str:
+        """Transcribe. ``mode`` is accepted so callers can share Gemini's signature."""
+        del mode
+        if isinstance(audio, np.ndarray) and audio.size == 0:
+            return ""
+        url, api_key, model = self._endpoint()
+        if not api_key:
+            return self._whisper_fallback(audio, "no API key")
+        try:
+            wav_bytes = _audio_to_wav_bytes(audio, Config.SAMPLE_RATE or 16000)
+        except Exception as e:
+            return self._whisper_fallback(audio, f"audio encode failed: {e}")
+        if not wav_bytes:
+            return ""
+        language = Config.stt_language_hint()
+        headers = {"Authorization": f"Bearer {api_key}"}
+        try:
+            if self.kind == "openrouter":
+                payload: dict = {
+                    "model": model,
+                    "input_audio": {
+                        "data": base64.b64encode(wav_bytes).decode("ascii"),
+                        "format": "wav",
+                    },
+                }
+                if language:
+                    payload["language"] = language
+                body = json.dumps(payload).encode("utf-8")
+                headers["Content-Type"] = "application/json"
+            else:
+                fields = {"model": model}
+                if self.kind == "groq":
+                    fields["response_format"] = "json"
+                if language:
+                    fields["language"] = language
+                body, content_type = _encode_multipart(
+                    fields, "file", "clip.wav", wav_bytes
+                )
+                headers["Content-Type"] = content_type
+            result = _post_bytes(url, body, headers)
+        except Exception as e:
+            return self._whisper_fallback(audio, str(e) or type(e).__name__)
+        text = _transcript_from_payload(result)
+        if text:
+            return text
+        return self._whisper_fallback(audio, "empty transcript")
 
 
 def _transcription_config_payload(mode: str) -> dict:
@@ -454,12 +628,9 @@ class GeminiLiveSession:
         self._sdk_client = client
         self._chunks: queue.Queue = queue.Queue(maxsize=128)
         self._stop = threading.Event()
-        self._ready = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._final_parts: List[str] = []
         self._error: Optional[str] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._session = None
         self._final_wait_s: float = 0.8
 
     def start(self) -> None:
@@ -545,11 +716,9 @@ class GeminiLiveSession:
         mime = f"audio/pcm;rate={sample_rate}"
         try:
             async with client.aio.live.connect(model=model, config=live_cfg) as session:
-                self._session = session
                 await session.send_realtime_input(
                     activity_start=google_genai_types.ActivityStart()
                 )
-                self._ready.set()
                 receiver = asyncio.create_task(self._recv_loop(session))
                 await self._send_loop(session, mime)
                 try:
@@ -566,15 +735,14 @@ class GeminiLiveSession:
                     receiver.cancel()
         except Exception as e:
             self._error = str(getattr(e, "message", "")) or str(e)
-        finally:
-            self._ready.set()
-            self._session = None
 
     async def _send_loop(self, session, mime: str) -> None:
-        while not self._stop.is_set():
+        while True:
             try:
                 chunk = await asyncio.to_thread(self._chunks.get, True, 0.15)
             except queue.Empty:
+                if self._stop.is_set():
+                    break
                 continue
             if chunk is None:
                 break

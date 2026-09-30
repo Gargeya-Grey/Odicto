@@ -2,10 +2,11 @@ import os
 import re
 from typing import Literal, Tuple
 from dotenv import load_dotenv
+from paths import ROOT
 
 # Load environment variables from .env file (override system env vars so the
 # project's .env takes precedence over Windows user/system environment).
-load_dotenv(override=True)
+load_dotenv(ROOT / ".env", override=True)
 
 
 def _env_bool(name: str, default: str = "true") -> bool:
@@ -49,6 +50,16 @@ ENV_DEFAULTS: dict[str, str] = {
     "GEMINI_TRANSCRIBE_MODE": "smart",
     "GEMINI_TRANSCRIBE_LANGUAGE": "",
     "GEMINI_TRANSCRIBE_VOCABULARY": "",
+    # Cloud speech-to-text. The same provider and model serve raw dictation,
+    # AI mode, and (when LIVE_STT_PROVIDER=auto) the F7 tap.
+    "GROQ_API_KEY": "",
+    "GROQ_API_BASE": "https://api.groq.com/openai/v1",
+    "GROQ_STT_MODEL": "whisper-large-v3-turbo",
+    "GROQ_MODEL": "openai/gpt-oss-20b",
+    "AI_CLIPBOARD_IMAGE": "false",
+    "POLISH_DICTATION": "false",
+    "POLISH_MODEL": "",
+    "OPENROUTER_STT_MODEL": "openai/whisper-large-v3",
     "LIVE_HOTKEY": "f7",
     # LLM — generic knobs (apply to the active provider)
     "LLM_PROVIDER": "none",
@@ -123,7 +134,7 @@ def _present(key: str) -> bool:
 
 
 # Which keys were explicitly provided when the module was imported. Computed
-# once here because load_dotenv(override=True) above has already merged .env
+# once here because load_dotenv(ROOT / ".env", override=True) above has already merged .env
 # into os.environ.
 _PRESENT_AT_IMPORT: frozenset = frozenset(k for k in ENV_DEFAULTS if _present(k))
 
@@ -222,7 +233,7 @@ PROMPT_EXAMPLE_NAME = "prompt.txt.example"
 
 
 def _prompt_dir() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    return str(ROOT)
 
 
 def _read_utf8_prompt(path: str) -> str:
@@ -306,6 +317,32 @@ def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
     return tuple(parts[:-1]), parts[-1]
 
 
+# Speech backends. ``auto`` on STT_PROVIDER still means Gemini when a Gemini
+# key is saved, otherwise local Whisper. ``auto`` on LIVE_STT_PROVIDER means
+# "the same backend STT_PROVIDER resolved to".
+STT_PROVIDER_NAMES = ("whisper", "gemini", "groq", "openrouter", "auto")
+
+
+def normalize_stt_provider(raw: str, default: str = "whisper") -> str:
+    """Map a config string onto a known speech backend.
+
+    Unknown values become ``default`` (whisper for the main provider, auto
+    for the live tap) so a typo cannot select a half-configured cloud.
+    """
+    value = (raw or "").strip().lower().replace("-", "_")
+    if value in ("gemini", "gemini_api", "google", "google_api"):
+        return "gemini"
+    if value in ("groq", "groq_api"):
+        return "groq"
+    if value in ("openrouter", "open_router"):
+        return "openrouter"
+    if value in ("whisper", "local", "faster_whisper"):
+        return "whisper"
+    if value == "auto":
+        return "auto"
+    return default if default in STT_PROVIDER_NAMES else "whisper"
+
+
 def validate_hotkey_pair(hotkey: str, ai_hotkey: str = "") -> None:
     """Validate a proposed HOTKEY / AI_HOTKEY pair without touching live config.
 
@@ -368,24 +405,16 @@ class Config:
     # Forced on for recordings >= 8s in transcriber.py, or set WHISPER_VAD=true.
     WHISPER_VAD: bool = _env_bool("WHISPER_VAD", _def("WHISPER_VAD"))
 
-    # Speech-to-text backend. Independent of LLM_PROVIDER: Gemini STT can run
-    # while AI replies still go through Meta/OpenRouter/Ollama/none.
-    # whisper | gemini | auto  (auto = Gemini when GEMINI_API_KEY is set)
-    _raw_stt = os.getenv("STT_PROVIDER", _def("STT_PROVIDER")).strip().lower().replace("-", "_")
-    STT_PROVIDER: Literal["whisper", "gemini", "auto"] = (  # type: ignore
-        "gemini"
-        if _raw_stt in ("gemini", "gemini_api", "google", "google_api")
-        else "auto"
-        if _raw_stt == "auto"
-        else "whisper"
+    # Speech-to-text backend. Independent of LLM_PROVIDER.
+    # whisper | gemini | groq | openrouter | auto
+    # auto = Gemini when GEMINI_API_KEY is set, otherwise local Whisper.
+    # The resolved backend and its model are used for raw dictation and AI mode.
+    STT_PROVIDER: str = normalize_stt_provider(
+        os.getenv("STT_PROVIDER", _def("STT_PROVIDER")), default="whisper"
     )
-    _raw_live_stt = os.getenv("LIVE_STT_PROVIDER", _def("LIVE_STT_PROVIDER")).strip().lower().replace("-", "_")
-    LIVE_STT_PROVIDER: Literal["whisper", "gemini", "auto"] = (  # type: ignore
-        "gemini"
-        if _raw_live_stt in ("gemini", "gemini_api", "google", "google_api")
-        else "whisper"
-        if _raw_live_stt == "whisper"
-        else "auto"
+    # auto = follow STT_PROVIDER. An explicit value overrides the live tap only.
+    LIVE_STT_PROVIDER: str = normalize_stt_provider(
+        os.getenv("LIVE_STT_PROVIDER", _def("LIVE_STT_PROVIDER")), default="auto"
     )
     GEMINI_TRANSCRIBE_MODEL: str = _sanitize_model_id(
         _default_env("GEMINI_TRANSCRIBE_MODEL")
@@ -399,6 +428,14 @@ class Config:
     )
     GEMINI_TRANSCRIBE_LANGUAGE: str = _default_env("GEMINI_TRANSCRIBE_LANGUAGE").strip()
     GEMINI_TRANSCRIBE_VOCABULARY: str = _default_env("GEMINI_TRANSCRIBE_VOCABULARY").strip()
+    AI_CLIPBOARD_IMAGE: bool = _env_bool("AI_CLIPBOARD_IMAGE", _def("AI_CLIPBOARD_IMAGE"))
+    POLISH_DICTATION: bool = _env_bool("POLISH_DICTATION", _def("POLISH_DICTATION"))
+    POLISH_MODEL: str = _sanitize_model_id(_default_env("POLISH_MODEL"))
+    GROQ_MODEL: str = _sanitize_model_id(_default_env("GROQ_MODEL"))
+    GROQ_API_KEY: str = _clean_secret("GROQ_API_KEY")
+    GROQ_API_BASE: str = _default_env("GROQ_API_BASE").strip().rstrip("/")
+    GROQ_STT_MODEL: str = _sanitize_model_id(_default_env("GROQ_STT_MODEL"))
+    OPENROUTER_STT_MODEL: str = _sanitize_model_id(_default_env("OPENROUTER_STT_MODEL"))
     # Tap-to-talk (press once to start, press again to stop and paste). Empty disables.
     LIVE_HOTKEY: str = _default_env("LIVE_HOTKEY").strip().lower()
 
@@ -406,7 +443,7 @@ class Config:
     # Flip LLM_PROVIDER between ollama / openrouter / meta / gemini / none to switch backends.
     # Aliases: meta-api, meta_api -> meta ; google, gemini-api -> gemini
     _raw_provider = os.getenv("LLM_PROVIDER", _def("LLM_PROVIDER")).strip().lower().replace("-", "_")
-    LLM_PROVIDER: Literal["ollama", "openrouter", "meta", "gemini", "none"] = (  # type: ignore
+    LLM_PROVIDER: Literal["ollama", "openrouter", "meta", "gemini", "groq", "none"] = (  # type: ignore
         "meta"
         if _raw_provider in ("meta", "meta_api")
         else "gemini"
@@ -483,6 +520,7 @@ class Config:
         "openrouter": "OPENROUTER_REASONING_EFFORT",
     }
     _MODEL_ATTR = {
+        "groq": "GROQ_MODEL",
         "ollama": "OLLAMA_MODEL",
         "openrouter": "OPENROUTER_MODEL",
         "meta": "META_MODEL",
@@ -531,9 +569,10 @@ class Config:
         override = cls._provider_override(cls._MODEL_ATTR, require_nonblank=True)
         if override:
             return override
-        if cls.LLM_MODEL.strip():
+        if cls.LLM_MODEL.strip() and (provider != "groq" or cls._explicit("LLM_MODEL", ("LLM_MODEL",))):
             return cls.LLM_MODEL
         return {
+            "groq": _def("GROQ_MODEL"),
             "ollama": _def("LLM_MODEL"),
             "openrouter": OPENROUTER_FALLBACK_MODEL,
             "meta": _def("META_MODEL"),
@@ -543,6 +582,8 @@ class Config:
     @classmethod
     def effective_llm_api_base(cls) -> str:
         """API base for the active provider."""
+        if cls.LLM_PROVIDER == "groq":
+            return cls.GROQ_API_BASE
         if cls.LLM_PROVIDER == "openrouter":
             base = cls.LLM_API_BASE
             # Keep a custom base if the user pointed LLM_API_BASE at a non-local proxy.
@@ -571,6 +612,8 @@ class Config:
         elif provider == "meta":
             if cls.META_API_KEY.strip():
                 return cls.META_API_KEY.strip()
+        elif provider == "groq":
+            return cls.GROQ_API_KEY.strip()
         elif provider == "gemini":
             if cls.GEMINI_API_KEY.strip():
                 return cls.GEMINI_API_KEY.strip()
@@ -684,32 +727,78 @@ class Config:
         }
 
     @classmethod
-    def effective_stt_provider(cls) -> Literal["whisper", "gemini"]:
-        """Resolved STT backend: gemini only when a Gemini key is present."""
-        if cls.STT_PROVIDER == "whisper":
+    def stt_has_credentials(cls, provider: str) -> bool:
+        """True when that speech backend can be called."""
+        if provider == "gemini":
+            return bool(cls.GEMINI_API_KEY.strip())
+        if provider == "groq":
+            return bool(cls.GROQ_API_KEY.strip())
+        if provider == "openrouter":
+            return bool(cls.OPENROUTER_API_KEY.strip())
+        return provider == "whisper"
+
+    @classmethod
+    def effective_stt_provider(cls) -> str:
+        """Speech backend for raw dictation and AI mode.
+
+        ``auto`` is Gemini when a Gemini key is saved, otherwise Whisper.
+        An explicit cloud choice with no key falls back to Whisper.
+        """
+        chosen = cls.STT_PROVIDER
+        if chosen == "auto":
+            return "gemini" if cls.stt_has_credentials("gemini") else "whisper"
+        if chosen == "whisper":
             return "whisper"
-        if cls.GEMINI_API_KEY.strip():
-            return "gemini"
+        if cls.stt_has_credentials(chosen):
+            return chosen
         return "whisper"
 
     @classmethod
-    def effective_live_stt_provider(cls) -> Literal["whisper", "gemini"]:
-        """Resolved STT backend for F7 Live Tap-to-Talk."""
-        if cls.LIVE_STT_PROVIDER == "whisper":
+    def effective_live_stt_provider(cls) -> str:
+        """Speech backend for the F7 tap.
+
+        ``auto`` follows ``effective_stt_provider`` so one setting covers
+        raw dictation, AI mode, and the live tap. An explicit live value
+        still overrides, and a cloud choice with no key falls back to Whisper.
+        """
+        chosen = cls.LIVE_STT_PROVIDER
+        if chosen == "auto":
+            return cls.effective_stt_provider()
+        if chosen == "whisper":
             return "whisper"
-        if cls.LIVE_STT_PROVIDER == "gemini":
-            return "gemini" if cls.GEMINI_API_KEY.strip() else "whisper"
-        # auto:
-        if cls.GEMINI_API_KEY.strip():
-            return "gemini"
+        if cls.stt_has_credentials(chosen):
+            return chosen
         return "whisper"
+
+    @classmethod
+    def stt_model_label(cls, provider: str = "") -> str:
+        """Short name of the speech model for logs and the setup meter."""
+        name = (provider or cls.effective_stt_provider() or "whisper").strip().lower()
+        if name == "gemini":
+            return cls.GEMINI_TRANSCRIBE_MODEL or "gemini"
+        if name == "groq":
+            return f"Groq {cls.GROQ_STT_MODEL}".strip()
+        if name == "openrouter":
+            return f"OpenRouter {cls.OPENROUTER_STT_MODEL}".strip()
+        return f"Whisper {cls.WHISPER_MODEL_SIZE}".strip()
+
+    @classmethod
+    def stt_language_hint(cls) -> str:
+        """ISO-639-1 hint shared by cloud speech backends. Empty = auto."""
+        codes = cls.gemini_transcribe_language_codes()
+        if not codes:
+            return ""
+        primary = codes[0].split("-", 1)[0].strip().lower()
+        if primary.isalpha() and 2 <= len(primary) <= 3:
+            return primary
+        return ""
 
     @classmethod
     def gemini_transcribe_mode(cls) -> Literal["smart", "verbatim"]:
         """Smart (cleaned dictation) or verbatim (literal).
 
-        Applies to the dictation chord and F7 live tap. The AI chord uses local
-        Whisper instead (the LLM is the cleanup step).
+        Applies wherever the resolved speech backend is Gemini (raw, AI, and
+        the live tap). Groq and OpenRouter transcribe the audio as-is.
         """
         mode = (cls.GEMINI_TRANSCRIBE_MODE or "smart").strip().lower()
         return "verbatim" if mode == "verbatim" else "smart"
@@ -863,6 +952,7 @@ class Config:
             cls.effective_llm_api_base(),
             {
                 "openrouter": _source_of("OPENROUTER_API_BASE", "LLM_API_BASE"),
+                "groq": _source_of("GROQ_API_BASE"),
                 "meta": _source_of("META_API_BASE"),
                 # Gemini always uses the official endpoint baked into the SDK.
                 "gemini": "built-in (Google endpoint)",
@@ -872,6 +962,7 @@ class Config:
 
         model = cls.effective_llm_model()
         override_attr = {
+            "groq": "GROQ_MODEL",
             "ollama": "OLLAMA_MODEL",
             "openrouter": "OPENROUTER_MODEL",
             "meta": "META_MODEL",
@@ -1014,6 +1105,24 @@ class Config:
             f"{vocab_n} term(s)" if vocab_n else "(none)",
             _source_of("GEMINI_TRANSCRIBE_VOCABULARY"),
         )
+        add("AI", "Groq chat model", cls.GROQ_MODEL, _source_of("GROQ_MODEL"))
+        add("AI", "Clipboard image", cls.AI_CLIPBOARD_IMAGE, _source_of("AI_CLIPBOARD_IMAGE"))
+        add("Speech to text", "Polish dictation", cls.POLISH_DICTATION, _source_of("POLISH_DICTATION"))
+        add("Speech to text", "Polish model", cls.POLISH_MODEL, _source_of("POLISH_MODEL"))
+        add("Speech to text", "Groq STT model", cls.GROQ_STT_MODEL, _source_of("GROQ_STT_MODEL"))
+        add(
+            "Speech to text",
+            "Groq API key",
+            cls.GROQ_API_KEY,
+            _source_of("GROQ_API_KEY"),
+            secret=True,
+        )
+        add(
+            "Speech to text",
+            "OpenRouter STT model",
+            cls.OPENROUTER_STT_MODEL,
+            _source_of("OPENROUTER_STT_MODEL"),
+        )
 
         add("Timing", "Paste delay (s)", cls.PASTE_DELAY_SECONDS, _source_of("PASTE_DELAY_SECONDS"))
         add("Timing", "Audio cues", cls.PLAY_AUDIO_CUES, _source_of("PLAY_AUDIO_CUES"))
@@ -1043,7 +1152,7 @@ class Config:
         Raises:
             ValueError: If a configuration value is invalid.
         """
-        valid_providers = {"ollama", "openrouter", "meta", "gemini", "none"}
+        valid_providers = {"ollama", "openrouter", "meta", "gemini", "groq", "none"}
         if cls.LLM_PROVIDER not in valid_providers:
             raise ValueError(
                 f"LLM_PROVIDER must be one of {valid_providers}, got '{cls.LLM_PROVIDER}'"
@@ -1114,27 +1223,35 @@ class Config:
             )
         if cls.GEMINI_MAX_OUTPUT_TOKENS < 64:
             raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 64, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
-        if cls.STT_PROVIDER not in ("whisper", "gemini", "auto"):
+        if cls.STT_PROVIDER not in STT_PROVIDER_NAMES:
             raise ValueError(
-                f"STT_PROVIDER must be whisper|gemini|auto, got {cls.STT_PROVIDER!r}"
+                "STT_PROVIDER must be whisper|gemini|groq|openrouter|auto, "
+                f"got {cls.STT_PROVIDER!r}"
             )
-        if cls.LIVE_STT_PROVIDER not in ("whisper", "gemini", "auto"):
+        if cls.LIVE_STT_PROVIDER not in STT_PROVIDER_NAMES:
             raise ValueError(
-                f"LIVE_STT_PROVIDER must be whisper|gemini|auto, got {cls.LIVE_STT_PROVIDER!r}"
+                "LIVE_STT_PROVIDER must be whisper|gemini|groq|openrouter|auto, "
+                f"got {cls.LIVE_STT_PROVIDER!r}"
             )
         if cls.GEMINI_TRANSCRIBE_MODE not in ("smart", "verbatim"):
             raise ValueError(
                 f"GEMINI_TRANSCRIBE_MODE must be smart|verbatim, got {cls.GEMINI_TRANSCRIBE_MODE!r}"
             )
-        if cls.STT_PROVIDER == "gemini" and not cls.GEMINI_API_KEY.strip():
-            print(
-                "Warning: GEMINI_API_KEY is empty while STT_PROVIDER='gemini'. "
-                "Speech-to-text will fall back to local Whisper until a key is set.",
-                flush=True,
-            )
+        _missing_stt_key = {
+            "gemini": ("GEMINI_API_KEY", cls.GEMINI_API_KEY),
+            "groq": ("GROQ_API_KEY", cls.GROQ_API_KEY),
+            "openrouter": ("OPENROUTER_API_KEY", cls.OPENROUTER_API_KEY),
+        }
+        for stt_name, (env_name, secret) in _missing_stt_key.items():
+            if cls.STT_PROVIDER == stt_name and not (secret or "").strip():
+                print(
+                    f"Warning: {env_name} is empty while STT_PROVIDER={stt_name!r}. "
+                    "Speech-to-text will fall back to local Whisper until a key is set.",
+                    flush=True,
+                )
 
-        if cls.SAMPLE_RATE <= 0:
-            raise ValueError(f"SAMPLE_RATE must be positive, got {cls.SAMPLE_RATE}")
+        if cls.SAMPLE_RATE != 16000:
+            raise ValueError(f"SAMPLE_RATE must be 16000 for the in-memory speech pipeline, got {cls.SAMPLE_RATE}")
         if cls.CHANNELS not in (1, 2):
             raise ValueError(f"CHANNELS must be 1 or 2, got {cls.CHANNELS}")
         if cls.LLM_MAX_TOKENS < 1:
@@ -1190,6 +1307,8 @@ _IMPORT_SNAPSHOT.update(
     {
         name: getattr(Config, name)
         for name in (
+            "GROQ_MODEL",
+            "LLM_MODEL",
             "OLLAMA_MODEL",
             "OPENROUTER_MODEL",
             "META_MODEL",
@@ -1212,7 +1331,7 @@ def load_env_file_keys() -> dict:
         from dotenv import dotenv_values
     except Exception:  # pragma: no cover
         return {}
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    path = os.path.join(str(ROOT), ".env")
     if not os.path.exists(path):
         return {}
     try:
@@ -1229,7 +1348,28 @@ def config_warnings() -> list:
     """
     warnings: list = []
     env_vals = load_env_file_keys()
-    unknown = sorted(k for k in env_vals if k and k not in KNOWN_ENV_KEYS)
+    retired_grok = [
+        k for k in ("GROK_API_KEY", "GROK_API_BASE", "GROK_STT_MODEL") if k in env_vals
+    ]
+    if retired_grok:
+        warnings.append(
+            "Grok's own speech API is not used ("
+            + ", ".join(retired_grok)
+            + "). Choose OpenRouter and set OPENROUTER_STT_MODEL "
+            "(for example x-ai/grok-stt-1.0)."
+        )
+    for stt_key in ("STT_PROVIDER", "LIVE_STT_PROVIDER"):
+        raw_stt = (env_vals.get(stt_key) or "").strip().lower().replace("-", "_")
+        if raw_stt in ("grok", "grok_api", "xai", "xai_api"):
+            warnings.append(
+                f"{stt_key}=grok is no longer a direct API. Choose openrouter "
+                "and set OPENROUTER_STT_MODEL to the Grok speech model."
+            )
+    unknown = sorted(
+        k
+        for k in env_vals
+        if k and k not in KNOWN_ENV_KEYS and k not in retired_grok
+    )
     for key in unknown:
         if key == "LLM_API_KEY":
             warnings.append(

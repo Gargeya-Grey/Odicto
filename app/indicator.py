@@ -12,6 +12,7 @@ Design language:
 from __future__ import annotations
 
 import math
+import threading
 import os
 import sys
 from enum import Enum, auto
@@ -42,6 +43,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from platforms import apply_window_exstyles
+from paths import ROOT
 
 
 class GuiState(Enum):
@@ -90,9 +92,12 @@ def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[s
     if state == GuiState.RECORDING:
         return "Listening"
     if state == GuiState.PROCESSING:
+        if last_status in ("polishing", "finalizing"):
+            return last_status.capitalize()
         return "Thinking" if use_llm else "Transcribing"
     if state == GuiState.SUCCESS:
-        return "Done"
+        return {"ai_fallback": "AI failed · raw text",
+                "polish_fallback": "Polish skipped · raw text"}.get(last_status, "Done")
     if state == GuiState.ERROR:
         if last_status == "empty":
             return "No speech"
@@ -118,6 +123,7 @@ def _all_status_labels() -> list[str]:
         status_label(GuiState.ERROR, last_status="empty"),
         status_label(GuiState.ERROR, last_status="error"),
         status_label(GuiState.RESET),
+        "Polishing", "Finalizing", "AI failed · raw text", "Polish skipped · raw text",
     ]
 
 
@@ -125,6 +131,7 @@ class DictationIndicator(QWidget):
     """Bottom-center always-on-top glass HUD for the dictation service."""
 
     # Thread-safe wake-ups from keyboard / worker threads
+    _image_request = Signal(object)
     _wake = Signal()
     _hide_req = Signal()
     _reset_flash = Signal()
@@ -142,6 +149,7 @@ class DictationIndicator(QWidget):
 
         super().__init__(None)
 
+        self._image_request.connect(self._read_clipboard_image)
         self.app = app
         self.gui_state: GuiState = GuiState.BOOTING
         self.last_app_state: Any = None
@@ -254,7 +262,7 @@ class DictationIndicator(QWidget):
             import sys
 
             subprocess.Popen(
-                [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "odicto.py"), "setup"],
+                [sys.executable, os.path.join(str(ROOT), "odicto.py"), "setup"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -335,8 +343,8 @@ class DictationIndicator(QWidget):
         self._reposition_bottom_center()
 
     def _is_live_layout(self) -> bool:
-        # Live text goes to the caret; HUD stays a one-row listening pill.
-        return False
+        return (getattr(self.app, "live_active", False) is True or
+                (self.gui_state == GuiState.PROCESSING and bool(getattr(self.app, "live_preview", ""))))
 
     def _sync_geometry(self) -> None:
         """Grow the capsule for the expanded recording waveform."""
@@ -345,6 +353,8 @@ class DictationIndicator(QWidget):
             pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 20, 22
         else:
             pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 7, 22
+        if self._is_live_layout():
+            pill_w, pill_h = max(pill_w, 440), 86
         if (
             pill_w == self._pill_w
             and pill_h == self._pill_h
@@ -376,6 +386,19 @@ class DictationIndicator(QWidget):
         apply_window_exstyles(self)
 
     # -------------------------------------------------------------- public API
+    def capture_clipboard_image(self):
+        """Worker request; Qt clipboard access executes only on the GUI thread."""
+        request = {"done": threading.Event(), "image": None}
+        self._image_request.emit(request)
+        return request["image"] if request["done"].wait(0.35) else None
+
+    def _read_clipboard_image(self, request) -> None:
+        from typer import get_clipboard_image
+        try:
+            request["image"] = get_clipboard_image()
+        finally:
+            request["done"].set()
+
     def notify_state_changed(self) -> None:
         """Thread-safe: request a UI refresh on the Qt main thread."""
         self._wake.emit()
@@ -442,7 +465,7 @@ class DictationIndicator(QWidget):
             came_from_processing = prev_app_state == AppState.PROCESSING
             if not ready and last_status is None:
                 target = GuiState.BOOTING
-            elif last_status == "success" and came_from_processing:
+            elif last_status in ("success", "ai_fallback", "polish_fallback") and came_from_processing:
                 target = GuiState.SUCCESS
             elif last_status in ("error", "empty") and (
                 came_from_processing or not ready
@@ -693,6 +716,19 @@ class DictationIndicator(QWidget):
         self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
     ) -> None:
         """Compact glyph+label or expanded recording waveform."""
+        if self._is_live_layout():
+            header = QRectF(pill.x(), pill.y(), pill.width(), 44)
+            if self.gui_state == GuiState.RECORDING:
+                self._paint_recording_content(p, header, accent, use_llm)
+            else:
+                self._paint_compact_content(p, header, accent, use_llm)
+            p.setFont(self._font)
+            p.setPen(_Theme.text)
+            preview = getattr(self.app, "live_preview", "") or "Speak, then tap F7 to insert"
+            preview = " ".join(preview.split())[-250:]
+            preview = p.fontMetrics().elidedText(preview, Qt.TextElideMode.ElideLeft, int(pill.width() - 28))
+            p.drawText(QRectF(pill.x() + 14, pill.y() + 44, pill.width() - 28, 30), Qt.AlignmentFlag.AlignVCenter, preview)
+            return
         if self.gui_state == GuiState.RECORDING:
             self._paint_recording_content(p, pill, accent, use_llm)
             return

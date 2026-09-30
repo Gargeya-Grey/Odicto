@@ -2,7 +2,7 @@
 # Why both: Explorer Startup is fast but can be skipped by Fast Boot;
 # the logon task is the reliable fallback.
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 $lnk = Join-Path $startup 'Odicto.lnk'
 $bat = Join-Path $repo 'start_dictation.bat'

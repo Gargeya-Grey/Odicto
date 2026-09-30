@@ -43,8 +43,25 @@ Set-Location $RepoRoot
 #     so the whole-clip unary re-transcription on stop only added latency. The five polish
 #     tests shrank to two: keep-streamed-text when no final exists, and cleanup swapping
 #     the interim draft for the authoritative final (155 -> 151). No weakened assertion.
-$ExpectedTestUnitsHash = '6E974D81CC75574D072551874FFA576DD6B8C8D6D8AC1FED73EDCE7A9AE78C45'
-$ExpectedUnitTestCount = 151
+# (4) Speech providers: Groq, Grok, and OpenRouter, plus a CUDA warmup on local
+#     Whisper. Raw dictation and AI mode now share the selected speech provider
+#     (151 -> 156). The old AI-chord tests that required local Whisper were
+#     replaced with tests that require the same engine on both chords. The
+#     live-auto helper now follows that provider. No assertion was loosened
+#     to hide a failure.
+# (5) The direct Grok speech API was removed. Grok transcription is an
+#     OpenRouter model slug. The Grok endpoint test went with it (156 -> 155).
+# (6) Gemini Live stop now drains queued PCM before ending the stream and
+#     commits the authoritative smart final over any interim draft. Two stop
+#     tests were updated and one sender-drain test was added (155 -> 156).
+# (7) F7 now previews in the HUD and inserts once while PROCESSING. Tests pin
+#     that contract, valid Interactions image payloads, fail-closed insertion and
+#     bounded CUDA probing. Removed three tests with the deleted caret editor and unused context helper (156 -> 153).
+#     Independent test_reliability exercises the new failure modes and polish.
+# (8) Folder layout: only the two fixture paths now resolve from tests/ to the install root.
+#     All 153 assertions remain unchanged.
+$ExpectedTestUnitsHash = 'C7C91E296A3C25DFA7BD642D5DC791F4D7653917EBB8478739DFB18DF8D95D4A'
+$ExpectedUnitTestCount = 153
 
 $Script:Failures = @()
 
@@ -143,7 +160,12 @@ function Get-RunCount {
 
 # ---------------------------------------------------------------- 1. test file frozen
 Write-Step 'Gate 1: test_units.py is unchanged'
-$actualHash = (Get-FileHash -LiteralPath (Join-Path $RepoRoot 'test_units.py') -Algorithm SHA256).Hash
+# Normalize Git's checkout line endings so this same checkpoint works on all OSes.
+$unitSource = [IO.File]::ReadAllText((Join-Path $RepoRoot 'tests/test_units.py')).Replace("`r`n", "`n")
+$hasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $actualHash = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($unitSource))).Replace('-', '')
+} finally { $hasher.Dispose() }
 if ($actualHash -ne $ExpectedTestUnitsHash) {
     Add-Failure "test_units.py changed (expected $ExpectedTestUnitsHash, got $actualHash). The oracle must stay frozen for this experiment."
 } else {
@@ -152,7 +174,7 @@ if ($actualHash -ne $ExpectedTestUnitsHash) {
 
 # ------------------------------------------------------------- 2. the unit tests
 Write-Step 'Gate 2: unit tests (test_units)'
-$units = Invoke-Python @('-m', 'unittest', 'test_units')
+$units = Invoke-Python @('-m', 'unittest', 'tests.test_units')
 $runCount = Get-RunCount $units.Text
 $skipCount = Get-SkipCount $units.Text
 if ($runCount -ne $ExpectedUnitTestCount) {
@@ -168,7 +190,18 @@ if ($runCount -ne $ExpectedUnitTestCount) {
 
 # --------------------------------------------------------- 3. the equivalence oracle
 Write-Step 'Gate 3: equivalence oracle (test_equivalence)'
-$equiv = Invoke-Python @('-m', 'unittest', 'test_equivalence')
+# Reliability is independent of the historical equivalence oracle.
+$reliability = Invoke-Python @('-m', 'unittest', 'tests.test_reliability')
+$reliabilityCount = Get-RunCount $reliability.Text
+$reliabilitySkips = Get-SkipCount $reliability.Text
+$expectedReliabilitySkips = if ($OnWindows) { 0 } else { 1 }
+if ($reliability.Code -ne 0 -or $reliabilityCount -ne 25 -or $reliabilitySkips -ne $expectedReliabilitySkips) {
+    Add-Failure "reliability regressions failed or count changed:`n$($reliability.Text)"
+} else {
+    Add-Pass '25 input ownership, HUD and polish regression tests passed (only Win32 ABI is skipped off Windows)'
+}
+
+$equiv = Invoke-Python @('-m', 'unittest', 'tests.test_equivalence')
 $equivSkips = Get-SkipCount $equiv.Text
 if ($equiv.Text -notmatch 'OK') {
     Add-Failure "test_equivalence did not report OK"
@@ -179,10 +212,18 @@ if ($equiv.Text -notmatch 'OK') {
     Add-Pass ("{0} ran, 0 skipped, OK{1}" -f (Get-RunCount $equiv.Text), $note)
 }
 
+Write-Step 'Layout regressions (entry points and install-root paths)'
+$layout = Invoke-Python @('-m', 'unittest', 'tests.test_layout')
+if ($layout.Code -ne 0 -or (Get-RunCount $layout.Text) -ne 4 -or $layout.Text -notmatch 'OK') {
+    Add-Failure "layout checks failed:`n$($layout.Text)"
+} else {
+    Add-Pass '4 layout checks passed without launching the application'
+}
+
 # --------------------------------------------------------------- 4. import smoke test
 Write-Step 'Gate 4: import smoke test'
 $smokeModules = 'main, refiner, indicator, setup_web, config, transcriber, typer, recorder, odicto, openrouter_catalog'
-$smoke = Invoke-Python @('-c', "import $smokeModules")
+$smoke = Invoke-Python @('-c', "import sys; sys.path.insert(0, 'app'); import $smokeModules")
 if ($smoke.Code -ne 0) {
     Add-Failure "import smoke test failed:`n$($smoke.Text)"
 } else {
@@ -194,7 +235,7 @@ Write-Step 'Gate 5: cross-platform backend syntax (macOS/Linux are not importabl
 # One file per invocation: PowerShell 5.1 splits a multi-line -c script into separate
 # arguments, so a here-string would arrive at python truncated.
 $syntaxFailed = $false
-foreach ($target in @('platforms/macos.py', 'platforms/linux.py')) {
+foreach ($target in @('app/platforms/macos.py', 'app/platforms/linux.py')) {
     $check = Invoke-Python @('-c', "compile(open('$target', encoding='utf-8').read(), '$target', 'exec')")
     if ($check.Code -ne 0) {
         $syntaxFailed = $true
@@ -223,7 +264,7 @@ if ($SkipCleanEnv) {
     # from CI. That is exactly how a real CI-only failure (test_openrouter_glm53_keeps_explicit_high)
     # stayed hidden locally. Clear config's known keys too, then restore them.
     $envGuard = @{}
-    $knownKeys = (Invoke-Python @('-c', 'from config import KNOWN_ENV_KEYS; print(chr(10).join(sorted(KNOWN_ENV_KEYS)))')).Text
+    $knownKeys = (Invoke-Python @('-c', "import sys; sys.path.insert(0, 'app'); from config import KNOWN_ENV_KEYS; print(chr(10).join(sorted(KNOWN_ENV_KEYS)))")).Text
     foreach ($key in ($knownKeys -split "`r?`n" | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*$' })) {
         $value = [Environment]::GetEnvironmentVariable($key)
         if ($null -ne $value) {
@@ -236,7 +277,7 @@ if ($SkipCleanEnv) {
     try {
         if ($hadEnv) { Move-Item -LiteralPath $envPath -Destination (Join-Path $backupDir '.env') -Force }
         if ($hadPrompt) { Move-Item -LiteralPath $promptPath -Destination (Join-Path $backupDir 'prompt.txt') -Force }
-        $cleanResult = Invoke-Python @('-m', 'unittest', 'test_units')
+        $cleanResult = Invoke-Python @('-m', 'unittest', 'tests.test_units')
     } finally {
         if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
             Move-Item -LiteralPath (Join-Path $backupDir '.env') -Destination $envPath -Force

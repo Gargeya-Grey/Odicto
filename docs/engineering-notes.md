@@ -5,7 +5,14 @@ this one describes **what was changed, why, what was deliberately not changed, a
 proved**. It is written to be transferable: the patterns and the review techniques matter more
 than the specific diff.
 
-Branch: `feature/consolidation` (never pushed to `main`).
+Historical experiment: `feature/consolidation`. The sections below record the original
+layout and accounting. The current layout is documented in [architecture.md](./architecture.md).
+
+The later folder cleanup moves implementations to `app/`, tests to `tests/`, setup markup
+to `assets/`, and OS helpers to `scripts/windows/` and `scripts/posix/`. Root launchers
+preserve startup targets, and `app/paths.py` keeps the install root stable for settings,
+logs, PID files, and the single-instance lock. Test fixture paths were updated without
+changing their assertions; layout tests cover launching and loading assets outside the repo.
 
 ---
 
@@ -394,3 +401,34 @@ defect here.
    Windows epilogue intact.
 3. Consider a `providers/` registry if the if/elif ladders in four modules start drifting.
 4. Run `.\tools\verify.ps1` after every change. It is the whole safety net in one command.
+
+## September 30 reliability build
+
+The adversarial review changed the F7 contract: previews live in the HUD, followed by
+one final insertion. The app remains PROCESSING until that insertion completes. This
+removes the long-lived caret worker, speculative backspaces, clipboard restoration and
+two cleanup branches; delayed callbacks carry a capture epoch and cannot edit a later
+session. Listener removal compares bound callbacks by equality, and the five-second
+audio ring counts frames in a deque rather than comparing sample counts with bytes.
+
+Direct Groq chat reuses the saved speech key but has its own model. Optional transcript
+polish reuses existing provider transports with a fixed prompt and separate model
+override. It waits at most two seconds, allows one outstanding request, and cannot
+change assistant memory or deliver a late result. Raw text remains available on failure.
+Gemini Smart already edits its transcript and skips the extra call. Screenshot context
+is explicit and its Qt access runs on the GUI thread. The Windows INPUT union now
+matches the native ABI; partial injection raises instead of replaying the entire text.
+WM_COPY is bounded to 100ms. Auto Whisper probes CUDA once (at most two seconds), uses
+CPU if unavailable, and always uses CPU on macOS; explicit CUDA waits briefly and fails
+without loading an unready native driver. Capture is validated at 16kHz.
+
+Historical unit-test checkpoints were intentionally updated for these changed contracts;
+three tests were removed with the deleted caret editor and unused context helper. The independent reliability
+suite covers the races, failures, SDK image schema and polish isolation. The setup page
+goldens were regenerated for Groq and the new controls; config/platform goldens remain
+unchanged. No language rewrite was needed: inference runs in native libraries, and the
+reliability costs came from orchestration and resource policy.
+
+The HUD follow-up reproduced stale F7 captions when a later ordinary or AI capture
+entered PROCESSING. Clear capture-owned preview and committed text at ordinary capture
+start and on every pipeline exit. Keep current F7 captions visible until finalization ends.

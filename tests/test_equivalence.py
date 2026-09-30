@@ -40,7 +40,8 @@ from unittest import mock
 import config
 import setup_web
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_ROOT = os.path.join(REPO_ROOT, "app")
 
 _BACKEND_FOR_PLATFORM = {"win32": "windows", "darwin": "macos"}
 _SUBMODULE_NAMES = {"base", "_keyboard", "_posix", "windows", "macos", "linux"}
@@ -48,24 +49,28 @@ _SUBMODULE_NAMES = {"base", "_keyboard", "_posix", "windows", "macos", "linux"}
 # platforms/__init__.py), so they are legitimately absent from a backend's __all__.
 _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 
-# sha256 of setup_web._page() per state. Captured pre-refactor; re-baselined for the
-# Quiet Console setup-page redesign (same states, same mechanism, new rendering).
-_GOLDEN_PAGE_HASHES = {
-    "fresh_empty_env": "855ddfbecf768e40d4be4d0a28fc4d6cf4e1a7522526ac9259126e0483b97ab2",
-    "provider_meta": "49f5776dec8365f426a1f277d3ad3c9d62e55bc71975d24be081271635287f9a",
-    "provider_openrouter": "3511e561643e2e62cef03334d4f5e4de7f69439b6c613e898229c0df67b21120",
-    "provider_gemini": "456ecf9557344c04134b8704c8fc6d09f8d33f7e4fdb3e63f852361cb614a6da",
-    "provider_ollama": "347259d8a45ebc8ab7580aa29aa36a7d9b4647030b6e78839d3cf70287030488",
-    "provider_none": "855ddfbecf768e40d4be4d0a28fc4d6cf4e1a7522526ac9259126e0483b97ab2",
-    "history_and_custom": "13a6d9618bb149a73e9796fa57ba5d72afead91de14e73dae71296f4a314993b",
-    "hotkey_short": "5b1a419bf12d8c3268804c51fba834b58951dc26642e5b60031d7a531b1dc2dd",
-    "stt_gemini": "8e7e4967d7d7433278c361850eb71f41e45ef38cffe92186014cfebfd770acaf",
-    "prompt_from_file": "ca293af47956c39430bff555952c118f880c7f4e2d6f9f8449059691dfee1dd2",
-    "prompt_from_inline_env": "73f20a40e5c3a472d37ca08254aa4e3290b5f1c138b99a82496c9c66caac4acc",
-    "msg_ok": "07dc9cb25cf4dccf770a4c5a538ea81cf041e9a22b059a4ca6c7e9ea61f5ce13",
-    "msg_err": "73d1d94bc15a4c63a6713a7d3090f09df35043a7a58e2fb51bb80a6ab099be5d",
-    "msg_neutral": "8001d14fb68943d2fdf833aa7f2806bf3295bcf58c4a4fd5a19f2ae282b17c78",
-}
+# Updated for Groq chat, optional polish and explicit screenshot settings; two new states.
+# sha256 of setup_web._page() per state. Captured pre-refactor; re-baselined when
+# the speech page gained Groq, Grok, OpenRouter, and the GPU device control
+# (same states, same mechanism, new rendering).
+# Folder cleanup: recovery now uses the public odicto.py setup entry point.
+# Before rebasing, every old golden was verified with only that sentence reverted.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '1f28ca11776e28dc5b43c81697c0d9fd6cb8c0efa6eb578e9c028eb65d921a55',
+ 'provider_meta': '689f51f78e3152f7f5f03aa76381f94af974928ab9a4b7a10371dc2f4d570e8a',
+ 'provider_openrouter': 'caebc395e393ed78bf6e3e685a20813182e97775e1b8ca8f36a7f868c370ae50',
+ 'provider_gemini': '45f1ac792cdb4ef292d900b3b88e8e1fbf4bc6c9ee9dc342787b711938e7eb06',
+ 'provider_ollama': '52c6bc52680abfb154f1f04ca44b1af6bcfedd2f52799490c1eb96f03a301e9c',
+ 'provider_none': '1f28ca11776e28dc5b43c81697c0d9fd6cb8c0efa6eb578e9c028eb65d921a55',
+ 'provider_groq': '5e00b6f75a38469ab1b77cdac244aafc074c056bcbb13caf2f0e4a1c03bcd792',
+ 'polish_enabled': '6ebcdfca7e51a1c3050bba61c433604e65f8ea53b2b082ac6c7a1ac33186dbc3',
+ 'history_and_custom': 'b02e9f2e66319c4e0007345f53a7e5977037e65e0cc7cbb9bed04ea9c9c48c33',
+ 'hotkey_short': '6a2c9d8b332093d50844fea040c7ed7fcce22b86ea0dce507a8567cd2d2826f8',
+ 'stt_gemini': 'f4da2e55c4d0d408e235bf3295ca1d6e14bfbb4d4c29cc9a03087e286fe1b270',
+ 'prompt_from_file': '8456e173bc2d17a095cb70411c5ec283f4508e3a5dd94e0e538d365f2393cf91',
+ 'prompt_from_inline_env': 'fc8a1340d05f99ed41f94375886704ee5186a51d287554aa1effe08dcba6782b',
+ 'msg_ok': '2ca4592f45e7e8f96583bb9073a3b25b282f289e583348fd95708db0e3ba8c53',
+ 'msg_err': '08615fb07f5c663a94804ea7d4b078ca3d927d55f957a00ce4108d408b3b31a3',
+ 'msg_neutral': '47a1ef3061642fe76f0a76a1554092758915a6eab44cec3f27593b005aabb6ac'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {
@@ -99,6 +104,8 @@ _PAGE_STATES = {
     },
     "provider_ollama": {"env": {"LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen-test"}},
     "provider_none": {"env": {"LLM_PROVIDER": "none"}},
+    "provider_groq": {"env": {"LLM_PROVIDER": "groq", "GROQ_API_KEY": "fake-test-key", "GROQ_MODEL": "openai/gpt-oss-120b"}},
+    "polish_enabled": {"env": {"LLM_PROVIDER": "groq", "POLISH_DICTATION": "true", "POLISH_MODEL": "polish/model", "AI_CLIPBOARD_IMAGE": "true"}},
     "history_and_custom": {
         "env": {
             "LLM_PROVIDER": "openrouter",
@@ -263,7 +270,7 @@ def _backend_exports(module_name: str, seen=None) -> set:
         return set()
     seen.add(module_name)
     relative = module_name.replace("platforms.", "", 1)
-    path = os.path.join(REPO_ROOT, "platforms", *relative.split(".")) + ".py"
+    path = os.path.join(APP_ROOT, "platforms", *relative.split(".")) + ".py"
     with open(path, encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), path)
 
@@ -283,7 +290,7 @@ def _backend_exports(module_name: str, seen=None) -> set:
 def _referenced_platform_names() -> set:
     """Every ``platforms.<name>`` / ``from platforms import <name>`` in the repo."""
     names = set()
-    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
         dirnames[:] = [d for d in dirnames if d not in {".venv", "__pycache__", ".git", "node_modules"}]
         for filename in filenames:
             if not filename.endswith(".py"):
@@ -326,8 +333,8 @@ class TestSetupPageEquivalence(unittest.TestCase):
         self.assertEqual(sorted(_PAGE_STATES), sorted(_GOLDEN_PAGE_HASHES))
 
     def test_every_provider_is_rendered(self) -> None:
-        hashes = [_GOLDEN_PAGE_HASHES["provider_%s" % p] for p in ("meta", "openrouter", "gemini", "ollama")]
-        self.assertEqual(len(set(hashes)), 4, "each provider must render a distinct page")
+        hashes = [_GOLDEN_PAGE_HASHES["provider_%s" % p] for p in ("meta", "openrouter", "gemini", "ollama", "groq")]
+        self.assertEqual(len(set(hashes)), 5, "each provider must render a distinct page")
 
 
 class TestConfigEquivalence(unittest.TestCase):
@@ -424,10 +431,10 @@ class TestTokenSubstitutionIsSinglePass(unittest.TestCase):
         )
         self.assertIn("failed on %s" % literal, page)
 
-    def test_template_file_is_shipped_beside_the_module(self) -> None:
-        """setup_web loads setup_template.html from its own directory, never the CWD."""
-        path = os.path.join(os.path.dirname(os.path.abspath(setup_web.__file__)), "setup_template.html")
-        self.assertTrue(os.path.isfile(path), "setup_template.html must sit beside setup_web.py")
+    def test_template_file_is_shipped_in_assets(self) -> None:
+        """setup_web loads the asset from the install root, never the CWD."""
+        path = os.path.join(REPO_ROOT, "assets", "setup_template.html")
+        self.assertTrue(os.path.isfile(path), "setup_template.html must be shipped in assets/")
 
 
 class TestDocumentationConsistency(unittest.TestCase):

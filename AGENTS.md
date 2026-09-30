@@ -57,8 +57,8 @@ button that pulls the model only when the user picks Ollama as provider.
 3. `copy .env.example .env`
 4. Optional AI: install [Ollama](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
 5. Warm Whisper: `.\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-6. Tests: `.\.venv\Scripts\python.exe -m unittest test_units -v`
-7. Start: `.\start_dictation.bat` or `.\run_debug.bat`
+6. Tests: `.\.venv\Scripts\python.exe -m unittest tests.test_units -v`
+7. Start: `.\start_dictation.bat` or `.\scripts\windows\run_debug.bat`
 
 ### macOS
 
@@ -69,8 +69,8 @@ button that pulls the model only when the user picks Ollama as provider.
 3. `cp .env.example .env`
 4. Optional AI: `brew install ollama && ollama pull qwen2.5:1.5b-instruct`
 5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-6. Tests: `.venv/bin/python -m unittest test_units -v`
-7. Start: `./run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
+6. Tests: `.venv/bin/python -m unittest tests.test_units -v`
+7. Start: `bash scripts/posix/run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
 
 ### Linux
 
@@ -81,16 +81,16 @@ button that pulls the model only when the user picks Ollama as provider.
 3. `cp .env.example .env`
 4. Optional AI: install Ollama from [ollama.com/download](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
 5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
-6. Tests: `.venv/bin/python -m unittest test_units -v`
-7. Start: `./run_debug.sh` (run as root or with `input` group; prefer X11)
+6. Tests: `.venv/bin/python -m unittest tests.test_units -v`
+7. Start: `bash scripts/posix/run_debug.sh` (run as root or with `input` group; prefer X11)
 
 ## Verify success
 
 | Check | Expected |
 |-------|----------|
 | Import check (`import PySide6, faster_whisper, keyboard`) | No import error |
-| `python -m unittest test_units -v` | All tests OK |
-| `run_debug.bat` / `./run_debug.sh` | Log shows `Application ready!` and `HUD enabled` |
+| `python -m unittest tests.test_units -v` | All tests OK |
+| `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh` | Log shows `Application ready!` and `HUD enabled` |
 | Hold hotkey | Bottom-center pill shows **Listening** |
 
 ## Setup page
@@ -99,11 +99,11 @@ After install, configure a provider and API key without hand-editing `.env`:
 
 ```bash
 # Windows
-.\setup.bat
+.\scripts\windows\setup.bat
 # or: .\.venv\Scripts\python.exe odicto.py setup
 
 # macOS / Linux
-./setup.sh
+bash scripts/posix/setup.sh
 # or: .venv/bin/python odicto.py setup
 ```
 
@@ -128,12 +128,11 @@ supplied it) with:
   (`HOTKEY_TOGGLE=true`). Set `HOTKEY_TOGGLE=false` to hold the chord while
   speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
-  dictation; tap again to stop and paste. While streaming you see interim ASR;
-  on stop Odicto waits up to ~2.5s for the same single call's finalized
-  `input_transcription` and swaps it over the draft in place — with
-  `GEMINI_TRANSCRIBE_MODE=smart` that final already is the cleaned output
-  (official Gemini Live transcription docs). Nothing re-transcribes the
-  buffered clip on stop.
+  dictation; tap again to finalize and insert once. Interim Gemini captions appear
+  in the HUD. Stop remains PROCESSING through finalization and optional polish, and
+  waits up to ~2.5s for the single Live call's authoritative final. A final or draft
+  skips batch STT. F7 leaves its final text on the clipboard outside terminals; no
+  caret worker, tail replacement or delayed clipboard restoration remains.
   Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
 - **Terminals are typed into, not pasted into.** No paste chord is universal
@@ -144,22 +143,27 @@ supplied it) with:
   clipboard, and the AI selection probe sends `Ctrl+Shift+C`
   (`send_copy_terminal`) instead of Ctrl+C. Detection is best-effort:
   `platforms.base.is_terminal_identifier` matches window class / process name /
-  macOS bundle id against the tables in `platforms/base.py`; Windows reads them
-  in `platforms/_keyboard.py`, Linux via `xdotool`/`xprop` in
-  `platforms/linux.py` (X11 only — Wayland returns False), macOS via
-  `NSWorkspace` in `platforms/macos.py`. An unresolved window falls back to the
+  macOS bundle id against the tables in `app/platforms/base.py`; Windows reads them
+  in `app/platforms/_keyboard.py`, Linux via `xdotool`/`xprop` in
+  `app/platforms/linux.py` (X11 only — Wayland returns False), macOS via
+  `NSWorkspace` in `app/platforms/macos.py`. An unresolved window falls back to the
   chord, so it must never raise. `TYPE_IN_TERMINAL=false` disables the whole
   path; `EXTRA_TERMINAL_APPS` adds a terminal the tables miss. Newlines are
   typed as-is, so a multi-line dictation into a shell runs each line.
-- **STT is independent of `LLM_PROVIDER`:** `STT_PROVIDER=whisper|gemini|auto`
-  (default `whisper`). Gemini STT reuses `GEMINI_API_KEY` and does **not** require
-  `LLM_PROVIDER=gemini`. `GEMINI_TRANSCRIBE_MODE=smart|verbatim` is the setup-page
-  toggle and applies to the **dictation chord and F7 live tap**. The **AI chord**
-  uses local Whisper (lazy-loaded; tiny/base may warm after boot) so Smart cloud
-  STT is not stacked in front of the LLM; Whisper failure falls back to Gemini
-  **verbatim**. `auto` uses Gemini when a key is saved, otherwise Whisper. Cloud
-  STT failures fall back to Whisper. First Whisper load downloads model weights
-  (~75MB for `tiny.en`) only when Whisper is the active, AI, or fallback backend.
+- **STT is independent of `LLM_PROVIDER`:** `STT_PROVIDER=whisper|gemini|groq|openrouter|auto`
+  (default `whisper`). The resolved provider **and model** are used for raw
+  dictation and for AI mode. AI mode only adds the LLM on top of that transcript.
+  `LIVE_STT_PROVIDER=auto` follows the same provider. Gemini STT reuses
+  `GEMINI_API_KEY` and does **not** require `LLM_PROVIDER=gemini`. Groq uses
+  `GROQ_API_KEY` and `GROQ_STT_MODEL` (default `whisper-large-v3-turbo`).
+  OpenRouter speech uses `OPENROUTER_API_KEY` and `OPENROUTER_STT_MODEL`
+  (default `openai/whisper-large-v3`), separate from the chat model. Grok
+  speech models are selected there by slug (for example `x-ai/grok-stt-1.0`).
+  `GEMINI_TRANSCRIBE_MODE=smart|verbatim` applies only when the
+  speech backend is Gemini. `auto` uses Gemini when a Gemini key is saved,
+  otherwise Whisper. A cloud choice with no key, and any speech error, falls
+  back to Whisper. First Whisper load downloads model weights (~75MB for
+  `tiny.en`) only when Whisper is the active or fallback backend.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,
@@ -220,9 +224,11 @@ supplied it) with:
 - Linux global suppression usually requires root or `input` group; prefer X11.
 - GPU: `WHISPER_DEVICE=auto` keeps **tiny/base on CPU** so login does not pay a
   ~1GB CUDA context for a 75MB model. Larger models (`small` and up) still try
-  CUDA first. Set `WHISPER_DEVICE=cuda` to force GPU. macOS uses CPU (int8) —
+  CUDA first. Set `WHISPER_DEVICE=cuda` to keep the chosen model resident in
+  GPU memory from startup. That load runs one silent warmup so the first
+  hotkey does not wait on CUDA kernel setup. macOS uses CPU (int8).
   faster-whisper has no Metal backend.
-- Stop with `stop_dictation.bat` / `./stop_dictation.sh`, or
+- Stop with `scripts/windows/stop_dictation.bat` / `bash scripts/posix/stop_dictation.sh`, or
   `.venv/bin/python odicto.py stop`.
 
 ## STRICT: single instance only (never stack keyboard hooks)
@@ -263,3 +269,16 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 - Do not assume Ollama is stopped system-wide just because `LLM_PROVIDER` is not
   `ollama` — only Odicto’s own spawn path is skipped.
 - Do not allow multiple Odicto instances / stacked keyboard hooks.
+
+## Transcript polish and Groq chat
+
+`LLM_PROVIDER=groq` uses `GROQ_API_KEY`, `GROQ_API_BASE` and `GROQ_MODEL`
+(default `openai/gpt-oss-20b`), separately from `GROQ_STT_MODEL`. The setup page
+offers an editable chat model and the shared saved key on Speech.
+`POLISH_DICTATION=false` is opt-in grammar/punctuation/capitalization cleanup;
+`POLISH_MODEL` blank uses the selected AI model. It never touches AI memory or
+selection/image context, waits at most two seconds, and keeps raw text on failure.
+Gemini Smart skips the extra call. `AI_CLIPBOARD_IMAGE=false` makes screenshots
+explicit; when enabled the HUD reads them on Qt's GUI thread. Auto Whisper uses
+CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must be
+16000. Run both `test_units` and `test_reliability`; the full gate includes both.

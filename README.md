@@ -29,7 +29,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 1. Records when you **tap** a global hotkey (tap again to stop), **hold** it if `HOTKEY_TOGGLE=false`, or **tap F7** for live captions
 2. Transcribes with **local Whisper** or **Gemini 3.5 Transcribe** (`STT_PROVIDER`)  
 3. Pastes into the focused field via clipboard  
-4. Optionally answers with an LLM — local Ollama, Meta API, OpenRouter, or **Google Gemini** (one-line switch)  
+4. Optionally answers with an LLM — local Ollama, Meta API, OpenRouter, **Groq**, or **Google Gemini** (one-line switch)
 5. Shows a slim **bottom-center HUD** while it works (live captions on F7)  
 
 ```text
@@ -43,7 +43,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 |------|-----|--------|
 | **Dictation** | Tap **Ctrl+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Transcript pasted (smart or verbatim) |
 | **AI reply** | Tap **Ctrl+Shift+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Local Whisper, then a fresh model answer |
-| **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Live text at the caret; tap again when done |
+| **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Captions in HUD; tap again to finalize and insert once |
 | **AI with memory** | Tap **F6** + **Ctrl+\`**, speak, tap again | Continues the F6 conversation |
 | **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
@@ -63,7 +63,8 @@ Notes:
   `cpu` (int8).
 - **Windows / Linux:** `WHISPER_DEVICE=auto` keeps **tiny/base on CPU** to
   avoid a ~1GB CUDA context at login. Larger models still try CUDA first.
-  Set `WHISPER_DEVICE=cuda` to force GPU.
+  Set `WHISPER_DEVICE=cuda` to keep the model in GPU memory from startup
+  and warm it so the first hotkey is not waiting on CUDA.
 - **Linux Wayland** needs `wl-clipboard` and may have compositor-specific
   synthetic-keyboard limits; an X11 session is the most reliable target.
 
@@ -77,7 +78,7 @@ Notes:
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\setup.bat   # pick provider + paste key (or: python odicto.py setup)
+.\scripts\windows\setup.bat   # pick provider + paste key (or: python odicto.py setup)
 .\start_dictation.bat
 ```
 
@@ -87,8 +88,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh
-./setup.sh
-./run_debug.sh
+bash scripts/posix/setup.sh
+bash scripts/posix/run_debug.sh
 # Grant Accessibility + Input Monitoring when macOS prompts, then restart the app.
 ```
 
@@ -98,8 +99,8 @@ bash install.sh
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 sudo bash install.sh   # or run as a user with access to /dev/input
-./setup.sh
-./run_debug.sh
+bash scripts/posix/setup.sh
+bash scripts/posix/run_debug.sh
 ```
 
 ---
@@ -329,41 +330,48 @@ Notes:
 ### 7c. Optional: Gemini 3.5 Transcribe as STT
 
 Speech-to-text is **independent** of `LLM_PROVIDER`. You can keep Meta/OpenRouter/Ollama
-for AI replies and still use Gemini for dictation. The setup page toggle
-**Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE` and applies to the
-**dictation chord and F7**. The AI chord uses **local Whisper** (the LLM is the
-cleanup step) and only falls back to Gemini **verbatim** if Whisper cannot load.
+for AI replies and still pick a different speech engine. Raw dictation and AI mode
+use that same speech provider and model. AI mode only adds the assistant on top.
+The setup page toggle **Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE`
+and applies when the speech engine is Gemini.
 
 ```env
-STT_PROVIDER=auto            # whisper | gemini | auto
+STT_PROVIDER=auto            # whisper | gemini | groq | openrouter | auto
 GEMINI_API_KEY=AIza...       # same key as Gemini LLM; reused, not a second secret
-GEMINI_TRANSCRIBE_MODE=smart # smart (cleaned) or verbatim (literal)
+GROQ_STT_MODEL=whisper-large-v3-turbo
+OPENROUTER_STT_MODEL=openai/whisper-large-v3   # or x-ai/grok-stt-1.0
+GEMINI_TRANSCRIBE_MODE=smart # smart (cleaned) or verbatim (literal); Gemini only
 LIVE_HOTKEY=f7               # tap to start, tap again to stop and paste
+LIVE_STT_PROVIDER=auto       # auto = the same provider and model as STT_PROVIDER
 ```
 
 | Variable | Role |
 |----------|------|
-| `STT_PROVIDER` | `whisper` (default, local), `gemini` (cloud STT), or `auto` (Gemini when a key is saved) |
-| `GEMINI_TRANSCRIBE_MODE` | `smart` strips ums/self-corrections and punctuates; `verbatim` is word-for-word |
+| `STT_PROVIDER` | `whisper` (default, local), `gemini`, `groq`, `openrouter`, or `auto` (Gemini when a Gemini key is saved) |
+| `GROQ_API_KEY` / `GROQ_STT_MODEL` | Groq Whisper. Default model `whisper-large-v3-turbo` |
+| `OPENROUTER_STT_MODEL` | OpenRouter speech model. Uses `OPENROUTER_API_KEY`. Separate from the chat model. Grok speech models go here, for example `x-ai/grok-stt-1.0` |
+| `GEMINI_TRANSCRIBE_MODE` | `smart` strips ums/self-corrections and punctuates; `verbatim` is word-for-word. Gemini only |
 | `GEMINI_TRANSCRIBE_MODEL` | Unary model (`gemini-3.5-transcribe`) used after hold-to-talk release |
-| `GEMINI_TRANSCRIBE_LIVE_MODEL` | Live API model (`gemini-3.5-transcribe-live`) used while F7 is active |
-| `GEMINI_TRANSCRIBE_LANGUAGE` | Optional BCP-47 hint (`en-US`); blank = auto-detect 85+ languages |
-| `GEMINI_TRANSCRIBE_VOCABULARY` | Optional comma-separated bias terms |
+| `GEMINI_TRANSCRIBE_LIVE_MODEL` | Live API model (`gemini-3.5-transcribe-live`) used while F7 is on Gemini |
+| `GEMINI_TRANSCRIBE_LANGUAGE` | Optional BCP-47 hint (`en-US`); blank = auto-detect. Also sent as a language hint to Groq and OpenRouter |
+| `GEMINI_TRANSCRIBE_VOCABULARY` | Optional comma-separated bias terms (Gemini) |
+| `LIVE_STT_PROVIDER` | `auto` follows `STT_PROVIDER`. Gemini streams. The others transcribe the clip when you tap stop |
 | `LIVE_HOTKEY` | Tap-to-talk key (default `f7`). Empty disables. Captured while Odicto runs |
 
-On Gemini STT failure (no key, 429, network), Odicto falls back to local Whisper.
+On a cloud speech failure (no key, 429, network), Odicto falls back to local Whisper.
 Default `STT_PROVIDER=whisper` so existing local-only installs do not change.
 
 ### Resource use: Ollama vs OpenRouter vs Meta vs Gemini vs Whisper
 
 | Component | When Odicto starts / uses it | RAM / GPU |
 |-----------|------------------------------|-----------|
-| **Whisper (STT)** | When `STT_PROVIDER=whisper`, as fallback, or for the AI chord | Local — skipped at boot if Gemini STT is selected; tiny/base may warm after ready when an LLM is configured. `auto` device keeps tiny/base on CPU (int8) so idle RAM is not a CUDA context |
+| **Whisper (STT)** | When `STT_PROVIDER` resolves to `whisper`, or as the fallback when a cloud speech call fails | Local. Loaded at startup when it is the active engine. `cuda` keeps it in GPU memory and warms it before the first hotkey. `auto` keeps tiny/base on CPU |
 | **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
 | **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
 | **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
 | **Google Gemini (LLM)** | Only if `LLM_PROVIDER=gemini` | Cloud — no local LLM VRAM from Odicto |
-| **Gemini 3.5 Transcribe (STT)** | Only if `STT_PROVIDER` resolves to `gemini` | Cloud — falls back to Whisper on error |
+| **Gemini 3.5 Transcribe (STT)** | Only if `STT_PROVIDER` resolves to `gemini` | Cloud. Falls back to Whisper on error |
+| **Groq / OpenRouter STT** | Only if `STT_PROVIDER` resolves to that backend | Cloud. Same model for raw dictation and AI mode. Grok speech models are an OpenRouter slug. Falls back to Whisper on error |
 
 **Important:** Switching to Meta, OpenRouter, or Gemini stops Odicto from launching or talking to Ollama.  
 It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.
@@ -389,22 +397,22 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 ```powershell
 # Windows
-.\.venv\Scripts\python.exe -m unittest test_units -v
+.\.venv\Scripts\python.exe -m unittest tests.test_units -v
 ```
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m unittest test_units -v
+.venv/bin/python -m unittest tests.test_units -v
 ```
 
 ### 10. Run
 
 | Action | Windows | macOS / Linux |
 |--------|---------|---------------|
-| Configure provider | `setup.bat` or `.venv\Scripts\python.exe odicto.py setup` | `./setup.sh` or `.venv/bin/python odicto.py setup` |
+| Configure provider | `scripts/windows/setup.bat` or `.venv\Scripts\python.exe odicto.py setup` | `bash scripts/posix/setup.sh` or `.venv/bin/python odicto.py setup` |
 | Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
-| Start (console logs) | `run_debug.bat` | `./run_debug.sh` |
-| Stop | `stop_dictation.bat` | `./stop_dictation.sh` |
+| Start (console logs) | `scripts/windows/run_debug.bat` | `bash scripts/posix/run_debug.sh` |
+| Stop | `scripts/windows/stop_dictation.bat` | `bash scripts/posix/stop_dictation.sh` |
 
 ---
 
@@ -474,7 +482,7 @@ To keep talking about the same task, hold **F6** together with **Ctrl+\`** (or w
 | **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
 | **VS Code note** | Ctrl+\` toggles the terminal there -- while Odicto runs it steals that chord |
 | **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
-| **Logs** | Use `run_debug.bat` / `./run_debug.sh`, or check `dictation.log` when using the no-console launcher |
+| **Logs** | Use `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`, or check `dictation.log` when using the no-console launcher |
 
 ### Stop
 
@@ -540,7 +548,7 @@ Behavior & UI:
 | `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
 | `CTRL_KEEP_CONTEXT_KEYS` | `f6` | Key held during a capture keeps AI conversation memory (default AI is always fresh) |
 | `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
-| `WHISPER_DEVICE` | `auto` | `auto` (tiny/base → CPU; larger → CUDA then CPU) · `cuda` · `cpu` |
+| `WHISPER_DEVICE` | `auto` | `auto` (tiny/base on CPU; larger models try CUDA) · `cuda` (GPU memory, warmed at startup) · `cpu` |
 | `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
 | `LLM_NUM_CTX` | `2048` | Ollama context window |
 | `SYSTEM_PROMPT_FILE` | *(empty)* | Set to `prompt.txt` when you have a private live prompt. Do not point this at other files. |
@@ -554,6 +562,30 @@ Behavior & UI:
 
 ---
 
+
+## Project folders
+
+```text
+app/                Application modules and platforms/ OS backends
+assets/             Setup page HTML, CSS, and JavaScript
+tests/              Unit, reliability, equivalence, and layout tests
+scripts/windows/    Windows setup, debug, stop, and startup helpers
+scripts/posix/      macOS/Linux setup, debug, stop, and startup helpers
+tools/              Verification and architecture tooling
+docs/               Architecture, engineering notes, and research
+```
+
+The root keeps the README, dependency list, installers, settings templates, and small
+`main.py`, `odicto.py`, and `start_dictation.*` launchers. Existing startup shortcuts can
+continue to use those entry points. Private `.env` and `prompt.txt`, and ignored runtime
+logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
+root independently of the working directory.
+
+Application modules keep their existing import names. The launchers and `tests/__init__.py`
+put `app/` on Python's import path; no installation or package build is required.
+Run tests from the project root with `python -m unittest discover -s tests -t .`.
+The optional microphone diagnostic is `python -m tests.test_pipeline`.
+
 ## Architecture (quick map)
 
 **Canonical reference: [`docs/architecture.md`](docs/architecture.md)** — module map, Mermaid
@@ -566,13 +598,13 @@ invariants not to break.
 
 | File | Role |
 |------|------|
-| `main.py` | App lifecycle, hotkeys, pipeline orchestration |
-| `setup_web.py` + `setup_template.html` | Local setup page (server + markup) |
-| `platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
+| `app/main.py` | App lifecycle, hotkeys, pipeline orchestration |
+| `app/setup_web.py` + `assets/setup_template.html` | Local setup page (server + markup) |
+| `app/platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
 | `tools/verify.ps1` | Runs every gate used to prove behaviour is unchanged |
 | `tools/module_graph.py` | Regenerates the dependency diagram in `docs/architecture.md` |
 | `install.ps1` / `install.sh` | Zero-to-one installers (uv-first, pip fallback) |
-| `setup.bat` / `setup.sh` | Launchers for the setup page |
+| `scripts/windows/setup.bat` / `scripts/posix/setup.sh` | Launchers for the setup page |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---
@@ -581,7 +613,7 @@ invariants not to break.
 
 | Symptom | Fix |
 |---------|-----|
-| No HUD on hotkey | Restart with `run_debug.bat` / `./run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
+| No HUD on hotkey | Restart with `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
 | Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux try root |
 | Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
 | **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
@@ -609,14 +641,14 @@ invariants not to break.
 
 ```powershell
 # Windows
-.\.venv\Scripts\python.exe -m unittest test_units -v
-.\run_debug.bat
+.\.venv\Scripts\python.exe -m unittest tests.test_units -v
+.\scripts\windows\run_debug.bat
 ```
 
 ```bash
 # macOS / Linux
-.venv/bin/python -m unittest test_units -v
-./run_debug.sh
+.venv/bin/python -m unittest tests.test_units -v
+bash scripts/posix/run_debug.sh
 ```
 
 ---
@@ -641,3 +673,23 @@ Use and modify freely for personal or commercial projects. Attribution appreciat
   Built for people who think faster than they type.<br/>
   <b>Hold. Speak. Continue.</b>
 </p>
+
+### Optional fast transcript polish
+
+Open Setup, select an AI backend, then enable **Speech → Polish dictated text**.
+It fixes grammar, punctuation and capitalization after local or cloud transcription.
+An optional **Polish model** can use a smaller model than your AI answers. Leave it
+blank to use the selected chat model. Polish never answers spoken questions or uses
+AI conversation memory. Gemini Smart already polishes speech and skips the extra call.
+After a two-second wait or provider failure, raw text is inserted with a visible notice.
+
+Groq is available on the AI page with a custom chat model. Its shared key is entered
+on Speech; `GROQ_MODEL` is independent of `GROQ_STT_MODEL`. The default is
+`openai/gpt-oss-20b`; `openai/gpt-oss-120b` is also offered. Account availability is
+documented in [Groq's model catalog](https://console.groq.com/docs/models).
+
+F7 previews captions in the HUD and inserts the final text once after stop. Other
+hotkeys wait during finalization. F7's finalized text remains on the clipboard outside
+terminals, so delayed paste handling cannot read an older clipboard value. AI errors
+show **AI failed · raw text**. Clipboard screenshots are off by default; enable the
+explicit AI setting with the visual indicator and an image-capable model.

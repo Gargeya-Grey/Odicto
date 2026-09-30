@@ -189,12 +189,17 @@ def wm_copy_foreground() -> bool:
         import ctypes
 
         user32 = ctypes.windll.user32
+        WM_COPY = 0x0301
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return False
-        WM_COPY = 0x0301
-        user32.SendMessageW(hwnd, WM_COPY, 0, 0)
-        return True
+        user32.SendMessageTimeoutW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_uint, ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_size_t)]
+        user32.SendMessageTimeoutW.restype = ctypes.c_ssize_t
+        result = ctypes.c_size_t()
+        return bool(user32.SendMessageTimeoutW(hwnd, WM_COPY, 0, 0, 2, 100, ctypes.byref(result)))
     except Exception:
         return False
 
@@ -377,28 +382,34 @@ def send_text_bulk(text: str) -> bool:
         return False
 
 
+def _win_input_type():
+    """Full Win32 INPUT union: sizeof(INPUT) is 40 on x64, 28 on x86."""
+    import ctypes
+    from ctypes import wintypes
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.c_size_t)]
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+    class UNION(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
+    class INPUT(ctypes.Structure):
+        _anonymous_ = ("i",)
+        _fields_ = [("type", wintypes.DWORD), ("i", UNION)]
+    return INPUT
+
+
 def _win_send_backspaces(n: int) -> bool:
+    total_sent = 0
     try:
         import ctypes
-        from ctypes import wintypes
-
-        ulong_ptr = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
-
-        class KEYBDINPUT(ctypes.Structure):
-            _fields_ = [
-                ("wVk", wintypes.WORD),
-                ("wScan", wintypes.WORD),
-                ("dwFlags", wintypes.DWORD),
-                ("time", wintypes.DWORD),
-                ("dwExtraInfo", ulong_ptr),
-            ]
-
-        class INPUT(ctypes.Structure):
-            class _I(ctypes.Union):
-                _fields_ = [("ki", KEYBDINPUT)]
-
-            _anonymous_ = ("i",)
-            _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+        INPUT = _win_input_type()
+        total_sent = 0
 
         INPUT_KEYBOARD = 1
         KEYEVENTF_KEYUP = 0x0002
@@ -417,37 +428,28 @@ def _win_send_backspaces(n: int) -> bool:
             sent = ctypes.windll.user32.SendInput(
                 count * 2, ctypes.byref(arr), ctypes.sizeof(INPUT)
             )
+            total_sent += sent
             if sent != count * 2:
+                if total_sent:
+                    raise RuntimeError("Partial keyboard injection; refusing to duplicate input")
                 return False
             remaining -= count
         return True
-    except Exception:
+    except RuntimeError:
+        raise
+    except Exception as e:
+        if total_sent:
+            raise RuntimeError("Keyboard injection interrupted; refusing to duplicate input") from e
         return False
 
 
 def _win_send_text(text: str) -> bool:
     """Inject UTF-16 code units via SendInput KEYEVENTF_UNICODE."""
+    total_sent = 0
     try:
         import ctypes
-        from ctypes import wintypes
-
-        ulong_ptr = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
-
-        class KEYBDINPUT(ctypes.Structure):
-            _fields_ = [
-                ("wVk", wintypes.WORD),
-                ("wScan", wintypes.WORD),
-                ("dwFlags", wintypes.DWORD),
-                ("time", wintypes.DWORD),
-                ("dwExtraInfo", ulong_ptr),
-            ]
-
-        class INPUT(ctypes.Structure):
-            class _I(ctypes.Union):
-                _fields_ = [("ki", KEYBDINPUT)]
-
-            _anonymous_ = ("i",)
-            _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+        INPUT = _win_input_type()
+        total_sent = 0
 
         INPUT_KEYBOARD = 1
         KEYEVENTF_UNICODE = 0x0004
@@ -474,8 +476,15 @@ def _win_send_text(text: str) -> bool:
             sent = ctypes.windll.user32.SendInput(
                 len(chunk) * 2, ctypes.byref(arr), ctypes.sizeof(INPUT)
             )
+            total_sent += sent
             if sent != len(chunk) * 2:
+                if total_sent:
+                    raise RuntimeError("Partial keyboard injection; refusing to duplicate input")
                 return False
         return True
-    except Exception:
+    except RuntimeError:
+        raise
+    except Exception as e:
+        if total_sent:
+            raise RuntimeError("Keyboard injection interrupted; refusing to duplicate input") from e
         return False

@@ -18,6 +18,7 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP = os.path.join(REPO, "app")
 DOC = os.path.join(REPO, "docs", "architecture.md")
 BEGIN = "<!-- BEGIN GENERATED: module-graph (tools/module_graph.py) -->"
 END = "<!-- END GENERATED: module-graph -->"
@@ -37,13 +38,14 @@ APP_MODULES = [
     "openrouter_catalog",
     "setup_web",
     "platforms",
+    "paths",
 ]
 
 
 def _module_path(name: str) -> str:
     if name == "platforms":
-        return os.path.join(REPO, "platforms", "__init__.py")
-    return os.path.join(REPO, name + ".py")
+        return os.path.join(APP, "platforms", "__init__.py")
+    return os.path.join(APP, name + ".py")
 
 
 def _local_imports(name: str) -> set[str]:

@@ -13,16 +13,14 @@ from platforms import (
     force_release_modifiers,
     foreground_is_terminal,
     is_pressed,
-    send_backspaces,
     send_copy,
     send_copy_terminal,
     send_paste,
-    send_text,
     send_text_bulk,
     wm_copy_foreground,
 )
 
-# Live paste, F7 clipboard restore, and AI selection copy must not interleave.
+# Paste and AI selection copy must not interleave.
 _CLIPBOARD_LOCK = threading.RLock()
 
 _MODIFIER_POLL_KEYS = (
@@ -68,11 +66,6 @@ def _clipboard_write_verified(text: str, attempts: int = 3) -> bool:
     return _clipboard_read() == text
 
 
-def clipboard_snapshot() -> str:
-    """Read the clipboard under the process-wide clipboard lock."""
-    with _CLIPBOARD_LOCK:
-        return _clipboard_read()
-
 
 def _terminal_target() -> bool:
     """True when the focused window is a terminal.
@@ -89,12 +82,6 @@ def _terminal_target() -> bool:
     except Exception:
         return False
 
-
-def clipboard_restore(text: str) -> None:
-    """Write the clipboard under the process-wide clipboard lock."""
-    with _CLIPBOARD_LOCK:
-        if not _clipboard_write_verified(text or ""):
-            print("Warning: Failed to restore clipboard", flush=True)
 
 
 def _wait_modifiers_up(timeout: float = 0.08) -> None:
@@ -265,8 +252,8 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
     Terminals reject or reassign the paste chord, so there the text is typed
     directly and the user's clipboard is never touched. Everywhere else the
     text goes through the clipboard + paste chord; hold-to-talk restores the
-    clipboard after a settle delay, while live caret updates pass
-    ``restore_clipboard=False`` and restore once at F7 stop.
+    clipboard after a settle delay. F7 passes ``restore_clipboard=False``
+    and leaves its final payload available for asynchronous paste consumers.
     """
     if not text:
         return
@@ -277,25 +264,18 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             if send_text_bulk(text):
                 print(">>> Terminal target: typed text (clipboard untouched)", flush=True)
                 return
-            print(
-                "Warning: typing into terminal failed; falling back to paste chord",
-                flush=True,
-            )
+            raise RuntimeError("Could not type into terminal; no paste chord was sent")
 
         original_clipboard = _clipboard_read() if restore_clipboard else None
 
         try:
             if not _clipboard_write_verified(text):
-                print("Error: Failed to write paste payload to clipboard", flush=True)
-                return
+                raise RuntimeError("Could not write the paste payload to clipboard")
 
             _wait_modifiers_up(0.08)
 
             time.sleep(0.02 if restore_clipboard else 0.008)
-            try:
-                send_paste()
-            except Exception as e:
-                print(f"Error: Failed to perform paste simulation: {e}", flush=True)
+            send_paste()
 
             if restore_clipboard:
                 # Floor 0.15s: SendInput only queues the paste chord — a
@@ -307,8 +287,6 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                 time.sleep(delay)
             else:
                 time.sleep(0.015)
-        except Exception as e:
-            print(f"Error: Failed to perform paste simulation: {e}", flush=True)
         finally:
             if restore_clipboard:
                 if not _clipboard_write_verified(original_clipboard or "", attempts=5):
@@ -317,37 +295,6 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                         flush=True,
                     )
 
-
-def apply_live_text(current: str, desired: str) -> str:
-    """Bring the caret from ``current`` to ``desired`` with minimal edits.
-
-    Shares a common prefix, backspaces the tail, then types or pastes the
-    remainder. Short tails prefer ``send_text`` (no clipboard); long tails
-    paste without restoring the clipboard (the F7 session restores once).
-    """
-    current = current or ""
-    desired = desired or ""
-    if current == desired:
-        return desired
-    i = 0
-    limit = min(len(current), len(desired))
-    while i < limit and current[i] == desired[i]:
-        i += 1
-    back = len(current) - i
-    add = desired[i:]
-    force_release_modifiers()
-    if back:
-        send_backspaces(back)
-    if add:
-        typed = False
-        if len(add) <= 32:
-            try:
-                typed = bool(send_text(add))
-            except Exception:
-                typed = False
-        if not typed:
-            paste_text(add, restore_clipboard=False)
-    return desired
 
 
 def get_clipboard_image(max_dim: int = 1600) -> Optional[bytes]:
@@ -387,16 +334,3 @@ def _get_clipboard_image_locked(max_dim: int = 1600) -> Optional[bytes]:
     except Exception as e:
         print(f"Notice: Qt clipboard image probe failed: {e}", flush=True)
     return None
-
-
-def capture_ai_context(timeout: float = 0.35) -> tuple[str, Optional[bytes]]:
-    """Capture selected text and/or clipboard image without destroying clipboard bitmap.
-
-    1. Snapshot pre-existing clipboard image (e.g. screenshot via Win+Shift+S / Cmd+Shift+4).
-    2. Probe for selected text in the active application.
-    3. Return (selected_text, image_bytes).
-    """
-    with _CLIPBOARD_LOCK:
-        image_bytes = _get_clipboard_image_locked(max_dim=1600)
-        selected_text = get_selected_text(timeout=timeout)
-        return selected_text, image_bytes

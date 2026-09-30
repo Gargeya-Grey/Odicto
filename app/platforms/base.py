@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from paths import ROOT
 from typing import Optional
 
 import pyperclip
@@ -16,7 +17,7 @@ import pyperclip
 
 def install_root() -> str:
     """Absolute path to the Odicto install directory (repo root)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return str(ROOT)
 
 
 def install_digest() -> str:

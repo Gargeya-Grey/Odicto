@@ -14,25 +14,49 @@ transcript is first sent to an LLM as a prompt, and the model's reply is pasted 
 
 | Question | Answer |
 |---|---|
-| Entry point | `main.py` (the app), `odicto.py` (lifecycle CLI), `setup_web.py` (setup page) |
-| How it starts | `start_dictation.bat` / `run_debug.sh` → `main.py` (pythonw on Windows) |
+| Entry point | Root `main.py` / `odicto.py` launch the implementations in `app/`; `app/setup_web.py` serves setup |
+| How it starts | `start_dictation.bat` / `scripts/posix/run_debug.sh` → `main.py` (pythonw on Windows) |
 | Where config comes from | `.env` → `ENV_DEFAULTS` in `config.py` (single source of defaults) |
 | How text reaches your cursor | `typer.py` — clipboard paste, or **typing** when the target is a terminal |
-| Speech to text | `transcriber.py` — local Whisper, or cloud Gemini Transcribe |
-| Optional LLM | `refiner.py` — `none` / `ollama` / `openrouter` / `meta` / `gemini` |
-| Audio capture | `recorder.py` — a persistent `sounddevice` stream + 1.5 s pre-roll |
+| Speech to text | `transcriber.py` — local Whisper, or cloud Gemini, Groq, or OpenRouter |
+| Optional LLM | `refiner.py` — `none` / `ollama` / `openrouter` / `meta` / `gemini` / `groq` |
+| Audio capture | `recorder.py` — a persistent `sounddevice` stream + 0.4 s pre-roll |
 | The bit that bites you | a **global keyboard hook with suppression**, hence the single-instance lock |
 
 **How to run it locally**
 
 ```bash
-.\run_debug.bat            # Windows: foreground, console logging
-./run_debug.sh             # macOS / Linux
-.\setup.bat                # configure a provider + API key in a web form
+.\scripts\windows\run_debug.bat            # Windows: foreground, console logging
+bash scripts/posix/run_debug.sh             # macOS / Linux
+.\scripts\windows\setup.bat                # configure a provider + API key in a web form
 .venv\Scripts\python.exe odicto.py config   # show every resolved value and its source
 ```
 
 ---
+
+
+## Project folders
+
+```text
+app/                Application modules and platforms/ OS backends
+assets/             Setup page HTML, CSS, and JavaScript
+tests/              Unit, reliability, equivalence, and layout tests
+scripts/windows/    Windows setup, debug, stop, and startup helpers
+scripts/posix/      macOS/Linux setup, debug, stop, and startup helpers
+tools/              Verification and architecture tooling
+docs/               Architecture, engineering notes, and research
+```
+
+The root keeps the README, dependency list, installers, settings templates, and small
+`main.py`, `odicto.py`, and `start_dictation.*` launchers. Existing startup shortcuts can
+continue to use those entry points. Private `.env` and `prompt.txt`, and ignored runtime
+logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
+root independently of the working directory.
+
+Application modules keep their existing import names. The launchers and `tests/__init__.py`
+put `app/` on Python's import path; no installation or package build is required.
+Run tests from the project root with `python -m unittest discover -s tests -t .`.
+The optional microphone diagnostic is `python -m tests.test_pipeline`.
 
 ## 2. System context
 
@@ -66,41 +90,42 @@ graph TD
 
 ## 3. Module map
 
-Production Python is **9,031 lines** (was 10,623 before the consolidation experiment).
-`setup_template.html` (2,518 lines) holds the setup page markup that used to be an f-string
+Application source lives in `app/`; root Python files are small launchers.
+`assets/setup_template.html` holds the setup page markup that used to be an f-string
 inside `setup_web.py`. It renders the "Quiet Console" dashboard: a left rail nav over five
 views (Overview status meters, AI, Speech, Controls, Prompt), one form with a sticky
 save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page()`.
 
-| Module | Lines | Responsibility | Public API other modules call |
-|---|---|---|---|
-| `main.py` | 1,375 | Process entry, orchestration, `DictationApp` state machine, hotkey handlers, pipeline | `DictationApp`, `acquire/release_single_instance_lock`, `ensure_can_bind_hotkeys` |
-| `config.py` | 1,277 | `.env` loading, `ENV_DEFAULTS`, cascade resolvers, validation, hotkey parsing, prompt resolution | `Config`, `ENV_DEFAULTS`, `parse_hold_hotkey`, `validate_hotkey_pair`, `config_warnings`, `prompt_live_path` |
-| `indicator.py` | 1,008 | PySide6 always-on-top, click-through HUD: glyph, label, chips, waveform, 60 fps ticks | `DictationIndicator`, `GuiState`, `status_label` |
-| `refiner.py` | 951 | LLM clients and the refine call, conversation history, provider ping | `TextRefiner`, `test_provider`, `openrouter_effort_for_model`, `build_system_prompt_with_context` |
-| `setup_web.py` | 877 | Loopback setup page server; reads/writes `.env` and `prompt.txt` atomically | `run_server`, `_page`, `merge_env`, `validate_provider_requirements` |
-| `transcriber.py` | 614 | Whisper + Gemini unary + Gemini Live streaming sessions | `WhisperTranscriber`, `GeminiTranscriber`, `GeminiLiveSession`, `float32_to_wav_bytes` |
-| `typer.py` | 402 | Clipboard snapshot/restore, paste chords, terminal typing, selection probe | `paste_text`, `get_selected_text`, `apply_live_text`, `capture_ai_context` |
-| `recorder.py` | 325 | Persistent capture stream, pre-roll, level/waveform, beeps | `AudioRecorder`, `play_beep` |
-| `openrouter_catalog.py` | 254 | Cached OpenRouter model catalog; reasoning-effort clamping | `ensure_openrouter_catalog`, `clamp_openrouter_effort`, `lightest_openrouter_effort` |
-| `odicto.py` | 206 | Lifecycle CLI (`setup`/`start`/`stop`/`status`/`config`/`autostart`) | `main()` |
-| `app_state.py` | 15 | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
-| `platforms/` | 1,727 | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
+| Module | Responsibility | Public API other modules call |
+|---|---|---|
+| `app/main.py` | Process entry, orchestration, `DictationApp` state machine, hotkey handlers, pipeline | `DictationApp`, `acquire/release_single_instance_lock`, `ensure_can_bind_hotkeys` |
+| `app/config.py` | `.env` loading, `ENV_DEFAULTS`, cascade resolvers, validation, hotkey parsing, prompt resolution | `Config`, `ENV_DEFAULTS`, `parse_hold_hotkey`, `validate_hotkey_pair`, `config_warnings`, `prompt_live_path` |
+| `app/indicator.py` | PySide6 always-on-top, click-through HUD: glyph, label, chips, waveform, 60 fps ticks | `DictationIndicator`, `GuiState`, `status_label` |
+| `app/refiner.py` | LLM clients and the refine call, conversation history, provider ping | `TextRefiner`, `test_provider`, `openrouter_effort_for_model`, `build_system_prompt_with_context` |
+| `app/setup_web.py` | Loopback setup page server; reads/writes `.env` and `prompt.txt` atomically | `run_server`, `_page`, `merge_env`, `validate_provider_requirements` |
+| `app/transcriber.py` | Whisper, Gemini Live, and batch Groq / OpenRouter speech | `WhisperTranscriber`, `CloudTranscriber`, `GeminiTranscriber`, `GeminiLiveSession`, `float32_to_wav_bytes` |
+| `app/typer.py` | Clipboard snapshot/restore, paste chords, terminal typing, selection probe | `paste_text`, `get_selected_text`, `get_clipboard_image` |
+| `app/recorder.py` | Persistent capture stream, pre-roll, level/waveform, beeps | `AudioRecorder`, `play_beep` |
+| `app/openrouter_catalog.py` | Cached OpenRouter model catalog; reasoning-effort clamping | `ensure_openrouter_catalog`, `clamp_openrouter_effort`, `lightest_openrouter_effort` |
+| `app/odicto.py` | Lifecycle CLI (`setup`/`start`/`stop`/`status`/`config`/`autostart`) | `main()` |
+| `app/app_state.py` | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
+| `app/platforms/` | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
+| `app/paths.py` | Canonical install root; keeps settings and runtime paths stable after moves | `ROOT` |
 
 ### 3.1 The platform layer
 
-`platforms/__init__.py` picks a backend **once at import** and re-exports it, so `import
+`app/platforms/__init__.py` picks a backend **once at import** and re-exports it, so `import
 platforms` gives one consistent surface on every OS.
 
 | File | Lines | Role |
 |---|---|---|
-| `platforms/__init__.py` | 51 | `sys.platform` dispatch + `__all__` |
-| `platforms/base.py` | 168 | OS-agnostic: install paths, clipboard, terminal-detection tables and matcher |
-| `platforms/_keyboard.py` | 481 | Shared `keyboard`-lib backend (Windows + Linux): hooks, key synthesis, SendInput batching |
-| `platforms/_posix.py` | 228 | Shared POSIX lock (`fcntl.flock`) and process management |
-| `platforms/windows.py` | 353 | Named mutex + `msvcrt` lockfile, `taskkill` orphan sweep, Win32 exstyles |
-| `platforms/macos.py` | 352 | `pynput` hooks, `NSWorkspace` terminal detection |
-| `platforms/linux.py` | 94 | X11 terminal detection via `xdotool`/`xprop`; re-exports the POSIX helpers |
+| `app/platforms/__init__.py` | 51 | `sys.platform` dispatch + `__all__` |
+| `app/platforms/base.py` | 168 | OS-agnostic: install paths, clipboard, terminal-detection tables and matcher |
+| `app/platforms/_keyboard.py` | 481 | Shared `keyboard`-lib backend (Windows + Linux): hooks, key synthesis, SendInput batching |
+| `app/platforms/_posix.py` | 228 | Shared POSIX lock (`fcntl.flock`) and process management |
+| `app/platforms/windows.py` | 353 | Named mutex + `msvcrt` lockfile, `taskkill` orphan sweep, Win32 exstyles |
+| `app/platforms/macos.py` | 352 | `pynput` hooks, `NSWorkspace` terminal detection |
+| `app/platforms/linux.py` | 94 | X11 terminal detection via `xdotool`/`xprop`; re-exports the POSIX helpers |
 
 ### 3.2 Module dependency graph (generated)
 
@@ -113,6 +138,7 @@ graph LR
     main --> app_state
     main --> config
     main --> indicator
+    main --> paths
     main --> platforms
     main --> recorder
     main --> refiner
@@ -121,16 +147,20 @@ graph LR
     odicto --> config
     odicto --> platforms
     odicto --> setup_web
+    config --> paths
     transcriber --> config
     refiner --> config
     refiner --> openrouter_catalog
     typer --> config
     typer --> platforms
     indicator --> app_state
+    indicator --> paths
     indicator --> platforms
+    indicator --> typer
     openrouter_catalog --> config
     setup_web --> config
     setup_web --> openrouter_catalog
+    setup_web --> paths
     setup_web --> platforms
     setup_web --> refiner
 ```
@@ -176,6 +206,9 @@ sequenceDiagram
     alt AI mode
         Pipe->>LLM: refine(transcript, context, image, keep_history)
         LLM-->>Pipe: reply
+    else dictation polish enabled (and speech is not Gemini Smart)
+        Pipe->>LLM: polish(transcript), independent 2s wait
+        LLM-->>Pipe: edited transcript, or raw fallback
     end
     Pipe->>Typ: paste_text(text)
     Typ-->>Cursor: paste, or type when the window is a terminal
@@ -189,44 +222,51 @@ STT.
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant Hook as Hook thread
     participant App as DictationApp
-    participant Caret as odicto-live-caret thread
     participant Sess as GeminiLiveSession
+    participant HUD as Qt HUD
+    participant Pipe as Finalization worker
     participant Typ as typer
-
-    Hook->>App: on_live_toggle()
-    App->>Sess: start()
-    App->>App: _live_epoch += 1
-    App->>Caret: ensure worker (long-lived, drains an Event)
-    loop while live
-        Sess-->>App: on_interim(text)
-        App->>Caret: set desired text
-        Caret->>Typ: apply_live_text (edits only the tail)
+    Hook->>App: first F7 tap
+    App->>App: increment epoch, RECORDING
+    App->>Sess: start, subscribe to recorder chunks
+    loop while recording
+        Sess-->>App: interim/final callback with capture epoch
+        App-->>HUD: preview only (no target edits)
     end
-    Hook->>App: on_live_toggle() again
-    App->>Sess: stop() — waits up to ~2.5s for the<br/>single call's finalized transcript
-    Note over App: odicto-live-cleanup thread joins the session off the hook
-    Note over App: finalized SMART input_transcription replaces<br/>the interim draft in place (same single call)
-    App->>Typ: apply_live_text (interim draft -> smart final)
+    Hook->>App: second F7 tap
+    App->>App: PROCESSING, detach listener, stop capture
+    App->>Pipe: finish session off hook thread
+    Pipe->>Sess: stop, drain PCM, wait up to 2.5s for final
+    Sess-->>Pipe: authoritative transcript
+    Pipe->>Pipe: optional text polish (skip Gemini Smart)
+    Pipe->>Typ: insert once, restore_clipboard=False
+    Pipe->>App: clear recorder, IDLE
 ```
 
-**Epoch guard.** Every live callback carries `_live_epoch`. If a stale worker finishes after
-you already started a new session, it must not touch the new one — that is why
-`_cleanup_live_session` deliberately does *not* call `_finish_cycle()` for a stale epoch.
+Only Gemini uses the streaming session; other F7 providers batch-transcribe once on stop.
+Explicit `LIVE_STT_PROVIDER` choices are honored and lazily cached independently of the
+ordinary speech provider. A Gemini final or an available draft skips batch STT. Only an
+empty Live result falls back to the selected speech engine. Callbacks from an old capture
+are ignored by epoch; no callback or background cleanup edits the target field.
 
-**Streamed final is authoritative (no second API call).** The Live session requests
-`mode=SMART` in `input_audio_transcription`; per the official Gemini Live transcription
-docs, `interim_input_transcription` events are speculative raw hypotheses while the
-finalized `input_transcription` is the model's authoritative transcript and, in smart
-mode, already carries the cleaned, formatted response — it lands at turn end, i.e. right
-when you tap stop. On stop the cleanup path waits up to ~2.5s for that single call's
-final and swaps the streamed draft for it in place when the two differ (equal or missing
-final -> draft stays). Nothing ever re-transcribes the buffered clip. If nothing streamed
-at all, `_finish_live_session` pastes the final directly, and only falls back to the
-dictation pipeline when the Live API produced nothing. Stop threads always run off the
-hook thread — `session.stop()` is never called there.
+F7 stays PROCESSING through finalization, polish and insertion, so both hotkeys reject a
+new capture until completion. Preview text and committed fragments belong to that capture:
+clear them on ordinary capture start and at every pipeline exit before returning to IDLE.
+In non-terminals its final text stays on the clipboard for
+asynchronous paste consumers. Terminals still receive typed Unicode without a clipboard
+change. The deleted caret worker, tail backspacing and delayed F7 clipboard restoration
+must not be reintroduced.
+
+`POLISH_DICTATION=false` is the default. When enabled, raw dictation uses the selected AI
+provider with `POLISH_MODEL` or its selected chat model, a fixed editing prompt, and no
+selection, image, reset commands or history. A separate worker waits at most two seconds;
+at most one polish call can be outstanding. Timeout, empty/truncated chat output or failure
+keeps raw text and shows "Polish skipped · raw text". Gemini Smart skips duplicate polish.
+AI answer failure similarly shows "AI failed · raw text" instead of "Done". Screenshot
+context requires explicit `AI_CLIPBOARD_IMAGE=true`; the HUD marshals Qt image access to
+the GUI thread. Remote AI providers do not generate a startup warmup reply; Ollama does.
 
 ## 6. Application and HUD states
 
@@ -280,21 +320,19 @@ so a second copy in the same folder collides while a second *different* install 
 | hook thread | `platforms.hook_key` | process | invokes `on_press` / `on_release` / `on_live_toggle` |
 | `dictation-pipeline` | `on_release` | one cycle | `process_and_paste` |
 | `odicto-sel` | `process_and_paste` | one cycle | `ThreadPoolExecutor(max_workers=1)`, shut down in `finally` |
-| `odicto-live-caret` | `_ensure_live_caret_worker` | process | long-lived, drains `_live_caret_event` |
-| `odicto-live-stop` / `-cleanup` / `-abort` | live teardown | one task | join the session off the hook thread |
+| `odicto-live-stop` / abort worker | live teardown | one task | join the session off the hook thread, then insert once |
+| `odicto-polish` | `TextRefiner.polish` | one request | one outstanding worker; caller waits at most 2s |
 | `beep-start` / `beep-stop` | `DictationApp._beep` | ~80 ms | never blocks the hot path |
-| `odicto-whisper-warm` | `initialize_app` | start-up only | warms Whisper for the AI chord |
 | Qt thread | `indicator.start` | process | all painting; worker threads marshal via signals |
 
 | Lock / primitive | Guards |
 |---|---|
 | `self.state_lock` | `state`, `_last_cycle_end`, `_record_started_at` |
-| `self._live_caret_lock` | `_live_caret_current`, `_live_caret_desired`, `_live_epoch` |
-| `self._whisper_lock` | lazy `WhisperTranscriber` creation |
-| `_CLIPBOARD_LOCK` (`typer.py`) | live paste, F7 restore and the selection probe must not interleave |
+| `self.state_lock` (live callbacks) | `_live_epoch`, `live_active`, `live_preview`, `_live_committed` |
+| `_CLIPBOARD_LOCK` (`typer.py`) | paste and selection probes must not interleave |
 | `_history_lock` (`refiner.py`) | `conversation_history` |
-| `_live_caret_event`, `_live_cleanup_done` | caret work signalling; `_live_cleanup_done` is awaited *while* `state_lock` is held, so nothing may move it under that lock |
-| Qt signals `_wake`, `_hide_req`, `_reset_flash` | worker → Qt thread, `QueuedConnection` |
+| `_polish_lock` (`refiner.py`) | prevents overlapping polish requests after a caller timeout |
+| Qt signals `_wake`, `_hide_req`, `_reset_flash`, `_image_request` | worker → Qt thread |
 
 ## 9. Failure paths — this app is built never to fail
 
@@ -347,16 +385,22 @@ so adding a provider is a one-row change.
 | `meta` | `_MetaClient` (Responses API) | `META_API_KEY` | no output cap; effort knob is the only control |
 | `gemini` | `_GeminiClient` (Interactions API) | `GEMINI_API_KEY` | ignores `LLM_API_BASE`; has its own endpoint |
 
-STT is **independent of `LLM_PROVIDER`**:
+STT is **independent of `LLM_PROVIDER`**. The resolved provider and its model are
+the same for raw dictation and AI mode. AI mode only adds the LLM on top of that
+transcript. `LIVE_STT_PROVIDER=auto` follows the same resolution. An explicit live
+value can still override F7.
 
-| `STT_PROVIDER` | Dictation chord and F7 | AI chord |
+| `STT_PROVIDER` | Raw dictation and AI chord | F7 when live is `auto` |
 |---|---|---|
-| `whisper` | local Whisper | local Whisper |
-| `gemini` | Gemini Transcribe (`smart` or `verbatim`) | local Whisper, then Gemini **verbatim** on failure |
-| `auto` | Gemini when a key is saved, else Whisper | as above |
+| `whisper` | local Whisper | local Whisper, batch on release |
+| `gemini` | Gemini Transcribe (`smart` or `verbatim`) | Gemini Live |
+| `groq` | Groq `GROQ_STT_MODEL` | same model, batch on release |
+| `openrouter` | `OPENROUTER_STT_MODEL` (Grok speech models included, by slug) | same model, batch on release |
+| `auto` | Gemini when a key is saved, else Whisper | the same resolution |
 
-The AI chord deliberately avoids cloud STT so Smart transcription is not stacked in front of
-the LLM.
+A cloud call with no key, or any speech error, falls back to local Whisper.
+`WHISPER_DEVICE=cuda` loads that fallback (or the active local model) into GPU
+memory at startup and runs one silent warmup so the first hotkey is not cold.
 
 ### 10.3 Where the defaults live
 
@@ -384,13 +428,14 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 
 | I want to… | Change |
 |---|---|
-| add an LLM provider | `config.py` (`ENV_DEFAULTS` + one row in `_MODEL_ATTR`), `refiner.py` (`TextRefiner.__init__` + `refine` + `test_provider`), `setup_web.py` (`EDITABLE_KEYS`, the page, `validate_provider_requirements`), `.env.example` |
+| add an LLM provider | `app/config.py` (`ENV_DEFAULTS` + one row in `_MODEL_ATTR`), `app/refiner.py` (`TextRefiner.__init__` + `refine` + `test_provider`), `app/setup_web.py` (`EDITABLE_KEYS`, the page, `validate_provider_requirements`), `.env.example` |
+| add a speech provider | `app/config.py` (`ENV_DEFAULTS`, `normalize_stt_provider`, `effective_stt_provider`), `app/transcriber.py`, `main.initialize_app`, `app/setup_web.py`, `assets/setup_template.html`, `.env.example` |
 | add a hotkey | `ENV_DEFAULTS`, `config.validate_hotkey_pair`, `main._match_active_chord` and `_bind_hotkeys` |
-| change the HUD look | `indicator.py` (glyph and chip drawing) — no test covers pixels, so check it by eye |
-| change the setup page | `setup_template.html` for markup/CSS/JS; `setup_web.py` only for tokens and handlers |
+| change the HUD look | `app/indicator.py` (glyph and chip drawing) — no test covers pixels, so check it by eye |
+| change the setup page | `assets/setup_template.html` for markup/CSS/JS; `app/setup_web.py` only for tokens and handlers |
 | change what the AI is told | `prompt.txt` (private, gitignored); the shipped default is `prompt.txt.example` **and** `DEFAULT_SYSTEM_PROMPT` — keep both in sync |
 | change paste behaviour | `typer.paste_text` and the clipboard helpers |
-| add a per-OS behaviour | `platforms/base.py` if OS-agnostic, otherwise the backend, and add the name to that backend's `__all__` |
+| add a per-OS behaviour | `app/platforms/base.py` if OS-agnostic, otherwise the backend, and add the name to that backend's `__all__` |
 
 ## 13. Invariants — do not break these
 
@@ -417,9 +462,9 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 
 These are known, chosen limits — not oversights:
 
-- **No package moves.** Modules stay flat at the repo root because `test_units.py` imports by
-  top-level module name, and `main.py` / `odicto.py` filenames are referenced by the start
-  scripts and by tests. This is the **modularity ceiling** for this layout.
+- **Stable entry points and module names.** Implementations live in `app/`, while root
+  `main.py` / `odicto.py` launchers preserve startup targets. Tests and application code
+  still import by top-level module name so patched globals keep their existing behavior.
 - **`main.py` keeps its logging and lock plumbing** even though they look extractable:
   `test_units.py` patches `main._LOG_MAX_BYTES` and `main._INSTANCE_LOCK_HELD`, which only works
   if the *reading* code lives in `main.py`.
@@ -430,7 +475,7 @@ These are known, chosen limits — not oversights:
   `cuda_is_safe_to_load`'s docstring claimed tests used it, and none did.
 - **HUD paint has no automated coverage** (no pixel tests — Qt rendering differs per platform),
   so painting changes are verified by eye.
-- **`platforms/macos.py` and `platforms/linux.py` cannot be imported on Windows.** Their only
+- **`app/platforms/macos.py` and `app/platforms/linux.py` cannot be imported on Windows.** Their only
   real gate is the 3-OS CI job.
 
 ## 15. Verification
@@ -441,15 +486,17 @@ These are known, chosen limits — not oversights:
 
 | Gate | What it proves |
 |---|---|
-| `test_units.py` hash | the behaviour contract has not been edited |
-| `-m unittest test_units` | 150 tests, 0 unexpected skips |
-| `-m unittest test_equivalence` | the setup page renders identically to the recorded hashes; cascade resolvers unchanged |
+| `tests/test_units.py` hash | the behaviour contract has not been edited |
+| `-m unittest tests.test_units` | 153 tests, 0 unexpected skips |
+| `-m unittest tests.test_equivalence` | the setup page renders identically to the recorded hashes; cascade resolvers unchanged |
 | clean-environment run | the suite also passes with no `.env` present, the way CI runs it |
+| `-m unittest tests.test_reliability` | 25 input, HUD, AI, and polish regression tests |
+| `-m unittest tests.test_layout` | Entry points and install-root paths work after relocation |
 | import smoke test | every top-level module imports |
-| backend syntax check | `platforms/macos.py` and `platforms/linux.py` compile |
+| backend syntax check | `app/platforms/macos.py` and `app/platforms/linux.py` compile |
 | `tools/module_graph.py --check` | the diagram above is not stale |
 
-Plus one manual check that no test can replace: launch with `run_debug.bat`, confirm the log
+Plus one manual check that no test can replace: launch with `scripts/windows/run_debug.bat`, confirm the log
 shows `Application ready!` and `HUD enabled`, hold the hotkey, watch the pill show **Listening**,
 release, and confirm the text lands. Then stop the app and confirm normal typing returns — that
 is the single-instance invariant in practice.
