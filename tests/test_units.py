@@ -56,6 +56,30 @@ class TestOdicto(unittest.TestCase):
         self._terminal_patch = patch("typer.foreground_is_terminal", return_value=False)
         self._terminal_patch.start()
         self.addCleanup(self._terminal_patch.stop)
+        # Clipboard safety: snapshots go through each test's fake text clipboard
+        # (never the real OS clipboard), the IDE-host probe is off like the
+        # terminal one, and the deferred restore runs inline so assertions see it.
+        import typer as typer_mod
+        from platforms.clipboard import ClipboardSnapshot
+
+        for clip_patch in (
+            patch(
+                "typer.clipboard_snapshot",
+                side_effect=lambda: ClipboardSnapshot(
+                    text=typer_mod._clipboard_read(),
+                    formats=(),
+                    complete=True,
+                    has_non_text=False,
+                    ok=True,
+                ),
+            ),
+            patch("typer.clipboard_restore", return_value=True),
+            patch("typer.clipboard_change_token", return_value=None),
+            patch("typer.foreground_is_ide_host", return_value=False),
+            patch.object(typer_mod, "_RESTORE_IN_BACKGROUND", False),
+        ):
+            clip_patch.start()
+            self.addCleanup(clip_patch.stop)
         reset_openrouter_effort_cache()
         self._catalog_patch = patch(
             "openrouter_catalog.fetch_openrouter_catalog",
@@ -621,7 +645,7 @@ class TestOdicto(unittest.TestCase):
         self.assertIn(b'name="model"', captured["data"])
         self.assertIn(b"whisper-large-v3-turbo", captured["data"])
         self.assertIn(b'name="language"', captured["data"])
-        self.assertIn(b"filename=\"clip.wav\"", captured["data"])
+        self.assertIn(b"filename=\"clip.flac\"", captured["data"])
         self.assertNotIn(b"gsk-test", captured["data"])
 
     def test_openrouter_transcriber_posts_json_audio(self) -> None:
@@ -685,7 +709,7 @@ class TestOdicto(unittest.TestCase):
         self.assertIn("gemini-3.5-transcribe", kwargs["model"])
         mode = kwargs["generation_config"]["transcription_config"]["mode"]
         self.assertEqual(mode["type"], "smart")
-        self.assertEqual(kwargs["input"][0]["mime_type"], "audio/wav")
+        self.assertEqual(kwargs["input"][0]["mime_type"], "audio/flac")
         self.assertTrue(kwargs["input"][0]["data"])
 
     @patch("transcriber.google_genai")
@@ -1060,7 +1084,7 @@ class TestOdicto(unittest.TestCase):
             r = TextRefiner()
             self.assertEqual(r.provider, "gemini")
             self.assertEqual(r.model, "gemini-3.7-flash")
-            mock_genai.Client.assert_called_once_with(api_key="AIza-test")
+            mock_genai.Client.assert_called_once_with(api_key="AIza-test", http_options={"retry_options": {"attempts": 0}, "client_args": {"limits": __import__("httpx").Limits(keepalive_expiry=120)}})
 
             result = r.refine("hello from gemini", keep_history=True)
             self.assertEqual(result, "Gemini reply")

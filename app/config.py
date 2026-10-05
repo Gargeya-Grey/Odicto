@@ -13,6 +13,50 @@ def _env_bool(name: str, default: str = "true") -> bool:
     return os.getenv(name, default).lower() in ("true", "1", "yes")
 
 
+# Human-readable notes about bad or out-of-range env values, filled while the
+# Config class body runs. Exposed as Config.CONFIG_WARNINGS so the UI can show them.
+CONFIG_WARNINGS: list[str] = []
+
+
+def _warn_config(message: str) -> None:
+    CONFIG_WARNINGS.append(message)
+    print(f"Warning: {message}", flush=True)
+
+
+def _parse_env_number(name: str, kind):
+    """Parse env var ``name`` as ``kind`` (int or float); fall back to the default."""
+    default = kind(ENV_DEFAULTS[name])
+    raw = os.getenv(name, ENV_DEFAULTS[name])
+    try:
+        value = kind(str(raw).strip())
+        if kind is float and value in (float("inf"), float("-inf")) or value != value:
+            raise ValueError("not finite")
+        return value
+    except (ValueError, TypeError):
+        _warn_config(f"{name}={raw!r} is not a valid {kind.__name__}; using default {default!r}")
+        return default
+
+
+def _clamp_env(name: str, value, lo, hi):
+    if lo is not None and value < lo:
+        _warn_config(f"{name}={value!r} is below the minimum {lo!r}; using {lo!r}")
+        return lo
+    if hi is not None and value > hi:
+        _warn_config(f"{name}={value!r} is above the maximum {hi!r}; using {hi!r}")
+        return hi
+    return value
+
+
+def _env_int(name: str, lo=None, hi=None) -> int:
+    """Int env value; bad values warn and use the default, out-of-range values clamp."""
+    return _clamp_env(name, _parse_env_number(name, int), lo, hi)
+
+
+def _env_float(name: str, lo=None, hi=None) -> float:
+    """Float env value; bad values warn and use the default, out-of-range values clamp."""
+    return _clamp_env(name, _parse_env_number(name, float), lo, hi)
+
+
 # ---------------------------------------------------------------------------
 # Single source of truth for built-in defaults.
 #
@@ -94,7 +138,13 @@ ENV_DEFAULTS: dict[str, str] = {
     "GEMINI_THINKING_LEVEL": "minimal",
     "GEMINI_MAX_OUTPUT_TOKENS": "4096",
     # Timing & feedback
-    "PASTE_DELAY_SECONDS": "0.05",
+    "PASTE_DELAY_SECONDS": "1.0",
+    "MAX_RECORDING_SECONDS": "600",
+    "STT_DEADLINE_SECONDS": "20",
+    "LLM_DEADLINE_SECONDS": "30",
+    "CANCEL_HOTKEY": "esc",
+    "LOG_TRANSCRIPTS": "false",
+    "POLISH_MAX_CHARS": "1200",
     "PLAY_AUDIO_CUES": "true",
     "SHOW_VISUAL_INDICATOR": "true",
     "MIN_HOLD_MS": "80",
@@ -394,8 +444,8 @@ class Config:
     )
 
     # Audio config
-    SAMPLE_RATE: int = int(_default_env("SAMPLE_RATE"))
-    CHANNELS: int = int(_default_env("CHANNELS"))
+    SAMPLE_RATE: int = _env_int("SAMPLE_RATE")
+    CHANNELS: int = _env_int("CHANNELS")
 
     # Whisper config
     WHISPER_MODEL_SIZE: str = _default_env("WHISPER_MODEL_SIZE")
@@ -463,9 +513,9 @@ class Config:
     # Generic output cap for EVERY provider; GEMINI_MAX_OUTPUT_TOKENS remains
     # as a per-provider ceiling override. Meta reasoning is uncapped (the
     # effort knob is the only control), so Meta has no output-cap override.
-    LLM_MAX_TOKENS: int = int(_default_env("LLM_MAX_TOKENS"))
+    LLM_MAX_TOKENS: int = _env_int("LLM_MAX_TOKENS")
     # Ollama context window (higher = smarter multi-turn, slightly slower)
-    LLM_NUM_CTX: int = int(_default_env("LLM_NUM_CTX"))
+    LLM_NUM_CTX: int = _env_int("LLM_NUM_CTX")
     OPENROUTER_API_KEY: str = _clean_secret("OPENROUTER_API_KEY")
     OPENROUTER_PROVIDER_SORT: str = _default_env("OPENROUTER_PROVIDER_SORT").strip().lower()
     OPENROUTER_REASONING_EFFORT: str = _default_env(
@@ -479,7 +529,7 @@ class Config:
     GEMINI_API_KEY: str = _clean_secret("GEMINI_API_KEY")
     GEMINI_MODEL: str = _sanitize_model_id(_default_env("GEMINI_MODEL"))
     GEMINI_THINKING_LEVEL: str = _default_env("GEMINI_THINKING_LEVEL").strip().lower()
-    GEMINI_MAX_OUTPUT_TOKENS: int = int(_default_env("GEMINI_MAX_OUTPUT_TOKENS"))
+    GEMINI_MAX_OUTPUT_TOKENS: int = _env_int("GEMINI_MAX_OUTPUT_TOKENS")
     # Unified reasoning knob. Mapped onto Meta's reasoning.effort, Gemini's
     # thinking_level, and OpenRouter's reasoning.effort. Ignored by ollama.
     # Provider-specific knobs (META_REASONING_EFFORT / GEMINI_THINKING_LEVEL /
@@ -491,15 +541,31 @@ class Config:
     SYSTEM_PROMPT_FILE: str = _default_env("SYSTEM_PROMPT_FILE").strip()
 
     # Timing & Feedback
-    PASTE_DELAY_SECONDS: float = float(_default_env("PASTE_DELAY_SECONDS"))
+    # Seconds after the paste chord before the previous clipboard is restored
+    # (runs in the background; a 0.15 s floor applies).
+    PASTE_DELAY_SECONDS: float = _env_float("PASTE_DELAY_SECONDS", 0.15, 10.0)
+    # A capture stops itself after this many seconds and is transcribed. 0 = no limit.
+    MAX_RECORDING_SECONDS: int = _env_int("MAX_RECORDING_SECONDS", 0, 7200)
+    # Wall-clock limit for one speech-to-text stage before the Whisper fallback.
+    STT_DEADLINE_SECONDS: float = _env_float("STT_DEADLINE_SECONDS", 3.0, 300.0)
+    # Wall-clock limit for one AI reply or polish stage; raw transcript kept on timeout.
+    LLM_DEADLINE_SECONDS: float = _env_float("LLM_DEADLINE_SECONDS", 3.0, 600.0)
+    # Key that cancels a running PROCESSING stage. Never suppressed. Blank disables.
+    CANCEL_HOTKEY: str = _default_env("CANCEL_HOTKEY").strip().lower()
+    # false = dictation.log records only lengths and timings, never text.
+    LOG_TRANSCRIPTS: bool = _env_bool("LOG_TRANSCRIPTS", _def("LOG_TRANSCRIPTS"))
+    # Polish is skipped for transcripts longer than this. 0 = no limit.
+    POLISH_MAX_CHARS: int = _env_int("POLISH_MAX_CHARS", 0, 100000)
+    # Notes about bad or out-of-range env values (same list object as the module's).
+    CONFIG_WARNINGS: list = CONFIG_WARNINGS
     PLAY_AUDIO_CUES: bool = _env_bool("PLAY_AUDIO_CUES", _def("PLAY_AUDIO_CUES"))
     SHOW_VISUAL_INDICATOR: bool = _env_bool(
         "SHOW_VISUAL_INDICATOR", _def("SHOW_VISUAL_INDICATOR")
     )
     # Minimum hold time (ms) before a recording is accepted — filters accidental taps
-    MIN_HOLD_MS: int = int(_default_env("MIN_HOLD_MS"))
+    MIN_HOLD_MS: int = _env_int("MIN_HOLD_MS")
     # Debounce between consecutive capture cycles (ms)
-    RETRIGGER_COOLDOWN_MS: int = int(_default_env("RETRIGGER_COOLDOWN_MS"))
+    RETRIGGER_COOLDOWN_MS: int = _env_int("RETRIGGER_COOLDOWN_MS")
 
     # Terminals have no shared paste chord and treat Ctrl+C as SIGINT, so when
     # the focused window is one Odicto types the text instead of pasting it.
@@ -1125,6 +1191,12 @@ class Config:
         )
 
         add("Timing", "Paste delay (s)", cls.PASTE_DELAY_SECONDS, _source_of("PASTE_DELAY_SECONDS"))
+        add("Timing", "Max recording (s)", cls.MAX_RECORDING_SECONDS, _source_of("MAX_RECORDING_SECONDS"))
+        add("Timing", "STT deadline (s)", cls.STT_DEADLINE_SECONDS, _source_of("STT_DEADLINE_SECONDS"))
+        add("Timing", "LLM deadline (s)", cls.LLM_DEADLINE_SECONDS, _source_of("LLM_DEADLINE_SECONDS"))
+        add("Timing", "Cancel hotkey", cls.CANCEL_HOTKEY or "(disabled)", _source_of("CANCEL_HOTKEY"))
+        add("Timing", "Log transcripts", cls.LOG_TRANSCRIPTS, _source_of("LOG_TRANSCRIPTS"))
+        add("Timing", "Polish max chars", cls.POLISH_MAX_CHARS, _source_of("POLISH_MAX_CHARS"))
         add("Timing", "Audio cues", cls.PLAY_AUDIO_CUES, _source_of("PLAY_AUDIO_CUES"))
         add("Timing", "Visual HUD", cls.SHOW_VISUAL_INDICATOR, _source_of("SHOW_VISUAL_INDICATOR"))
         add("Timing", "Min hold (ms)", cls.MIN_HOLD_MS, _source_of("MIN_HOLD_MS"))

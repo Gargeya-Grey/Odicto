@@ -7,7 +7,6 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, TextIO
 
@@ -137,11 +136,70 @@ from transcriber import (
 )
 from refiner import TextRefiner
 from typer import (
+    flush_pending_restore,
     get_selected_text,
     paste_text,
 )
 
 import platforms
+from platforms.preflight import environment_problems
+
+
+# Stage workers use the Thread class captured at import. A deadline is only a
+# deadline if its worker really runs; a caller that patches threading.Thread
+# (tests do, to intercept the pipeline thread) must not turn it into a hang.
+_Thread = threading.Thread
+# Serialises the "first caller sets _closing" step of _shutdown.
+_SHUTDOWN_GUARD = threading.Lock()
+# Backoff between failed initialisation attempts; the last value repeats.
+_INIT_RETRY_DELAYS_S = (2.0, 5.0, 10.0, 30.0, 60.0)
+
+
+class _Abort(Exception):
+    """End the current pipeline cycle without insertion; ``status`` goes to the HUD."""
+
+    def __init__(self, status: Optional[str]) -> None:
+        super().__init__(status or "closing")
+        self.status = status
+
+
+class _Stage:
+    """One bounded piece of pipeline work on its own daemon thread.
+
+    The pipeline waits on it with a deadline and may abandon it. An abandoned
+    stage only stores its late result here; it never inserts text.
+    """
+
+    def __init__(self, fn, name: str) -> None:
+        self.done = threading.Event()
+        self.value = None
+        self.error: Optional[BaseException] = None
+        _Thread(target=self._run, args=(fn,), daemon=True, name=name).start()
+
+    def _run(self, fn) -> None:
+        try:
+            self.value = fn()
+        except BaseException as e:  # reported by the waiting pipeline
+            self.error = e
+        finally:
+            self.done.set()
+
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+
+class _Cycle:
+    """Per-capture processing token: cancel flag, capture quality, early probe."""
+
+    def __init__(self, token: int, gap: bool = False, probe: Optional[_Stage] = None) -> None:
+        self.token = token
+        self.cancel = threading.Event()
+        self.gap = gap
+        self.probe = probe
+        self.claimed = False
+        self.pasting = False
 
 
 # Re-export hotkey helpers so existing callers/tests can import them from main.
@@ -222,6 +280,9 @@ def ensure_can_bind_hotkeys() -> None:
 
 
 class DictationApp:
+    # Longest wait for an in-flight insertion (and clipboard flush) at shutdown.
+    _SHUTDOWN_LOCK_TIMEOUT_S: float = 3.0
+
     def __init__(self, *, runtime: bool = False) -> None:
         """Initializes the background dictation app, setting up state and loading model instances."""
         print("==================================================")
@@ -293,6 +354,16 @@ class DictationApp:
         self.live_preview: str = ""
         self._speech_backends = {}
         self._live_epoch: int = 0
+
+        # Processing cycle (cancel / deadline token) and capture bookkeeping.
+        self._cycle: Optional[_Cycle] = None
+        self._cycle_seq: int = 0
+        self._capture_seq: int = 0
+        self._early_probe: Optional[_Stage] = None
+        # Init/preflight error code shown by the HUD (see indicator.INIT_REASON_LABELS).
+        self.status_detail: Optional[str] = None
+        self._preflight_error: Optional[str] = None
+        self._hooks_bound: bool = False
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -391,6 +462,31 @@ class DictationApp:
             self.on_live_toggle()
         elif kind == "reset":
             self._reset_context_via_hotkey()
+        elif kind == "cancel":
+            self._cancel_processing()
+        elif kind == "limit":
+            # Same stop-and-process path as a second chord / F7 tap, but only
+            # for the capture that reached the limit.
+            if snapshot != self._capture_seq or self.state != AppState.RECORDING:
+                return
+            if self.live_active:
+                self.on_live_toggle()
+            else:
+                self.on_release()
+
+    def _on_recording_limit(self) -> None:
+        """Recorder callback (own daemon thread): stop through the ordered worker."""
+        print(f"Recording limit reached ({Config.MAX_RECORDING_SECONDS} s)", flush=True)
+        self._dispatch_hotkey("limit", self._capture_seq)
+
+    def _cancel_processing(self) -> None:
+        """CANCEL_HOTKEY: abandon the current PROCESSING cycle; no insertion."""
+        with self.state_lock:
+            cycle = self._cycle
+            if self.state != AppState.PROCESSING or cycle is None or cycle.pasting:
+                return
+            cycle.cancel.set()
+        print(">>> Cancel requested; nothing will be inserted.", flush=True)
 
     def _notify_ui(self) -> None:
         """Push current state to the indicator on the Qt UI thread (non-blocking)."""
@@ -431,6 +527,14 @@ class DictationApp:
                        WhisperTranscriber())
             self._speech_backends[provider] = backend
         return backend.transcribe(audio)
+
+    def _speech_backend(self, live: bool):
+        """The transcriber object that served this capture (for local fallback)."""
+        if live:
+            provider = Config.effective_live_stt_provider()
+            if provider != Config.effective_stt_provider():
+                return self._speech_backends.get(provider)
+        return self.transcriber
 
     def _transcribe_for_pipeline(self, audio, use_llm: bool) -> str:
         """Raw dictation and AI mode share the selected speech provider and model.
@@ -474,49 +578,47 @@ class DictationApp:
         except Exception as e:
             print(f"Warning: Could not write PID file: {e}")
 
+        self._report_environment()
+
         if Config.LLM_PROVIDER == "ollama":
             self._ensure_ollama_running()
 
-        try:
-            self.recorder = AudioRecorder(
-                sample_rate=Config.SAMPLE_RATE,
-                channels=Config.CHANNELS,
+        # Retry the failed steps with backoff until ready or shutdown. A failed
+        # start must not leave a lock-holding process with no hooks and no retry.
+        attempt = 0
+        while True:
+            reason = self._init_attempt()
+            if reason is None:
+                break
+            if reason == "closing" or self._closing.is_set():
+                return
+            delay = _INIT_RETRY_DELAYS_S[min(attempt, len(_INIT_RETRY_DELAYS_S) - 1)]
+            attempt += 1
+            self.status_detail = self._preflight_error or reason
+            self.last_status = "init_error"
+            self._notify_ui()
+            print(
+                f"!!! Not ready ({reason}); retry {attempt} in {delay:.0f} s",
+                file=sys.stderr,
+                flush=True,
             )
-            provider = Config.effective_stt_provider()
-            if provider == "gemini":
-                self.transcriber = GeminiTranscriber()
-            elif provider in ("groq", "openrouter"):
-                self.transcriber = CloudTranscriber(provider)
-            else:
-                self.transcriber = WhisperTranscriber()
-            self.refiner = TextRefiner()
-            self.refiner.preload()
-        except Exception as e:
-            print(f"!!! Fatal init error: {e}", file=sys.stderr)
-            self.last_status = "error"
-            self._notify_ui()
-            return
+            if self._closing.wait(delay):
+                return
 
-        # Bind global press/release hooks for hold-to-talk (ctrl+grave / ctrl+shift+grave).
-        try:
-            with self._lifecycle_lock:
-                if self._closing.is_set():
-                    self.recorder.close()
-                    return
-                self._bind_hotkeys()
-                self.ready = True
-        except Exception as e:
-            print(f"!!! Failed to bind hotkey '{Config.HOTKEY}': {e}", file=sys.stderr)
-            self.last_status = "error"
-            self._notify_ui()
-            return
-
+        self.status_detail = None
+        self.last_status = None
         if self.indicator is not None:
             try:
-                # Fade out the boot HUD; thread-safe via Qt signals inside hide_indicator path
-                self.indicator.notify_state_changed()
-                # Explicit hide once ready (idle, no last_status → hidden)
-                self.indicator.hide_indicator()
+                if self._preflight_error:
+                    # Hotkeys bound, but the OS may still block them: say why once.
+                    self.status_detail = self._preflight_error
+                    self.last_status = "preflight"
+                    self.indicator.notify_state_changed()
+                else:
+                    # Fade out the boot HUD; thread-safe via Qt signals inside hide_indicator path
+                    self.indicator.notify_state_changed()
+                    # Explicit hide once ready (idle, no last_status → hidden)
+                    self.indicator.hide_indicator()
             except Exception:
                 pass
 
@@ -564,6 +666,93 @@ class DictationApp:
             )
         print("Press Ctrl+C in this terminal window to terminate.")
         print("==================================================")
+
+    def _report_environment(self) -> None:
+        """Print preflight problems and config warnings once; remember the first error."""
+        try:
+            problems = list(environment_problems() or [])
+        except Exception:
+            problems = []
+        for problem in problems:
+            print(f"Preflight {problem.severity}: {problem.message}", flush=True)
+            if problem.severity == "error" and self._preflight_error is None:
+                self._preflight_error = problem.code
+        for warning in list(getattr(Config, "CONFIG_WARNINGS", None) or []):
+            print(f"Config warning: {warning}", flush=True)
+
+    def _init_attempt(self) -> Optional[str]:
+        """Build whatever is still missing and bind hooks. None means ready.
+
+        Returns a short reason code (indicator.INIT_REASON_LABELS) on failure,
+        or "closing" when shutdown began. Every step is idempotent so a retry
+        only repeats the steps that failed.
+        """
+        if self.recorder is None:
+            try:
+                recorder = AudioRecorder(
+                    sample_rate=Config.SAMPLE_RATE,
+                    channels=Config.CHANNELS,
+                    max_seconds=Config.MAX_RECORDING_SECONDS,
+                )
+                recorder.set_limit_callback(self._on_recording_limit)
+                self.recorder = recorder
+            except Exception as e:
+                print(f"!!! Microphone init error: {e}", file=sys.stderr)
+                return "mic"
+        if self.transcriber is None:
+            try:
+                provider = Config.effective_stt_provider()
+                if provider == "gemini":
+                    self.transcriber = GeminiTranscriber()
+                elif provider in ("groq", "openrouter"):
+                    self.transcriber = CloudTranscriber(provider)
+                else:
+                    self.transcriber = WhisperTranscriber()
+            except Exception as e:
+                print(f"!!! Speech engine init error: {e}", file=sys.stderr)
+                return "speech"
+        if self.refiner is None:
+            try:
+                refiner = TextRefiner()
+                refiner.preload()
+                self.refiner = refiner
+            except Exception as e:
+                print(f"!!! AI init error: {e}", file=sys.stderr)
+                return "ai"
+
+        # Bind global press/release hooks for hold-to-talk (ctrl+grave / ctrl+shift+grave).
+        try:
+            with self._lifecycle_lock:
+                if self._closing.is_set():
+                    self.recorder.close()
+                    return "closing"
+                if not self._hooks_bound:
+                    self._bind_hotkeys()
+                    self._hooks_bound = True
+                self.ready = True
+        except Exception as e:
+            print(f"!!! Failed to bind hotkey '{Config.HOTKEY}': {e}", file=sys.stderr)
+            # A partial bind must not survive into the retry (stacked hooks).
+            try:
+                platforms.unhook_all()
+            except Exception:
+                pass
+            return "hotkeys"
+        return None
+
+    def _prewarm_for_capture(self, use_llm: bool) -> None:
+        """Wake provider connections while the user speaks. Never blocks or raises."""
+        targets = [self.transcriber]
+        if use_llm or Config.POLISH_DICTATION:
+            targets.append(self.refiner)
+        for target in targets:
+            prewarm = getattr(target, "prewarm", None)
+            if target is None or not callable(prewarm):
+                continue
+            try:
+                prewarm()
+            except Exception:
+                pass
 
     def _beep(self, frequency: float, name: str) -> None:
         """Play a short audio cue off the hot path."""
@@ -685,6 +874,24 @@ class DictationApp:
                 flush=True,
             )
 
+        cancel_key: str = (Config.CANCEL_HOTKEY or "").strip().lower()
+        live_primary = (Config.LIVE_HOTKEY or "").split("+")[-1].strip().lower()
+        if cancel_key and cancel_key in (primary, reset_key, live_primary):
+            print(f"Warning: CANCEL_HOTKEY '{cancel_key}' is already bound; cancel disabled.",
+                  flush=True)
+        elif cancel_key:
+            def cancel_handler(event: object) -> bool:
+                if getattr(event, "event_type", None) == platforms.KEY_DOWN:
+                    # Only enqueue; the worker ignores it outside PROCESSING.
+                    self._dispatch_hotkey("cancel")
+                return True  # never suppress; the key keeps its normal app behavior
+
+            platforms.hook_key(cancel_key, cancel_handler, suppress=False)
+            print(
+                f"Cancel hotkey bound: '{cancel_key}' (while processing: insert nothing)",
+                flush=True,
+            )
+
         live_key: str = (Config.LIVE_HOTKEY or "").split("+")[-1].strip().lower()
         if live_key:
             def live_handler(event: object) -> bool:
@@ -763,19 +970,36 @@ class DictationApp:
             self._shutdown()
 
     def _shutdown(self) -> None:
-        """Release resources, keyboard hooks, PID file, and any Ollama we spawned."""
-        with self._lifecycle_lock:
+        """Release resources, keyboard hooks, PID file, and any Ollama we spawned.
+
+        Order matters: set _closing and drop the hooks FIRST, outside any lock.
+        The pipeline holds _lifecycle_lock across paste_text (native clipboard,
+        long typed input); Quit must never wait on that with hooks installed.
+        Once _closing is set the pipeline re-checks it under the lock, so no new
+        insertion can start.
+        """
+        with _SHUTDOWN_GUARD:
             if self._closing.is_set():
                 return
             self._closing.set()
-            actions = getattr(self, "_hotkey_actions", None)
-            if actions is not None:
-                actions.put(None)
-            self.ready = False
+        actions = getattr(self, "_hotkey_actions", None)
+        if actions is not None:
+            actions.put(None)
+        self.ready = False
+        try:
+            platforms.unhook_all()
+        except Exception as e:
+            print(f"Warning: unhook failed: {e}", file=sys.stderr)
+        acquired = self._lifecycle_lock.acquire(timeout=self._SHUTDOWN_LOCK_TIMEOUT_S)
+        if not acquired:
+            print("Warning: an insertion is still running; continuing shutdown.",
+                  file=sys.stderr, flush=True)
+        try:
             self._live_epoch += 1
             self.live_active = False
-            # Remove hooks before potentially slow native microphone teardown.
-            platforms.unhook_all()
+        finally:
+            if acquired:
+                self._lifecycle_lock.release()
         try:
             if self._live_session is not None:
                 try:
@@ -794,7 +1018,20 @@ class DictationApp:
             pass
 
         # Drop system-wide hooks ASAP so normal typing is not filtered by a dying process.
-        platforms.unhook_all()
+        try:
+            platforms.unhook_all()
+        except Exception:
+            pass
+
+        # Put the user's clipboard back now instead of after process exit.
+        # Bounded: an insertion still typing holds the clipboard lock.
+        try:
+            flusher = _Thread(target=flush_pending_restore, daemon=True,
+                              name="odicto-clipboard-flush")
+            flusher.start()
+            flusher.join(self._SHUTDOWN_LOCK_TIMEOUT_S)
+        except Exception:
+            pass
 
         self._cleanup_temp_file()
 
@@ -900,9 +1137,21 @@ class DictationApp:
             if self._closing.is_set():
                 return
             self._record_started_at = time.monotonic()
+            self._capture_seq += 1
+            self._early_probe = None
             self._set_state(AppState.RECORDING)
             if Config.PLAY_AUDIO_CUES:
                 self._beep(880.0, "beep-start")
+
+            # Toggle mode: the chord is released right after this tap, so read
+            # the selection/image now (off the hook thread; the probe waits for
+            # modifier release) instead of after STT. Hold mode keeps the chord
+            # down while speaking, so it still probes at release. Only the
+            # runtime owner touches the real clipboard here.
+            if (self.use_llm and Config.HOTKEY_TOGGLE and self.refiner is not None
+                    and getattr(self, "_runtime_enabled", False)):
+                self._early_probe = _Stage(self._capture_selection, "odicto-sel-early")
+            self._prewarm_for_capture(self.use_llm)
 
             mode_str = "AI refined" if self.use_llm else "raw dictation"
             hint = (
@@ -926,6 +1175,8 @@ class DictationApp:
             if self.live_active:
                 return  # F7 live tap owns the mic
 
+            # The early selection probe belongs to this capture only.
+            probe, self._early_probe = self._early_probe, None
             hold_ms = (time.monotonic() - self._record_started_at) * 1000.0
             if hold_ms < Config.MIN_HOLD_MS:
                 # Accidental tap — discard without processing.
@@ -969,12 +1220,21 @@ class DictationApp:
             use_llm = self.use_llm
             keep_history = self._keep_history
             audio = self.recorder.last_audio_array
+            # A gap/overflow keeps the audio; the HUD says it may miss words.
+            gap = getattr(self.recorder, "last_capture_gap", False) is True
+            if gap:
+                print("Warning: the microphone had a gap during this capture.", flush=True)
+            if getattr(self.recorder, "last_capture_limited", False) is True:
+                print("Capture stopped at the recording limit.", flush=True)
+            self._cycle_seq += 1
+            self._cycle = _Cycle(self._cycle_seq, gap=gap, probe=probe)
 
             # IMPORTANT: do NOT call get_selected_text() here on the keyboard-hook
             # thread. Synthetic copy input from inside a low-level hook is
             # unreliable, and AI mode still has modifiers physically held on
             # primary-key release — which pollutes the copy chord.
-            # Selection is captured first thing in the pipeline worker instead.
+            # Selection is captured in the pipeline worker instead, or by the
+            # toggle-mode probe that on_press started on its own thread.
 
             print(">>> Processing transcription and refinement...")
             threading.Thread(
@@ -1016,10 +1276,12 @@ class DictationApp:
                     if self._closing.is_set():
                         return
                     self._record_started_at = time.monotonic()
+                    self._capture_seq += 1
                     self.live_active = True
                     self._set_state(AppState.RECORDING)
                     if Config.PLAY_AUDIO_CUES:
                         self._beep(880.0, "beep-start")
+                    self._prewarm_for_capture(False)
                 except Exception as e:
                     print(f"!!! Live start failed: {e}", file=sys.stderr)
                     session = self._live_session
@@ -1051,6 +1313,9 @@ class DictationApp:
             short = (time.monotonic() - self._record_started_at) * 1000 < Config.MIN_HOLD_MS
             audio = self.recorder.last_audio_array if captured and not short else None
             epoch = self._live_epoch
+            gap = bool(captured) and getattr(self.recorder, "last_capture_gap", False) is True
+            self._cycle_seq += 1
+            self._cycle = _Cycle(self._cycle_seq, gap=gap)
             if Config.PLAY_AUDIO_CUES:
                 self._beep(440.0, "beep-stop")
         threading.Thread(target=self._finish_live_session,
@@ -1110,25 +1375,32 @@ class DictationApp:
         pre_transcript: str = "",
         *, live: bool = False,
     ) -> None:
-        """Worker: STT (and selection/image, in parallel for AI) → optional LLM → paste."""
+        """Worker: STT (and selection/image, in parallel for AI) → optional LLM → paste.
+
+        STT and the LLM/polish step each run on a stage thread under a wall-clock
+        deadline. The worker waits for done, deadline, cancel or shutdown, and
+        only the worker that owns this cycle may insert text.
+        """
         self.last_status = None
-        sel_pool: Optional[ThreadPoolExecutor] = None
+        cycle = self._claim_cycle()
         try:
             if self._closing.is_set():
                 return
+            if cycle.cancel.is_set():
+                raise _Abort("cancelled")
             if self.transcriber is None:
                 raise RuntimeError("Transcriber not initialized")
 
             start_time: float = time.time()
 
             # Raw dictation never probes the clipboard. AI mode overlaps the
-            # selection/image probe with Whisper so clipboard wait does not delay STT.
+            # selection/image probe with STT so clipboard wait does not delay it;
+            # in toggle mode the probe already started with the capture.
             context = (pre_context or "").strip()
             image_bytes: Optional[bytes] = None
-            sel_future = None
+            sel_stage: Optional[_Stage] = None
             if use_llm and self.refiner is not None and not context:
-                sel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odicto-sel")
-                sel_future = sel_pool.submit(self._capture_selection)
+                sel_stage = cycle.probe or _Stage(self._capture_selection, "odicto-sel")
 
             # Prefer the in-memory buffer; fall back to disk only if missing.
             audio_source = audio
@@ -1136,39 +1408,39 @@ class DictationApp:
                 audio_source = self.audio_filepath
 
             stt_started = time.time()
+            stt_notice = ""
             raw_text: str = (pre_transcript or "").strip()
             if raw_text:
-                print(
-                    f'Live Transcript: "{raw_text}" '
-                    f"(committed in {time.time() - stt_started:.2f}s)"
-                )
+                self._log_text("Live Transcript", raw_text,
+                               f"committed in {time.time() - stt_started:.2f}s")
             else:
-                raw_text = (self._live_transcribe(audio_source) if live else
-                            self._transcribe_for_pipeline(audio_source, use_llm))
-                print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
+                raw_text, stt_notice = self._run_stt(audio_source, use_llm, live, cycle)
+                raw_text = raw_text or ""
+                self._log_text("Raw Transcript", raw_text, f"STT {time.time() - stt_started:.2f}s")
 
-            if self._closing.is_set():
-                return
-
-            if sel_future is not None:
+            if sel_stage is not None:
                 sel_wait_started = time.time()
-                try:
-                    res = sel_future.result(timeout=1.5)
-                    if isinstance(res, tuple):
-                        context, image_bytes = res
-                    elif isinstance(res, str):
-                        context, image_bytes = res, None
-                    else:
-                        context, image_bytes = "", None
-                except Exception as e:
+                outcome = self._await_stage(sel_stage, 1.5, cycle)
+                self._raise_for(outcome)
+                context, image_bytes = "", None
+                if outcome == "timeout":
+                    print("Warning: selection capture failed: TimeoutError", flush=True)
+                elif sel_stage.error is not None:
+                    e = sel_stage.error
                     err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                     print(f"Warning: selection capture failed: {err_msg}", flush=True)
-                    context, image_bytes = "", None
+                elif isinstance(sel_stage.value, tuple):
+                    context, image_bytes = sel_stage.value
+                elif isinstance(sel_stage.value, str):
+                    context = sel_stage.value
                 sel_elapsed = time.time() - sel_wait_started
                 if context or image_bytes:
                     ctx_parts = []
                     if context:
-                        ctx_parts.append(f'text ({len(context)} chars) "{context[:80]}{"..." if len(context) > 80 else ""}"')
+                        preview = ""
+                        if Config.LOG_TRANSCRIPTS:
+                            preview = f' "{context[:80]}{"..." if len(context) > 80 else ""}"'
+                        ctx_parts.append(f"text ({len(context)} chars){preview}")
                     if image_bytes:
                         ctx_parts.append(f'image ({len(image_bytes)} bytes PNG)')
                     print(
@@ -1183,6 +1455,8 @@ class DictationApp:
 
             if self._closing.is_set():
                 return
+            if cycle.cancel.is_set():
+                raise _Abort("cancelled")
             if not raw_text.strip() or not any(c.isalnum() for c in raw_text):
                 print(">>> Empty transcription. Paste cancelled.")
                 self.last_status = "empty"
@@ -1195,14 +1469,20 @@ class DictationApp:
                         f"Context: fresh AI reply (history {len(self.refiner.conversation_history)} msgs ignored)",
                         flush=True,
                     )
-                refined_text = self.refiner.refine(
-                    raw_text,
-                    context=context,
-                    image_bytes=image_bytes,
-                    keep_history=keep_history,
-                )
-                notice = getattr(self.refiner, "last_notice", "")
-                print(f'Refined Text (AI):   "{refined_text}"')
+                refiner = self.refiner
+                outcome, stage = self._run_stage(
+                    lambda: refiner.refine(raw_text, context=context,
+                                           image_bytes=image_bytes, keep_history=keep_history),
+                    Config.LLM_DEADLINE_SECONDS, cycle, "odicto-llm")
+                if outcome == "timeout":
+                    # Same as an AI failure: the user's words still arrive.
+                    print(f"!!! AI reply timed out after {Config.LLM_DEADLINE_SECONDS:g}s; "
+                          "inserting the raw transcript.", file=sys.stderr, flush=True)
+                    refined_text, notice = raw_text, "ai_timeout"
+                else:
+                    refined_text = stage.result() or ""
+                    notice = getattr(refiner, "last_notice", "")
+                self._log_text("Refined Text (AI)", refined_text)
             else:
                 # Raw dictation: transcript only; no selection probe / no LLM.
                 refined_text = raw_text
@@ -1212,9 +1492,16 @@ class DictationApp:
                 if Config.POLISH_DICTATION and not already_smart and self.refiner is not None:
                     self.last_status = "polishing"
                     self._notify_ui()
-                    refined_text = self.refiner.polish(raw_text)
-                    notice = self.refiner.last_notice
-                print(f'Raw Text (Bypass):  "{refined_text}"')
+                    refiner = self.refiner
+                    outcome, stage = self._run_stage(
+                        lambda: refiner.polish(raw_text),
+                        Config.LLM_DEADLINE_SECONDS, cycle, "odicto-polish-wait")
+                    if outcome == "timeout":
+                        refined_text, notice = raw_text, "polish_fallback"
+                    else:
+                        refined_text = stage.result() or raw_text
+                        notice = refiner.last_notice
+                self._log_text("Raw Text (Bypass)", refined_text)
 
             if not refined_text.strip():
                 self.last_status = "empty"
@@ -1222,9 +1509,14 @@ class DictationApp:
 
             # Shutdown and final insertion share a gate: once closing begins,
             # late STT/LLM results can never inject input into another app.
+            # Only the worker that still owns this cycle may insert.
             with self._lifecycle_lock:
                 if self._closing.is_set():
                     return
+                with self.state_lock:
+                    if cycle.cancel.is_set() or self._cycle is not cycle:
+                        raise _Abort("cancelled")
+                    cycle.pasting = True
                 if live:
                     # Keep the final payload for asynchronous paste consumers.
                     paste_text(refined_text, restore_clipboard=False)
@@ -1233,15 +1525,96 @@ class DictationApp:
 
             elapsed: float = time.time() - start_time
             print(f">>> Text pasted successfully in {elapsed:.2f} seconds!")
-            self.last_status = notice if isinstance(notice, str) and notice else "success"
+            if not (isinstance(notice, str) and notice):
+                notice = stt_notice or ("mic_gap" if cycle.gap else "")
+            self.last_status = notice or "success"
 
+        except _Abort as stop:
+            if stop.status == "cancelled":
+                print(">>> Cancelled. Nothing inserted.", flush=True)
+            if stop.status:
+                self.last_status = stop.status
         except Exception as e:
             print(f"!!! Pipeline Error: {e}", file=sys.stderr)
             self.last_status = "error"
         finally:
-            if sel_pool is not None:
-                sel_pool.shutdown(wait=False)
             self._finish_cycle()
+
+    # ------------------------------------------------------------ pipeline stages
+    def _claim_cycle(self) -> _Cycle:
+        """Take the cycle created when this capture entered PROCESSING (or a new one)."""
+        with self.state_lock:
+            cycle = self._cycle
+            if cycle is None or cycle.claimed:
+                self._cycle_seq += 1
+                cycle = _Cycle(self._cycle_seq)
+                self._cycle = cycle
+            cycle.claimed = True
+            return cycle
+
+    def _await_stage(self, stage: _Stage, seconds: float, cycle: _Cycle) -> str:
+        """Wait for done, deadline, cancel or shutdown, whichever comes first."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while True:
+            if cycle.cancel.is_set():
+                return "cancelled"
+            if self._closing.is_set():
+                return "closing"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "done" if stage.done.is_set() else "timeout"
+            if stage.done.wait(min(0.05, remaining)):
+                return "done"
+
+    @staticmethod
+    def _raise_for(outcome: str) -> None:
+        if outcome == "cancelled":
+            raise _Abort("cancelled")
+        if outcome == "closing":
+            raise _Abort(None)
+
+    def _run_stage(self, fn, seconds: float, cycle: _Cycle, name: str):
+        """Run fn on a stage thread; return ("done"|"timeout", stage) or abort."""
+        stage = _Stage(fn, name)
+        outcome = self._await_stage(stage, seconds, cycle)
+        self._raise_for(outcome)
+        return outcome, stage
+
+    def _run_stt(self, audio_source, use_llm: bool, live: bool, cycle: _Cycle) -> tuple:
+        """Transcribe under STT_DEADLINE_SECONDS. A slow cloud provider gets one
+        local-Whisper retry under a second deadline. Returns (text, notice)."""
+        seconds = Config.STT_DEADLINE_SECONDS
+        if live:
+            primary = lambda: self._live_transcribe(audio_source)  # noqa: E731
+        else:
+            primary = lambda: self._transcribe_for_pipeline(audio_source, use_llm)  # noqa: E731
+        outcome, stage = self._run_stage(primary, seconds, cycle, "odicto-stt")
+        if outcome == "done":
+            return stage.result(), ""
+        provider = (Config.effective_live_stt_provider() if live else
+                    Config.effective_stt_provider())
+        fallback = getattr(self._speech_backend(live), "local_fallback", None)
+        if provider == "whisper" or not callable(fallback):
+            print(f"!!! Speech-to-text timed out after {seconds:g}s.", file=sys.stderr, flush=True)
+            raise _Abort("stt_timeout")
+        print(f"!!! {provider} speech timed out after {seconds:g}s; trying local Whisper.",
+              file=sys.stderr, flush=True)
+        outcome, stage = self._run_stage(lambda: fallback(audio_source), seconds, cycle,
+                                         "odicto-stt-local")
+        if outcome == "done":
+            return stage.result(), "stt_fallback"
+        print(f"!!! Local Whisper also timed out after {seconds:g}s.", file=sys.stderr, flush=True)
+        raise _Abort("stt_timeout")
+
+    @staticmethod
+    def _log_text(label: str, text: str, timing: str = "") -> None:
+        """Transcripts and replies reach dictation.log only with LOG_TRANSCRIPTS=true."""
+        text = text or ""
+        suffix = f" ({timing})" if timing else ""
+        if Config.LOG_TRANSCRIPTS:
+            print(f'{label}: "{text}"{suffix}')
+        else:
+            print(f"{label}: {len(text)} chars{suffix}")
 
     def _finish_cycle(self) -> None:
         """Idempotent cycle teardown shared by raw and AI pipeline workers."""
@@ -1255,11 +1628,11 @@ class DictationApp:
         with self.state_lock:
             # Keep captions through finalization, then discard this capture's UI data.
             self._live_committed = self.live_preview = ""
+            self._cycle = None
             if self._closing.is_set():
                 return
             self._set_state(AppState.IDLE)
             print("System Idle. Ready.")
-
 
 if __name__ == "__main__":
     if sys.stdout is not None:

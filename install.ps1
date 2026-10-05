@@ -25,6 +25,12 @@ Set-Location -Path $PSScriptRoot
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK  $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    !!  $msg" -ForegroundColor Yellow }
+# $ErrorActionPreference does not catch native exit codes; check them by hand.
+function Assert-Native($what) {
+    if ($LASTEXITCODE -ne 0) {
+        throw "$what failed (exit code $LASTEXITCODE). Fix the error above and re-run install.ps1."
+    }
+}
 
 Write-Host "========================================" -ForegroundColor White
 Write-Host "  Odicto - Installer" -ForegroundColor White
@@ -61,11 +67,12 @@ if (-not $uvPath) {
 # --- Python (needed only for the pip fallback; uv can fetch its own) ---
 $py = $null
 if (-not $uvPath) {
-    Write-Step "Locating Python 3.10+"
+    # numpy<2 has no wheels for Python 3.13+, so only 3.10 to 3.12 are accepted.
+    Write-Step "Locating Python 3.10-3.12"
     foreach ($candidate in @("py", "python", "python3")) {
         try {
             $ver = & $candidate --version 2>&1
-            if ($LASTEXITCODE -eq 0 -or $ver -match "Python 3\.") {
+            if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10 -and [int]$Matches[1] -le 12) {
                 $py = $candidate
                 Write-Ok "$candidate -> $ver"
                 break
@@ -73,10 +80,12 @@ if (-not $uvPath) {
         } catch { }
     }
     if (-not $py) {
-        Write-Warn "Python not found. Attempting winget install of Python 3.12..."
+        Write-Warn "Python 3.10-3.12 not found. Attempting winget install of Python 3.12..."
         winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        Assert-Native "winget install Python 3.12"
         $py = "py"
-        & $py --version | Out-Host
+        & $py -3.12 --version | Out-Host
+        Assert-Native "py -3.12 --version"
     }
 } else {
     Write-Ok "uv manages Python; no system Python needed"
@@ -86,12 +95,14 @@ if (-not $uvPath) {
 Write-Step "Creating virtual environment (.venv)"
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     if ($uvPath) {
-        & $uvPath venv .venv
+        & $uvPath venv --python 3.12 .venv
     } elseif ($py -eq "py") {
-        & py -3 -m venv .venv
+        & py -3.12 -m venv .venv
+        if ($LASTEXITCODE -ne 0) { & py -3 -m venv .venv }
     } else {
         & $py -m venv .venv
     }
+    Assert-Native "Creating .venv"
     Write-Ok "Created .venv"
 } else {
     Write-Ok ".venv already exists"
@@ -102,9 +113,12 @@ $venvPy = ".\.venv\Scripts\python.exe"
 Write-Step "Installing Python requirements"
 if ($uvPath) {
     & $uvPath pip install --python $venvPy -r requirements.txt | Out-Host
+    Assert-Native "uv pip install -r requirements.txt"
 } else {
     & $venvPy -m pip install --upgrade pip wheel setuptools | Out-Host
+    Assert-Native "pip install --upgrade pip wheel setuptools"
     & $venvPy -m pip install -r requirements.txt | Out-Host
+    Assert-Native "pip install -r requirements.txt"
 }
 Write-Ok "requirements.txt installed"
 
@@ -151,6 +165,7 @@ if ($Ollama) {
 
         Write-Step "Pulling LLM model: $OllamaModel"
         & ollama pull $OllamaModel | Out-Host
+        Assert-Native "ollama pull $OllamaModel"
         Write-Ok "Model ready: $OllamaModel"
     }
 } else {
@@ -165,6 +180,7 @@ print('Downloading / loading $WhisperModel ...')
 m = WhisperModel('$WhisperModel', device='cpu', compute_type='int8')
 print('Whisper model ready.')
 "@
+Assert-Native "Whisper model download"
 Write-Ok "Whisper model cached"
 
 Write-Host "`n========================================" -ForegroundColor Green

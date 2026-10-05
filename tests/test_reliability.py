@@ -46,6 +46,13 @@ def app_fixture():
     app.audio_filepath = "unused-test-audio.wav"
     app.last_status = None
     app.use_llm = False
+    app._cycle = None
+    app._cycle_seq = 0
+    app._capture_seq = 0
+    app._early_probe = None
+    app.status_detail = None
+    app._preflight_error = None
+    app._hooks_bound = False
     app._cleanup_temp_file = MagicMock()
     return app
 
@@ -114,7 +121,9 @@ class TestReliability(unittest.TestCase):
         self.assertEqual(app.state, AppState.IDLE)
         self.assertEqual(app.last_status, "error")
 
-    def test_callback_loss_during_capture_never_starts_transcription(self):
+    def test_callback_loss_during_capture_keeps_audio_and_flags_gap(self):
+        # Owner rule (reversed from the old "reject after a gap"): the words
+        # captured before the gap are kept, processed, and the HUD says "mic_gap".
         with patch("recorder.sd.InputStream"), patch("main.threading.Thread") as worker:
             recorder = AudioRecorder()
             try:
@@ -128,11 +137,40 @@ class TestReliability(unittest.TestCase):
                 app._keep_history = False
                 with patch.object(Config, "PLAY_AUDIO_CUES", False):
                     app.on_release()
+                self.assertEqual(app.state, AppState.PROCESSING)
+                self.assertFalse(recorder.recording)
+                self.assertTrue(recorder.last_capture_gap)
+                worker.assert_called_once()
+                call = worker.call_args.kwargs
+                self.assertIsNotNone(call["args"][0])
+                with patch("main.paste_text") as paste, patch.object(Config, "POLISH_DICTATION", False):
+                    call["target"](*call["args"])
+                paste.assert_called_once_with("hello world")
+                app.transcriber.transcribe.assert_called_once()
+                self.assertEqual(app.last_status, "mic_gap")
+                self.assertEqual(app.state, AppState.IDLE)
+            finally:
+                recorder.close()
+
+    def test_dead_stream_without_audio_ends_as_error_without_transcription(self):
+        with patch("recorder.sd.InputStream"), patch("main.threading.Thread") as worker:
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._last_callback -= 4.0
+                app = app_fixture()
+                app.recorder = recorder
+                app.state = AppState.RECORDING
+                app._record_started_at = time.monotonic() - 5
+                app._keep_history = False
+                with patch.object(Config, "PLAY_AUDIO_CUES", False):
+                    app.on_release()
                 self.assertEqual(app.state, AppState.IDLE)
                 self.assertEqual(app.last_status, "error")
                 self.assertIsNone(recorder.last_audio_array)
                 self.assertFalse(recorder.recording)
                 worker.assert_not_called()
+                app.transcriber.transcribe.assert_not_called()
             finally:
                 recorder.close()
 

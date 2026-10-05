@@ -8,14 +8,20 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 import wave
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 
 from config import Config
+from http_clients import (
+    KEEPALIVE_SECONDS,
+    Prewarmer,
+    full_timeout,
+    origin_of,
+    shared_httpx_client,
+    warm_httpx_origin,
+)
 
 # Lazy: importing google-genai pulls pydantic + HTTP stacks. Whisper-only
 # boots never need that, so the SDK is loaded on first Gemini STT/Live use.
@@ -69,20 +75,42 @@ def whisper_device_attempts(
     return [("cuda", "float16"), ("cpu", "int8")]
 
 
-def get_genai_client(api_key: str):
-    """One SDK client per process for the same API key.
+def _genai_http_options() -> dict:
+    """SDK options for the shared client: no SDK retries, long-lived idle sockets.
+
+    Retries are off because every caller has its own deadline and a local
+    fallback. There is no client-wide timeout: the Live session lives as long
+    as the user speaks, so unary calls pass their own ``timeout``.
+    """
+    options: dict = {"retry_options": {"attempts": 0}}
+    try:
+        import httpx
+
+        options["client_args"] = {
+            "limits": httpx.Limits(keepalive_expiry=KEEPALIVE_SECONDS)
+        }
+    except Exception:
+        pass
+    return options
+
+
+def get_genai_client(api_key: str, factory=None):
+    """One SDK client per process for the same API key (STT, Live, AI, polish).
 
     The cache is keyed by both the key and the ``Client`` factory object so
-    tests that patch ``google_genai.Client`` still get a fresh mock.
+    tests that patch ``google_genai.Client`` still get a fresh mock. The
+    refiner passes its own ``google_genai.Client``; in production that is
+    the same class, so both modules share one client and one pool.
     """
     global _genai_client, _genai_client_key, _genai_client_factory
     key = (api_key or "").strip()
     if not key:
         return None
-    _ensure_google_genai()
-    if google_genai is None:
-        return None
-    factory = getattr(google_genai, "Client", None)
+    if factory is None:
+        _ensure_google_genai()
+        if google_genai is None:
+            return None
+        factory = getattr(google_genai, "Client", None)
     if factory is None:
         return None
     with _genai_client_lock:
@@ -93,7 +121,7 @@ def get_genai_client(api_key: str):
         ):
             return _genai_client
         try:
-            client = factory(api_key=key, http_options={"retry_options": {"attempts": 0}})
+            client = factory(api_key=key, http_options=_genai_http_options())
         except Exception:
             return None
         _genai_client = client
@@ -209,6 +237,58 @@ def _audio_to_wav_bytes(audio: Union[str, np.ndarray], sample_rate: int) -> byte
     if isinstance(audio, np.ndarray):
         return float32_to_wav_bytes(audio, sample_rate)
     raise TypeError(f"Unsupported audio type: {type(audio)}")
+
+
+def float32_to_flac_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
+    """Encode mono float32 PCM as in-memory 16-bit FLAC (about half a WAV's size)."""
+    import soundfile as sf
+
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.ndim > 1:
+        arr = np.mean(arr, axis=1) if arr.shape[-1] > 1 else arr.reshape(-1)
+    if arr.size == 0:
+        return b""
+    buf = io.BytesIO()
+    sf.write(
+        buf,
+        np.clip(arr, -1.0, 1.0),
+        int(sample_rate) or 16000,
+        format="FLAC",
+        subtype="PCM_16",
+    )
+    return buf.getvalue()
+
+
+def encode_upload_audio(
+    audio: Union[str, np.ndarray], sample_rate: int, prefer_flac: bool = False
+) -> Tuple[bytes, str]:
+    """Return ``(bytes, "flac" | "wav")`` for a speech upload.
+
+    FLAC is used only when asked for and when it encodes; any FLAC failure
+    falls back to WAV. File paths are uploaded as-is (WAV).
+    """
+    if prefer_flac and isinstance(audio, np.ndarray):
+        try:
+            data = float32_to_flac_bytes(audio, sample_rate)
+            if data:
+                return data, "flac"
+        except Exception:
+            pass
+    return _audio_to_wav_bytes(audio, sample_rate), "wav"
+
+
+def stt_deadline_seconds() -> float:
+    """Per-request bound for one cloud speech call (``STT_DEADLINE_SECONDS``)."""
+    try:
+        value = float(Config.STT_DEADLINE_SECONDS)
+    except Exception:
+        value = 20.0
+    return value if value > 0 else 20.0
+
+
+# Gemini unary STT keeps its 15 s cap unless the deadline is lower.
+GEMINI_STT_TIMEOUT_CAP = 15.0
+PREWARM_TIMEOUT_SECONDS = 2.0
 
 
 class WhisperTranscriber:
@@ -376,8 +456,35 @@ class WhisperTranscriber:
                 parts.append(text)
         return "".join(parts).strip()
 
+    def prewarm(self) -> None:
+        """Nothing to warm: the model is loaded in ``__init__``."""
 
-def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: bytes) -> tuple:
+    def local_fallback(self, audio: Union[str, np.ndarray]) -> str:
+        return self.transcribe(audio)
+
+
+class _LocalWhisperFallback:
+    """Lazy local Whisper shared by the cloud backends for failures."""
+
+    _whisper: Optional[WhisperTranscriber]
+
+    def local_fallback(self, audio: Union[str, np.ndarray]) -> str:
+        """Transcribe with local Whisper, loading it on first use."""
+        lock = self.__dict__.setdefault("_whisper_lock", threading.Lock())
+        with lock:
+            if getattr(self, "_whisper", None) is None:
+                self._whisper = WhisperTranscriber()
+            whisper = self._whisper
+        return whisper.transcribe(audio)
+
+
+def _encode_multipart(
+    fields: dict,
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    file_content_type: str = "audio/wav",
+) -> tuple:
     """Build a multipart body. Returns (body, content_type)."""
     boundary = "----OdictoSttBoundary7f3a9c"
     chunks: List[bytes] = []
@@ -395,7 +502,7 @@ def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: 
         (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
-            f"Content-Type: audio/wav\r\n\r\n"
+            f"Content-Type: {file_content_type}\r\n\r\n"
         ).encode("utf-8")
     )
     chunks.append(file_bytes)
@@ -403,25 +510,33 @@ def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: 
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
-def _post_bytes(url: str, data: bytes, headers: dict, timeout: float = 45.0) -> dict:
-    """POST and parse a JSON object. Raises RuntimeError on HTTP or bad JSON."""
-    req = urllib.request.Request(url, data=data, method="POST")
-    for key, value in headers.items():
-        req.add_header(key, value)
+def _post_bytes(
+    url: str, data: bytes, headers: dict, timeout: Optional[float] = None
+) -> dict:
+    """POST through the shared keep-alive pool and parse a JSON object.
+
+    ``timeout`` is the request budget in seconds (default
+    ``STT_DEADLINE_SECONDS``): connect is capped at 5 s; read and write each
+    get the whole budget. Raises RuntimeError on HTTP or bad JSON.
+    """
+    budget = stt_deadline_seconds() if timeout is None else max(0.5, float(timeout))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:
-            detail = ""
-        raise RuntimeError(f"HTTP {e.code} {detail}".strip()) from e
+        resp = shared_httpx_client().post(
+            url,
+            content=data,
+            headers=headers,
+            timeout=full_timeout(min(5.0, budget), budget),
+        )
     except Exception as e:
         raise RuntimeError(str(e) or type(e).__name__) from e
+    if resp.status_code >= 400:
+        try:
+            detail = resp.text[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"HTTP {resp.status_code} {detail}".strip())
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        payload = json.loads(resp.content.decode("utf-8"))
     except Exception as e:
         raise RuntimeError(f"speech response was not JSON ({e})") from e
     if not isinstance(payload, dict):
@@ -436,7 +551,7 @@ def _transcript_from_payload(payload: dict) -> Optional[str]:
     return None
 
 
-class CloudTranscriber:
+class CloudTranscriber(_LocalWhisperFallback):
     """Batch speech-to-text for Groq and OpenRouter.
 
     Groq takes an OpenAI-style multipart upload. OpenRouter takes base64
@@ -447,15 +562,28 @@ class CloudTranscriber:
     def __init__(self, kind: str) -> None:
         self.kind = (kind or "").strip().lower()
         self._whisper: Optional[WhisperTranscriber] = None
+        self._whisper_lock = threading.Lock()
+        self._prewarmer = Prewarmer()
 
     def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
         label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
             self.kind, self.kind or "Cloud"
         )
         print(f"{label} STT fallback to Whisper ({reason})", flush=True)
-        if self._whisper is None:
-            self._whisper = WhisperTranscriber()
-        return self._whisper.transcribe(audio)
+        return self.local_fallback(audio)
+
+    def prewarm(self) -> None:
+        """Open the TLS connection to the speech host in the background."""
+        try:
+            url, api_key, _model = self._endpoint()
+            if not api_key or not origin_of(url):
+                return
+            self._prewarmer.fire(
+                lambda: warm_httpx_origin(url, PREWARM_TIMEOUT_SECONDS),
+                name="odicto-stt-prewarm",
+            )
+        except Exception:
+            pass
 
     def _endpoint(self) -> tuple:
         """Return (url, api_key, model) for the configured backend."""
@@ -482,11 +610,15 @@ class CloudTranscriber:
         url, api_key, model = self._endpoint()
         if not api_key:
             return self._whisper_fallback(audio, "no API key")
+        # Groq accepts FLAC (about half the bytes of WAV). OpenRouter's
+        # transcription endpoint is not documented to accept it: keep WAV.
         try:
-            wav_bytes = _audio_to_wav_bytes(audio, Config.SAMPLE_RATE or 16000)
+            audio_bytes, audio_format = encode_upload_audio(
+                audio, Config.SAMPLE_RATE or 16000, prefer_flac=self.kind == "groq"
+            )
         except Exception as e:
             return self._whisper_fallback(audio, f"audio encode failed: {e}")
-        if not wav_bytes:
+        if not audio_bytes:
             return ""
         language = Config.stt_language_hint()
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -495,8 +627,8 @@ class CloudTranscriber:
                 payload: dict = {
                     "model": model,
                     "input_audio": {
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "format": "wav",
+                        "data": base64.b64encode(audio_bytes).decode("ascii"),
+                        "format": audio_format,
                     },
                 }
                 if language:
@@ -510,10 +642,14 @@ class CloudTranscriber:
                 if language:
                     fields["language"] = language
                 body, content_type = _encode_multipart(
-                    fields, "file", "clip.wav", wav_bytes
+                    fields,
+                    "file",
+                    f"clip.{audio_format}",
+                    audio_bytes,
+                    file_content_type=f"audio/{audio_format}",
                 )
                 headers["Content-Type"] = content_type
-            result = _post_bytes(url, body, headers)
+            result = _post_bytes(url, body, headers, timeout=stt_deadline_seconds())
         except Exception as e:
             return self._whisper_fallback(audio, str(e) or type(e).__name__)
         text = _transcript_from_payload(result)
@@ -533,7 +669,7 @@ def _transcription_config_payload(mode: str) -> dict:
     return cfg
 
 
-class GeminiTranscriber:
+class GeminiTranscriber(_LocalWhisperFallback):
     """Cloud STT via Gemini 3.5 Transcribe (unary Interactions API).
 
     Falls back to local Whisper on missing key, SDK errors, or empty output.
@@ -542,6 +678,8 @@ class GeminiTranscriber:
     def __init__(self) -> None:
         self._client = None
         self._whisper: Optional[WhisperTranscriber] = None
+        self._whisper_lock = threading.Lock()
+        self._prewarmer = Prewarmer()
         api_key = Config.GEMINI_API_KEY.strip()
         _ensure_google_genai()
         if google_genai is None:
@@ -562,9 +700,28 @@ class GeminiTranscriber:
 
     def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
         print(f"Gemini STT fallback to Whisper ({reason})", flush=True)
-        if self._whisper is None:
-            self._whisper = WhisperTranscriber()
-        return self._whisper.transcribe(audio)
+        return self.local_fallback(audio)
+
+    def prewarm(self) -> None:
+        """Open the shared SDK client's connection in the background.
+
+        A model metadata GET is free and uses the same pooled connection as
+        ``interactions.create``.
+        """
+        try:
+            client = self._client
+            if client is None:
+                return
+            model = Config.GEMINI_TRANSCRIBE_MODEL or "gemini-3.5-transcribe"
+            timeout_ms = int(PREWARM_TIMEOUT_SECONDS * 1000)
+            self._prewarmer.fire(
+                lambda: client.models.get(
+                    model=model, config={"http_options": {"timeout": timeout_ms}}
+                ),
+                name="odicto-stt-prewarm",
+            )
+        except Exception:
+            pass
 
     def transcribe(
         self, audio: Union[str, np.ndarray], mode: Optional[str] = None
@@ -575,10 +732,12 @@ class GeminiTranscriber:
             return self._whisper_fallback(audio, "no Gemini client")
 
         try:
-            wav_bytes = _audio_to_wav_bytes(audio, Config.SAMPLE_RATE or 16000)
+            audio_bytes, audio_format = encode_upload_audio(
+                audio, Config.SAMPLE_RATE or 16000, prefer_flac=True
+            )
         except Exception as e:
             return self._whisper_fallback(audio, f"audio encode failed: {e}")
-        if not wav_bytes:
+        if not audio_bytes:
             return ""
 
         resolved = (mode or Config.gemini_transcribe_mode() or "smart").strip().lower()
@@ -588,12 +747,12 @@ class GeminiTranscriber:
         try:
             interaction = self._client.interactions.create(
                 model=model,
-                timeout=15.0,
+                timeout=min(GEMINI_STT_TIMEOUT_CAP, stt_deadline_seconds()),
                 input=[
                     {
                         "type": "audio",
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "mime_type": "audio/wav",
+                        "data": base64.b64encode(audio_bytes).decode("ascii"),
+                        "mime_type": f"audio/{audio_format}",
                     }
                 ],
                 generation_config={

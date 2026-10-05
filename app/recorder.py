@@ -8,6 +8,10 @@ import sounddevice as sd
 import soundfile as sf
 
 
+class _MicrophoneOpenFailed(RuntimeError):
+    """Every open attempt failed and no stream was left half-open."""
+
+
 class AudioRecorder:
     """Always-on input stream with a ring buffer.
 
@@ -23,13 +27,16 @@ class AudioRecorder:
     RING_SECONDS: int = 5
     # Pre-roll copied into a session when recording starts (seconds).
     PRE_ROLL_SECONDS: float = 0.4
+    # Callback silence (seconds) that counts as a gap in, or death of, the stream.
+    GAP_SECONDS: float = 3.0
 
-    def __init__(self, sample_rate: int = 16000, channels: int = 1) -> None:
+    def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0) -> None:
         """Initializes the audio recorder and opens the persistent input stream.
 
         Args:
             sample_rate: The sample rate for recording, default 16000 (Whisper optimized).
             channels: The number of audio channels, default 1 (mono).
+            max_seconds: Longest session kept, in seconds; 0 means no limit.
         """
         self.sample_rate: int = sample_rate
         self.channels: int = channels
@@ -40,7 +47,20 @@ class AudioRecorder:
         self._lock: threading.Lock = threading.Lock()
         self._stream_lock = threading.RLock()
         self._callback_ready = threading.Event()
-        self._interrupted = False
+        # Session quality flags. A gap or overflow keeps the audio and flags it;
+        # the limit stops appending. stop() publishes them as last_capture_*.
+        self._session_gap = False
+        self._session_limited = False
+        self._session_frames = 0
+        try:
+            max_seconds = float(max_seconds or 0)
+        except (TypeError, ValueError):
+            max_seconds = 0.0
+        self.max_seconds: float = max(0.0, max_seconds)
+        self._max_samples = int(sample_rate * self.max_seconds)
+        self._limit_callback: Optional[Callable[[], None]] = None
+        self.last_capture_gap: bool = False
+        self.last_capture_limited: bool = False
         self._device_index = None
         # Smoothed peak level 0..1 for the live UI waveform (updated from audio callback).
         self._level: float = 0.0
@@ -116,10 +136,58 @@ class AudioRecorder:
                         stream.abort()
                     except Exception:
                         pass
+                    # A failed close propagates unchanged: it must never
+                    # authorize another open (see _MicrophoneOpenFailed).
                     stream.close(ignore_errors=False)
-        raise RuntimeError(
+        raise _MicrophoneOpenFailed(
             f"Could not open microphone after {len(delays)} attempts: {last_error}"
         ) from last_error
+
+    def _refresh_device_list(self) -> None:
+        """Re-enumerate PortAudio devices so a re-plugged endpoint gets a fresh index."""
+        try:
+            sd._terminate()
+        except Exception:
+            pass
+        try:
+            sd._initialize()
+        except Exception:
+            pass
+
+    def _reopen_stream(self) -> None:
+        """Reopen the cached device; on failure refresh PortAudio and use the default."""
+        try:
+            self._open_persistent_stream(delays=(0.0,))
+            return
+        except _MicrophoneOpenFailed as e:
+            if self._closed.is_set():
+                raise
+            print(f"Cached microphone failed ({e}); refreshing device list...", flush=True)
+        # The cached index can point at a removed or renumbered endpoint.
+        self._refresh_device_list()
+        self._device_index = None
+        self._device_info = {}
+        self._open_persistent_stream(delays=(0.0,))
+
+    def set_limit_callback(self, fn: Optional[Callable[[], None]]) -> None:
+        """Register fn, called once per session when max_seconds is reached.
+
+        fn runs on a new daemon thread, never on the audio callback thread and
+        never while recorder locks are held.
+        """
+        with self._lock:
+            self._limit_callback = fn
+
+    def _fire_limit_callback(self, fn: Callable[[], None]) -> None:
+        def run() -> None:
+            try:
+                fn()
+            except Exception as e:
+                print(f"Recording limit handler failed: {e}", flush=True)
+        try:
+            threading.Thread(target=run, name="odicto-rec-limit", daemon=True).start()
+        except Exception:
+            pass
 
     def health_snapshot(self) -> dict:
         """Observe the existing stream; never reopen or alter the microphone."""
@@ -159,14 +227,19 @@ class AudioRecorder:
             level = min(1.0, peak * 3.2)
         except Exception:
             peak = level = 0.0
+        limit_fn = None
         with self._lock:
             if self._closed.is_set():
                 return
             now = monotonic()
-            if now - self._last_callback > 3 or getattr(status, "input_overflow", False):
-                self._interrupted = self.recording
+            if now - self._last_callback > self.GAP_SECONDS:
+                # Stale pre-roll must not bridge a gap; the session keeps its audio.
                 self._ring.clear()
                 self._ring_frames = 0
+                if self.recording:
+                    self._session_gap = True
+            if self.recording and getattr(status, "input_overflow", False):
+                self._session_gap = True
             self._last_callback = now
             self._callback_count += 1
             self._input_peak = peak
@@ -196,14 +269,33 @@ class AudioRecorder:
                         session_chunk = chunk.reshape(-1)
                 else:
                     session_chunk = chunk
-                self.audio_data.append(session_chunk)
-                listeners = list(self._chunk_listeners)
+                listeners = []
+                if self._max_samples:
+                    room = self._max_samples - self._session_frames
+                    if room <= 0:
+                        session_chunk = None
+                        if not self._session_limited:
+                            # Pre-roll alone filled a very small limit.
+                            self._session_limited = True
+                            limit_fn = self._limit_callback
+                    elif len(session_chunk) >= room:
+                        session_chunk = session_chunk[:room]
+                        self._session_limited = True
+                        limit_fn = self._limit_callback
+                if session_chunk is not None:
+                    self.audio_data.append(session_chunk)
+                    self._session_frames += len(session_chunk)
+                    listeners = list(self._chunk_listeners)
                 # Exponential smooth toward current peak.
                 self._level = (0.55 * self._level) + (0.45 * level)
             else:
                 listeners = []
                 self._level = 0.0
             self._callback_ready.set()
+        if limit_fn is not None:
+            # Exactly once per session: only the chunk that fills the last room
+            # reaches here. The handler runs off the audio thread, lock-free.
+            self._fire_limit_callback(limit_fn)
         for fn in listeners:
             try:
                 fn(session_chunk)
@@ -257,18 +349,26 @@ class AudioRecorder:
         with self._stream_lock:
             if self._closed.is_set():
                 raise RuntimeError("Microphone closed; restart Odicto")
-            if not self.recording and time.monotonic() - self._last_callback > 3:
+            if not self.recording and time.monotonic() - self._last_callback > self.GAP_SECONDS:
                 # A USB endpoint can return while its old stream stays dead.
                 # Reconnect only on demand, after closing the previous stream.
                 if self._stream is not None:
-                    self._stream.abort()
-                    self._stream.close(ignore_errors=False)
-                    self._stream = None
+                    stream = self._stream
+                    try:
+                        try:
+                            stream.abort()
+                        finally:
+                            stream.close(ignore_errors=False)
+                    finally:
+                        # A dead stream that refuses to close must not wedge
+                        # every later start(); this attempt still fails, so no
+                        # second endpoint opens on top of it now.
+                        self._stream = None
                 with self._lock:
                     self._ring.clear()
                     self._ring_frames = 0
                 self._callback_ready.clear()
-                self._open_persistent_stream(delays=(0.0,))
+                self._reopen_stream()
                 if not self._callback_ready.wait(1.0):
                     raise RuntimeError("Microphone unavailable; reconnect it and try again")
             self._start_capture()
@@ -277,7 +377,8 @@ class AudioRecorder:
         with self._lock:
             if self.recording:
                 return
-            if self._closed.is_set() or self._stream is None or time.monotonic() - self._last_callback > 3:
+            if (self._closed.is_set() or self._stream is None
+                    or time.monotonic() - self._last_callback > self.GAP_SECONDS):
                 raise RuntimeError("Microphone stopped; restart Odicto")
             # Seed the session with the tail of the always-running ring buffer so
             # the first spoken syllable (which often starts before Windows would
@@ -302,8 +403,23 @@ class AudioRecorder:
                     # channels=1 but chunks arrived 2D (tests / drivers that
                     # always emit (frames,1)) — flatten each chunk.
                     pre_roll = [part.reshape(-1) for part in pre_roll]
+            if self._max_samples and sum(len(part) for part in pre_roll) > self._max_samples:
+                # Keep the newest pre-roll when the limit is shorter than it.
+                kept: List[np.ndarray] = []
+                kept_len = 0
+                for part in reversed(pre_roll):
+                    take = min(len(part), self._max_samples - kept_len)
+                    if take <= 0:
+                        break
+                    kept.insert(0, part[-take:])
+                    kept_len += take
+                pre_roll = kept
             self.audio_data = pre_roll
-            self._interrupted = False
+            self._session_frames = sum(len(part) for part in pre_roll)
+            self._session_gap = False
+            self._session_limited = False
+            self.last_capture_gap = False
+            self.last_capture_limited = False
             self.last_audio_array = None
             self._level = 0.0
             self.recording = True
@@ -325,23 +441,32 @@ class AudioRecorder:
         Args:
             filepath: Optional path to save the audio file.
 
+        Captured audio is never discarded because of an overflow or a callback
+        gap: it is kept and flagged in ``last_capture_gap``. ``last_capture_limited``
+        is True when the session reached ``max_seconds``.
+
         Returns:
             bool: True if nonzero audio was captured, False otherwise.
+
+        Raises:
+            RuntimeError: The stream died and the session holds no audio at all.
         """
         with self._lock:
             if not self.recording:
                 return False
             self.recording = False
             self._level = 0.0
-            if self._interrupted or time.monotonic() - self._last_callback > 3:
-                self.audio_data = []
-                self.last_audio_array = None
-                raise RuntimeError("Microphone interrupted; please record again")
-            if not self.audio_data:
-                self.last_audio_array = None
-                return False
+            stream_dead = time.monotonic() - self._last_callback > self.GAP_SECONDS
+            self.last_capture_gap = self._session_gap or stream_dead
+            self.last_capture_limited = self._session_limited
             chunks = self.audio_data
             self.audio_data = []
+            self._session_frames = 0
+            if not any(len(part) for part in chunks):
+                self.last_audio_array = None
+                if stream_dead:
+                    raise RuntimeError("Microphone interrupted; please record again")
+                return False
 
         # A long capture must not hold the callback lock during allocation/copy.
         data: np.ndarray = np.concatenate(chunks, axis=0)

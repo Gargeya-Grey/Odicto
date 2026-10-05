@@ -432,3 +432,20 @@ reliability costs came from orchestration and resource policy.
 The HUD follow-up reproduced stale F7 captions when a later ordinary or AI capture
 entered PROCESSING. Clear capture-owned preview and committed text at ordinary capture
 start and on every pipeline exit. Keep current F7 captions visible until finalization ends.
+
+## October review: decision record
+
+- **The gap rule was reversed.** An overflow or callback gap used to discard the capture.
+  The invariant "dictation never fails" outranks the risk of one bad segment, so the audio is
+  now kept, processed, and flagged. The user sees "Mic gap · check text" in the HUD and can
+  judge the text. Only a dead stream with no audio errors.
+- **Clipboard restore is deferred and guarded.** An immediate restore can run before the target
+  app reads the paste, which pastes the old content. The restore waits `PASTE_DELAY_SECONDS`
+  and runs only if the clipboard still holds Odicto's payload, so a copy the user made in the
+  meantime is never overwritten. An original that is not yet restored stays pending and is
+  flushed at shutdown.
+- **Linux hotkeys without root stay unsupported.** No XGrabKey or evdev backend exists, and it
+  cannot be tested on the development machine. The docs keep saying root or the `input` group.
+- **Abandoned provider calls may keep running.** After a deadline or a cancel, the worker thread
+  of a cloud call cannot be killed. It can finish in the background. Its result is dropped and
+  is never pasted.

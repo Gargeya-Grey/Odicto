@@ -15,6 +15,8 @@ import os
 from paths import ROOT
 import re
 import subprocess
+import hmac
+import secrets
 import sys
 import threading
 import webbrowser
@@ -725,8 +727,27 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     )
 
 
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+_TOKEN_HEADER = "X-Odicto-Token"
+_TOKEN_FIELD = "_odicto_token"
+_MAX_BODY_BYTES = 1024 * 1024
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+# Injected into the served page (not into _page(), which stays deterministic).
+# Adds the per-launch token to every POST fetch and to the form's own submit.
+_TOKEN_SNIPPET = """<meta name="odicto-token" content="__TOKEN__">
+<script>(function(){var t=document.querySelector('meta[name="odicto-token"]').content;
+var f=window.fetch;window.fetch=function(u,o){o=o||{};
+if(String(o.method||'GET').toUpperCase()==='POST'){var h=new Headers(o.headers||{});h.set('X-Odicto-Token',t);o.headers=h;}
+return f.call(this,u,o);};
+document.addEventListener('DOMContentLoaded',function(){var fm=document.getElementById('setupForm');
+if(fm&&!fm.querySelector('input[name="_odicto_token"]')){var i=document.createElement('input');
+i.type='hidden';i.name='_odicto_token';i.value=t;fm.appendChild(i);}});})();</script>
+"""
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "OdictoSetup/1.0"
+    timeout = 15
 
     def do_GET(self) -> None:
         if self.path == "/pull-status":
@@ -740,37 +761,102 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != "/":
             self.send_error(404)
             return
-        body = _page().encode("utf-8")
+        body = self._inject_token(_page())
         self._send(body)
 
+    def send_error(self, code, message=None, explain=None) -> None:
+        if code >= 400:
+            self.close_connection = True
+        super().send_error(code, message, explain)
+
+    def end_headers(self) -> None:
+        if self.close_connection:
+            self.send_header("Connection", "close")
+        super().end_headers()
+
+    def _server_port(self) -> int:
+        return int(self.server.server_address[1])
+
     def _validate_origin(self) -> bool:
-        host = self.headers.get("Host", "")
-        origin = self.headers.get("Origin", "")
-        referer = self.headers.get("Referer", "")
-        allowed_hosts = {"127.0.0.1", "localhost"}
-        host_name = host.split(":")[0].lower()
-        if host_name and host_name not in allowed_hosts:
+        from urllib.parse import urlparse
+
+        port = self._server_port()
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
             return False
-        for header_val in (origin, referer):
-            if header_val:
-                from urllib.parse import urlparse
-                p = urlparse(header_val)
-                if p.hostname and p.hostname.lower() not in allowed_hosts:
-                    return False
+        for name in ("Origin", "Referer"):
+            value = self.headers.get(name) or ""
+            if not value:
+                continue
+            try:
+                p = urlparse(value)
+                p_port = p.port
+            except ValueError:
+                return False
+            if (p.hostname or "").lower() not in _ALLOWED_HOSTS:
+                return False
+            if p_port is not None and p_port != port:
+                return False
         return True
+
+    def _token_ok(self, form: dict) -> bool:
+        expected = getattr(self.server, "odicto_token", None)
+        if not expected:
+            return False
+        supplied = self.headers.get(_TOKEN_HEADER) or ""
+        if not supplied:
+            supplied = (form.get(_TOKEN_FIELD) or [""])[0]
+        return hmac.compare_digest(
+            supplied.encode("utf-8", "replace"), expected.encode("utf-8")
+        )
+
+    def _inject_token(self, page: str) -> bytes:
+        body = page.encode("utf-8")
+        token = getattr(self.server, "odicto_token", "") or ""
+        snippet = _TOKEN_SNIPPET.replace("__TOKEN__", token).encode("utf-8")
+        marker = b"</head>"
+        idx = body.find(marker)
+        if idx < 0:
+            return snippet + body
+        return body[:idx] + snippet + body[idx:]
 
     def do_POST(self) -> None:
         if not self._validate_origin():
             self.send_error(403, "Forbidden: Cross-origin requests not permitted")
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8")
+        length_text = self.headers.get("Content-Length")
+        if length_text is None:
+            self.send_error(411, "Length Required")
+            return
+        try:
+            length = int(length_text.strip())
+        except ValueError:
+            self.send_error(400, "Bad Content-Length")
+            return
+        if length < 0:
+            self.send_error(400, "Bad Content-Length")
+            return
+        if length > _MAX_BODY_BYTES:
+            self.close_connection = True
+            self.send_error(413, "Request body too large")
+            return
+        try:
+            raw = self.rfile.read(length).decode("utf-8")
+        except (UnicodeDecodeError, OSError):
+            self.send_error(400, "Bad request body")
+            return
         form = parse_qs(raw)
+        if not self._token_ok(form):
+            self.send_error(403, "Forbidden: missing or invalid token")
+            return
 
         if self.path == "/pull-ollama":
             model = (form.get("OLLAMA_MODEL") or form.get("LLM_MODEL") or [ENV_DEFAULTS["LLM_MODEL"]])[0].strip()
             if not model:
                 self._send_json({"ok": False, "message": "Enter an Ollama model first."})
+                return
+            if not _MODEL_NAME_RE.match(model):
+                self._send_json({"ok": False, "message": "Invalid Ollama model name."})
                 return
             err = start_ollama_pull(model)
             if err:
@@ -873,7 +959,7 @@ class _Handler(BaseHTTPRequestHandler):
         prompt_body = updates.get("SYSTEM_PROMPT", "")
         err = apply_prompt_save(prompt_body)
         if err:
-            body = _page(err, "err").encode("utf-8")
+            body = self._inject_token(_page(err, "err"))
             self._send(body)
             return
         if (prompt_body or "").strip() and (
@@ -889,7 +975,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             validate_hotkey_pair(hotkey, ai_hotkey)
         except Exception as e:
-            body = _page(f"Hotkey invalid: {e}", "err").encode("utf-8")
+            body = self._inject_token(_page(f"Hotkey invalid: {e}", "err"))
             self._send(body)
             return
 
@@ -899,15 +985,15 @@ class _Handler(BaseHTTPRequestHandler):
             updates.get("LLM_PROVIDER") or merged.get("LLM_PROVIDER") or "none"
         ).strip().lower()
         if provider not in ("meta", "ollama", "openrouter", "gemini", "groq", "none"):
-            body = _page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err").encode("utf-8")
+            body = self._inject_token(_page(f"Saved, but LLM_PROVIDER '{provider}' is invalid.", "err"))
             self._send(body)
             return
         err_msg = validate_provider_requirements(provider, updates, merged)
         if err_msg:
-            body = _page(f"Saved, but {err_msg}", "err").encode("utf-8")
+            body = self._inject_token(_page(f"Saved, but {err_msg}", "err"))
             self._send(body)
             return
-        body = _page(restart_odicto(), "ok").encode("utf-8")
+        body = self._inject_token(_page(restart_odicto(), "ok"))
         self._send(body)
 
     def _handle_reset(self) -> None:
@@ -943,6 +1029,7 @@ class _Handler(BaseHTTPRequestHandler):
 def run_server(port: int = 8765, open_browser: bool = True) -> None:
     port = int(os.getenv("SETUP_PORT", str(port)))
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    server.odicto_token = secrets.token_urlsafe(32)
     url = f"http://127.0.0.1:{port}"
     print(f"Odicto setup page: {url} (Ctrl+C to stop)")
     if open_browser:

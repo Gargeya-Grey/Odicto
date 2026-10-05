@@ -110,6 +110,18 @@ def cmd_status(_args) -> int:
             pid = None
     print(f"Backend:     {platforms.hotkey_backend_name()}")
     print(f"PID file:    {pid or '(none)'}")
+    try:
+        from platforms.preflight import environment_problems
+
+        problems = environment_problems()
+    except Exception:
+        problems = []
+    if problems:
+        print("Environment problems:")
+        for p in problems:
+            print(f"  [{p.severity}] {p.code}: {p.message}")
+    else:
+        print("Environment: no known problems")
     health_path = os.path.join(_repo_root(), "dictation-health.json")
     try:
         with open(health_path, encoding="utf-8") as f:

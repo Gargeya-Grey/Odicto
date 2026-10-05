@@ -189,3 +189,72 @@ def is_terminal_identifier(identifiers, extra=()) -> bool:
         if stem in extra_set or stem in TERMINAL_PROCESS_NAMES:
             return True
     return False
+
+
+# --- IDE host detection -------------------------------------------------
+# Editors with an integrated terminal (VS Code and its forks, JetBrains IDEs,
+# Zed) are not in the terminal tables: the focused window belongs to the IDE
+# process, so a selection probe there would send plain Ctrl+C — SIGINT when the
+# integrated terminal has focus. The probe sends Ctrl+Insert to these hosts
+# instead; it copies in both the editor and the integrated terminal and is
+# never an interrupt. Matching mirrors the terminal tables: window class,
+# process image name (with or without ".exe") or macOS bundle id, lowercased.
+
+IDE_HOST_NAMES: frozenset = frozenset(
+    {
+        # Windows: VS Code family and Zed
+        "code.exe",
+        "code - insiders.exe",
+        "cursor.exe",
+        "windsurf.exe",
+        "vscodium.exe",
+        "zed.exe",
+        # Windows: JetBrains
+        "idea64.exe",
+        "pycharm64.exe",
+        "webstorm64.exe",
+        "phpstorm64.exe",
+        "rider64.exe",
+        "clion64.exe",
+        "goland64.exe",
+        "rubymine64.exe",
+        "datagrip64.exe",
+        "studio64.exe",
+        # Linux
+        "code",
+        "code-insiders",
+        "cursor",
+        "windsurf",
+        "codium",
+        "zed",
+        "idea",
+        "pycharm",
+        "webstorm",
+        "clion",
+        "goland",
+        "rider",
+        "studio",
+    }
+)
+
+
+def is_ide_host_identifier(identifiers, extra=()) -> bool:
+    """True when any window class / process name is an IDE that hosts a terminal.
+
+    Args:
+        identifiers: Candidate names for the focused window, any case.
+        extra: Additional names that also count.
+    """
+    extra_set = {str(e).strip().lower() for e in extra or () if str(e).strip()}
+    for raw in identifiers:
+        if not raw:
+            continue
+        name = str(raw).strip().lower()
+        if not name:
+            continue
+        if name in extra_set or name in IDE_HOST_NAMES:
+            return True
+        stem = name.rsplit(".", 1)[0] if name.endswith(".exe") else name
+        if stem in extra_set or stem in IDE_HOST_NAMES:
+            return True
+    return False

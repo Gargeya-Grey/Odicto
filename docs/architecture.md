@@ -56,7 +56,7 @@ root independently of the working directory.
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.
 Run tests from the project root with `python -m unittest discover -s tests -t .`.
-The optional microphone diagnostic is `python -m tests.test_pipeline`.
+The optional microphone diagnostic is `python tools/manual_pipeline_check.py`.
 
 ### Runtime recovery and diagnostics
 
@@ -84,9 +84,10 @@ one second for fresh callbacks. Native stream operations are serialized against
 shutdown; an unsuccessful close cannot authorize a second stream. There is no
 background reopening or signal-volume trigger. Status reads never alter input.
 Healthy hotkeys reuse the stream and pre-roll without opening a device.
-Input overflow or a callback gap invalidates an active recording and clears old
-pre-roll; resuming callbacks cannot conceal lost audio. Stop rejects the partial
-capture and asks the user to record again. Quiet speech remains valid.
+Input overflow or a callback gap keeps the captured audio and flags the capture; Stop
+processes it and the HUD shows "Mic gap · check text". Only a dead stream with no audio
+errors. A capture longer than `MAX_RECORDING_SECONDS` stops itself and is processed.
+Reconnect refreshes PortAudio and falls back to the default device. Quiet speech remains valid.
 Native driver calls cannot be forcibly interrupted within Python; a driver that
 hangs during close/open can still require an explicit process restart.
 The production keyboard hook only snapshots the chord and enqueues an action;
@@ -231,6 +232,7 @@ graph LR
     transcriber --> config
     refiner --> config
     refiner --> openrouter_catalog
+    refiner --> transcriber
     typer --> config
     typer --> platforms
     indicator --> app_state
@@ -571,7 +573,7 @@ These are known, chosen limits — not oversights:
 | `-m unittest tests.test_units` | 153 tests, 0 unexpected skips |
 | `-m unittest tests.test_equivalence` | the setup page renders identically to the recorded hashes; cascade resolvers unchanged |
 | clean-environment run | the suite also passes with no `.env` present, the way CI runs it |
-| `-m unittest tests.test_reliability` | 25 input, HUD, AI, and polish regression tests |
+| `tools/run_tests.py` | discovery of every `tests/test_*.py`, a count floor that only rises, a per-platform skip allow-list (the one gate for CI and `verify.ps1`) |
 | `-m unittest tests.test_layout` | Entry points and install-root paths work after relocation |
 | import smoke test | every top-level module imports |
 | backend syntax check | `app/platforms/macos.py` and `app/platforms/linux.py` compile |
