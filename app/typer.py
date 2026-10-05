@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import uuid
@@ -35,7 +36,16 @@ _CLIPBOARD_LOCK = threading.RLock()
 
 # Text no longer than this is typed instead of pasted when the clipboard holds
 # data that cannot be saved and restored (see paste_text).
+# Windows (SendInput batches) and macOS type fast enough for long text; the
+# Linux keyboard backend types with a per-character delay.
 _TYPE_INSTEAD_MAX_CHARS = 2000
+_TYPE_INSTEAD_MAX_CHARS_FAST = 20000
+
+
+def _type_instead_limit() -> int:
+    if sys.platform in ("win32", "darwin"):
+        return _TYPE_INSTEAD_MAX_CHARS_FAST
+    return _TYPE_INSTEAD_MAX_CHARS
 
 # The deferred restore runs on a daemon thread. Tests that drive paste_text
 # with a fake clipboard set this False to run the same restore inline.
@@ -63,6 +73,7 @@ class _PendingRestore:
     snapshot: ClipboardSnapshot  # the user's clipboard before the paste
     payload: str  # the text Odicto put on the clipboard
     token: Optional[int]  # clipboard_change_token() right after the payload write
+    due: float = 0.0  # time.monotonic() at which the deferred restore is due
 
 
 _PENDING: Optional[_PendingRestore] = None
@@ -226,6 +237,7 @@ def _schedule_restore(pending: _PendingRestore) -> None:
     global _PENDING
     _PENDING = pending
     delay = max(0.15, float(Config.PASTE_DELAY_SECONDS))
+    pending.due = time.monotonic() + delay
     if not _RESTORE_IN_BACKGROUND:
         _deferred_restore(pending, delay)
         return
@@ -243,13 +255,26 @@ def _schedule_restore(pending: _PendingRestore) -> None:
             _finish_pending(pending, "after paste")
 
 
-def flush_pending_restore() -> None:
-    """Run any pending deferred clipboard restore now (call at shutdown)."""
+def flush_pending_restore(max_wait: float = 1.5) -> None:
+    """Run any pending deferred clipboard restore now (call at shutdown).
+
+    A restore younger than its delay first waits out the remaining time, capped
+    at ``max_wait`` seconds, so the target app can still read the paste.
+    """
     try:
         with _CLIPBOARD_LOCK:
-            pending = _cancel_pending()
-            if pending is not None:
-                _finish_pending(pending, "at flush")
+            pending = _PENDING
+            if pending is None:
+                return
+            remaining = pending.due - time.monotonic()
+        wait = min(max(0.0, remaining), max(0.0, float(max_wait)))
+        if wait > 0:
+            time.sleep(wait)
+        with _CLIPBOARD_LOCK:
+            if _PENDING is not pending:
+                return  # the deferred thread or a new paste took it over
+            _cancel_pending()
+            _finish_pending(pending, "at flush")
     except Exception as e:
         print(f"Warning: clipboard restore flush failed: {e}", flush=True)
 
@@ -499,7 +524,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
         original, from_pending = _take_original()
 
         if original.ok and original.has_non_text and not original.complete:
-            if len(text) <= _TYPE_INSTEAD_MAX_CHARS:
+            if len(text) <= _type_instead_limit():
                 _wait_modifiers_up(0.08)
                 # A RuntimeError here means a partial injection: do not paste a
                 # second copy on top of it.

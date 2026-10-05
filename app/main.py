@@ -516,17 +516,18 @@ class DictationApp:
             self.live_preview = self._live_committed
         self._notify_ui()
 
-    def _live_transcribe(self, audio) -> str:
+    def _live_transcribe(self, audio, allow_local_fallback: bool = True) -> str:
         provider = Config.effective_live_stt_provider()
         if provider == Config.effective_stt_provider():
-            return self.transcriber.transcribe(audio)
+            return self.transcriber.transcribe(
+                audio, allow_local_fallback=allow_local_fallback)
         backend = self._speech_backends.get(provider)
         if backend is None:
             backend = (GeminiTranscriber() if provider == "gemini" else
                        CloudTranscriber(provider) if provider in ("groq", "openrouter") else
                        WhisperTranscriber())
             self._speech_backends[provider] = backend
-        return backend.transcribe(audio)
+        return backend.transcribe(audio, allow_local_fallback=allow_local_fallback)
 
     def _speech_backend(self, live: bool):
         """The transcriber object that served this capture (for local fallback)."""
@@ -536,14 +537,15 @@ class DictationApp:
                 return self._speech_backends.get(provider)
         return self.transcriber
 
-    def _transcribe_for_pipeline(self, audio, use_llm: bool) -> str:
+    def _transcribe_for_pipeline(self, audio, use_llm: bool,
+                                 allow_local_fallback: bool = True) -> str:
         """Raw dictation and AI mode share the selected speech provider and model.
 
         ``use_llm`` only decides whether the transcript is then sent to the
         assistant. It does not switch the speech engine.
         """
         del use_llm
-        return self.transcriber.transcribe(audio)
+        return self.transcriber.transcribe(audio, allow_local_fallback=allow_local_fallback)
 
     def _set_state(self, new_state: AppState) -> None:
         """Update app state and immediately notify the indicator."""
@@ -1581,28 +1583,46 @@ class DictationApp:
         return outcome, stage
 
     def _run_stt(self, audio_source, use_llm: bool, live: bool, cycle: _Cycle) -> tuple:
-        """Transcribe under STT_DEADLINE_SECONDS. A slow cloud provider gets one
-        local-Whisper retry under a second deadline. Returns (text, notice)."""
+        """Transcribe under STT_DEADLINE_SECONDS. Returns (text, notice).
+
+        The pipeline owns the one local-Whisper fallback: cloud transcribers are
+        called with allow_local_fallback=False, so a cloud request that fails or
+        is abandoned at the deadline never starts a second, competing Whisper
+        run. A cloud failure or timeout gets one local retry under a second
+        deadline.
+        """
         seconds = Config.STT_DEADLINE_SECONDS
         if live:
-            primary = lambda: self._live_transcribe(audio_source)  # noqa: E731
+            primary = lambda: self._live_transcribe(  # noqa: E731
+                audio_source, allow_local_fallback=False)
         else:
-            primary = lambda: self._transcribe_for_pipeline(audio_source, use_llm)  # noqa: E731
+            primary = lambda: self._transcribe_for_pipeline(  # noqa: E731
+                audio_source, use_llm, allow_local_fallback=False)
         outcome, stage = self._run_stage(primary, seconds, cycle, "odicto-stt")
-        if outcome == "done":
-            return stage.result(), ""
+        if outcome == "done" and stage.error is None:
+            return stage.value, ""
         provider = (Config.effective_live_stt_provider() if live else
                     Config.effective_stt_provider())
         fallback = getattr(self._speech_backend(live), "local_fallback", None)
         if provider == "whisper" or not callable(fallback):
+            if outcome == "done":
+                raise stage.error
             print(f"!!! Speech-to-text timed out after {seconds:g}s.", file=sys.stderr, flush=True)
             raise _Abort("stt_timeout")
-        print(f"!!! {provider} speech timed out after {seconds:g}s; trying local Whisper.",
-              file=sys.stderr, flush=True)
+        if outcome == "done":
+            # Cloud error: same silent local fallback the transcriber used to run.
+            error = stage.error
+            print(f"{provider} STT fallback to Whisper ({str(error) or type(error).__name__})",
+                  flush=True)
+            notice = ""
+        else:
+            print(f"!!! {provider} speech timed out after {seconds:g}s; trying local Whisper.",
+                  file=sys.stderr, flush=True)
+            notice = "stt_fallback"
         outcome, stage = self._run_stage(lambda: fallback(audio_source), seconds, cycle,
                                          "odicto-stt-local")
         if outcome == "done":
-            return stage.result(), "stt_fallback"
+            return stage.result(), notice
         print(f"!!! Local Whisper also timed out after {seconds:g}s.", file=sys.stderr, flush=True)
         raise _Abort("stt_timeout")
 

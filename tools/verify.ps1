@@ -10,7 +10,7 @@
 #   5. an isolated source copy runs the same suite without live configuration
 #   6. LOC accounting against origin/main (skipped with a note if origin/main is not fetched)
 #
-# Usage:  .	oolserify.ps1 [-SkipCleanEnv] [-Quiet]
+# Usage:  .\tools\verify.ps1 [-SkipCleanEnv] [-Quiet]
 
 [CmdletBinding()]
 param(
@@ -41,8 +41,10 @@ Set-Location $RepoRoot
 #     Three expected values follow intended changes, each still an exact assertion:
 #     Groq upload clip.wav -> clip.flac; Gemini upload audio/wav -> audio/flac; the Gemini
 #     client is built with retries off and keep-alive (http_options). No assertion removed
-#     or loosened; still 153 tests.
-$ExpectedTestUnitsHash = '309013B959DFC5DAA99A80FBF3B3F71F594A848D6555EBF28AF4CBEC29FD6ED0'
+#     or loosened; still 153 tests. test_whisper_transcriber_loading_fallback skips on macOS
+#     only: macOS forces CPU under auto, so its CUDA->CPU path cannot run there (it failed
+#     on macOS CI since 4d8302d). It still runs on Windows and Linux.
+$ExpectedTestUnitsHash = '776D6B6E71F7899EE3B9553F270487AC57DF276F309D68B44703A1CCC9B12D3B'
 
 $Script:Failures = @()
 

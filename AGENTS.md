@@ -281,7 +281,7 @@ selection/image context, waits at most two seconds, and keeps raw text on failur
 Gemini Smart skips the extra call. `AI_CLIPBOARD_IMAGE=false` makes screenshots
 explicit; when enabled the HUD reads them on Qt's GUI thread. Auto Whisper uses
 CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must be
-16000. Run `.	oolserify.ps1` (or `python tools/run_tests.py`); it is the full gate.
+16000. Run `.\tools\verify.ps1` (or `python tools/run_tests.py`); it is the full gate.
 
 ## Reliability behaviour
 

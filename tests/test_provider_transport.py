@@ -229,6 +229,61 @@ class TestSpeechTransport(unittest.TestCase):
             self.assertIsNone(whisper.prewarm())
         transcribe.assert_called_once_with("clip")
 
+    def test_default_cloud_call_still_falls_back_to_whisper(self):
+        audio = np.ones(1600, dtype=np.float32) * 0.1
+        with patch.object(transcriber, "WhisperTranscriber") as whisper, patch.object(
+            transcriber, "_post_bytes", side_effect=RuntimeError("timed out")
+        ):
+            whisper.return_value.transcribe.return_value = "local words"
+            backend = transcriber.CloudTranscriber("groq")
+            backend._endpoint = lambda: ("https://x.invalid/a", "synthetic-key", "m")
+            self.assertEqual(backend.transcribe(audio), "local words")
+        whisper.return_value.transcribe.assert_called_once()
+
+    def test_caller_owned_fallback_raises_instead_of_running_whisper(self):
+        audio = np.ones(1600, dtype=np.float32) * 0.1
+        with patch.object(transcriber, "WhisperTranscriber") as whisper, patch.object(
+            transcriber, "_post_bytes", side_effect=RuntimeError("timed out")
+        ):
+            cloud = transcriber.CloudTranscriber("groq")
+            cloud._endpoint = lambda: ("https://x.invalid/a", "synthetic-key", "m")
+            with self.assertRaisesRegex(transcriber.LocalFallbackDisabled, "timed out"):
+                cloud.transcribe(audio, allow_local_fallback=False)
+            gemini = transcriber.GeminiTranscriber.__new__(transcriber.GeminiTranscriber)
+            gemini._client = None
+            with self.assertRaises(transcriber.LocalFallbackDisabled):
+                gemini.transcribe(audio, allow_local_fallback=False)
+        whisper.assert_not_called()
+
+    def test_whisper_decodes_never_run_concurrently(self):
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def decode(audio, **kwargs):
+            def segments():
+                with lock:
+                    active[0] += 1
+                    peak[0] = max(peak[0], active[0])
+                time.sleep(0.05)
+                with lock:
+                    active[0] -= 1
+                yield SimpleNamespace(text="words")
+            return segments(), None
+
+        engines = []
+        for _ in range(2):
+            engine = transcriber.WhisperTranscriber.__new__(transcriber.WhisperTranscriber)
+            engine.model = MagicMock()
+            engine.model.transcribe.side_effect = decode
+            engines.append(engine)
+        audio = np.ones(1600, dtype=np.float32) * 0.1
+        workers = [threading.Thread(target=e.transcribe, args=(audio,)) for e in engines * 2]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(2)
+        self.assertEqual(peak[0], 1)
+        self.assertEqual(engines[0].transcribe(audio, allow_local_fallback=False), "words")
+
 
 class TestPrewarm(unittest.TestCase):
     def test_cloud_prewarm_is_non_blocking_rate_limited_and_never_raises(self):

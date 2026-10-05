@@ -33,6 +33,12 @@ _google_genai_import_tried = False
 WhisperModel = None  # type: ignore
 
 _genai_client_lock = threading.Lock()
+# Serialises every local Whisper decode in the process (see WhisperTranscriber.transcribe).
+_WHISPER_INFERENCE_LOCK = threading.Lock()
+
+
+class LocalFallbackDisabled(RuntimeError):
+    """A cloud transcription failed and the caller owns the local fallback."""
 _genai_client = None
 _genai_client_key: Optional[str] = None
 _genai_client_factory = None
@@ -389,7 +395,9 @@ class WhisperTranscriber:
             flush=True,
         )
 
-    def transcribe(self, audio: Union[str, np.ndarray]) -> str:
+    def transcribe(
+        self, audio: Union[str, np.ndarray], allow_local_fallback: bool = True
+    ) -> str:
         """Transcribes audio to text (accepts filepath string or in-memory numpy array).
 
         Speed-oriented decode settings preserve accuracy for short push-to-talk clips
@@ -397,10 +405,13 @@ class WhisperTranscriber:
 
         Args:
             audio: Path to the mono WAV file, or in-memory 1D float32 numpy array.
+            allow_local_fallback: Ignored; this is the local engine. Accepted so
+                every transcriber shares one signature.
 
         Returns:
             str: The transcribed text.
         """
+        del allow_local_fallback
         if not self.model:
             raise RuntimeError("Whisper model is not loaded.")
 
@@ -446,14 +457,18 @@ class WhisperTranscriber:
                 "speech_pad_ms": 300,
             }
 
-        segments, _info = self.model.transcribe(audio, **transcribe_kwargs)
+        # One Whisper decode at a time, process-wide: an abandoned decode (a
+        # cloud fallback after the pipeline deadline) must not halve the CPU of
+        # the decode that matters. segments is lazy, so consume it inside.
+        with _WHISPER_INFERENCE_LOCK:
+            segments, _info = self.model.transcribe(audio, **transcribe_kwargs)
 
-        # Consume generator promptly; join without intermediate list growth for tiny clips.
-        parts: List[str] = []
-        for segment in segments:
-            text = segment.text
-            if text:
-                parts.append(text)
+            # Consume generator promptly; join without intermediate list growth for tiny clips.
+            parts: List[str] = []
+            for segment in segments:
+                text = segment.text
+                if text:
+                    parts.append(text)
         return "".join(parts).strip()
 
     def prewarm(self) -> None:
@@ -565,7 +580,11 @@ class CloudTranscriber(_LocalWhisperFallback):
         self._whisper_lock = threading.Lock()
         self._prewarmer = Prewarmer()
 
-    def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
+    def _whisper_fallback(
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+    ) -> str:
+        if not allow:
+            raise LocalFallbackDisabled(reason)
         label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
             self.kind, self.kind or "Cloud"
         )
@@ -601,15 +620,22 @@ class CloudTranscriber(_LocalWhisperFallback):
         )
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+        self,
+        audio: Union[str, np.ndarray],
+        mode: Optional[str] = None,
+        allow_local_fallback: bool = True,
     ) -> str:
-        """Transcribe. ``mode`` is accepted so callers can share Gemini's signature."""
+        """Transcribe. ``mode`` is accepted so callers can share Gemini's signature.
+
+        ``allow_local_fallback=False`` raises LocalFallbackDisabled instead of
+        running local Whisper; the pipeline then owns the single fallback run.
+        """
         del mode
         if isinstance(audio, np.ndarray) and audio.size == 0:
             return ""
         url, api_key, model = self._endpoint()
         if not api_key:
-            return self._whisper_fallback(audio, "no API key")
+            return self._whisper_fallback(audio, "no API key", allow_local_fallback)
         # Groq accepts FLAC (about half the bytes of WAV). OpenRouter's
         # transcription endpoint is not documented to accept it: keep WAV.
         try:
@@ -617,7 +643,7 @@ class CloudTranscriber(_LocalWhisperFallback):
                 audio, Config.SAMPLE_RATE or 16000, prefer_flac=self.kind == "groq"
             )
         except Exception as e:
-            return self._whisper_fallback(audio, f"audio encode failed: {e}")
+            return self._whisper_fallback(audio, f"audio encode failed: {e}", allow_local_fallback)
         if not audio_bytes:
             return ""
         language = Config.stt_language_hint()
@@ -651,11 +677,11 @@ class CloudTranscriber(_LocalWhisperFallback):
                 headers["Content-Type"] = content_type
             result = _post_bytes(url, body, headers, timeout=stt_deadline_seconds())
         except Exception as e:
-            return self._whisper_fallback(audio, str(e) or type(e).__name__)
+            return self._whisper_fallback(audio, str(e) or type(e).__name__, allow_local_fallback)
         text = _transcript_from_payload(result)
         if text is not None:
             return text
-        return self._whisper_fallback(audio, "missing or invalid transcript")
+        return self._whisper_fallback(audio, "missing or invalid transcript", allow_local_fallback)
 
 
 def _transcription_config_payload(mode: str) -> dict:
@@ -698,7 +724,11 @@ class GeminiTranscriber(_LocalWhisperFallback):
         if self._client is None:
             print("Warning: Could not create Gemini STT client.", flush=True)
 
-    def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
+    def _whisper_fallback(
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+    ) -> str:
+        if not allow:
+            raise LocalFallbackDisabled(reason)
         print(f"Gemini STT fallback to Whisper ({reason})", flush=True)
         return self.local_fallback(audio)
 
@@ -724,19 +754,22 @@ class GeminiTranscriber(_LocalWhisperFallback):
             pass
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+        self,
+        audio: Union[str, np.ndarray],
+        mode: Optional[str] = None,
+        allow_local_fallback: bool = True,
     ) -> str:
         if isinstance(audio, np.ndarray) and audio.size == 0:
             return ""
         if self._client is None:
-            return self._whisper_fallback(audio, "no Gemini client")
+            return self._whisper_fallback(audio, "no Gemini client", allow_local_fallback)
 
         try:
             audio_bytes, audio_format = encode_upload_audio(
                 audio, Config.SAMPLE_RATE or 16000, prefer_flac=True
             )
         except Exception as e:
-            return self._whisper_fallback(audio, f"audio encode failed: {e}")
+            return self._whisper_fallback(audio, f"audio encode failed: {e}", allow_local_fallback)
         if not audio_bytes:
             return ""
 
@@ -761,12 +794,12 @@ class GeminiTranscriber(_LocalWhisperFallback):
             )
         except Exception as e:
             detail = str(getattr(e, "message", "")) or str(e)
-            return self._whisper_fallback(audio, detail.strip() or type(e).__name__)
+            return self._whisper_fallback(audio, detail.strip() or type(e).__name__, allow_local_fallback)
 
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str):
             return text.strip()
-        return self._whisper_fallback(audio, "missing or invalid Gemini transcript")
+        return self._whisper_fallback(audio, "missing or invalid Gemini transcript", allow_local_fallback)
 
 
 class GeminiLiveSession:

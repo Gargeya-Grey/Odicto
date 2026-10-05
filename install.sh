@@ -90,6 +90,16 @@ if [ -z "$UV" ]; then
   echo "    Using $PY"
 fi
 
+echo "==> Creating virtual environment"
+if [ ! -x ".venv/bin/python" ]; then
+  if [ -n "$UV" ]; then
+    "$UV" venv --python 3.12 .venv
+  else
+    "$PY" -m venv .venv
+  fi
+fi
+VENV_PY=".venv/bin/python"
+
 if [ "$PLATFORM" = linux ]; then
   echo "==> Checking Linux system packages"
   PM=""
@@ -101,7 +111,7 @@ if [ "$PLATFORM" = linux ]; then
   if ! command -v xclip >/dev/null 2>&1 && ! command -v xsel >/dev/null 2>&1 && ! command -v wl-copy >/dev/null 2>&1; then
     MISSING="$MISSING clipboard"
   fi
-  if ! "${PY:-python3}" -c 'import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library("portaudio") else 1)' 2>/dev/null; then
+  if ! "$VENV_PY" -c 'import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library("portaudio") else 1)' 2>/dev/null; then
     MISSING="$MISSING portaudio"
   fi
   if [ -z "$MISSING" ]; then
@@ -119,15 +129,6 @@ if [ "$PLATFORM" = linux ]; then
   fi
 fi
 
-echo "==> Creating virtual environment"
-if [ ! -x ".venv/bin/python" ]; then
-  if [ -n "$UV" ]; then
-    "$UV" venv --python 3.12 .venv
-  else
-    "$PY" -m venv .venv
-  fi
-fi
-VENV_PY=".venv/bin/python"
 
 echo "==> Installing Python requirements"
 if [ -n "$UV" ]; then

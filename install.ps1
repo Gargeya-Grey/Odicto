@@ -97,8 +97,19 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     if ($uvPath) {
         & $uvPath venv --python 3.12 .venv
     } elseif ($py -eq "py") {
-        & py -3.12 -m venv .venv
-        if ($LASTEXITCODE -ne 0) { & py -3 -m venv .venv }
+        # Only 3.10-3.12 are allowed (numpy<2 has no 3.13+ wheels); never `py -3`.
+        $made = $false
+        foreach ($v in @("3.12", "3.11", "3.10")) {
+            & py "-$v" -c "import sys" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                & py "-$v" -m venv .venv
+                $made = $true
+                break
+            }
+        }
+        if (-not $made) {
+            throw "No Python 3.10-3.12 found via the py launcher. Install Python 3.12 (winget install Python.Python.3.12) and re-run."
+        }
     } else {
         & $py -m venv .venv
     }

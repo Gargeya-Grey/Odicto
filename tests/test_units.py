@@ -311,6 +311,7 @@ class TestOdicto(unittest.TestCase):
         )
         recorder.close()
 
+    @unittest.skipIf(sys.platform == "darwin", "macOS never tries CUDA under auto (always CPU)")
     @patch("transcriber.Config.WHISPER_DEVICE", "auto")
     @patch("transcriber.Config.WHISPER_MODEL_SIZE", "small.en")
     @patch("transcriber.WhisperModel")

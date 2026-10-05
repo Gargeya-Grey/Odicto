@@ -150,7 +150,7 @@ class TestDeferredRestore(ClipboardSafetyBase):
         with self._hold_restore():
             typer.paste_text("transcript")
         self.clip.user_copies("something new")
-        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "something new")
 
     def test_app_change_detected_by_text_when_no_token(self):
@@ -158,7 +158,7 @@ class TestDeferredRestore(ClipboardSafetyBase):
         with self._hold_restore():
             typer.paste_text("transcript")
         self.clip.user_copies("app wrote this")
-        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "app wrote this")
 
     def test_flush_runs_the_pending_restore_now(self):
@@ -166,17 +166,42 @@ class TestDeferredRestore(ClipboardSafetyBase):
             typer.paste_text("transcript")
         self.assertIsNotNone(typer._PENDING)
         self.assertEqual(self.clip.text, "transcript")
-        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "user clip")
         self.assertIsNone(typer._PENDING)
-        typer.flush_pending_restore()  # nothing pending: a no-op
+        typer.flush_pending_restore(max_wait=0)  # nothing pending: a no-op
+
+    def test_flush_waits_the_remaining_delay(self):
+        with self._hold_restore(), patch("typer.time.monotonic", return_value=100.0):
+            typer.paste_text("transcript")  # due at 101.0
+        waits = []
+        with patch("typer.time.monotonic", return_value=100.4), patch(
+            "typer.time.sleep", side_effect=waits.append
+        ):
+            typer.flush_pending_restore()
+        self.assertEqual(len(waits), 1)
+        self.assertAlmostEqual(waits[0], 0.6, places=6)
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_flush_wait_is_capped_and_skipped_when_due(self):
+        for now, max_wait, expected in ((100.0, 0.25, [0.25]), (102.0, 1.5, [])):
+            with self.subTest(now=now):
+                with self._hold_restore(), patch("typer.time.monotonic", return_value=100.0):
+                    typer.paste_text("transcript")
+                waits = []
+                with patch("typer.time.monotonic", return_value=now), patch(
+                    "typer.time.sleep", side_effect=waits.append
+                ):
+                    typer.flush_pending_restore(max_wait)
+                self.assertEqual(waits, expected)
+                self.assertIsNone(typer._PENDING)
 
     def test_back_to_back_pastes_keep_the_first_original(self):
         with self._hold_restore():
             typer.paste_text("first")
             typer.paste_text("second")
         self.assertEqual(typer._PENDING.snapshot.text, "user clip")
-        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "user clip")
         self.assertNotIn("first", [s.text for s in self.clip.restores])
 
@@ -210,13 +235,34 @@ class TestDeferredRestore(ClipboardSafetyBase):
         self.assertEqual(self.clip.writes, [])
         self.assertEqual(self.clip.non_text, b"files")
 
-    def test_incomplete_snapshot_long_text_still_pastes(self):
+    def test_incomplete_snapshot_long_text_typed_on_windows(self):
         self.clip.non_text = b"files"
         self.clip.complete = False
-        typer.paste_text("x" * 2001)
-        self.mocks["send_text_bulk"].assert_not_called()
-        self.mocks["send_paste"].assert_called_once()
-        self.assertEqual(self.clip.text, "user clip")
+        with patch.object(typer.sys, "platform", "win32"):
+            typer.paste_text("x" * 20000)
+        self.mocks["send_text_bulk"].assert_called_once()
+        self.mocks["send_paste"].assert_not_called()
+        self.assertEqual(self.clip.non_text, b"files")
+
+    def test_incomplete_snapshot_over_limit_still_pastes(self):
+        for platform, limit in (("win32", 20000), ("darwin", 20000), ("linux", 2000)):
+            with self.subTest(platform=platform):
+                self.clip = FakeClipboard(non_text=b"files", complete=False)
+                self.mocks["send_text_bulk"].reset_mock()
+                self.mocks["send_paste"].reset_mock()
+                with patch.object(typer.sys, "platform", platform):
+                    typer.paste_text("x" * (limit + 1))
+                self.mocks["send_text_bulk"].assert_not_called()
+                self.mocks["send_paste"].assert_called_once()
+                self.assertEqual(self.clip.text, "user clip")
+
+    def test_linux_types_only_up_to_2000_chars(self):
+        self.clip.non_text = b"files"
+        self.clip.complete = False
+        with patch.object(typer.sys, "platform", "linux"):
+            typer.paste_text("x" * 2000)
+        self.mocks["send_text_bulk"].assert_called_once()
+        self.mocks["send_paste"].assert_not_called()
 
     def test_incomplete_snapshot_typing_failure_falls_back_to_paste(self):
         self.clip.non_text = b"files"
@@ -231,7 +277,7 @@ class TestDeferredRestore(ClipboardSafetyBase):
         with patch("typer.time.sleep"):
             typer.paste_text("live final", restore_clipboard=False)
         self.assertIsNone(typer._PENDING)
-        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "live final")
 
 
@@ -374,3 +420,84 @@ class TestWindowsRoundTrip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWindowsFormatAllowList(unittest.TestCase):
+    """Pure allow-list logic: fake formats and a recording reader, any OS."""
+
+    HTML = 0xC100
+    OLE_PRIVATE = 0xC200
+    EMBED_SOURCE = 0xC201
+    ALLOWED = frozenset(clip_mod._WIN_ALLOWED_STANDARD | {HTML})
+
+    def _build(self, seen, data=None):
+        reads = []
+        data = data or {}
+
+        def read(fmt):
+            reads.append(fmt)
+            return data.get(fmt, b"x")
+
+        return clip_mod._win_build_snapshot(seen, self.ALLOWED, read), reads
+
+    def test_owner_private_formats_are_never_read(self):
+        text = ("hi" + chr(0)).encode("utf-16-le")
+        snap, reads = self._build(
+            [clip_mod.CF_UNICODETEXT, self.HTML, self.OLE_PRIVATE, self.EMBED_SOURCE],
+            {clip_mod.CF_UNICODETEXT: text},
+        )
+        self.assertEqual(reads, [clip_mod.CF_UNICODETEXT, self.HTML])
+        self.assertTrue(snap.complete)
+        self.assertTrue(snap.has_non_text)
+        self.assertEqual(snap.text, "hi")
+        self.assertNotIn(self.OLE_PRIVATE, dict(snap.formats))
+
+    def test_only_private_formats_is_incomplete(self):
+        snap, reads = self._build([self.OLE_PRIVATE, self.EMBED_SOURCE])
+        self.assertEqual(reads, [])
+        self.assertFalse(snap.complete)
+        self.assertTrue(snap.has_non_text)
+
+    def test_unreadable_allowed_format_is_incomplete(self):
+        snap, _ = self._build([clip_mod.CF_DIB], {clip_mod.CF_DIB: None})
+        self.assertFalse(snap.complete)
+
+    def test_empty_clipboard_is_complete(self):
+        snap, _ = self._build([])
+        self.assertTrue(snap.complete)
+        self.assertFalse(snap.has_non_text)
+
+
+class TestWindowsSnapshotBudget(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(setattr, clip_mod, "_WIN_SNAPSHOT_THREAD", None)
+
+    def test_slow_owner_times_out_as_incomplete_non_text(self):
+        release = threading.Event()
+        calls = []
+
+        def slow():
+            calls.append(1)
+            release.wait(5)
+            return _snap(text="late")
+
+        self.addCleanup(release.set)
+        with patch.object(clip_mod, "_win_snapshot_blocking", side_effect=slow), patch.object(
+            clip_mod, "_WIN_SNAPSHOT_TIMEOUT_S", 0.05
+        ):
+            snap = clip_mod._win_snapshot()
+            self.assertTrue(snap.ok)
+            self.assertFalse(snap.complete)
+            self.assertTrue(snap.has_non_text)
+            # The stuck worker is not stacked: the next call returns at once.
+            again = clip_mod._win_snapshot()
+            self.assertFalse(again.complete)
+            self.assertEqual(len(calls), 1)
+            release.set()
+            clip_mod._WIN_SNAPSHOT_THREAD.join(5)
+
+    def test_fast_owner_returns_the_snapshot(self):
+        with patch.object(
+            clip_mod, "_win_snapshot_blocking", return_value=_snap(text="quick")
+        ):
+            self.assertEqual(clip_mod._win_snapshot().text, "quick")

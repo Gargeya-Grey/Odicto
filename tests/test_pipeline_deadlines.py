@@ -93,6 +93,42 @@ class TestStageDeadlines(_Base):
         self.assertEqual(app.last_status, "stt_timeout")
         self.assertIn("timed out", status_label(GuiState.ERROR, last_status=app.last_status))
 
+    def _cloud_app(self, post):
+        """Real CloudTranscriber with a fake HTTP post and a counting fake Whisper."""
+        import transcriber
+        whisper = self.stack.enter_context(patch.object(transcriber, "WhisperTranscriber"))
+        whisper.return_value.transcribe.return_value = "local words"
+        self.stack.enter_context(patch.object(transcriber, "_post_bytes", side_effect=post))
+        self.stack.enter_context(patch.object(Config, "effective_stt_provider", return_value="groq"))
+        app = app_fixture()
+        app.transcriber = transcriber.CloudTranscriber("groq")
+        app.transcriber._endpoint = lambda: ("https://x.invalid/a", "synthetic-key", "m")
+        return app, whisper.return_value.transcribe
+
+    def test_cloud_stage_timeout_runs_exactly_one_whisper_decode(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def post(*args, **kwargs):
+            release.wait(5)
+            raise RuntimeError("read timed out")  # the abandoned request's own timeout
+
+        app, whisper_decode = self._cloud_app(post)
+        with patch.object(Config, "STT_DEADLINE_SECONDS", 0.1):
+            app.process_and_paste(np.ones(1600, dtype=np.float32) * 0.1, False)
+        self.paste.assert_called_once_with("local words")
+        self.assertEqual(app.last_status, "stt_fallback")
+        release.set()  # the abandoned cloud call now fails
+        time.sleep(0.2)
+        self.assertEqual(whisper_decode.call_count, 1)
+
+    def test_cloud_error_runs_the_pipeline_fallback_once(self):
+        app, whisper_decode = self._cloud_app(RuntimeError("HTTP 500"))
+        app.process_and_paste(np.ones(1600, dtype=np.float32) * 0.1, False)
+        self.assertEqual(whisper_decode.call_count, 1)
+        self.paste.assert_called_once_with("local words")
+        self.assertEqual(app.last_status, "success")
+
     def test_llm_deadline_inserts_raw_transcript_and_late_reply_never_pastes(self):
         app = app_fixture()
         app.refiner = MagicMock()
@@ -430,7 +466,7 @@ class TestShutdownOrder(_Base):
         app.pid_file = "unused-test-pid"
         self.stack.enter_context(patch("main.platforms.unhook_all"))
         self.stack.enter_context(patch("main.flush_pending_restore"))
-        app.transcriber.transcribe.side_effect = lambda audio: (app._shutdown(), "words")[1]
+        app.transcriber.transcribe.side_effect = lambda audio, **kw: (app._shutdown(), "words")[1]
         app.process_and_paste(np.zeros(10), False)
         self.paste.assert_not_called()
 

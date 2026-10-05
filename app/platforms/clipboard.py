@@ -5,9 +5,10 @@ or a sentinel for the AI selection probe) and then puts the user's clipboard
 back. A text-only round trip destroys a copied image, a file list or rich
 text, so this module captures every format the platform lets it re-create.
 
-* Windows: every HGLOBAL-backed clipboard format through a private ctypes
-  binding, plus enhanced metafiles through their bits. GDI handle formats with
-  no captured equivalent make the snapshot incomplete.
+* Windows: an allow-list of user-visible formats (text, DIB, files, HTML,
+  RTF, PNG, enhanced metafile) through a private ctypes binding, read on a
+  worker thread with a 750 ms budget. Owner-private OLE formats are skipped;
+  GDI bitmap/metafile forms are re-synthesized by the system after a restore.
 * macOS: every type of every ``NSPasteboard`` item, through AppKit.
 * Linux: plain text only (pyperclip); ``xclip``/``wl-paste`` report whether
   the clipboard also holds an image or files, which makes it incomplete.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -121,36 +123,15 @@ def _text_restore(text: str) -> bool:
 # --- Windows ----------------------------------------------------------------
 
 CF_TEXT = 1
-CF_BITMAP = 2
-CF_METAFILEPICT = 3
 CF_OEMTEXT = 7
 CF_DIB = 8
-CF_PALETTE = 9
 CF_UNICODETEXT = 13
-CF_ENHMETAFILE = 14
+CF_ENHMETAFILE = 14  # a GDI handle: captured through its bits, not GlobalLock
+CF_HDROP = 15
 CF_LOCALE = 16
 CF_DIBV5 = 17
-CF_OWNERDISPLAY = 0x80
-CF_DSPBITMAP = 0x82
-CF_DSPMETAFILEPICT = 0x83
-CF_DSPENHMETAFILE = 0x8E
-CF_PRIVATEFIRST = 0x200
-CF_GDIOBJLAST = 0x3FF
 
 _WIN_TEXT_FORMATS = frozenset({CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, CF_LOCALE})
-# Formats whose handle is a GDI object, not an HGLOBAL; never GlobalLock them.
-_WIN_GDI_FORMATS = frozenset(
-    {
-        CF_BITMAP,
-        CF_METAFILEPICT,
-        CF_PALETTE,
-        CF_ENHMETAFILE,
-        CF_OWNERDISPLAY,
-        CF_DSPBITMAP,
-        CF_DSPMETAFILEPICT,
-        CF_DSPENHMETAFILE,
-    }
-)
 GMEM_MOVEABLE = 0x0002
 
 _WIN_API = None
@@ -187,6 +168,9 @@ class _WinApi:
         self.EnumClipboardFormats = sig(u.EnumClipboardFormats, [UINT], UINT)
         self.GetClipboardData = sig(u.GetClipboardData, [UINT], HANDLE)
         self.SetClipboardData = sig(u.SetClipboardData, [UINT, HANDLE], HANDLE)
+        self.RegisterClipboardFormatW = sig(
+            u.RegisterClipboardFormatW, [wintypes.LPCWSTR], UINT
+        )
         self.CreateWindowExW = sig(
             u.CreateWindowExW,
             [
@@ -262,53 +246,72 @@ def _win_read_emf(api: _WinApi, handle) -> Optional[bytes]:
     return buf.raw
 
 
-def _win_snapshot() -> ClipboardSnapshot:
-    api = _win_api()
-    if not _win_open(api):
-        return _UNREADABLE
-    captured = []
-    seen = set()
-    uncaptured = set()
-    total = 0
-    over_cap = False
-    try:
-        fmt = 0
-        while True:
-            fmt = int(api.EnumClipboardFormats(fmt))
-            if not fmt:
-                break
-            seen.add(fmt)
-            if fmt in _WIN_GDI_FORMATS or CF_PRIVATEFIRST <= fmt <= CF_GDIOBJLAST:
-                if fmt != CF_ENHMETAFILE:
-                    uncaptured.add(fmt)
-                    continue
-            if over_cap:
-                continue
-            handle = api.GetClipboardData(fmt)
-            if not handle:
-                uncaptured.add(fmt)
-                continue
-            data = _win_read_emf(api, handle) if fmt == CF_ENHMETAFILE else _win_read_hglobal(api, handle)
-            if data is None:
-                uncaptured.add(fmt)
-                continue
-            if total + len(data) > MAX_SNAPSHOT_BYTES:
-                over_cap = True
-                continue
-            total += len(data)
-            captured.append((fmt, data))
-    finally:
-        api.CloseClipboard()
+# Formats captured for a restore. Everything else (OLE / owner-private formats
+# such as "Ole Private Data", "DataObject", "Embed Source", "Object Descriptor",
+# "Link Source", app-private binaries) is never requested: many are rendered on
+# demand (WM_RENDERFORMAT), so reading them makes every paste wait on the owner
+# app, and re-publishing them after the owner changed would be dead data.
+# Skipping them does not by itself make a snapshot incomplete.
+_WIN_ALLOWED_STANDARD = frozenset(
+    {CF_UNICODETEXT, CF_TEXT, CF_OEMTEXT, CF_LOCALE, CF_DIB, CF_DIBV5, CF_HDROP, CF_ENHMETAFILE}
+)
+_WIN_ALLOWED_REGISTERED = (
+    "HTML Format",
+    "Rich Text Format",
+    "PNG",
+    "image/png",
+    "Preferred DropEffect",
+    "FileGroupDescriptorW",
+    "FileContents",
+    "Shell IDList Array",
+    "UniformResourceLocatorW",
+)
+# A snapshot that has to call the owner app back for data gets this long; a
+# slow or hung owner then yields an incomplete snapshot (typer types instead).
+_WIN_SNAPSHOT_TIMEOUT_S = 0.75
 
-    have = {fmt for fmt, _ in captured}
-    # A GDI format is covered when its HGLOBAL (or EMF) equivalent was captured;
-    # the system synthesizes the GDI form again from it after a restore.
-    covered = set()
-    if have & {CF_DIB, CF_DIBV5}:
-        covered |= {CF_BITMAP, CF_DSPBITMAP, CF_PALETTE}
-    if CF_ENHMETAFILE in have:
-        covered |= {CF_METAFILEPICT}
-    complete = not over_cap and not (uncaptured - covered)
+_WIN_ALLOWED = None
+_WIN_SNAPSHOT_THREAD = None
+_WIN_TIMEOUT_LOGGED = False
+
+
+def _win_allowed_formats(api: _WinApi) -> frozenset:
+    """Standard allow-list plus the ids of the registered allow-listed names."""
+    global _WIN_ALLOWED
+    if _WIN_ALLOWED is None:
+        ids = set(_WIN_ALLOWED_STANDARD)
+        for name in _WIN_ALLOWED_REGISTERED:
+            fmt = int(api.RegisterClipboardFormatW(name) or 0)
+            if fmt:
+                ids.add(fmt)
+        _WIN_ALLOWED = frozenset(ids)
+    return _WIN_ALLOWED
+
+
+def _win_build_snapshot(seen, allowed, read) -> ClipboardSnapshot:
+    """Build a snapshot from enumerated formats. ``read(fmt)`` -> bytes or None.
+
+    Only allow-listed formats are read. Pure apart from ``read``, so tests
+    drive it with fake formats.
+    """
+    captured = []
+    total = 0
+    complete = True
+    for fmt in seen:
+        if fmt not in allowed:
+            continue
+        data = read(fmt)
+        if data is None:
+            complete = False  # an allow-listed format we could not save
+            continue
+        if total + len(data) > MAX_SNAPSHOT_BYTES:
+            complete = False
+            continue
+        total += len(data)
+        captured.append((fmt, data))
+    if seen and not captured:
+        # Only owner-private formats: nothing user-visible could be saved.
+        complete = False
 
     text = ""
     for fmt, data in captured:
@@ -323,6 +326,72 @@ def _win_snapshot() -> ClipboardSnapshot:
         has_non_text=has_non_text,
         ok=True,
     )
+
+
+def _win_snapshot_blocking() -> ClipboardSnapshot:
+    api = _win_api()
+    allowed = _win_allowed_formats(api)
+    if not _win_open(api):
+        return _UNREADABLE
+    try:
+        seen = []
+        fmt = 0
+        while True:
+            fmt = int(api.EnumClipboardFormats(fmt))
+            if not fmt:
+                break
+            seen.append(fmt)
+
+        def read(fmt: int) -> Optional[bytes]:
+            handle = api.GetClipboardData(fmt)
+            if not handle:
+                return None
+            if fmt == CF_ENHMETAFILE:
+                return _win_read_emf(api, handle)
+            return _win_read_hglobal(api, handle)
+
+        return _win_build_snapshot(seen, allowed, read)
+    finally:
+        api.CloseClipboard()
+
+
+_WIN_TIMED_OUT = ClipboardSnapshot(text="", formats=(), complete=False, has_non_text=True, ok=True)
+
+
+def _win_snapshot() -> ClipboardSnapshot:
+    """Run the blocking snapshot on a worker thread with a time budget.
+
+    GetClipboardData on a delay-rendered format waits for the owner app. On
+    timeout the snapshot reports incomplete non-text data (so typer types the
+    text) and the stuck worker is left alone; while it is still stuck, later
+    snapshots return the same result at once instead of stacking threads.
+    """
+    global _WIN_SNAPSHOT_THREAD, _WIN_TIMEOUT_LOGGED
+    previous = _WIN_SNAPSHOT_THREAD
+    if previous is not None and previous.is_alive():
+        return _WIN_TIMED_OUT
+    result = []
+
+    def run() -> None:
+        try:
+            result.append(_win_snapshot_blocking())
+        except Exception:
+            result.append(_UNREADABLE)
+
+    worker = threading.Thread(target=run, name="odicto-clipboard-snapshot", daemon=True)
+    _WIN_SNAPSHOT_THREAD = worker
+    worker.start()
+    worker.join(_WIN_SNAPSHOT_TIMEOUT_S)
+    if result:
+        return result[0]
+    if not _WIN_TIMEOUT_LOGGED:
+        _WIN_TIMEOUT_LOGGED = True
+        print(
+            "Warning: clipboard owner is slow to render its data; treating the "
+            "clipboard as unsaveable for this paste",
+            flush=True,
+        )
+    return _WIN_TIMED_OUT
 
 
 def _win_set_bytes(api: _WinApi, fmt: int, data: bytes) -> bool:

@@ -131,6 +131,20 @@ class SetupSecurityTests(unittest.TestCase):
         self.assertEqual(self._post(host="127.0.0.1:1")[0], 403)
         self.assertEqual(self._post("/reset", host=f"localhost:{self.port}")[0], 200)
 
+    def test_portless_host_only_allowed_on_port_80(self) -> None:
+        def check(server_port: int, host: str) -> bool:
+            h = object.__new__(setup_web._Handler)
+            h.server = mock.Mock(server_address=("127.0.0.1", server_port))
+            h.headers = {"Host": host}
+            return h._validate_origin()
+
+        self.assertTrue(check(80, "localhost"))
+        self.assertTrue(check(80, "127.0.0.1"))
+        self.assertTrue(check(80, "localhost:80"))
+        self.assertFalse(check(80, "evil.example"))
+        self.assertFalse(check(8765, "localhost"))
+        self.assertFalse(check(8765, "127.0.0.1"))
+
     def test_cross_site_origin_forbidden(self) -> None:
         self.assertEqual(self._post(headers={"Origin": "http://evil.example"})[0], 403)
         self.assertEqual(self._post(headers={"Referer": "http://evil.example/x"})[0], 403)

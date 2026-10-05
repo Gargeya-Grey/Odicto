@@ -19,20 +19,25 @@ from pathlib import Path
 # FLOORS MAY ONLY RISE. Never lower "floor" to make a run pass: a lower count means
 # tests were deleted or are no longer discovered. Raise it when tests are added.
 # "allowed_skips" maps a platform to fnmatch patterns over full test ids
-# (tests.module.Class.method). Windows allows nothing: every test must run there.
+# (tests.module.Class.method). Windows allows only the self-skipping real-clipboard round trip.
 # Off Windows only tests that are decorated skipUnless(win32) may skip. A skipped
 # "node not available" JS gate is never allowed anywhere (dead gate).
 # ---------------------------------------------------------------------------
 GATE = {
-    "floor": 400,  # raised after the October review fixes (315 when the gate was introduced)
+    "floor": 416,  # raised after the October review fixes (315 when the gate was introduced)
     "allowed_skips": {
-        "win32": [],
+        # The real-clipboard round trip skips itself when the developer's clipboard
+        # is busy or holds data it cannot save; CI's clean clipboard always runs it.
+        "win32": ["tests.test_clipboard_safety.TestWindowsRoundTrip.*"],
         "other": [
             "tests.test_reliability.*.test_win32_input_union_size_and_partial_input_never_retried",
             "tests.test_process_lifecycle.TestWindowsStop.*",
             "tests.test_units.*.test_side_exclusive_scan_codes_right_ctrl",
             "tests.test_units.*.test_is_pressed_exclusive_right_ctrl",
             "tests.test_clipboard_safety.*Win*",
+            # macOS forces CPU under WHISPER_DEVICE=auto, so the CUDA->CPU fallback
+            # path does not exist there (runs on Windows and Linux).
+            "tests.test_units.*.test_whisper_transcriber_loading_fallback",
         ],
     },
 }

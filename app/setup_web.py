@@ -17,8 +17,10 @@ import re
 import subprocess
 import hmac
 import secrets
+import socket
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -768,6 +770,32 @@ class _Handler(BaseHTTPRequestHandler):
         if code >= 400:
             self.close_connection = True
         super().send_error(code, message, explain)
+        if code >= 400:
+            self._linger_close()
+
+    def _linger_close(self, max_bytes: int = 64 * 1024, max_s: float = 0.5) -> None:
+        """Let the client read a rejection before the socket closes.
+
+        Closing with unread request bytes makes Windows reset the connection, and
+        the reset can overtake the response. Half-close, then drop a bounded amount
+        of input (never the whole oversized body) so the reply arrives intact.
+        """
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            deadline = time.monotonic() + max_s
+            drained = 0
+            while drained < max_bytes:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.connection.settimeout(remaining)
+                chunk = self.connection.recv(min(8192, max_bytes - drained))
+                if not chunk:
+                    break
+                drained += len(chunk)
+        except OSError:
+            pass
 
     def end_headers(self) -> None:
         if self.close_connection:
@@ -782,7 +810,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         port = self._server_port()
         host = (self.headers.get("Host") or "").strip().lower()
-        if host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if port == 80:  # browsers omit the scheme-default port
+            allowed |= {"127.0.0.1", "localhost"}
+        if host not in allowed:
             return False
         for name in ("Origin", "Referer"):
             value = self.headers.get(name) or ""
