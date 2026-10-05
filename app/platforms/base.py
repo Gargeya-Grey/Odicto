@@ -35,6 +35,28 @@ def lock_file_path() -> str:
     return os.path.join(install_root(), "dictation.lock")
 
 
+def is_odicto_command(argv, cwd=None) -> bool:
+    """Identify the executed script, never a mention inside an agent command."""
+    if len(argv) < 2:
+        return False
+    executable = os.path.basename(argv[0]).lower()
+    if not (executable.startswith("python") or executable.startswith("pypy")):
+        return False
+    index = 1
+    while index < len(argv) and argv[index] in ("-B", "-u", "-I", "-E", "-s", "-S", "-O", "-OO"):
+        index += 1
+    if index == len(argv) or argv[index].startswith("-"):
+        return False
+    script = argv[index]
+    if not os.path.isabs(script):
+        if not cwd:
+            return False
+        script = os.path.join(cwd, script)
+    script = os.path.normcase(os.path.normpath(script))
+    return script in {os.path.normcase(os.path.join(install_root(), "main.py")),
+                      os.path.normcase(os.path.join(install_root(), "app", "main.py"))}
+
+
 def clipboard_read() -> str:
     try:
         value = pyperclip.paste()

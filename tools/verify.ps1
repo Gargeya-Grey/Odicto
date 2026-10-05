@@ -9,10 +9,7 @@
 #   4. import smoke test across all top-level modules
 #   5. syntax check for platforms/macos.py and platforms/linux.py, which cannot be
 #      imported on Windows (CI is the real gate for those; see .github/workflows/ci.yml)
-#   6. a clean-environment run: .env and prompt.txt temporarily moved OUTSIDE the repo
-#      so the suite runs like CI does. Backups live outside the repo on purpose -
-#      `.env.bak` inside the repo is not gitignored and would put live API keys one
-#      `git add -A` away from being committed.
+#   6. an isolated source copy runs clean-environment tests without moving live configuration
 #   7. LOC accounting against origin/main
 #
 # Usage:  .\tools\verify.ps1 [-SkipCleanEnv] [-Quiet]
@@ -112,14 +109,8 @@ foreach ($name in @('.env', 'prompt.txt')) {
     }
 }
 
-# Runs python in a child job with a hard timeout, writing output to a file so partial
-# output survives a kill. This exists because of a pre-existing hazard: the unit suite
-# prints "OK" and then can stall at interpreter shutdown with
-#   Exception ignored in: BaseEventLoop.__del__
-#   AttributeError: 'ProactorEventLoop' object has no attribute '_ssock_'
-# (Gemini Live asyncio teardown; triggered by GC timing). Treating output-based success
-# as authoritative keeps the gate reliable without hiding a genuine hang, which would
-# produce no "Ran N tests" / "OK" line at all.
+# A successful test summary alone is insufficient: process exit, timeout, count
+# and skips must also pass, including failures during interpreter teardown.
 $GateTimeoutSeconds = 180
 
 function Invoke-Python {
@@ -158,6 +149,15 @@ function Get-RunCount {
     return -1
 }
 
+function Test-TestResult {
+    param($Result, [int]$ExpectedCount, [int]$ExpectedSkipped = 0)
+    return ($Result.Code -eq 0 -and -not $Result.TimedOut -and
+        (Get-RunCount $Result.Text) -eq $ExpectedCount -and
+        (Get-SkipCount $Result.Text) -eq $ExpectedSkipped -and
+        $Result.Text -match '(?m)^OK(?: \(skipped=\d+\))?\s*$' -and
+        $Result.Text -notmatch '(?m)^FAILED\b')
+}
+
 # ---------------------------------------------------------------- 1. test file frozen
 Write-Step 'Gate 1: test_units.py is unchanged'
 # Normalize Git's checkout line endings so this same checkpoint works on all OSes.
@@ -181,11 +181,10 @@ if ($runCount -ne $ExpectedUnitTestCount) {
     Add-Failure "expected $ExpectedUnitTestCount tests, ran $runCount"
 } elseif ($skipCount -ne $ExpectedSkips) {
     Add-Failure "expected $ExpectedSkips skipped on this OS, saw $skipCount (a silently skipped gate is not a passing gate)"
-} elseif ($units.Text -notmatch 'OK') {
-    Add-Failure "test_units did not report OK"
+} elseif (-not (Test-TestResult $units $ExpectedUnitTestCount $ExpectedSkips)) {
+    Add-Failure "test_units did not exit cleanly with a successful summary:`n$($units.Text)"
 } else {
-    $note = if ($units.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-    Add-Pass "$runCount ran, $skipCount skipped, OK$note"
+    Add-Pass "$runCount ran, $skipCount skipped, OK"
 }
 
 # --------------------------------------------------------- 3. the equivalence oracle
@@ -195,26 +194,33 @@ $reliability = Invoke-Python @('-m', 'unittest', 'tests.test_reliability')
 $reliabilityCount = Get-RunCount $reliability.Text
 $reliabilitySkips = Get-SkipCount $reliability.Text
 $expectedReliabilitySkips = if ($OnWindows) { 0 } else { 1 }
-if ($reliability.Code -ne 0 -or $reliabilityCount -ne 25 -or $reliabilitySkips -ne $expectedReliabilitySkips) {
+if (-not (Test-TestResult $reliability 45 $expectedReliabilitySkips)) {
     Add-Failure "reliability regressions failed or count changed:`n$($reliability.Text)"
 } else {
-    Add-Pass '25 input ownership, HUD and polish regression tests passed (only Win32 ABI is skipped off Windows)'
+    Add-Pass '45 lifecycle, microphone, input ownership, HUD and polish regressions passed (only Win32 ABI is skipped off Windows)'
+}
+
+$boundaries = Invoke-Python @('-m', 'unittest', 'tests.test_shutdown', 'tests.test_readiness', 'tests.test_live_transport', 'tests.test_process_lifecycle', 'tests.test_capture_continuity', 'tests.test_capture_reconnect', 'tests.test_stt_results', 'tests.test_provider_deadlines', 'tests.test_hotkey_dispatch')
+$boundarySkips = if ($OnWindows) { 0 } else { 12 }
+if (-not (Test-TestResult $boundaries 46 $boundarySkips)) {
+    Add-Failure "component boundary regressions failed:`n$($boundaries.Text)"
+} else {
+    Add-Pass "46 shutdown, readiness, capture, provider and process regressions passed ($boundarySkips Windows-only skips)"
 }
 
 $equiv = Invoke-Python @('-m', 'unittest', 'tests.test_equivalence')
 $equivSkips = Get-SkipCount $equiv.Text
-if ($equiv.Text -notmatch 'OK') {
-    Add-Failure "test_equivalence did not report OK"
+if (-not (Test-TestResult $equiv 15)) {
+    Add-Failure "test_equivalence failed, timed out or did not run all 15 checks:`n$($equiv.Text)"
 } elseif ($equivSkips -ne 0) {
     Add-Failure "test_equivalence skipped $equivSkips tests - the oracle must always run in full"
 } else {
-    $note = if ($equiv.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-    Add-Pass ("{0} ran, 0 skipped, OK{1}" -f (Get-RunCount $equiv.Text), $note)
+    Add-Pass '15 ran, 0 skipped, OK'
 }
 
 Write-Step 'Layout regressions (entry points and install-root paths)'
 $layout = Invoke-Python @('-m', 'unittest', 'tests.test_layout')
-if ($layout.Code -ne 0 -or (Get-RunCount $layout.Text) -ne 4 -or $layout.Text -notmatch 'OK') {
+if (-not (Test-TestResult $layout 4)) {
     Add-Failure "layout checks failed:`n$($layout.Text)"
 } else {
     Add-Pass '4 layout checks passed without launching the application'
@@ -250,53 +256,12 @@ if (-not $syntaxFailed) {
 if ($SkipCleanEnv) {
     Write-Step 'Gate 6: clean-environment run (SKIPPED)'
 } else {
-    Write-Step 'Gate 6: clean-environment run (.env and prompt.txt moved outside the repo)'
-    $envPath = Join-Path $RepoRoot '.env'
-    $promptPath = Join-Path $RepoRoot 'prompt.txt'
-    $hadEnv = Test-Path -LiteralPath $envPath
-    $hadPrompt = Test-Path -LiteralPath $promptPath
-    if (Test-Path $backupDir) { Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
-    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-
-    # Moving .env is NOT sufficient. If the shell also exports the config keys (common when
-    # a developer exports .env into their environment), os.getenv still sees them, so
-    # _PRESENT_AT_IMPORT is non-empty and the run is not clean at all - it silently diverges
-    # from CI. That is exactly how a real CI-only failure (test_openrouter_glm53_keeps_explicit_high)
-    # stayed hidden locally. Clear config's known keys too, then restore them.
-    $envGuard = @{}
-    $knownKeys = (Invoke-Python @('-c', "import sys; sys.path.insert(0, 'app'); from config import KNOWN_ENV_KEYS; print(chr(10).join(sorted(KNOWN_ENV_KEYS)))")).Text
-    foreach ($key in ($knownKeys -split "`r?`n" | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*$' })) {
-        $value = [Environment]::GetEnvironmentVariable($key)
-        if ($null -ne $value) {
-            $envGuard[$key] = $value
-            Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
-        }
-    }
-
-    $cleanResult = $null
-    try {
-        if ($hadEnv) { Move-Item -LiteralPath $envPath -Destination (Join-Path $backupDir '.env') -Force }
-        if ($hadPrompt) { Move-Item -LiteralPath $promptPath -Destination (Join-Path $backupDir 'prompt.txt') -Force }
-        $cleanResult = Invoke-Python @('-m', 'unittest', 'tests.test_units')
-    } finally {
-        if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
-            Move-Item -LiteralPath (Join-Path $backupDir '.env') -Destination $envPath -Force
-        }
-        if ($hadPrompt -and -not (Test-Path -LiteralPath $promptPath)) {
-            Move-Item -LiteralPath (Join-Path $backupDir 'prompt.txt') -Destination $promptPath -Force
-        }
-        foreach ($key in $envGuard.Keys) {
-            Set-Item -Path "Env:$key" -Value $envGuard[$key]
-        }
-    }
-
-    if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
-        Add-Failure "'.env' was NOT restored after the clean-environment run - restore it from $backupDir"
-    } elseif (-not $cleanResult -or $cleanResult.Text -notmatch 'OK') {
-        Add-Failure "clean-environment run failed (this is how CI runs; a local .env can mask it):`n$($cleanResult.Text)"
+    Write-Step 'Gate 6: isolated clean-environment run (live configuration stays in place)'
+    $cleanResult = Invoke-Python @('-B', 'tools/verify_clean.py')
+    if (-not (Test-TestResult $cleanResult $ExpectedUnitTestCount $ExpectedSkips)) {
+        Add-Failure "isolated clean-environment run failed:`n$($cleanResult.Text)"
     } else {
-        $note = if ($cleanResult.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-        Add-Pass "suite passes with no .env present and $($envGuard.Count) exported config vars cleared, all restored$note"
+        Add-Pass '153 clean-environment tests passed in an isolated source copy; private files untouched'
     }
 }
 

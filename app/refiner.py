@@ -463,9 +463,8 @@ class _GeminiClient:
             "input": input_content,
             "system_instruction": sys_inst,
             "generation_config": self._generation_config(max_tokens),
+            "timeout": 30.0 if timeout is None else timeout,
         }
-        if timeout is not None:
-            kwargs["timeout"] = timeout
         if keep_history and self._last_interaction_id:
             kwargs["previous_interaction_id"] = self._last_interaction_id
         try:

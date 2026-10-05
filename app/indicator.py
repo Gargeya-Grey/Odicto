@@ -467,9 +467,7 @@ class DictationIndicator(QWidget):
                 target = GuiState.BOOTING
             elif last_status in ("success", "ai_fallback", "polish_fallback") and came_from_processing:
                 target = GuiState.SUCCESS
-            elif last_status in ("error", "empty") and (
-                came_from_processing or not ready
-            ):
+            elif last_status in ("error", "empty"):
                 target = GuiState.ERROR
             else:
                 target = GuiState.HIDDEN

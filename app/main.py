@@ -1,4 +1,6 @@
 import os
+import json
+import queue
 from paths import ROOT
 import subprocess
 import sys
@@ -202,6 +204,14 @@ def release_single_instance_lock() -> None:
     _INSTANCE_LOCK_HELD = False
 
 
+def claim_install(pid_file: str) -> bool:
+    """Leave a live owner alone; sweep orphans only under exclusive ownership."""
+    if not acquire_single_instance_lock():
+        return False
+    platforms.kill_other_odicto_processes(pid_file)
+    return True
+
+
 def ensure_can_bind_hotkeys() -> None:
     """Final gate immediately before installing hooks — raises if not exclusive owner."""
     if not _INSTANCE_LOCK_HELD or not platforms.lock_is_held():
@@ -212,7 +222,7 @@ def ensure_can_bind_hotkeys() -> None:
 
 
 class DictationApp:
-    def __init__(self) -> None:
+    def __init__(self, *, runtime: bool = False) -> None:
         """Initializes the background dictation app, setting up state and loading model instances."""
         print("==================================================")
         print("              Initializing Odicto               ")
@@ -254,6 +264,9 @@ class DictationApp:
         self._record_started_at: float = 0.0
         self.use_llm: bool = False
         self.ready: bool = False
+        self._runtime_enabled = runtime
+        self._closing = threading.Event()
+        self._lifecycle_lock = threading.Lock()
 
         # Hold-to-talk chord bookkeeping (set during hotkey bind).
         # Dictation chord (HOTKEY) and optional AI chord (AI_HOTKEY) share one primary key.
@@ -303,11 +316,82 @@ class DictationApp:
         else:
             print("HUD disabled (SHOW_VISUAL_INDICATOR=false)")
 
+        if runtime:
+            self._start_hotkey_worker()
         threading.Thread(
             target=self.initialize_app, daemon=True, name="dictation-init"
         ).start()
+        if runtime:
+            threading.Thread(target=self._monitor_runtime, daemon=True,
+                             name="odicto-runtime-health").start()
+
+    def _monitor_runtime(self) -> None:
+        """Publish only lifecycle metadata; never audio, transcripts or credentials."""
+        if not getattr(self, "_runtime_enabled", False) or not platforms.lock_is_held():
+            return  # test instances and nonowners must never overwrite runtime evidence
+        path = os.path.join(str(ROOT), "dictation-health.json")
+        temporary = path + f".{os.getpid()}.tmp"
+        while not self._closing.is_set():
+            try:
+                microphone = self.recorder.health_snapshot() if self.recorder else None
+                ready = (self.ready and microphone is not None and not microphone["closed"]
+                         and microphone["callback_count"] > 0 and microphone["callback_age_s"] <= 3)
+                snapshot = {"pid": os.getpid(), "updated_at": time.time(),
+                            "ready": ready, "state": self.state.name,
+                            "status": self.last_status,
+                            "microphone": microphone}
+                with open(temporary, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f)
+                os.replace(temporary, path)
+            except Exception:
+                pass  # diagnostics must not break dictation
+            if self._closing.wait(2.0):
+                break
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------ UI push
+    def _start_hotkey_worker(self) -> None:
+        self._hotkey_actions = queue.SimpleQueue()
+        self._hotkey_worker = threading.Thread(target=self._run_hotkey_actions,
+                                               daemon=True, name="odicto-hotkey-actions")
+        self._hotkey_worker.start()
+
+    def _run_hotkey_actions(self) -> None:
+        while True:
+            action = self._hotkey_actions.get()
+            if action is None or self._closing.is_set():
+                return
+            try:
+                self._execute_hotkey_action(*action)
+            except Exception as error:
+                print(f"Hotkey action failed: {error}", file=sys.stderr)
+
+    def _dispatch_hotkey(self, kind, snapshot=(), use_llm=None) -> None:
+        if getattr(self, "_closing", None) is not None and self._closing.is_set():
+            return
+        action = (kind, snapshot, use_llm)
+        if getattr(self, "_runtime_enabled", False):
+            self._hotkey_actions.put(action)
+        else:
+            self._execute_hotkey_action(*action)
+
+    def _execute_hotkey_action(self, kind, snapshot, use_llm) -> None:
+        if kind == "primary":
+            self._pressed_mods_at_press = snapshot
+            if Config.HOTKEY_TOGGLE and self.state == AppState.RECORDING and not self.live_active:
+                self.on_release()
+            else:
+                self.on_press(use_llm=use_llm)
+        elif kind == "release":
+            self.on_release()
+        elif kind == "live":
+            self.on_live_toggle()
+        elif kind == "reset":
+            self._reset_context_via_hotkey()
+
     def _notify_ui(self) -> None:
         """Push current state to the indicator on the Qt UI thread (non-blocking)."""
         indicator = self.indicator
@@ -369,8 +453,7 @@ class DictationApp:
         # __main__ acquires first; unit tests call initialize_app() directly so we
         # acquire here only if the lock is not already held (never double-wait).
         if not _INSTANCE_LOCK_HELD:
-            platforms.kill_other_odicto_processes(self.pid_file)
-            if not acquire_single_instance_lock():
+            if not claim_install(self.pid_file):
                 print(
                     "!!! FATAL: single-instance lock not held — refusing init/hooks.",
                     file=sys.stderr,
@@ -385,8 +468,9 @@ class DictationApp:
             pass
 
         try:
-            with open(self.pid_file, "w") as f:
-                f.write(str(os.getpid()))
+            if self._runtime_enabled and platforms.lock_is_held():
+                with open(self.pid_file, "w") as f:
+                    f.write(str(os.getpid()))
         except Exception as e:
             print(f"Warning: Could not write PID file: {e}")
 
@@ -415,14 +499,17 @@ class DictationApp:
 
         # Bind global press/release hooks for hold-to-talk (ctrl+grave / ctrl+shift+grave).
         try:
-            self._bind_hotkeys()
+            with self._lifecycle_lock:
+                if self._closing.is_set():
+                    self.recorder.close()
+                    return
+                self._bind_hotkeys()
+                self.ready = True
         except Exception as e:
             print(f"!!! Failed to bind hotkey '{Config.HOTKEY}': {e}", file=sys.stderr)
             self.last_status = "error"
             self._notify_ui()
             return
-
-        self.ready = True
 
         if self.indicator is not None:
             try:
@@ -484,13 +571,13 @@ class DictationApp:
             target=play_beep, args=(frequency, 0.08), daemon=True, name=name
         ).start()
 
-    def _mods_in_snapshot(self, mods: tuple) -> bool:
+    def _mods_in_snapshot(self, mods: tuple, snapshot=None) -> bool:
         """True if every modifier was physically down at primary-key press time."""
         if not mods:
             return True
-        return all(m in self._pressed_mods_at_press for m in mods)
+        return all(m in (self._pressed_mods_at_press if snapshot is None else snapshot) for m in mods)
 
-    def _match_active_chord(self) -> Optional[bool]:
+    def _match_active_chord(self, snapshot=None) -> Optional[bool]:
         """Which hold-to-talk chord is active at primary-key press time.
 
         Uses the modifiers that were physically held when the key went down, so a
@@ -504,14 +591,14 @@ class DictationApp:
         # Prefer the more-specific AI chord when both could match
         # (e.g. ctrl+shift+grave vs ctrl+grave — shift+ctrl also satisfies ctrl).
         if self._ai_hotkey_modifiers:
-            if self._mods_in_snapshot(self._ai_hotkey_modifiers):
+            if self._mods_in_snapshot(self._ai_hotkey_modifiers, snapshot):
                 return True
-            if self._mods_in_snapshot(self._hotkey_modifiers):
+            if self._mods_in_snapshot(self._hotkey_modifiers, snapshot):
                 return False
             return None
 
         # Legacy: HOTKEY + optional AI_MODIFIER extra key
-        if not self._mods_in_snapshot(self._hotkey_modifiers):
+        if not self._mods_in_snapshot(self._hotkey_modifiers, snapshot):
             return None
         if Config.AI_MODIFIER and platforms.is_pressed_exclusive(Config.AI_MODIFIER):
             return True
@@ -557,27 +644,21 @@ class DictationApp:
                             snapshot.append(keep_key)
                     except Exception:
                         pass
-                self._pressed_mods_at_press = tuple(snapshot)
-                match = self._match_active_chord()
+                snapshot = tuple(snapshot)
+                match = self._match_active_chord(snapshot)
                 if match is None:
                     return True  # no chord — allow normal typing (e.g. bare `)
                 if self._hotkey_physically_held:
                     return False  # key-repeat while held
                 self._hotkey_physically_held = True
-                if Config.HOTKEY_TOGGLE:
-                    if self.state == AppState.RECORDING and not self.live_active:
-                        self.on_release()
-                    else:
-                        self.on_press(use_llm=match)
-                else:
-                    self.on_press(use_llm=match)
+                self._dispatch_hotkey("primary", snapshot, match)
                 return False  # suppress so ` does not leak into the focused app
             if event_type == platforms.KEY_UP:
                 if not self._hotkey_physically_held:
                     return True
                 self._hotkey_physically_held = False
                 if not Config.HOTKEY_TOGGLE:
-                    self.on_release()
+                    self._dispatch_hotkey("release")
                 return False
             return True
 
@@ -594,7 +675,7 @@ class DictationApp:
             def reset_handler(event: object) -> bool:
                 if getattr(event, "event_type", None) == platforms.KEY_UP:
                     # Fire on release so a quick tap still registers exactly once.
-                    self._reset_context_via_hotkey()
+                    self._dispatch_hotkey("reset")
                 return True  # never suppress; F5 keeps its normal app behavior
 
             platforms.hook_key(reset_key, reset_handler, suppress=False)
@@ -612,7 +693,7 @@ class DictationApp:
                     if self._live_key_held:
                         return False  # key-repeat while held
                     self._live_key_held = True
-                    self.on_live_toggle()
+                    self._dispatch_hotkey("live")
                     return False  # suppress so F7 does not leak into the focused app
                 if event_type == platforms.KEY_UP:
                     self._live_key_held = False
@@ -683,7 +764,18 @@ class DictationApp:
 
     def _shutdown(self) -> None:
         """Release resources, keyboard hooks, PID file, and any Ollama we spawned."""
-        self.ready = False
+        with self._lifecycle_lock:
+            if self._closing.is_set():
+                return
+            self._closing.set()
+            actions = getattr(self, "_hotkey_actions", None)
+            if actions is not None:
+                actions.put(None)
+            self.ready = False
+            self._live_epoch += 1
+            self.live_active = False
+            # Remove hooks before potentially slow native microphone teardown.
+            platforms.unhook_all()
         try:
             if self._live_session is not None:
                 try:
@@ -706,10 +798,13 @@ class DictationApp:
 
         self._cleanup_temp_file()
 
-        if os.path.exists(self.pid_file):
+        if self._runtime_enabled and platforms.lock_is_held():
             try:
-                os.remove(self.pid_file)
-            except Exception:
+                with open(self.pid_file, encoding="ascii") as f:
+                    owned = f.read().strip() == str(os.getpid())
+                if owned:
+                    os.remove(self.pid_file)
+            except OSError:
                 pass
 
         if getattr(self, "ollama_process", None) is not None:
@@ -794,11 +889,6 @@ class DictationApp:
             # Ordinary captures cannot inherit a previous F7 preview.
             self._live_committed = self.live_preview = ""
             self.live_active = False
-            self._set_state(AppState.RECORDING)
-
-            if Config.PLAY_AUDIO_CUES:
-                self._beep(880.0, "beep-start")
-
             try:
                 self.recorder.start()
             except Exception as e:
@@ -806,6 +896,13 @@ class DictationApp:
                 self.last_status = "error"
                 self._set_state(AppState.IDLE)
                 return
+
+            if self._closing.is_set():
+                return
+            self._record_started_at = time.monotonic()
+            self._set_state(AppState.RECORDING)
+            if Config.PLAY_AUDIO_CUES:
+                self._beep(880.0, "beep-start")
 
             mode_str = "AI refined" if self.use_llm else "raw dictation"
             hint = (
@@ -852,7 +949,16 @@ class DictationApp:
                 self._beep(440.0, "beep-stop")
 
             # Hot path: keep audio in memory only (no disk write).
-            success: bool = self.recorder.stop(filepath=None)
+            try:
+                success: bool = self.recorder.stop(filepath=None)
+            except Exception as e:
+                print(f"!!! Failed to stop recorder: {e}", file=sys.stderr)
+                self.last_status = "error"
+                self.recorder.clear()
+                self._live_committed = self.live_preview = ""
+                self._last_cycle_end = time.monotonic()
+                self._set_state(AppState.IDLE)
+                return
             if not success:
                 print("!!! Warning: No audio captured. Resetting to idle.")
                 self.last_status = "empty"
@@ -896,8 +1002,6 @@ class DictationApp:
                 self._record_started_at = now
                 self.last_status = None
                 self._live_committed = self.live_preview = ""
-                self.live_active = True
-                self._set_state(AppState.RECORDING)
                 try:
                     if Config.effective_live_stt_provider() == "gemini":
                         session = GeminiLiveSession(
@@ -909,6 +1013,11 @@ class DictationApp:
                         self.recorder.add_chunk_listener(session.push_audio)
                         session.start()
                     self.recorder.start()
+                    if self._closing.is_set():
+                        return
+                    self._record_started_at = time.monotonic()
+                    self.live_active = True
+                    self._set_state(AppState.RECORDING)
                     if Config.PLAY_AUDIO_CUES:
                         self._beep(880.0, "beep-start")
                 except Exception as e:
@@ -935,7 +1044,9 @@ class DictationApp:
                 self.recorder.remove_chunk_listener(session.push_audio)
             try:
                 captured = self.recorder.stop(filepath=None)
-            except Exception:
+            except Exception as e:
+                print(f"!!! Failed to stop live recorder: {e}", file=sys.stderr)
+                self.last_status = "error"
                 captured = False
             short = (time.monotonic() - self._record_started_at) * 1000 < Config.MIN_HOLD_MS
             audio = self.recorder.last_audio_array if captured and not short else None
@@ -952,11 +1063,15 @@ class DictationApp:
             if epoch != self._live_epoch:
                 return
             if discard:
-                self.last_status = "empty"
+                if self.last_status != "error":
+                    self.last_status = "empty"
                 self._finish_cycle()
                 return
             # A final/draft from this one Live call avoids a second STT request.
-            transcript = (final or self.live_preview or "").strip()
+            incomplete = session is not None and getattr(session, "needs_batch_fallback", False) is True
+            transcript = "" if incomplete else (final or self.live_preview or "").strip()
+            if incomplete:
+                print("Live audio delivery incomplete; transcribing the full recording.")
             self.process_and_paste(audio, False, "", False, transcript, live=True)
         except Exception as e:
             print(f"!!! Live finish failed: {e}", file=sys.stderr)
@@ -968,6 +1083,8 @@ class DictationApp:
         """Capture highlighted text and/or clipboard image off the hook thread."""
         # Brief settle so physical modifier key-ups finish after the chord.
         time.sleep(0.02)
+        if self._closing.is_set():
+            return "", None
         try:
             image_bytes = (self.indicator.capture_clipboard_image()
                            if Config.AI_CLIPBOARD_IMAGE and self.indicator is not None else None)
@@ -997,6 +1114,8 @@ class DictationApp:
         self.last_status = None
         sel_pool: Optional[ThreadPoolExecutor] = None
         try:
+            if self._closing.is_set():
+                return
             if self.transcriber is None:
                 raise RuntimeError("Transcriber not initialized")
 
@@ -1027,6 +1146,9 @@ class DictationApp:
                 raw_text = (self._live_transcribe(audio_source) if live else
                             self._transcribe_for_pipeline(audio_source, use_llm))
                 print(f'Raw Transcript: "{raw_text}" (STT {time.time() - stt_started:.2f}s)')
+
+            if self._closing.is_set():
+                return
 
             if sel_future is not None:
                 sel_wait_started = time.time()
@@ -1059,6 +1181,8 @@ class DictationApp:
                         flush=True,
                     )
 
+            if self._closing.is_set():
+                return
             if not raw_text.strip() or not any(c.isalnum() for c in raw_text):
                 print(">>> Empty transcription. Paste cancelled.")
                 self.last_status = "empty"
@@ -1096,13 +1220,16 @@ class DictationApp:
                 self.last_status = "empty"
                 return
 
-            # Paste chord: if text was selected, the target app replaces it with this payload.
-            if live:
-                # Leave the finalized payload on the clipboard: an asynchronous
-                # target must never read an older payload after the paste chord.
-                paste_text(refined_text, restore_clipboard=False)
-            else:
-                paste_text(refined_text)
+            # Shutdown and final insertion share a gate: once closing begins,
+            # late STT/LLM results can never inject input into another app.
+            with self._lifecycle_lock:
+                if self._closing.is_set():
+                    return
+                if live:
+                    # Keep the final payload for asynchronous paste consumers.
+                    paste_text(refined_text, restore_clipboard=False)
+                else:
+                    paste_text(refined_text)
 
             elapsed: float = time.time() - start_time
             print(f">>> Text pasted successfully in {elapsed:.2f} seconds!")
@@ -1128,6 +1255,8 @@ class DictationApp:
         with self.state_lock:
             # Keep captions through finalization, then discard this capture's UI data.
             self._live_committed = self.live_preview = ""
+            if self._closing.is_set():
+                return
             self._set_state(AppState.IDLE)
             print("System Idle. Ready.")
 
@@ -1139,11 +1268,10 @@ if __name__ == "__main__":
         except AttributeError:
             pass
 
-    # STRICT single-instance: kill orphans, take lock, only then construct the app
+    # STRICT single-instance: take lock, sweep orphans, then construct the app
     # (which binds a system-wide keyboard hook). Never skip this gate.
     _pid_path = os.path.join(_install_root(), "dictation.pid")
-    platforms.kill_other_odicto_processes(_pid_path)
-    if not acquire_single_instance_lock():
+    if not claim_install(_pid_path):
         sys.exit(2)
 
     # Write PID as soon as we own the install so start scripts can confirm
@@ -1161,7 +1289,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     try:
-        app = DictationApp()
+        app = DictationApp(runtime=True)
         app.run()
     finally:
         release_single_instance_lock()

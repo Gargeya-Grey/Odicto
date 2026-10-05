@@ -15,7 +15,8 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-.venv/bin/python odicto.py stop >/dev/null 2>&1 || true
+# An ordinary start must leave an existing owner alone. Use odicto.py stop
+# explicitly before start when a restart is intended.
 nohup .venv/bin/python main.py >/dev/null 2>&1 &
 PID=$!
 
@@ -24,7 +25,7 @@ PID=$!
 DEADLINE=$((SECONDS + 30))
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
   if [ -f dictation.pid ]; then
-    echo "Started Odicto (PID $PID, dictation.pid present)"
+    echo "Launch requested (PID $PID, PID file present); use odicto.py status to check readiness."
     exit 0
   fi
   if ! kill -0 "$PID" 2>/dev/null; then

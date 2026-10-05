@@ -93,7 +93,7 @@ def get_genai_client(api_key: str):
         ):
             return _genai_client
         try:
-            client = factory(api_key=key)
+            client = factory(api_key=key, http_options={"retry_options": {"attempts": 0}})
         except Exception:
             return None
         _genai_client = client
@@ -429,11 +429,11 @@ def _post_bytes(url: str, data: bytes, headers: dict, timeout: float = 45.0) -> 
     return payload
 
 
-def _transcript_from_payload(payload: dict) -> str:
+def _transcript_from_payload(payload: dict) -> Optional[str]:
     text = payload.get("text")
     if isinstance(text, str):
         return text.strip()
-    return ""
+    return None
 
 
 class CloudTranscriber:
@@ -517,9 +517,9 @@ class CloudTranscriber:
         except Exception as e:
             return self._whisper_fallback(audio, str(e) or type(e).__name__)
         text = _transcript_from_payload(result)
-        if text:
+        if text is not None:
             return text
-        return self._whisper_fallback(audio, "empty transcript")
+        return self._whisper_fallback(audio, "missing or invalid transcript")
 
 
 def _transcription_config_payload(mode: str) -> dict:
@@ -588,6 +588,7 @@ class GeminiTranscriber:
         try:
             interaction = self._client.interactions.create(
                 model=model,
+                timeout=15.0,
                 input=[
                     {
                         "type": "audio",
@@ -604,9 +605,9 @@ class GeminiTranscriber:
             return self._whisper_fallback(audio, detail.strip() or type(e).__name__)
 
         text = getattr(interaction, "output_text", None)
-        if isinstance(text, str) and text.strip():
+        if isinstance(text, str):
             return text.strip()
-        return self._whisper_fallback(audio, "empty Gemini transcript")
+        return self._whisper_fallback(audio, "missing or invalid Gemini transcript")
 
 
 class GeminiLiveSession:
@@ -632,6 +633,16 @@ class GeminiLiveSession:
         self._final_parts: List[str] = []
         self._error: Optional[str] = None
         self._final_wait_s: float = 0.8
+        self._incomplete_audio = threading.Event()
+        self._cancel_requested = threading.Event()
+        self._transport_lock = threading.Lock()
+        self._loop = None
+        self._task = None
+
+    @property
+    def needs_batch_fallback(self) -> bool:
+        """Whether a live draft/final may omit audio from the complete recording."""
+        return self._incomplete_audio.is_set() or bool(self._error)
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -640,41 +651,76 @@ class GeminiLiveSession:
         self._thread.start()
 
     def push_audio(self, chunk: np.ndarray) -> None:
-        if self._stop.is_set():
-            return
-        try:
-            self._chunks.put_nowait(np.ascontiguousarray(chunk, dtype=np.float32))
-        except queue.Full:
+        with self._transport_lock:
+            if self._stop.is_set():
+                return
+            owned_chunk = np.array(chunk, dtype=np.float32, order="C", copy=True)
             try:
-                self._chunks.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._chunks.put_nowait(np.ascontiguousarray(chunk, dtype=np.float32))
+                self._chunks.put_nowait(owned_chunk)
             except queue.Full:
-                pass
+                self._incomplete_audio.set()
+                try:
+                    self._chunks.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._chunks.put_nowait(owned_chunk)
+                except queue.Full:
+                    pass
 
     def stop(self, timeout: float = 8.0, final_wait_s: float = 0.8) -> str:
         """Join the session. ``final_wait_s`` bounds how long the single Live
-        call may keep streaming its authoritative final after stream end."""
+        call may keep streaming its authoritative final after stream end.
+
+        Timed-out I/O is cancelled on its owning event loop, with at most a
+        further 0.5 seconds allowed for transport/executor cleanup.
+        """
         self._final_wait_s = max(0.0, final_wait_s)
-        self._stop.set()
-        try:
-            self._chunks.put_nowait(None)  # type: ignore[arg-type]
-        except queue.Full:
-            pass
+        with self._transport_lock:
+            if not self._stop.is_set():
+                self._stop.set()
+                try:
+                    self._chunks.put_nowait(None)  # type: ignore[arg-type]
+                except queue.Full:
+                    pass  # sender drains queued PCM, then observes stop
         if self._thread is not None:
-            self._thread.join(timeout=timeout)
+            self._thread.join(timeout=max(0.0, timeout))
+            if self._thread.is_alive():
+                self._incomplete_audio.set()
+                self._cancel_requested.set()
+                with self._transport_lock:
+                    loop, task = self._loop, self._task
+                if loop is not None and task is not None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass  # loop finished between snapshot and cancellation
+                self._thread.join(timeout=0.5)
         if self._error:
             print(f"Gemini Live STT error: {self._error}", flush=True)
         return " ".join(p for p in self._final_parts if p).strip()
 
     def _thread_main(self) -> None:
         try:
-            asyncio.run(self._run())
+            asyncio.run(self._run_owned())
+        except asyncio.CancelledError:
+            pass  # stop() deliberately cancelled the session's own task
         except Exception as e:
-            self._error = str(e)
+            self._error = str(e) or type(e).__name__
             print(f"Gemini Live STT thread failed: {e}", flush=True)
+
+    async def _run_owned(self) -> None:
+        with self._transport_lock:
+            self._loop = asyncio.get_running_loop()
+            self._task = asyncio.current_task()
+        try:
+            # stop() may time out before this worker has started its event loop.
+            if self._cancel_requested.is_set():
+                return
+            await self._run()
+        finally:
+            with self._transport_lock:
+                self._loop = self._task = None
 
     async def _run(self) -> None:
         _ensure_google_genai()
@@ -734,7 +780,7 @@ class GeminiLiveSession:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:
-            self._error = str(getattr(e, "message", "")) or str(e)
+            self._error = str(getattr(e, "message", "")) or str(e) or type(e).__name__
 
     async def _send_loop(self, session, mime: str) -> None:
         while True:
@@ -754,7 +800,7 @@ class GeminiLiveSession:
                     audio=google_genai_types.Blob(data=pcm, mime_type=mime)
                 )
             except Exception as e:
-                self._error = str(e)
+                self._error = str(e) or type(e).__name__
                 break
         try:
             await session.send_realtime_input(audio_stream_end=True)

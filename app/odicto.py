@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import json
+import time
 import subprocess
 import sys
 
@@ -45,19 +47,56 @@ def cmd_setup(_args) -> int:
 
 def cmd_start(_args) -> int:
     proc = platforms.spawn_detached([_venv_python(), _main_py()])
-    print(f"Started Odicto (PID {proc.pid})")
+    print(f"Launch requested (PID {proc.pid}); use odicto.py status to check readiness.")
     return 0
 
 
 def cmd_stop(_args) -> int:
     pid_file = os.path.join(_repo_root(), "dictation.pid")
-    killed = platforms.kill_other_odicto_processes(pid_file)
+    try:
+        killed = platforms.kill_other_odicto_processes(pid_file)
+    except (OSError, RuntimeError) as error:
+        print(f"Could not stop Odicto: {error}", file=sys.stderr)
+        return 1
     platforms.release_lock()
     if killed:
-        print(f"Stopped {len(killed)} Odicto process(es).")
+        print(f"Stopped {len(killed)} Odicto runtime process(es), including any Python launcher.")
     else:
         print("No Odicto processes found.")
     return 0
+
+
+def cmd_wait_ready(args) -> int:
+    """Wait for the actual owner and microphone, not just an early PID file."""
+    import psutil
+    from platforms.base import is_odicto_command
+
+    deadline = time.monotonic() + max(0.0, args.timeout)
+    while True:
+        try:
+            with open(os.path.join(_repo_root(), "dictation.pid"), encoding="ascii") as f:
+                pid = int(f.read().strip())
+            with open(os.path.join(_repo_root(), "dictation-health.json"), encoding="utf-8") as f:
+                health = json.load(f)
+            mic = health.get("microphone") or {}
+            age = time.time() - health["updated_at"]
+            if (health["pid"] == pid and 0 <= age < 10 and health["ready"]
+                    and mic and not mic.get("closed", True)
+                    and mic.get("callback_count", 0) > 0
+                    and 0 <= mic.get("callback_age_s", 10) + age < 3):
+                owner = psutil.Process(pid)
+                if (owner.create_time() <= health["updated_at"]
+                        and is_odicto_command(owner.cmdline(), owner.cwd())):
+                    print(f"Odicto ready (app PID {pid}); microphone receiving audio.")
+                    return 0
+        except (OSError, ValueError, KeyError, TypeError, psutil.Error):
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print("Readiness not confirmed: startup may be in progress or the microphone has stopped. "
+                  "Run odicto.py status; check dictation.log if this persists.", file=sys.stderr)
+            return 1
+        time.sleep(min(0.1, remaining))
 
 
 def cmd_status(_args) -> int:
@@ -70,8 +109,29 @@ def cmd_status(_args) -> int:
         except Exception:
             pid = None
     print(f"Backend:     {platforms.hotkey_backend_name()}")
-    print(f"Lock held:   {platforms.lock_is_held()}")
     print(f"PID file:    {pid or '(none)'}")
+    health_path = os.path.join(_repo_root(), "dictation-health.json")
+    try:
+        with open(health_path, encoding="utf-8") as f:
+            health = json.load(f)
+        age = time.time() - health["updated_at"]
+        if str(health["pid"]) != pid or age < 0 or age > 10:
+            print("Health:      stale or unavailable (restart may be needed)")
+        else:
+            print(f"Health:      {health['state']} ready={health['ready']} (heartbeat {age:.1f}s ago)")
+            mic = health.get("microphone")
+            if mic:
+                print(f"Microphone:  closed={mic.get('closed', True)} callback_age={mic['callback_age_s']}s")
+                device = mic.get("device") or {}
+                if device:
+                    print(f"Input device: {device.get('name', '(unknown)')} [{device.get('host_api', '?')}] {device.get('sample_rate', '?')}Hz channels={device.get('channels', '?')}")
+                if "input_rms" in mic:
+                    print(f"Input level: peak={mic['input_peak']:.6f} RMS={mic['input_rms']:.6f} (latest heartbeat sample; silence is normal when not speaking)")
+                captured = mic.get("last_capture")
+                if captured:
+                    print(f"Last capture: {captured['seconds']}s RMS={captured['rms']:.6f} (audio magnitude only)")
+    except (OSError, ValueError, KeyError, TypeError):
+        print("Health:      unavailable (this running version may predate health reporting)")
     return 0
 
 
@@ -185,6 +245,8 @@ def main() -> int:
     sub.add_parser("start", help="Start Odicto in the background")
     sub.add_parser("stop", help="Stop all Odicto processes")
     sub.add_parser("status", help="Show runtime status")
+    wait_ready = sub.add_parser("wait-ready", help="Wait for app and microphone readiness")
+    wait_ready.add_argument("--timeout", type=float, default=30.0)
     sub.add_parser("config", help="Show resolved configuration and where each value came from")
     sub.add_parser("autostart", help="Install autostart entry")
     sub.add_parser("remove-autostart", help="Remove autostart entry")
@@ -195,6 +257,7 @@ def main() -> int:
         "start": cmd_start,
         "stop": cmd_stop,
         "status": cmd_status,
+        "wait-ready": cmd_wait_ready,
         "config": cmd_config,
         "autostart": cmd_autostart,
         "remove-autostart": cmd_remove_autostart,

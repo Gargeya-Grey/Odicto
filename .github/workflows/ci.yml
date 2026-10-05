@@ -34,13 +34,13 @@ jobs:
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m unittest tests.test_units tests.test_reliability tests.test_layout -v
+        run: .venv\Scripts\python.exe -m unittest tests.test_units tests.test_reliability tests.test_layout tests.test_shutdown tests.test_readiness tests.test_live_transport tests.test_process_lifecycle tests.test_capture_continuity tests.test_capture_reconnect tests.test_stt_results tests.test_provider_deadlines tests.test_hotkey_dispatch -v
         env:
           QT_QPA_PLATFORM: offscreen
 
       - name: Run unit tests (macOS/Linux)
         if: runner.os != 'Windows'
-        run: .venv/bin/python -m unittest tests.test_units tests.test_reliability tests.test_layout -v
+        run: .venv/bin/python -m unittest tests.test_units tests.test_reliability tests.test_layout tests.test_shutdown tests.test_readiness tests.test_live_transport tests.test_process_lifecycle tests.test_capture_continuity tests.test_capture_reconnect tests.test_stt_results tests.test_provider_deadlines tests.test_hotkey_dispatch -v
         env:
           QT_QPA_PLATFORM: offscreen
 
