@@ -146,6 +146,111 @@ class TestStageDeadlines(_Base):
         self.assertEqual(self.paste.call_args_list, [call("raw question")])
 
 
+class _SlowChat:
+    """Fake chat client: each question blocks until released, then replies or fails."""
+
+    def __init__(self):
+        self.plans = {}
+
+    def plan(self, question, reply=None, error=None):
+        self.plans[question] = (threading.Event(), threading.Event(), reply, error)
+        return self.plans[question]
+
+    def create(self, **kwargs):
+        entered, release, reply, error = self.plans[kwargs["messages"][-1]["content"]]
+        entered.set()
+        release.wait(5)
+        if error is not None:
+            raise error
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=reply), finish_reason="stop")], usage=None)
+
+
+class TestAbandonedAiMemory(_Base):
+    """A real TextRefiner: an abandoned AI call must never edit conversation memory."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.test_reliability import refiner_fixture
+        self.app = app_fixture()
+        self.app.refiner = refiner_fixture()
+        self.chat = _SlowChat()
+        self.app.refiner.client.chat.completions.create.side_effect = self.chat.create
+        self.history = lambda: [(t["role"], t["content"]) for t in self.app.refiner.conversation_history]
+
+    def start(self, question):
+        worker = threading.Thread(target=self.app.process_and_paste, args=(None, True),
+                                  kwargs={"pre_context": "ctx", "keep_history": True,
+                                          "pre_transcript": question})
+        worker.start()
+        self.assertTrue(self.chat.plans[question][0].wait(1))
+        return worker
+
+    def cancel_and_join(self, worker):
+        self.app._execute_hotkey_action("cancel", (), None)
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(self.app.last_status, "cancelled")
+
+    def test_cancelled_call_failing_late_keeps_the_next_question(self):
+        _, release_a, _, _ = self.chat.plan("question A", error=RuntimeError("offline"))
+        _, release_b, _, _ = self.chat.plan("question B", reply="answer B")
+        self.addCleanup(release_a.set)
+        self.addCleanup(release_b.set)
+        self.cancel_and_join(self.start("question A"))
+        self.assertEqual(self.history(), [])
+        worker_b = self.start("question B")
+        release_a.set()  # A fails while B waits
+        time.sleep(0.1)
+        self.assertEqual(self.history(), [("user", "question B")])
+        release_b.set()
+        worker_b.join(2)
+        self.assertEqual(self.history(), [("user", "question B"), ("assistant", "answer B")])
+        self.paste.assert_called_once_with("answer B")
+
+    def test_late_success_after_cancel_adds_nothing(self):
+        _, release, _, _ = self.chat.plan("question A", reply="late answer")
+        self.addCleanup(release.set)
+        self.cancel_and_join(self.start("question A"))
+        release.set()
+        time.sleep(0.15)
+        self.assertEqual(self.history(), [])
+        self.paste.assert_not_called()
+
+    def test_late_success_after_deadline_adds_nothing(self):
+        _, release, _, _ = self.chat.plan("question A", reply="late answer")
+        self.addCleanup(release.set)
+        with patch.object(Config, "LLM_DEADLINE_SECONDS", 0.1):
+            self.app.process_and_paste(None, True, pre_context="ctx", keep_history=True,
+                                       pre_transcript="question A")
+        self.assertEqual(self.app.last_status, "ai_timeout")
+        release.set()
+        time.sleep(0.15)
+        self.assertEqual(self.history(), [])
+        self.paste.assert_called_once_with("question A")
+
+    def test_late_success_after_reset_context_adds_nothing(self):
+        entered, release, _, _ = self.chat.plan("question A", reply="late answer")
+        self.addCleanup(release.set)
+        refiner = self.app.refiner
+        worker = threading.Thread(target=refiner.refine, args=("question A",), kwargs={"keep_history": True})
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        refiner.reset_context()  # F5 while the reply is still on its way
+        release.set()
+        worker.join(2)
+        self.assertEqual(self.history(), [])
+
+    def test_normal_f6_call_records_both_turns(self):
+        _, release, _, _ = self.chat.plan("question A", reply="answer A")
+        release.set()
+        self.app.process_and_paste(None, True, pre_context="ctx", keep_history=True,
+                                   pre_transcript="question A")
+        self.assertEqual(self.history(), [("user", "question A"), ("assistant", "answer A")])
+        self.paste.assert_called_once_with("answer A")
+        self.assertEqual(self.app.last_status, "success")
+
+
 class TestCancel(_Base):
     def _start_blocked_pipeline(self, app):
         entered = threading.Event()

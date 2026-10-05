@@ -57,22 +57,42 @@ def clipboard_snapshot() -> ClipboardSnapshot:
         return _UNREADABLE
 
 
-def clipboard_restore(snap: ClipboardSnapshot) -> bool:
-    """Re-create ``snap`` on the clipboard. Never raises; False on failure.
+RESTORED = "restored"  # the snapshot is back on the clipboard
+CHANGED = "changed"  # expect_token mismatch: the clipboard changed, nothing written
+FAILED = "failed"  # could not open, or a write failed (possibly after emptying): retry
 
-    An empty snapshot clears the clipboard with the platform's own empty
-    operation rather than writing an empty string.
+
+def clipboard_restore_status(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
+    """Re-create ``snap`` on the clipboard and report RESTORED, CHANGED or FAILED.
+
+    Never raises. An empty snapshot clears the clipboard with the platform's
+    own empty operation rather than writing an empty string.
+
+    ``expect_token`` (a ``clipboard_change_token()`` value) makes the restore
+    conditional: when the clipboard changed since that token, nothing is
+    written and CHANGED is returned. Windows checks inside the same
+    OpenClipboard session that writes, so no other app can copy in between.
+    macOS checks ``changeCount`` immediately before ``clearContents`` (best
+    effort: NSPasteboard has no lock). Linux has no token and ignores it.
+
+    FAILED includes a write that failed after the clipboard was already
+    emptied: the user's data is not back, so the caller must retry.
     """
     if snap is None or not snap.ok:
-        return False
+        return FAILED
     try:
         if sys.platform == "win32":
-            return _win_restore(snap)
+            return _win_restore(snap, expect_token)
         if sys.platform == "darwin":
-            return _mac_restore(snap)
-        return _text_restore(snap.text)
+            return _mac_restore(snap, expect_token)
+        return RESTORED if _text_restore(snap.text) else FAILED
     except Exception:
-        return False
+        return FAILED
+
+
+def clipboard_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> bool:
+    """Bool form of ``clipboard_restore_status``: True only when RESTORED."""
+    return clipboard_restore_status(snap, expect_token) == RESTORED
 
 
 def clipboard_change_token() -> Optional[int]:
@@ -288,10 +308,12 @@ def _win_allowed_formats(api: _WinApi) -> frozenset:
     return _WIN_ALLOWED
 
 
-def _win_build_snapshot(seen, allowed, read) -> ClipboardSnapshot:
+def _win_build_snapshot(seen, allowed, read, deadline=None, clock=time.monotonic) -> ClipboardSnapshot:
     """Build a snapshot from enumerated formats. ``read(fmt)`` -> bytes or None.
 
-    Only allow-listed formats are read. Pure apart from ``read``, so tests
+    Only allow-listed formats are read. Once ``clock()`` passes ``deadline`` no
+    further format is read and the snapshot is incomplete, so the caller can
+    close the clipboard at once. Pure apart from ``read``/``clock``, so tests
     drive it with fake formats.
     """
     captured = []
@@ -300,6 +322,9 @@ def _win_build_snapshot(seen, allowed, read) -> ClipboardSnapshot:
     for fmt in seen:
         if fmt not in allowed:
             continue
+        if deadline is not None and clock() >= deadline:
+            complete = False  # budget spent: stop asking the owner to render
+            break
         data = read(fmt)
         if data is None:
             complete = False  # an allow-listed format we could not save
@@ -329,6 +354,12 @@ def _win_build_snapshot(seen, allowed, read) -> ClipboardSnapshot:
 
 
 def _win_snapshot_blocking() -> ClipboardSnapshot:
+    # The budget is checked before each format read, and the clipboard is closed
+    # as soon as it is spent. One GetClipboardData call that blocks on a hung
+    # owner's WM_RENDERFORMAT cannot be interrupted (Windows has no API for
+    # it); while it blocks, OpenClipboard stays held. Any clipboard reader,
+    # including the old text-only read, had the same exposure.
+    deadline = time.monotonic() + _WIN_SNAPSHOT_TIMEOUT_S
     api = _win_api()
     allowed = _win_allowed_formats(api)
     if not _win_open(api):
@@ -350,7 +381,7 @@ def _win_snapshot_blocking() -> ClipboardSnapshot:
                 return _win_read_emf(api, handle)
             return _win_read_hglobal(api, handle)
 
-        return _win_build_snapshot(seen, allowed, read)
+        return _win_build_snapshot(seen, allowed, read, deadline)
     finally:
         api.CloseClipboard()
 
@@ -423,7 +454,7 @@ def _win_set_bytes(api: _WinApi, fmt: int, data: bytes) -> bool:
     return True
 
 
-def _win_restore(snap: ClipboardSnapshot) -> bool:
+def _win_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
     api = _win_api()
     formats = tuple(snap.formats or ())
     if not formats and snap.text:
@@ -434,15 +465,22 @@ def _win_restore(snap: ClipboardSnapshot) -> bool:
     hwnd = api.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, HWND_MESSAGE, None, None, None)
     try:
         if not _win_open(api, hwnd):
-            return False
+            return FAILED
         try:
-            if not api.EmptyClipboard():
-                return False
-            ok = True
-            for fmt, data in formats:
-                if not _win_set_bytes(api, int(fmt), bytes(data)):
-                    ok = False
-            return ok
+            if (
+                expect_token is not None
+                and int(api.user32.GetClipboardSequenceNumber()) != int(expect_token)
+            ):
+                return CHANGED  # changed since the paste: write nothing
+            # A write that fails after EmptyClipboard would leave the user with
+            # an empty clipboard: empty and write everything once more in the
+            # same session before giving up.
+            for _attempt in range(2):
+                if not api.EmptyClipboard():
+                    continue
+                if all(_win_set_bytes(api, int(fmt), bytes(data)) for fmt, data in formats):
+                    return RESTORED
+            return FAILED
         finally:
             api.CloseClipboard()
     finally:
@@ -507,15 +545,19 @@ def _mac_snapshot() -> ClipboardSnapshot:
     )
 
 
-def _mac_restore(snap: ClipboardSnapshot) -> bool:
+def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
     try:
         from AppKit import NSPasteboard, NSPasteboardItem
         from Foundation import NSData
     except Exception:
-        return _text_restore(snap.text)
-    if not snap.formats and snap.text:
-        return _text_restore(snap.text)
+        return RESTORED if _text_restore(snap.text) else FAILED
     pb = NSPasteboard.generalPasteboard()
+    # Best effort: compared immediately before clearContents; NSPasteboard has
+    # no lock, so a copy in the instant between the two is not excluded.
+    if expect_token is not None and int(pb.changeCount()) != int(expect_token):
+        return CHANGED
+    if not snap.formats and snap.text:
+        return RESTORED if _text_restore(snap.text) else FAILED
     pb.clearContents()
     objects = []
     for entries in snap.formats:
@@ -524,8 +566,8 @@ def _mac_restore(snap: ClipboardSnapshot) -> bool:
             item.setData_forType_(NSData.dataWithBytes_length_(raw, len(raw)), type_name)
         objects.append(item)
     if not objects:
-        return True  # clearContents already emptied it
-    return bool(pb.writeObjects_(objects))
+        return RESTORED  # clearContents already emptied it
+    return RESTORED if pb.writeObjects_(objects) else FAILED
 
 
 # --- Linux ------------------------------------------------------------------

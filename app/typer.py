@@ -28,6 +28,9 @@ from platforms.clipboard import (
     ClipboardSnapshot,
     clipboard_change_token,
     clipboard_restore,
+    clipboard_restore_status,
+    CHANGED as RESTORE_CHANGED,
+    RESTORED as RESTORE_RESTORED,
     clipboard_snapshot,
 )
 
@@ -129,47 +132,74 @@ def _snapshot(attempts: int = 3) -> ClipboardSnapshot:
     return ClipboardSnapshot(text="", formats=(), complete=False, has_non_text=False, ok=False)
 
 
-def _restore_snapshot(snap: ClipboardSnapshot, context: str) -> bool:
-    """Put the user's clipboard back. Never writes a fake empty clipboard.
+_RESTORE_OK = "restored"
+_RESTORE_FAILED = "failed"  # clipboard busy etc.: worth a retry
+_RESTORE_CHANGED = "changed"  # someone else wrote the clipboard: never retry
+_RESTORE_SKIPPED = "skipped"  # nothing that can be put back: done
+
+# Deferred restore retries before the restore is left pending for the next
+# paste/probe or flush_pending_restore().
+_RESTORE_RETRIES = 3
+_RESTORE_RETRY_BACKOFF_S = 0.25
+
+
+def _restore_status(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
+    """Put the user's clipboard back and say how it went. Never writes a fake empty clipboard.
 
     * Unreadable original (``ok=False``): nothing is written; the payload stays.
     * Non-text formats captured in full: full-format restore.
+    * Incomplete non-text: only its text comes back (the rest is already gone).
     * Really empty original: the platform's own "empty clipboard".
     * Text: the verified text write.
+
+    With ``expect_token`` (Windows, macOS) the platform restore itself checks,
+    inside its clipboard session, that nobody changed the clipboard since the
+    paste; a mismatch writes nothing and reports ``changed``.
     """
-    try:
-        if not snap.ok:
+    if not snap.ok:
+        print("Warning: original clipboard was unreadable; not restoring it", flush=True)
+        return _RESTORE_SKIPPED
+    target = snap
+    if snap.has_non_text and not snap.complete:
+        if not snap.text:
             print(
-                f"Warning: original clipboard was unreadable; not restoring {context}",
+                "Warning: clipboard held only data Odicto cannot save; not restoring it",
                 flush=True,
             )
-            return False
-        ok = False
-        if snap.has_non_text and snap.complete:
-            ok = bool(clipboard_restore(snap))
-            if not ok and snap.text:
-                ok = _clipboard_write_verified(snap.text, attempts=5)
-        elif snap.has_non_text:
-            # Incomplete: the non-text part is already gone. Keep the text.
-            if snap.text:
-                ok = _clipboard_write_verified(snap.text, attempts=5)
-            else:
-                print(
-                    f"Warning: clipboard held only data Odicto cannot save; "
-                    f"not restoring {context}",
-                    flush=True,
-                )
-                return False
-        elif snap.text == "":
-            ok = bool(clipboard_restore(snap)) or _clipboard_write_verified("", attempts=5)
-        else:
-            ok = _clipboard_write_verified(snap.text, attempts=5)
-        if not ok:
-            print(f"Warning: Failed to restore original clipboard {context}", flush=True)
-        return ok
+            return _RESTORE_SKIPPED
+        target = ClipboardSnapshot(
+            text=snap.text, formats=(), complete=True, has_non_text=False, ok=True
+        )
+
+    if expect_token is not None:
+        # The platform tells a token mismatch (nothing written) apart from a
+        # failed write, which may have emptied the clipboard and must be retried.
+        status = clipboard_restore_status(target, expect_token=expect_token)
+        if status == RESTORE_CHANGED:
+            return _RESTORE_CHANGED
+        return _RESTORE_OK if status == RESTORE_RESTORED else _RESTORE_FAILED
+
+    if target.has_non_text:
+        ok = bool(clipboard_restore(target))
+        if not ok and target.text:
+            ok = _clipboard_write_verified(target.text, attempts=5)
+    elif target.text == "":
+        ok = bool(clipboard_restore(target)) or _clipboard_write_verified("", attempts=5)
+    else:
+        ok = _clipboard_write_verified(target.text, attempts=5)
+    return _RESTORE_OK if ok else _RESTORE_FAILED
+
+
+def _restore_snapshot(snap: ClipboardSnapshot, context: str) -> bool:
+    """Synchronous restore (selection probe, failed paste). True when restored."""
+    try:
+        status = _restore_status(snap)
     except Exception as e:
         print(f"Warning: clipboard restore {context} failed: {e}", flush=True)
         return False
+    if status == _RESTORE_FAILED:
+        print(f"Warning: Failed to restore original clipboard {context}", flush=True)
+    return status == _RESTORE_OK
 
 
 def _clipboard_holds_payload(pending: _PendingRestore) -> bool:
@@ -181,49 +211,89 @@ def _clipboard_holds_payload(pending: _PendingRestore) -> bool:
     return _clipboard_read() == pending.payload
 
 
-def _finish_pending(pending: _PendingRestore, context: str) -> None:
-    """Restore for ``pending`` only if the clipboard still holds its payload."""
-    if _clipboard_holds_payload(pending):
-        _restore_snapshot(pending.snapshot, context)
-    else:
-        print(
-            "Notice: clipboard changed after paste; keeping the new contents",
-            flush=True,
-        )
+def _attempt_pending(pending: _PendingRestore) -> bool:
+    """One guarded restore attempt for ``pending``. Caller holds the lock.
 
-
-def _cancel_pending() -> Optional[_PendingRestore]:
-    """Take the pending restore away from its thread. Caller holds the lock."""
-    global _PENDING
-    pending, _PENDING = _PENDING, None
-    return pending
-
-
-def _take_original() -> tuple:
-    """(snapshot of the user's clipboard, came_from_pending). Caller holds the lock.
-
-    A pending restore means the clipboard still holds Odicto's previous payload,
-    not the user's data. Its original snapshot is reused, so a back-to-back paste
-    or probe never saves Odicto's own text as "the user's clipboard". When the
-    clipboard changed since that paste, the new contents are the user's.
+    Returns True when the pending restore is finished (restored, or the
+    clipboard changed, or nothing can be restored) and clears it. A failed
+    restore (clipboard busy) returns False and leaves it pending.
     """
-    pending = _cancel_pending()
-    if pending is not None and _clipboard_holds_payload(pending):
-        return pending.snapshot, True
-    return _snapshot(), False
+    global _PENDING
+    try:
+        if not _clipboard_holds_payload(pending):
+            status = _RESTORE_CHANGED
+        else:
+            status = _restore_status(pending.snapshot, expect_token=pending.token)
+    except Exception as e:
+        print(f"Warning: clipboard restore failed: {e}", flush=True)
+        status = _RESTORE_FAILED
+    if status == _RESTORE_FAILED:
+        # A failed write may have emptied the clipboard already, which moves
+        # its change token. That change is Odicto's own: re-arm the guard on
+        # the current state so the retry is not mistaken for a user copy.
+        token = _change_token()
+        if pending.token is not None and token is not None:
+            pending.token = token
+        else:
+            pending.payload = _clipboard_read()
+        return False
+    if status == _RESTORE_CHANGED:
+        print("Notice: clipboard changed after paste; keeping the new contents", flush=True)
+    if _PENDING is pending:
+        _PENDING = None
+    return True
+
+
+def _wait_for_pending_due() -> None:
+    """Sleep (without the lock) until a pending restore is due.
+
+    A target app may still be reading the previous paste; overwriting the
+    clipboard before the restore is due would hand it a sentinel or a new
+    payload. The wait is capped at the configured paste delay.
+    """
+    with _CLIPBOARD_LOCK:
+        pending = _PENDING
+        if pending is None:
+            return
+        remaining = pending.due - time.monotonic()
+    cap = max(0.15, float(Config.PASTE_DELAY_SECONDS))
+    wait = min(max(0.0, remaining), cap)
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _settle_pending() -> Optional[ClipboardSnapshot]:
+    """Finish a pending restore before a new clipboard write. Caller holds the lock.
+
+    Returns None when nothing is pending or the restore finished, so the caller
+    snapshots the (now restored) clipboard fresh. If the restore still fails,
+    the clipboard holds Odicto's previous payload: the caller takes over the
+    pending original instead of saving that payload as the user's clipboard.
+    """
+    global _PENDING
+    pending = _PENDING
+    if pending is None or _attempt_pending(pending):
+        return None
+    _PENDING = None
+    print("Warning: earlier clipboard restore still failing; carrying it forward", flush=True)
+    return pending.snapshot
 
 
 def _deferred_restore(pending: _PendingRestore, delay: float) -> None:
-    global _PENDING
     time.sleep(delay)
-    with _CLIPBOARD_LOCK:
-        if _PENDING is not pending:
-            return  # a later paste/probe/flush took it over
-        _PENDING = None
-        try:
-            _finish_pending(pending, "after paste")
-        except Exception as e:
-            print(f"Warning: deferred clipboard restore failed: {e}", flush=True)
+    for attempt in range(_RESTORE_RETRIES):
+        with _CLIPBOARD_LOCK:
+            if _PENDING is not pending:
+                return  # a later paste/probe/flush took it over
+            if _attempt_pending(pending):
+                return
+        if attempt + 1 < _RESTORE_RETRIES:
+            time.sleep(_RESTORE_RETRY_BACKOFF_S)
+    print(
+        "Warning: Failed to restore original clipboard after paste; "
+        "will retry before the next paste or at shutdown",
+        flush=True,
+    )
 
 
 def _schedule_restore(pending: _PendingRestore) -> None:
@@ -233,6 +303,7 @@ def _schedule_restore(pending: _PendingRestore) -> None:
     sessions read the clipboard much later. The restore waits on a background
     thread so paste_text returns at once, and is skipped if the clipboard
     changed meanwhile (the user copied something, or the app wrote to it).
+    Caller holds the lock.
     """
     global _PENDING
     _PENDING = pending
@@ -250,16 +321,15 @@ def _schedule_restore(pending: _PendingRestore) -> None:
         ).start()
     except Exception as e:
         print(f"Warning: could not defer clipboard restore ({e}); restoring now", flush=True)
-        if _PENDING is pending:
-            _PENDING = None
-            _finish_pending(pending, "after paste")
+        _attempt_pending(pending)
 
 
 def flush_pending_restore(max_wait: float = 1.5) -> None:
     """Run any pending deferred clipboard restore now (call at shutdown).
 
     A restore younger than its delay first waits out the remaining time, capped
-    at ``max_wait`` seconds, so the target app can still read the paste.
+    at ``max_wait`` seconds, so the target app can still read the paste. A
+    restore that still fails stays pending (and is reported).
     """
     try:
         with _CLIPBOARD_LOCK:
@@ -273,8 +343,8 @@ def flush_pending_restore(max_wait: float = 1.5) -> None:
         with _CLIPBOARD_LOCK:
             if _PENDING is not pending:
                 return  # the deferred thread or a new paste took it over
-            _cancel_pending()
-            _finish_pending(pending, "at flush")
+            if not _attempt_pending(pending):
+                print("Warning: clipboard restore at flush failed; clipboard busy", flush=True)
     except Exception as e:
         print(f"Warning: clipboard restore flush failed: {e}", flush=True)
 
@@ -354,6 +424,7 @@ def get_selected_text(timeout: float = 0.35) -> str:
     Returns:
         Selected text, or ``""`` when nothing usable was captured.
     """
+    _wait_for_pending_due()
     with _CLIPBOARD_LOCK:
         return _get_selected_text_locked(timeout)
 
@@ -361,7 +432,9 @@ def get_selected_text(timeout: float = 0.35) -> str:
 def _get_selected_text_locked(timeout: float) -> str:
     terminal = _terminal_target()
     ide = False if terminal else _ide_target()
-    original, from_pending = _take_original()
+    inherited = _settle_pending()
+    from_pending = inherited is not None
+    original = inherited if from_pending else _snapshot()
     if not original.ok:
         print("Warning: clipboard unreadable; selection probe skipped", flush=True)
         return ""
@@ -511,8 +584,11 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                 return
             raise RuntimeError("Could not type into terminal; no paste chord was sent")
 
+    # Let a previous paste's target finish reading before the clipboard changes.
+    _wait_for_pending_due()
+    with _CLIPBOARD_LOCK:
         if not restore_clipboard:
-            _cancel_pending()
+            _settle_pending()
             if not _clipboard_write_verified(text):
                 raise RuntimeError("Could not write the paste payload to clipboard")
             _wait_modifiers_up(0.08)
@@ -521,7 +597,9 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             time.sleep(0.015)
             return
 
-        original, from_pending = _take_original()
+        inherited = _settle_pending()
+        from_pending = inherited is not None
+        original = inherited if from_pending else _snapshot()
 
         if original.ok and original.has_non_text and not original.complete:
             if len(text) <= _type_instead_limit():

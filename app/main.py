@@ -1472,11 +1472,16 @@ class DictationApp:
                         flush=True,
                     )
                 refiner = self.refiner
-                outcome, stage = self._run_stage(
-                    lambda: refiner.refine(raw_text, context=context,
-                                           image_bytes=image_bytes, keep_history=keep_history),
-                    Config.LLM_DEADLINE_SECONDS, cycle, "odicto-llm")
+                try:
+                    outcome, stage = self._run_stage(
+                        lambda: refiner.refine(raw_text, context=context,
+                                               image_bytes=image_bytes, keep_history=keep_history),
+                        Config.LLM_DEADLINE_SECONDS, cycle, "odicto-llm")
+                except _Abort:
+                    self._abandon_ai(refiner)
+                    raise
                 if outcome == "timeout":
+                    self._abandon_ai(refiner)
                     # Same as an AI failure: the user's words still arrive.
                     print(f"!!! AI reply timed out after {Config.LLM_DEADLINE_SECONDS:g}s; "
                           "inserting the raw transcript.", file=sys.stderr, flush=True)
@@ -1567,6 +1572,16 @@ class DictationApp:
                 return "done" if stage.done.is_set() else "timeout"
             if stage.done.wait(min(0.05, remaining)):
                 return "done"
+
+    @staticmethod
+    def _abandon_ai(refiner) -> None:
+        """The AI stage was given up: its late reply or failure must not edit memory."""
+        abandon = getattr(refiner, "abandon_inflight", None)
+        if callable(abandon):
+            try:
+                abandon()
+            except Exception as e:
+                print(f"Warning: could not detach the abandoned AI call: {e}", flush=True)
 
     @staticmethod
     def _raise_for(outcome: str) -> None:

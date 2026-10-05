@@ -35,12 +35,17 @@ class FakeClipboard:
         self.token = 1
         self.writes = []
         self.restores = []
+        self.events = []
+        self.fail_restores = 0  # next N restores fail as if the clipboard were busy
+        self.empty_then_fail = 0  # next N restores empty the clipboard, then fail to write
+        self.restore_attempts = 0
 
     def read(self):
         return self.text
 
     def write(self, text):
         self.writes.append(text)
+        self.events.append(("write", text))
         self.text = text
         self.non_text = None
         self.token += 1
@@ -56,12 +61,30 @@ class FakeClipboard:
             has_non_text=bool(self.non_text),
         )
 
-    def restore(self, snap):
+    def restore(self, snap, expect_token=None):
+        return self.restore_status(snap, expect_token) == "restored"
+
+    def restore_status(self, snap, expect_token=None):
+        self.restore_attempts += 1
+        if expect_token is not None and expect_token != self.token:
+            self.events.append(("aborted", snap.text))
+            return "changed"
+        if self.fail_restores:
+            self.fail_restores -= 1
+            return "failed"
+        if self.empty_then_fail:
+            self.empty_then_fail -= 1
+            self.text = ""
+            self.non_text = None
+            self.token += 1
+            self.events.append(("emptied", ""))
+            return "failed"
         self.restores.append(snap)
+        self.events.append(("restore", snap.text))
         self.text = snap.text
         self.non_text = dict(snap.formats).get("img")
         self.token += 1
-        return True
+        return "restored"
 
     def user_copies(self, text):
         self.text = text
@@ -81,7 +104,16 @@ class ClipboardSafetyBase(unittest.TestCase):
             patch("typer.clipboard_read", side_effect=lambda: self.clip.read()),
             patch("typer.clipboard_write", side_effect=lambda t: self.clip.write(t)),
             patch("typer.clipboard_snapshot", side_effect=lambda: self.clip.snapshot()),
-            patch("typer.clipboard_restore", side_effect=lambda s: self.clip.restore(s)),
+            patch(
+                "typer.clipboard_restore",
+                side_effect=lambda s, expect_token=None: self.clip.restore(s, expect_token),
+            ),
+            patch(
+                "typer.clipboard_restore_status",
+                side_effect=lambda s, expect_token=None: self.clip.restore_status(
+                    s, expect_token
+                ),
+            ),
             patch(
                 "typer.clipboard_change_token",
                 side_effect=lambda: self.clip.token if self.use_token else None,
@@ -196,14 +228,65 @@ class TestDeferredRestore(ClipboardSafetyBase):
                 self.assertEqual(waits, expected)
                 self.assertIsNone(typer._PENDING)
 
-    def test_back_to_back_pastes_keep_the_first_original(self):
+    def test_back_to_back_paste_waits_restores_then_snapshots_fresh(self):
         with self._hold_restore():
             typer.paste_text("first")
-            typer.paste_text("second")
+            waits = []
+            with patch("typer.time.sleep", side_effect=waits.append):
+                typer.paste_text("second")
+        self.assertTrue(waits and 0 < waits[0] <= 1.0, waits)
+        self.assertEqual(
+            self.clip.events, [("write", "first"), ("restore", "user clip"), ("write", "second")]
+        )
         self.assertEqual(typer._PENDING.snapshot.text, "user clip")
         typer.flush_pending_restore(max_wait=0)
         self.assertEqual(self.clip.text, "user clip")
-        self.assertNotIn("first", [s.text for s in self.clip.restores])
+
+    def test_failed_restore_is_retried_then_kept_for_flush(self):
+        self.clip.fail_restores = 3
+        waits = []
+        with patch("typer.time.sleep", side_effect=waits.append):
+            typer.paste_text("transcript")
+        self.assertEqual(self.clip.restore_attempts, 3)
+        self.assertEqual(waits.count(typer._RESTORE_RETRY_BACKOFF_S), 2)
+        self.assertIsNotNone(typer._PENDING)
+        self.assertEqual(self.clip.text, "transcript")
+        typer.flush_pending_restore(max_wait=0)
+        self.assertIsNone(typer._PENDING)
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_flush_keeps_a_still_failing_restore(self):
+        with self._hold_restore():
+            typer.paste_text("transcript")
+        self.clip.fail_restores = 1
+        typer.flush_pending_restore(max_wait=0)
+        self.assertIsNotNone(typer._PENDING)
+        typer.flush_pending_restore(max_wait=0)
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_emptied_then_failed_write_is_kept_pending_and_retried(self):
+        with self._hold_restore():
+            typer.paste_text("transcript")
+        self.clip.empty_then_fail = 1
+        typer.flush_pending_restore(max_wait=0)
+        # The clipboard is now empty and its token moved, but this is FAILED,
+        # not "changed": the original stays pending.
+        self.assertEqual(self.clip.text, "")
+        self.assertIsNotNone(typer._PENDING)
+        typer.flush_pending_restore(max_wait=0)
+        self.assertIsNone(typer._PENDING)
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_token_mismatch_inside_restore_writes_nothing_and_never_retries(self):
+        with self._hold_restore():
+            typer.paste_text("transcript")
+        # Another app copies after the guard check but before the restore.
+        self.clip.token += 1
+        with patch("typer._clipboard_holds_payload", return_value=True):
+            typer.flush_pending_restore(max_wait=0)
+        self.assertEqual(self.clip.restores, [])
+        self.assertEqual(self.clip.restore_attempts, 1)
+        self.assertIsNone(typer._PENDING)
 
     def test_full_format_original_is_restored(self):
         self.clip.non_text = b"PNGDATA"
@@ -271,13 +354,15 @@ class TestDeferredRestore(ClipboardSafetyBase):
         typer.paste_text("short")
         self.mocks["send_paste"].assert_called_once()
 
-    def test_f7_cancels_pending_restore(self):
+    def test_f7_settles_pending_restore_before_its_payload(self):
         with self._hold_restore():
             typer.paste_text("hold-to-talk text")
         with patch("typer.time.sleep"):
             typer.paste_text("live final", restore_clipboard=False)
         self.assertIsNone(typer._PENDING)
-        typer.flush_pending_restore(max_wait=0)
+        self.assertEqual(
+            self.clip.events[-2:], [("restore", "user clip"), ("write", "live final")]
+        )
         self.assertEqual(self.clip.text, "live final")
 
 
@@ -320,10 +405,17 @@ class TestSelectionProbe(ClipboardSafetyBase):
         self.assertEqual(self.clip.non_text, b"PNGDATA")
         self.assertEqual(self.clip.text, "user clip")
 
-    def test_probe_after_paste_reuses_pending_original(self):
+    def test_probe_during_pending_restore_waits_and_restores_first(self):
         with self._hold_restore():
             typer.paste_text("transcript")
-        self.assertEqual(self._probe(), "picked text")
+        waits = []
+        with patch("typer.time.sleep", side_effect=waits.append):
+            self.mocks["send_copy"].side_effect = lambda: self.clip.user_copies("picked text")
+            self.assertEqual(typer.get_selected_text(timeout=0.2), "picked text")
+        self.assertTrue(waits and 0 < waits[0] <= 1.0, waits)
+        kinds = [e[0] for e in self.clip.events]
+        self.assertEqual(kinds[:3], ["write", "restore", "write"])  # payload, restore, sentinel
+        self.assertEqual(self.clip.events[1], ("restore", "user clip"))
         self.assertIsNone(typer._PENDING)
         self.assertEqual(self.clip.text, "user clip")
 
@@ -369,6 +461,69 @@ def _small_dib() -> bytes:
     return header + pixels
 
 
+class _FakeWinApi:
+    """Stands in for the private ctypes binding inside _win_restore."""
+
+    def __init__(self, set_failures):
+        self.set_failures = set_failures
+        self.calls = []
+        self.user32 = self
+
+    def CreateWindowExW(self, *args):
+        return 1
+
+    def DestroyWindow(self, hwnd):
+        return True
+
+    def OpenClipboard(self, hwnd):
+        return True
+
+    def CloseClipboard(self):
+        self.calls.append("close")
+        return True
+
+    def GetClipboardSequenceNumber(self):
+        return 7
+
+    def EmptyClipboard(self):
+        self.calls.append("empty")
+        return True
+
+
+class TestWindowsRestoreOutcome(unittest.TestCase):
+    def _run(self, set_failures, expect_token=None):
+        api = _FakeWinApi(set_failures)
+
+        def fake_set(_api, fmt, data):
+            api.calls.append(("set", fmt))
+            if api.set_failures:
+                api.set_failures -= 1
+                return False
+            return True
+
+        snap = _snap(text="t", formats=((clip_mod.CF_UNICODETEXT, b"t\x00\x00"),))
+        with patch.object(clip_mod, "_win_api", return_value=api), patch.object(
+            clip_mod, "_win_set_bytes", side_effect=fake_set
+        ):
+            return clip_mod._win_restore(snap, expect_token), api.calls
+
+    def test_write_failure_after_empty_retries_once_in_session(self):
+        status, calls = self._run(set_failures=1)
+        self.assertEqual(status, clip_mod.RESTORED)
+        self.assertEqual(calls.count("empty"), 2)
+        self.assertEqual(calls[-1], "close")
+
+    def test_write_failing_twice_after_empty_is_failed_not_changed(self):
+        status, calls = self._run(set_failures=2)
+        self.assertEqual(status, clip_mod.FAILED)
+        self.assertEqual(calls.count("empty"), 2)
+
+    def test_token_mismatch_is_changed_and_empties_nothing(self):
+        status, calls = self._run(set_failures=0, expect_token=6)
+        self.assertEqual(status, clip_mod.CHANGED)
+        self.assertNotIn("empty", calls)
+
+
 @unittest.skipUnless(sys.platform == "win32", "real clipboard round trip is Windows-only")
 class TestWindowsRoundTrip(unittest.TestCase):
     def setUp(self):
@@ -409,6 +564,15 @@ class TestWindowsRoundTrip(unittest.TestCase):
         formats = dict(back.formats)
         self.assertIn(clip_mod.CF_DIB, formats)
         self.assertEqual(formats[clip_mod.CF_DIB][: len(dib)], dib)
+
+    def test_token_mismatch_aborts_restore_without_writing(self):
+        self.assertTrue(clip_mod.clipboard_restore(_snap(text="kept")))
+        stale = clip_mod.clipboard_change_token() - 1
+        self.assertFalse(clip_mod.clipboard_restore(_snap(text="must not land"), expect_token=stale))
+        self.assertEqual(clip_mod.clipboard_snapshot().text, "kept")
+        current = clip_mod.clipboard_change_token()
+        self.assertTrue(clip_mod.clipboard_restore(_snap(text="lands"), expect_token=current))
+        self.assertEqual(clip_mod.clipboard_snapshot().text, "lands")
 
     def test_empty_snapshot_clears_clipboard(self):
         self.assertTrue(clip_mod.clipboard_restore(_snap(text="")))
@@ -460,6 +624,25 @@ class TestWindowsFormatAllowList(unittest.TestCase):
 
     def test_unreadable_allowed_format_is_incomplete(self):
         snap, _ = self._build([clip_mod.CF_DIB], {clip_mod.CF_DIB: None})
+        self.assertFalse(snap.complete)
+
+    def test_budget_stops_further_reads(self):
+        now = [0.0]
+
+        def read(fmt):
+            reads.append(fmt)
+            now[0] += 1.0  # each render takes a "second"
+            return b"x"
+
+        reads = []
+        snap = clip_mod._win_build_snapshot(
+            [clip_mod.CF_UNICODETEXT, clip_mod.CF_DIB, self.HTML],
+            self.ALLOWED,
+            read,
+            deadline=1.5,
+            clock=lambda: now[0],
+        )
+        self.assertEqual(reads, [clip_mod.CF_UNICODETEXT, clip_mod.CF_DIB])
         self.assertFalse(snap.complete)
 
     def test_empty_clipboard_is_complete(self):

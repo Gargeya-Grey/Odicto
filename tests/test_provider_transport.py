@@ -255,6 +255,18 @@ class TestSpeechTransport(unittest.TestCase):
                 gemini.transcribe(audio, allow_local_fallback=False)
         whisper.assert_not_called()
 
+    def test_abandoned_gemini_reply_does_not_advance_server_memory(self):
+        client = refiner._GeminiClient.__new__(refiner._GeminiClient)
+        client.model = "m"
+        client._last_interaction_id = "earlier"
+        client.client = MagicMock()
+        client.client.interactions.create.return_value = SimpleNamespace(output_text="a", id="new")
+        client.create_interaction("q", 10, keep_history=True, system_instruction="s",
+                                  should_commit=lambda: False)
+        self.assertEqual(client._last_interaction_id, "earlier")
+        client.create_interaction("q", 10, keep_history=True, system_instruction="s")
+        self.assertEqual(client._last_interaction_id, "new")
+
     def test_whisper_decodes_never_run_concurrently(self):
         active, peak, lock = [0], [0], threading.Lock()
 

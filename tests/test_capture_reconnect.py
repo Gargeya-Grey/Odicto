@@ -45,29 +45,62 @@ class TestCaptureReconnect(unittest.TestCase):
             np.ones((1024, 1), np.float32), 1024, None, None
         )
 
-    def test_failed_abort_or_close_resets_stream_and_next_start_reconnects(self):
-        for failing in ("abort", "close"):
-            with self.subTest(failing=failing):
-                old, new = MagicMock(), MagicMock()
-                getattr(old, failing).side_effect = RuntimeError(f"{failing} failed")
-                with patch("recorder.sd.InputStream", side_effect=[old, new]) as opened:
-                    recorder = AudioRecorder()
-                    try:
-                        recorder._last_callback -= 4
-                        with self.assertRaisesRegex(RuntimeError, f"{failing} failed"):
-                            recorder.start()
-                        # Close is still attempted when abort fails.
-                        old.close.assert_called_once_with(ignore_errors=False)
-                        self.assertIsNone(recorder._stream)
-                        self.assertFalse(recorder.recording)
-                        self.assertEqual(opened.call_count, 1)
-                        self._deliver_on_start(recorder, new)
-                        recorder.start()
-                        self.assertTrue(recorder.recording)
-                        self.assertIs(recorder._stream, new)
-                        self.assertEqual(opened.call_count, 2)
-                    finally:
-                        recorder.close()
+    def test_failed_abort_still_closes_and_reconnects(self):
+        old, new = MagicMock(), MagicMock()
+        old.abort.side_effect = RuntimeError("abort failed")
+        with patch("recorder.sd.InputStream", side_effect=[old, new]) as opened:
+            recorder = AudioRecorder()
+            try:
+                recorder._last_callback -= 4
+                self._deliver_on_start(recorder, new)
+                recorder.start()
+                old.close.assert_called_once_with(ignore_errors=False)
+                self.assertTrue(recorder.recording)
+                self.assertIs(recorder._stream, new)
+                self.assertEqual(recorder._stale_streams, [])
+                self.assertEqual(opened.call_count, 2)
+            finally:
+                recorder.close()
+
+    def test_failed_close_resets_stream_mutes_old_callbacks_and_retries_close(self):
+        old, new = MagicMock(), MagicMock()
+        old.abort.side_effect = RuntimeError("abort failed")
+        old.close.side_effect = RuntimeError("close failed")
+        with patch("recorder.sd.InputStream", side_effect=[old, new]) as opened:
+            recorder = AudioRecorder()
+            old_callback = opened.call_args_list[0].kwargs["callback"]
+            try:
+                recorder._last_callback -= 4
+                with self.assertRaisesRegex(RuntimeError, "close failed"):
+                    recorder.start()
+                self.assertIsNone(recorder._stream)
+                self.assertFalse(recorder.recording)
+                self.assertEqual(opened.call_count, 1)
+                self.assertEqual(recorder._stale_streams, [old])
+                # Next start retries the stale close, then reconnects.
+                self._deliver_on_start(recorder, new)
+                recorder.start()
+                self.assertEqual(old.close.call_count, 2)
+                self.assertTrue(recorder.recording)
+                self.assertIs(recorder._stream, new)
+                self.assertEqual(opened.call_count, 2)
+                # The surviving old stream can no longer write anything.
+                count = recorder.health_snapshot()["callback_count"]
+                ring = sum(len(c) for c in recorder._ring)
+                session = sum(len(c) for c in recorder.audio_data)
+                old_callback(np.full((1024, 1), 0.9, np.float32), 1024, None, None)
+                self.assertEqual(recorder.health_snapshot()["callback_count"], count)
+                self.assertEqual(sum(len(c) for c in recorder._ring), ring)
+                self.assertEqual(sum(len(c) for c in recorder.audio_data), session)
+                # The new stream's own callback still writes.
+                new_callback = opened.call_args_list[1].kwargs["callback"]
+                new_callback(np.full((1024, 1), 0.5, np.float32), 1024, None, None)
+                self.assertEqual(sum(len(c) for c in recorder.audio_data), session + 1024)
+            finally:
+                recorder.close()
+            # Shutdown retries the stale stream once more, then forgets it.
+            self.assertEqual(old.close.call_count, 3)
+            self.assertEqual(recorder._stale_streams, [])
 
     def test_failed_cached_device_refreshes_portaudio_and_uses_default(self):
         old, new = MagicMock(), MagicMock()

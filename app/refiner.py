@@ -2,7 +2,7 @@ import base64
 import sys
 import threading
 import time
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from config import OPENROUTER_FALLBACK_MODEL, ENV_DEFAULTS, Config
 from http_clients import (
@@ -524,7 +524,10 @@ class _GeminiClient:
         keep_history: bool = False,
         system_instruction: Optional[str] = None,
         *, model: Optional[str] = None, timeout: Optional[float] = None,
+        should_commit: Optional[Callable[[], bool]] = None,
     ) -> Optional[str]:
+        """``should_commit`` (optional) is asked before the server-side
+        conversation id advances; False keeps the previous id (abandoned call)."""
         if self.client is None:
             raise RuntimeError("google-genai package not installed — run: pip install google-genai")
         sys_inst = (
@@ -554,7 +557,7 @@ class _GeminiClient:
             raise RuntimeError(f"Gemini API error: {detail}".strip()) from e
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str) and text.strip():
-            if keep_history:
+            if keep_history and (should_commit is None or should_commit()):
                 interaction_id = getattr(interaction, "id", None)
                 if isinstance(interaction_id, str) and interaction_id:
                     self._last_interaction_id = interaction_id
@@ -592,6 +595,12 @@ class TextRefiner:
         self._history_lock = threading.Lock()
         self._prewarmer = Prewarmer()
         self.conversation_history: list[dict[str, str]] = []
+        # History generation: refine() commits memory changes only while it is
+        # unchanged. reset_context() and abandon_inflight() bump it, so a call
+        # the pipeline gave up on (cancel/deadline) can never edit memory later.
+        self._history_generation = 0
+        # User turns appended by refine() calls that have not finished yet.
+        self._pending_turns: list[dict[str, str]] = []
 
         if self.provider == "ollama":
             _require_openai()
@@ -645,20 +654,51 @@ class TextRefiner:
         else:  # "none"
             self.client = None
 
-    def _record_reply(self, reply: str, keep_history: bool) -> None:
-        """Append the assistant turn when multi-turn memory is on."""
+    def _remove_turn_locked(self, turn: Optional[dict]) -> None:
+        """Remove exactly this turn object (identity), never "the last user turn"."""
+        if turn is None:
+            return
+        self._pending_turns = [t for t in self._pending_turns if t is not turn]
+        self.conversation_history = [t for t in self.conversation_history if t is not turn]
+
+    def _history_current(self, generation: Optional[int]) -> bool:
+        return generation is None or generation == self._history_generation
+
+    def _record_reply(self, reply: str, keep_history: bool, turn: Optional[dict] = None,
+                      generation: Optional[int] = None) -> None:
+        """Append the assistant turn when multi-turn memory is on.
+
+        A call whose generation is stale (reset or abandoned meanwhile) only
+        removes its own user turn and records nothing.
+        """
         if not keep_history:
             return
         with self._history_lock:
+            if not self._history_current(generation):
+                self._remove_turn_locked(turn)
+                return
+            if turn is not None:
+                self._pending_turns = [t for t in self._pending_turns if t is not turn]
             self.conversation_history.append({"role": "assistant", "content": reply})
 
-    def _pop_pending_user_turn(self, keep_history: bool) -> None:
-        """Drop the user turn recorded optimistically when the call yields no reply."""
+    def _pop_pending_user_turn(self, keep_history: bool, turn: Optional[dict] = None) -> None:
+        """Drop the user turn this call recorded optimistically (it got no reply)."""
         if not keep_history:
             return
         with self._history_lock:
-            if self.conversation_history and self.conversation_history[-1]["role"] == "user":
-                self.conversation_history.pop()
+            self._remove_turn_locked(turn)  # no turn recorded: nothing to undo
+
+    def abandon_inflight(self) -> None:
+        """The caller gave up on every running refine() (cancel or deadline).
+
+        Their user turns leave memory now, and their late replies or failures
+        can no longer change it.
+        """
+        with self._history_lock:
+            self._history_generation += 1
+            for turn in list(self._pending_turns):
+                self._remove_turn_locked(turn)
+            self._pending_turns = []
 
     def _meta_input_from_history(
         self, history_snapshot: list[dict[str, str]], system_prompt: str = ""
@@ -734,6 +774,8 @@ class TextRefiner:
     def reset_context(self) -> None:
         """Clears the multi-turn conversation history (spoken 'reset chat' or hotkey)."""
         with self._history_lock:
+            self._history_generation += 1
+            self._pending_turns = []
             self.conversation_history.clear()
         if isinstance(self.client, _GeminiClient):
             self.client.reset_context()
@@ -780,6 +822,8 @@ class TextRefiner:
 
         budget = llm_deadline_seconds()
         deadline = time.monotonic() + budget
+        user_turn: Optional[dict] = None
+        generation: Optional[int] = None
         try:
             max_tokens = Config.effective_max_output_tokens()
             # Meta ignores this (uncapped; effort knob controls thinking).
@@ -800,10 +844,11 @@ class TextRefiner:
             user_message = text
 
             with self._history_lock:
+                generation = self._history_generation
                 if keep_history:
-                    self.conversation_history.append(
-                        {"role": "user", "content": user_message}
-                    )
+                    user_turn = {"role": "user", "content": user_message}
+                    self._pending_turns.append(user_turn)
+                    self.conversation_history.append(user_turn)
                     if len(self.conversation_history) > 16:
                         self.conversation_history = self.conversation_history[-16:]
                     history_snapshot = list(self.conversation_history)
@@ -827,9 +872,9 @@ class TextRefiner:
                 print(f"Meta responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
-                    self._record_reply(refined_text, keep_history)
+                    self._record_reply(refined_text, keep_history, user_turn, generation)
                     return refined_text
-                self._pop_pending_user_turn(keep_history)
+                self._pop_pending_user_turn(keep_history, user_turn)
                 self.last_notice = "ai_fallback"
                 return text
 
@@ -850,13 +895,14 @@ class TextRefiner:
                     keep_history=keep_history,
                     system_instruction=effective_sys_prompt,
                     timeout=budget,
+                    should_commit=lambda: self._history_current(generation),
                 )
                 print(f"Gemini responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
-                    self._record_reply(refined_text, keep_history)
+                    self._record_reply(refined_text, keep_history, user_turn, generation)
                     return refined_text
-                self._pop_pending_user_turn(keep_history)
+                self._pop_pending_user_turn(keep_history, user_turn)
                 self.last_notice = "ai_fallback"
                 return text
 
@@ -947,7 +993,7 @@ class TextRefiner:
                 refined_text = _choice_content(response)
 
             if refined_text:
-                self._record_reply(refined_text, keep_history)
+                self._record_reply(refined_text, keep_history, user_turn, generation)
                 return refined_text
 
             print(
@@ -956,12 +1002,12 @@ class TextRefiner:
                 f"pasting the raw transcript.",
                 flush=True,
             )
-            self._pop_pending_user_turn(keep_history)
+            self._pop_pending_user_turn(keep_history, user_turn)
             self.last_notice = "ai_fallback"
             return text
 
         except Exception as e:
-            self._pop_pending_user_turn(keep_history)
+            self._pop_pending_user_turn(keep_history, user_turn)
             print(
                 f"!!! AI mode FAILED for model '{self.model}' ({self.provider}): {e}\n"
                 f"    Using the raw transcript instead. "

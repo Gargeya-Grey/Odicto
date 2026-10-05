@@ -82,6 +82,11 @@ class AudioRecorder:
         self._input_peak = 0.0
         self._device_info = {}
         self._last_capture_signal = None
+        # Each opened stream gets a generation; only the current one may write.
+        # A stream that survived a failed close can never feed the ring/session.
+        self._generation = 0
+        # Streams whose abort/close failed; retried before reopen and at close().
+        self._stale_streams: List[object] = []
 
         # Open the device once. At login the WASAPI endpoint may not exist yet,
         # so retry with backoff instead of failing the whole app on first try.
@@ -96,12 +101,19 @@ class AudioRecorder:
             if delay:
                 time.sleep(delay)
             stream = None
+            with self._lock:
+                self._generation += 1
+                generation = self._generation
+
+            def bound_callback(indata, frames, time_info, status, _gen=generation):
+                self._callback(indata, frames, time_info, status, _generation=_gen)
+
             try:
                 stream = sd.InputStream(
                     device=self._device_index,
                     samplerate=self.sample_rate,
                     channels=self.channels,
-                    callback=self._callback,
+                    callback=bound_callback,
                     dtype="float32",
                     blocksize=1024,
                     latency="low",
@@ -138,7 +150,11 @@ class AudioRecorder:
                         pass
                     # A failed close propagates unchanged: it must never
                     # authorize another open (see _MicrophoneOpenFailed).
-                    stream.close(ignore_errors=False)
+                    try:
+                        stream.close(ignore_errors=False)
+                    except Exception:
+                        self._stale_streams.append(stream)
+                        raise
         raise _MicrophoneOpenFailed(
             f"Could not open microphone after {len(delays)} attempts: {last_error}"
         ) from last_error
@@ -153,6 +169,20 @@ class AudioRecorder:
             sd._initialize()
         except Exception:
             pass
+
+    def _retry_stale_streams(self) -> None:
+        """Best-effort close of streams whose earlier abort/close failed."""
+        remaining = []
+        for stream in self._stale_streams:
+            try:
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+                stream.close(ignore_errors=False)
+            except Exception:
+                remaining.append(stream)
+        self._stale_streams = remaining
 
     def _reopen_stream(self) -> None:
         """Reopen the cached device; on failure refresh PortAudio and use the default."""
@@ -218,8 +248,15 @@ class AudioRecorder:
         except Exception:
             pass
 
-    def _callback(self, indata: np.ndarray, frames: int, time: object, status: object) -> None:
-        """Internal callback for sounddevice input stream to capture audio chunks."""
+    def _callback(self, indata: np.ndarray, frames: int, time: object, status: object,
+                  _generation: Optional[int] = None) -> None:
+        """Internal callback for sounddevice input stream to capture audio chunks.
+
+        Streams pass their generation; a stale one returns at once. Direct calls
+        (no generation) are treated as the current stream.
+        """
+        if _generation is not None and _generation != self._generation:
+            return
         # Live meter (outside lock first for RMS compute, then short lock for store).
         try:
             peak = float(np.max(np.abs(indata))) if indata.size else 0.0
@@ -230,6 +267,8 @@ class AudioRecorder:
         limit_fn = None
         with self._lock:
             if self._closed.is_set():
+                return
+            if _generation is not None and _generation != self._generation:
                 return
             now = monotonic()
             if now - self._last_callback > self.GAP_SECONDS:
@@ -354,16 +393,26 @@ class AudioRecorder:
                 # Reconnect only on demand, after closing the previous stream.
                 if self._stream is not None:
                     stream = self._stream
+                    # Retire the old stream's generation first: if the driver
+                    # keeps it alive, its callbacks are ignored from now on.
+                    with self._lock:
+                        self._generation += 1
                     try:
-                        try:
-                            stream.abort()
-                        finally:
-                            stream.close(ignore_errors=False)
-                    finally:
+                        stream.abort()
+                    except Exception:
+                        pass  # close() below decides whether the stream is gone
+                    try:
+                        stream.close(ignore_errors=False)
+                    except Exception:
                         # A dead stream that refuses to close must not wedge
                         # every later start(); this attempt still fails, so no
-                        # second endpoint opens on top of it now.
+                        # second endpoint opens on top of it now. Keep the
+                        # handle so later reopen/close() can retry closing it.
+                        self._stale_streams.append(stream)
+                        raise
+                    finally:
                         self._stream = None
+                self._retry_stale_streams()
                 with self._lock:
                     self._ring.clear()
                     self._ring_frames = 0
@@ -509,6 +558,9 @@ class AudioRecorder:
                     stream.close()
                 except Exception:
                     pass
+            # Shutdown never forgets a stream that refused to close earlier.
+            self._retry_stale_streams()
+            self._stale_streams = []
         with self._lock:
             self.recording = False
             self.audio_data = []
