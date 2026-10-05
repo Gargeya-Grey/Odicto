@@ -241,6 +241,34 @@ class TestAbandonedAiMemory(_Base):
         worker.join(2)
         self.assertEqual(self.history(), [])
 
+    def test_abandon_before_worker_reaches_refine_memory_still_wins(self):
+        # Race P2-a: pause the AI worker before refine() records anything,
+        # cancel (abandon), then let it run: it must use the dispatch token.
+        import refiner as refiner_mod
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        real_build = refiner_mod.build_system_prompt_with_context
+
+        def paused_build(*args, **kwargs):
+            entered.set()
+            release.wait(5)
+            return real_build(*args, **kwargs)
+
+        reply_entered, reply_release, _, _ = self.chat.plan("question A", reply="late answer")
+        reply_release.set()
+        with patch.object(refiner_mod, "build_system_prompt_with_context", side_effect=paused_build):
+            worker = threading.Thread(target=self.app.process_and_paste, args=(None, True),
+                                      kwargs={"pre_context": "ctx", "keep_history": True,
+                                              "pre_transcript": "question A"})
+            worker.start()
+            self.assertTrue(entered.wait(1))
+            self.cancel_and_join(worker)
+            release.set()
+            self.assertTrue(reply_entered.wait(1))
+            time.sleep(0.15)
+        self.assertEqual(self.history(), [])
+        self.paste.assert_not_called()
+
     def test_normal_f6_call_records_both_turns(self):
         _, release, _, _ = self.chat.plan("question A", reply="answer A")
         release.set()

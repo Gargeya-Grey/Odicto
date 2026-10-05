@@ -170,8 +170,8 @@ class AudioRecorder:
         except Exception:
             pass
 
-    def _retry_stale_streams(self) -> None:
-        """Best-effort close of streams whose earlier abort/close failed."""
+    def _retry_stale_streams(self) -> bool:
+        """Retry closing streams whose earlier close failed; True when none remain."""
         remaining = []
         for stream in self._stale_streams:
             try:
@@ -183,6 +183,7 @@ class AudioRecorder:
             except Exception:
                 remaining.append(stream)
         self._stale_streams = remaining
+        return not remaining
 
     def _reopen_stream(self) -> None:
         """Reopen the cached device; on failure refresh PortAudio and use the default."""
@@ -412,7 +413,12 @@ class AudioRecorder:
                         raise
                     finally:
                         self._stream = None
-                self._retry_stale_streams()
+                if not self._retry_stale_streams():
+                    # Never open a second endpoint while a native stream that
+                    # refuses to close may still be alive.
+                    raise RuntimeError(
+                        "Microphone is still held by a previous stream; reconnect it or restart Odicto"
+                    )
                 with self._lock:
                     self._ring.clear()
                     self._ring_frames = 0

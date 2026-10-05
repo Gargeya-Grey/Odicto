@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import sys
 import threading
 import time
@@ -524,10 +525,11 @@ class _GeminiClient:
         keep_history: bool = False,
         system_instruction: Optional[str] = None,
         *, model: Optional[str] = None, timeout: Optional[float] = None,
-        should_commit: Optional[Callable[[], bool]] = None,
+        commit_guard: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> Optional[str]:
-        """``should_commit`` (optional) is asked before the server-side
-        conversation id advances; False keeps the previous id (abandoned call)."""
+        """``commit_guard`` (optional) receives the function that advances the
+        server-side conversation id and decides, atomically under its own lock,
+        whether to run it (an abandoned or reset call must not)."""
         if self.client is None:
             raise RuntimeError("google-genai package not installed — run: pip install google-genai")
         sys_inst = (
@@ -557,10 +559,15 @@ class _GeminiClient:
             raise RuntimeError(f"Gemini API error: {detail}".strip()) from e
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str) and text.strip():
-            if keep_history and (should_commit is None or should_commit()):
-                interaction_id = getattr(interaction, "id", None)
-                if isinstance(interaction_id, str) and interaction_id:
+            interaction_id = getattr(interaction, "id", None)
+            if keep_history and isinstance(interaction_id, str) and interaction_id:
+                def advance() -> None:
                     self._last_interaction_id = interaction_id
+
+                if commit_guard is None:
+                    advance()
+                else:
+                    commit_guard(advance)
             return text.strip()
         return None
 
@@ -601,6 +608,8 @@ class TextRefiner:
         self._history_generation = 0
         # User turns appended by refine() calls that have not finished yet.
         self._pending_turns: list[dict[str, str]] = []
+        # Generation pinned by the caller for refine() calls on this thread.
+        self._pinned = threading.local()
 
         if self.provider == "ollama":
             _require_openai()
@@ -664,12 +673,36 @@ class TextRefiner:
     def _history_current(self, generation: Optional[int]) -> bool:
         return generation is None or generation == self._history_generation
 
+    def history_generation(self) -> int:
+        """Current memory generation; a caller reads it when it dispatches work."""
+        with self._history_lock:
+            return self._history_generation
+
+    @contextlib.contextmanager
+    def pinned_generation(self, generation: int):
+        """refine() calls inside this block (same thread) use ``generation``.
+
+        The caller reads history_generation() on its own thread before it
+        starts the worker, so an abandon_inflight() that lands before the
+        worker even reaches refine() still makes that call stale.
+        """
+        previous = getattr(self._pinned, "generation", None)
+        self._pinned.generation = generation
+        try:
+            yield
+        finally:
+            self._pinned.generation = previous
+
     def _record_reply(self, reply: str, keep_history: bool, turn: Optional[dict] = None,
-                      generation: Optional[int] = None) -> None:
+                      generation: Optional[int] = None,
+                      commits: tuple = ()) -> None:
         """Append the assistant turn when multi-turn memory is on.
 
-        A call whose generation is stale (reset or abandoned meanwhile) only
-        removes its own user turn and records nothing.
+        One locked step: the generation check, the reply, and any deferred
+        provider-memory change (``commits``, e.g. Gemini's conversation id).
+        reset_context() and abandon_inflight() take the same lock, so they land
+        wholly before (nothing recorded) or wholly after (a complete exchange).
+        A stale call only removes its own user turn.
         """
         if not keep_history:
             return
@@ -677,6 +710,8 @@ class TextRefiner:
             if not self._history_current(generation):
                 self._remove_turn_locked(turn)
                 return
+            for apply in commits:
+                apply()
             if turn is not None:
                 self._pending_turns = [t for t in self._pending_turns if t is not turn]
             self.conversation_history.append({"role": "assistant", "content": reply})
@@ -777,8 +812,9 @@ class TextRefiner:
             self._history_generation += 1
             self._pending_turns = []
             self.conversation_history.clear()
-        if isinstance(self.client, _GeminiClient):
-            self.client.reset_context()
+            # Same lock as _record_reply: a late Gemini id cannot slip in.
+            if isinstance(self.client, _GeminiClient):
+                self.client.reset_context()
         print(">>> AI context cleared (fresh conversation).", flush=True)
 
     def refine(
@@ -843,15 +879,21 @@ class TextRefiner:
             )
             user_message = text
 
+            pinned = getattr(self._pinned, "generation", None)
             with self._history_lock:
-                generation = self._history_generation
-                if keep_history:
+                generation = self._history_generation if pinned is None else pinned
+                if keep_history and self._history_current(generation):
                     user_turn = {"role": "user", "content": user_message}
                     self._pending_turns.append(user_turn)
                     self.conversation_history.append(user_turn)
                     if len(self.conversation_history) > 16:
                         self.conversation_history = self.conversation_history[-16:]
                     history_snapshot = list(self.conversation_history)
+                elif keep_history:
+                    # Abandoned before it started: send the memory, never edit it.
+                    history_snapshot = list(self.conversation_history) + [
+                        {"role": "user", "content": user_message}
+                    ]
                 else:
                     history_snapshot = [
                         {"role": "user", "content": user_message}
@@ -889,18 +931,21 @@ class TextRefiner:
                         {"type": "image", "data": base64.b64encode(image_bytes).decode("ascii"), "mime_type": "image/png"},
                         {"type": "text", "text": user_message},
                     ]
+                gemini_commits: list = []
                 refined_text = self.client.create_interaction(
                     gemini_input,
                     max_tokens=max_tokens,
                     keep_history=keep_history,
                     system_instruction=effective_sys_prompt,
                     timeout=budget,
-                    should_commit=lambda: self._history_current(generation),
+                    # Deferred: advanced only inside _record_reply's locked step.
+                    commit_guard=gemini_commits.append,
                 )
                 print(f"Gemini responded in {time.time() - llm_started:.2f}s")
                 if refined_text:
                     refined_text = refined_text.strip()
-                    self._record_reply(refined_text, keep_history, user_turn, generation)
+                    self._record_reply(refined_text, keep_history, user_turn, generation,
+                                       tuple(gemini_commits))
                     return refined_text
                 self._pop_pending_user_turn(keep_history, user_turn)
                 self.last_notice = "ai_fallback"

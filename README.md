@@ -574,7 +574,7 @@ Behavior & UI:
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
 | `MIN_HOLD_MS` | `80` | Ignore shorter presses |
-| `PASTE_DELAY_SECONDS` | `1.0` | Delay before the deferred clipboard restore (restores only if the clipboard still holds the pasted text) |
+| `PASTE_DELAY_SECONDS` | `1.0` | Wait after the paste chord before the clipboard restore (restores only if the clipboard still holds the pasted text) |
 | `MAX_RECORDING_SECONDS` | `600` | A capture stops itself and is processed after this long (0 = no limit) |
 | `STT_DEADLINE_SECONDS` | `20` | Time limit per speech stage; cloud STT then falls back to local Whisper |
 | `LLM_DEADLINE_SECONDS` | `30` | Time limit per AI reply or polish stage; raw text is kept on timeout |

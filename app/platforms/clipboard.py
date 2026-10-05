@@ -62,11 +62,12 @@ CHANGED = "changed"  # expect_token mismatch: the clipboard changed, nothing wri
 FAILED = "failed"  # could not open, or a write failed (possibly after emptying): retry
 
 
-def clipboard_restore_status(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
-    """Re-create ``snap`` on the clipboard and report RESTORED, CHANGED or FAILED.
+def clipboard_restore_result(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:
+    """Re-create ``snap`` on the clipboard. Returns ``(status, token_after)``.
 
-    Never raises. An empty snapshot clears the clipboard with the platform's
-    own empty operation rather than writing an empty string.
+    ``status`` is RESTORED, CHANGED or FAILED. Never raises. An empty snapshot
+    clears the clipboard with the platform's own empty operation rather than
+    writing an empty string.
 
     ``expect_token`` (a ``clipboard_change_token()`` value) makes the restore
     conditional: when the clipboard changed since that token, nothing is
@@ -76,18 +77,28 @@ def clipboard_restore_status(snap: ClipboardSnapshot, expect_token: Optional[int
     effort: NSPasteboard has no lock). Linux has no token and ignores it.
 
     FAILED includes a write that failed after the clipboard was already
-    emptied: the user's data is not back, so the caller must retry.
+    emptied: the user's data is not back, so the caller must retry. When that
+    failed attempt itself changed the clipboard, ``token_after`` is the change
+    token observed inside the same session right after it (Windows sequence
+    number, macOS ``clearContents`` count); it is the only value a caller may
+    use to replace its guard. Otherwise ``token_after`` is None (nothing was
+    written, or the platform cannot tell).
     """
     if snap is None or not snap.ok:
-        return FAILED
+        return FAILED, None
     try:
         if sys.platform == "win32":
             return _win_restore(snap, expect_token)
         if sys.platform == "darwin":
             return _mac_restore(snap, expect_token)
-        return RESTORED if _text_restore(snap.text) else FAILED
+        return (RESTORED if _text_restore(snap.text) else FAILED), None
     except Exception:
-        return FAILED
+        return FAILED, None
+
+
+def clipboard_restore_status(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
+    """Status-only form of ``clipboard_restore_result``."""
+    return clipboard_restore_result(snap, expect_token)[0]
 
 
 def clipboard_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> bool:
@@ -454,7 +465,8 @@ def _win_set_bytes(api: _WinApi, fmt: int, data: bytes) -> bool:
     return True
 
 
-def _win_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
+def _win_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:
+    """(status, token_after). See ``clipboard_restore_result``."""
     api = _win_api()
     formats = tuple(snap.formats or ())
     if not formats and snap.text:
@@ -465,22 +477,28 @@ def _win_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) ->
     hwnd = api.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, HWND_MESSAGE, None, None, None)
     try:
         if not _win_open(api, hwnd):
-            return FAILED
+            return FAILED, None  # nothing written
         try:
             if (
                 expect_token is not None
                 and int(api.user32.GetClipboardSequenceNumber()) != int(expect_token)
             ):
-                return CHANGED  # changed since the paste: write nothing
+                return CHANGED, None  # changed since the paste: write nothing
             # A write that fails after EmptyClipboard would leave the user with
             # an empty clipboard: empty and write everything once more in the
             # same session before giving up.
+            touched = False
             for _attempt in range(2):
                 if not api.EmptyClipboard():
                     continue
+                touched = True
                 if all(_win_set_bytes(api, int(fmt), bytes(data)) for fmt, data in formats):
-                    return RESTORED
-            return FAILED
+                    return RESTORED, int(api.user32.GetClipboardSequenceNumber())
+            # Our own failed write changed the clipboard: report the token seen
+            # inside this session, before any other app can open it.
+            if touched:
+                return FAILED, int(api.user32.GetClipboardSequenceNumber())
+            return FAILED, None
         finally:
             api.CloseClipboard()
     finally:
@@ -545,20 +563,22 @@ def _mac_snapshot() -> ClipboardSnapshot:
     )
 
 
-def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> str:
+def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:
+    """(status, token_after). See ``clipboard_restore_result``."""
     try:
         from AppKit import NSPasteboard, NSPasteboardItem
         from Foundation import NSData
     except Exception:
-        return RESTORED if _text_restore(snap.text) else FAILED
+        return (RESTORED if _text_restore(snap.text) else FAILED), None
     pb = NSPasteboard.generalPasteboard()
     # Best effort: compared immediately before clearContents; NSPasteboard has
     # no lock, so a copy in the instant between the two is not excluded.
     if expect_token is not None and int(pb.changeCount()) != int(expect_token):
-        return CHANGED
+        return CHANGED, None
     if not snap.formats and snap.text:
-        return RESTORED if _text_restore(snap.text) else FAILED
-    pb.clearContents()
+        return (RESTORED if _text_restore(snap.text) else FAILED), None
+    # clearContents returns the change count it produced: our own change.
+    cleared = int(pb.clearContents())
     objects = []
     for entries in snap.formats:
         item = NSPasteboardItem.alloc().init()
@@ -566,8 +586,10 @@ def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) ->
             item.setData_forType_(NSData.dataWithBytes_length_(raw, len(raw)), type_name)
         objects.append(item)
     if not objects:
-        return RESTORED  # clearContents already emptied it
-    return RESTORED if pb.writeObjects_(objects) else FAILED
+        return RESTORED, cleared  # clearContents already emptied it
+    if pb.writeObjects_(objects):
+        return RESTORED, None
+    return FAILED, cleared
 
 
 # --- Linux ------------------------------------------------------------------

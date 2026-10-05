@@ -262,10 +262,83 @@ class TestSpeechTransport(unittest.TestCase):
         client.client = MagicMock()
         client.client.interactions.create.return_value = SimpleNamespace(output_text="a", id="new")
         client.create_interaction("q", 10, keep_history=True, system_instruction="s",
-                                  should_commit=lambda: False)
+                                  commit_guard=lambda apply: None)  # guard refuses
         self.assertEqual(client._last_interaction_id, "earlier")
         client.create_interaction("q", 10, keep_history=True, system_instruction="s")
         self.assertEqual(client._last_interaction_id, "new")
+
+    def test_gemini_id_commit_is_atomic_with_reset_and_abandon(self):
+        # Race P2-b: pause the worker at the exact commit point (inside the
+        # locked step), reset / abandon from another thread, then release. The
+        # other call must wait, then land wholly after: reset clears both
+        # memories; abandon leaves one complete, consistent exchange.
+        for action, expected_id, expected_turns in (("reset_context", None, 0),
+                                                    ("abandon_inflight", "new", 2)):
+            with self.subTest(action=action):
+                ai = refiner_fixture("gemini")
+                client = refiner._GeminiClient.__new__(refiner._GeminiClient)
+                client.model = "m"
+                client._last_interaction_id = "earlier"
+                client.client = MagicMock()
+                client.client.interactions.create.return_value = SimpleNamespace(output_text="answer", id="new")
+                ai.client = client
+                at_commit, release = threading.Event(), threading.Event()
+                self.addCleanup(release.set)
+                real_record = ai._record_reply
+
+                def paused_record(reply, keep_history, turn=None, generation=None, commits=()):
+                    def paused_apply(apply):
+                        def run():
+                            at_commit.set()
+                            release.wait(5)
+                            apply()
+                        return run
+                    real_record(reply, keep_history, turn, generation,
+                                tuple(paused_apply(a) for a in commits))
+
+                with patch.object(ai, "_record_reply", side_effect=paused_record), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    worker = threading.Thread(target=ai.refine, args=("question",),
+                                              kwargs={"keep_history": True})
+                    worker.start()
+                    self.assertTrue(at_commit.wait(1))
+                    other = threading.Thread(target=getattr(ai, action))
+                    other.start()
+                    other.join(0.1)
+                    self.assertTrue(other.is_alive(), f"{action} must wait for the atomic commit")
+                    release.set()
+                    worker.join(2)
+                    other.join(2)
+                self.assertEqual(client._last_interaction_id, expected_id)
+                self.assertEqual(len(ai.conversation_history), expected_turns)
+
+    def test_gemini_reply_abandoned_before_commit_keeps_old_conversation(self):
+        ai = refiner_fixture("gemini")
+        client = refiner._GeminiClient.__new__(refiner._GeminiClient)
+        client.model = "m"
+        client._last_interaction_id = "earlier"
+        client.client = MagicMock()
+
+        def reply_after_abandon(**kwargs):
+            ai.abandon_inflight()  # lands while the request is in flight
+            return SimpleNamespace(output_text="late", id="new")
+
+        client.client.interactions.create.side_effect = reply_after_abandon
+        ai.client = client
+        with contextlib.redirect_stdout(io.StringIO()):
+            ai.refine("question", keep_history=True)
+        self.assertEqual(client._last_interaction_id, "earlier")
+        self.assertEqual(ai.conversation_history, [])
+
+    def test_pinned_generation_survives_abandon_before_refine_starts(self):
+        ai = refiner_fixture()
+        token = ai.history_generation()
+        ai.abandon_inflight()  # lands before the worker reaches refine()
+        with ai.pinned_generation(token):
+            self.assertEqual(ai.refine("question", keep_history=True), "Hello world.")
+        self.assertEqual(ai.conversation_history, [])
+        self.assertEqual(ai.refine("question", keep_history=True), "Hello world.")
+        self.assertEqual(len(ai.conversation_history), 2)  # unpinned default unchanged
 
     def test_whisper_decodes_never_run_concurrently(self):
         active, peak, lock = [0], [0], threading.Lock()

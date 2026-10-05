@@ -1,3 +1,4 @@
+import contextlib
 import os
 import json
 import queue
@@ -1472,11 +1473,18 @@ class DictationApp:
                         flush=True,
                     )
                 refiner = self.refiner
+                # The memory token is fixed here, on the pipeline thread, before
+                # the stage starts: an abandon that lands before the worker even
+                # reaches refine() still makes that call stale.
+                pin = self._pin_ai_generation(refiner)
                 try:
-                    outcome, stage = self._run_stage(
-                        lambda: refiner.refine(raw_text, context=context,
-                                               image_bytes=image_bytes, keep_history=keep_history),
-                        Config.LLM_DEADLINE_SECONDS, cycle, "odicto-llm")
+                    def ask():
+                        with pin():
+                            return refiner.refine(raw_text, context=context,
+                                                  image_bytes=image_bytes, keep_history=keep_history)
+
+                    outcome, stage = self._run_stage(ask, Config.LLM_DEADLINE_SECONDS, cycle,
+                                                     "odicto-llm")
                 except _Abort:
                     self._abandon_ai(refiner)
                     raise
@@ -1572,6 +1580,20 @@ class DictationApp:
                 return "done" if stage.done.is_set() else "timeout"
             if stage.done.wait(min(0.05, remaining)):
                 return "done"
+
+    @staticmethod
+    def _pin_ai_generation(refiner):
+        """Return a context-manager factory that pins the refiner's memory
+        generation read NOW (caller thread) for the stage thread's refine()."""
+        read = getattr(refiner, "history_generation", None)
+        pinned = getattr(refiner, "pinned_generation", None)
+        if callable(read) and callable(pinned):
+            try:
+                generation = read()
+                return lambda: pinned(generation)
+            except Exception:
+                pass
+        return contextlib.nullcontext
 
     @staticmethod
     def _abandon_ai(refiner) -> None:

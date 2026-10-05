@@ -62,6 +62,28 @@ class TestCaptureReconnect(unittest.TestCase):
             finally:
                 recorder.close()
 
+    def test_stale_stream_that_keeps_refusing_close_blocks_reopen(self):
+        old, new = MagicMock(), MagicMock()
+        old.close.side_effect = RuntimeError("close failed")
+        with patch("recorder.sd.InputStream", side_effect=[old, new]) as opened:
+            recorder = AudioRecorder()
+            try:
+                recorder._last_callback -= 4
+                with self.assertRaisesRegex(RuntimeError, "close failed"):
+                    recorder.start()
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, "still held by a previous stream"):
+                        recorder.start()
+                    self.assertFalse(recorder.recording)
+                    self.assertIsNone(recorder._stream)
+                    self.assertEqual(opened.call_count, 1, "no second endpoint may open")
+                    self.assertEqual(recorder._stale_streams, [old])
+                self.assertEqual(old.close.call_count, 3)
+            finally:
+                recorder.close()
+            self.assertEqual(old.close.call_count, 4)
+            self.assertEqual(recorder._stale_streams, [])
+
     def test_failed_close_resets_stream_mutes_old_callbacks_and_retries_close(self):
         old, new = MagicMock(), MagicMock()
         old.abort.side_effect = RuntimeError("abort failed")
@@ -77,10 +99,12 @@ class TestCaptureReconnect(unittest.TestCase):
                 self.assertFalse(recorder.recording)
                 self.assertEqual(opened.call_count, 1)
                 self.assertEqual(recorder._stale_streams, [old])
-                # Next start retries the stale close, then reconnects.
+                # Next start retries the stale close; it succeeds, so reopen proceeds.
+                old.close.side_effect = None
                 self._deliver_on_start(recorder, new)
                 recorder.start()
                 self.assertEqual(old.close.call_count, 2)
+                self.assertEqual(recorder._stale_streams, [])
                 self.assertTrue(recorder.recording)
                 self.assertIs(recorder._stream, new)
                 self.assertEqual(opened.call_count, 2)
@@ -98,8 +122,8 @@ class TestCaptureReconnect(unittest.TestCase):
                 self.assertEqual(sum(len(c) for c in recorder.audio_data), session + 1024)
             finally:
                 recorder.close()
-            # Shutdown retries the stale stream once more, then forgets it.
-            self.assertEqual(old.close.call_count, 3)
+            # The stale stream closed already; shutdown does not touch it again.
+            self.assertEqual(old.close.call_count, 2)
             self.assertEqual(recorder._stale_streams, [])
 
     def test_failed_cached_device_refreshes_portaudio_and_uses_default(self):

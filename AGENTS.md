@@ -286,7 +286,7 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
 ## Reliability behaviour
 
 - **Timing keys** (invalid numbers log a warning naming the key and fall back to the default):
-  `PASTE_DELAY_SECONDS` (default 1.0; delay before the deferred clipboard restore, 0.15-10),
+  `PASTE_DELAY_SECONDS` (default 1.0; wait after the paste chord before the clipboard restore, 0.15-10),
   `MAX_RECORDING_SECONDS` (600; auto-stop and process, 0 = no limit),
   `STT_DEADLINE_SECONDS` (20) and `LLM_DEADLINE_SECONDS` (30) are wall-clock limits per stage,
   `CANCEL_HOTKEY` (`esc`; cancels PROCESSING, never suppressed, blank disables),
@@ -294,8 +294,11 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
   `POLISH_MAX_CHARS` (1200; polish is skipped above it, 0 = no limit). Polish wait scales with length.
 - **Clipboard:** `platforms/clipboard.py` snapshots every format (Windows: all HGLOBAL formats;
   macOS: NSPasteboard items; Linux: text, and a non-text clipboard falls back to typing).
-  Restore is deferred by `PASTE_DELAY_SECONDS` and runs only if the clipboard still holds
-  Odicto's payload. An unrestored original stays pending and is flushed at shutdown. The AI
+  Restore is synchronous: `paste_text` holds the clipboard lock, waits `PASTE_DELAY_SECONDS`,
+  then restores only if the clipboard still holds Odicto's payload (Windows checks the change
+  token inside the same OpenClipboard session that writes). A restore that keeps failing is kept
+  as one unrestored record; the next paste or probe and the shutdown flush retry it with the
+  same guard, so a newer user copy is never overwritten. No background restore thread exists. The AI
   selection probe sends Ctrl+Insert in IDE hosts (VS Code, JetBrains) instead of Ctrl+C, and
   returns `""` when the clipboard cannot be saved.
 - **Recorder:** an overflow or callback gap keeps the audio, processes it, and flags the HUD
@@ -303,8 +306,8 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
   PortAudio and falls back to the default device.
 - **Pipeline:** cloud STT that errors or times out falls back to local Whisper. An AI timeout
   keeps the raw text. Cancel and late results never paste. Init retries with backoff and leaves
-  no zombie. Shutdown removes hooks before it takes the lifecycle lock (3 s timeout) and flushes
-  the pending restore. In toggle mode the AI selection probe starts at capture start. Whisper
+  no zombie. Shutdown removes hooks before it takes the lifecycle lock (3 s timeout) and retries
+  an unrestored clipboard record. In toggle mode the AI selection probe starts at capture start. Whisper
   prewarms at capture start. Preflight problems print and show in the HUD.
 - **Providers:** `http_clients.py` holds shared keep-alive clients with connect, read, write
   and pool timeouts. One shared Gemini client runs with SDK retries off. Groq and Gemini

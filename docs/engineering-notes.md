@@ -439,13 +439,17 @@ start and on every pipeline exit. Keep current F7 captions visible until finaliz
   The invariant "dictation never fails" outranks the risk of one bad segment, so the audio is
   now kept, processed, and flagged. The user sees "Mic gap · check text" in the HUD and can
   judge the text. Only a dead stream with no audio errors.
-- **Clipboard restore is deferred and guarded.** An immediate restore can run before the target
-  app reads the paste, which pastes the old content. The restore waits `PASTE_DELAY_SECONDS`
-  and runs only if the clipboard still holds Odicto's payload, so a copy the user made in the
-  meantime is never overwritten. An original that is not yet restored stays pending and is
-  flushed at shutdown.
+- **Clipboard restore is synchronous and guarded.** An immediate restore can run before the
+  target app reads the paste, which pastes the old content, so the restore waits
+  `PASTE_DELAY_SECONDS` and runs only if the clipboard still holds Odicto's payload. A deferred
+  (background) restore was built first and rejected: three review rounds each found races in its
+  pending-restore state (a retry adopting a user copy, a probe settling a newer paste early, a
+  lost original on a second failure). Holding `_CLIPBOARD_LOCK` through the wait removes that
+  state. The cost is that "Done" and the next AI probe or paste wait up to the delay; the text
+  itself appears just as fast.
 - **Linux hotkeys without root stay unsupported.** No XGrabKey or evdev backend exists, and it
-  cannot be tested on the development machine. The docs keep saying root or the `input` group.
+  cannot be tested on the development machine. The `keyboard` library needs euid 0; the `input`
+  group is not enough. `odicto.py status` and the HUD report it.
 - **Abandoned provider calls may keep running.** After a deadline or a cancel, the worker thread
   of a cloud call cannot be killed. It can finish in the background. Its result is dropped and
   is never pasted.

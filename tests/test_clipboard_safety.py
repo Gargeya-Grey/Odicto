@@ -1,4 +1,4 @@
-"""Clipboard safety: deferred guarded restore, full-format snapshots, safe copy chords.
+"""Clipboard safety: synchronous guarded restore, full-format snapshots, safe copy chords.
 
 Everything except the Windows round trip runs against a fake clipboard; the real
 OS clipboard is never touched by those tests.
@@ -25,7 +25,12 @@ def _snap(text="", formats=(), complete=True, has_non_text=False, ok=True):
 
 
 class FakeClipboard:
-    """Text clipboard with a change counter and optional non-text payload."""
+    """Text clipboard with a change counter and optional non-text payload.
+
+    ``restore_result`` mimics the platform contract: the token check and the
+    write happen in one step, and a failed write that emptied the clipboard
+    reports the token it produced.
+    """
 
     def __init__(self, text="user clip", non_text=None, complete=True, readable=True):
         self.text = text
@@ -36,9 +41,11 @@ class FakeClipboard:
         self.writes = []
         self.restores = []
         self.events = []
-        self.fail_restores = 0  # next N restores fail as if the clipboard were busy
-        self.empty_then_fail = 0  # next N restores empty the clipboard, then fail to write
+        self.open_failures = 0  # next N restores cannot open: nothing written
+        self.empty_then_fail = 0  # next N restores empty the clipboard, then fail
         self.restore_attempts = 0
+        self.guards_seen = []
+        self.on_restore_attempt = None  # hook run before each attempt (simulate users)
 
     def read(self):
         return self.text
@@ -61,32 +68,36 @@ class FakeClipboard:
             has_non_text=bool(self.non_text),
         )
 
-    def restore(self, snap, expect_token=None):
-        return self.restore_status(snap, expect_token) == "restored"
-
-    def restore_status(self, snap, expect_token=None):
+    def restore_result(self, snap, expect_token=None):
         self.restore_attempts += 1
+        self.guards_seen.append(expect_token)
+        if self.on_restore_attempt is not None:
+            self.on_restore_attempt(self.restore_attempts)
+        if self.open_failures:
+            self.open_failures -= 1
+            return "failed", None
         if expect_token is not None and expect_token != self.token:
             self.events.append(("aborted", snap.text))
-            return "changed"
-        if self.fail_restores:
-            self.fail_restores -= 1
-            return "failed"
+            return "changed", None
         if self.empty_then_fail:
             self.empty_then_fail -= 1
             self.text = ""
             self.non_text = None
             self.token += 1
             self.events.append(("emptied", ""))
-            return "failed"
+            return "failed", self.token
         self.restores.append(snap)
         self.events.append(("restore", snap.text))
         self.text = snap.text
         self.non_text = dict(snap.formats).get("img")
         self.token += 1
-        return "restored"
+        return "restored", self.token
+
+    def restore(self, snap, expect_token=None):
+        return self.restore_result(snap, expect_token)[0] == "restored"
 
     def user_copies(self, text):
+        self.events.append(("user", text))
         self.text = text
         self.non_text = None
         self.token += 1
@@ -97,9 +108,8 @@ class ClipboardSafetyBase(unittest.TestCase):
 
     def setUp(self):
         self.clip = FakeClipboard()
-        self.sleeps = []
         self.copy_calls = []
-        typer._PENDING = None
+        typer._UNRESTORED = None
         patches = [
             patch("typer.clipboard_read", side_effect=lambda: self.clip.read()),
             patch("typer.clipboard_write", side_effect=lambda t: self.clip.write(t)),
@@ -109,8 +119,8 @@ class ClipboardSafetyBase(unittest.TestCase):
                 side_effect=lambda s, expect_token=None: self.clip.restore(s, expect_token),
             ),
             patch(
-                "typer.clipboard_restore_status",
-                side_effect=lambda s, expect_token=None: self.clip.restore_status(
+                "typer.clipboard_restore_result",
+                side_effect=lambda s, expect_token=None: self.clip.restore_result(
                     s, expect_token
                 ),
             ),
@@ -133,240 +143,21 @@ class ClipboardSafetyBase(unittest.TestCase):
             patch(
                 "typer.send_copy_ide", side_effect=lambda: self.copy_calls.append("ctrl+insert")
             ),
-            # Deferred restores run inline (after the recorded "sleep") unless a
-            # test explicitly wants the background thread.
-            patch.object(typer, "_RESTORE_IN_BACKGROUND", False),
             patch.object(Config, "PASTE_DELAY_SECONDS", 1.0),
         ]
         self.mocks = {}
         for p in patches:
             self.mocks[p.attribute] = p.start()
             self.addCleanup(p.stop)
-        self.addCleanup(setattr, typer, "_PENDING", None)
+        self.addCleanup(setattr, typer, "_UNRESTORED", None)
 
-    def _hold_restore(self):
-        """Make the next deferred restore stay pending until flushed."""
-        return patch("typer._deferred_restore")
+    def _paste(self, text="transcript", **kwargs):
+        """paste_text with time.sleep recorded instead of slept."""
+        sleeps = []
+        with patch("typer.time.sleep", side_effect=sleeps.append):
+            typer.paste_text(text, **kwargs)
+        return sleeps
 
-
-class TestDeferredRestore(ClipboardSafetyBase):
-    def test_restore_happens_after_the_delay(self):
-        with patch("typer.time.sleep", side_effect=self.sleeps.append):
-            typer.paste_text("transcript")
-        self.assertIn("transcript", self.clip.writes)
-        self.assertIn(1.0, self.sleeps)
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._PENDING)
-
-    def test_paste_returns_before_background_restore(self):
-        release = threading.Event()
-        done = threading.Event()
-        real_deferred = typer._deferred_restore
-
-        def gated(pending, delay):
-            release.wait(5)
-            real_deferred(pending, 0)
-            done.set()
-
-        with patch.object(typer, "_RESTORE_IN_BACKGROUND", True), patch(
-            "typer._deferred_restore", side_effect=gated
-        ):
-            typer.paste_text("transcript")
-            # paste_text has returned; the payload is still on the clipboard.
-            self.assertEqual(self.clip.text, "transcript")
-            release.set()
-            self.assertTrue(done.wait(5))
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_user_change_during_delay_prevents_restore(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        self.clip.user_copies("something new")
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "something new")
-
-    def test_app_change_detected_by_text_when_no_token(self):
-        self.use_token = False
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        self.clip.user_copies("app wrote this")
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "app wrote this")
-
-    def test_flush_runs_the_pending_restore_now(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        self.assertIsNotNone(typer._PENDING)
-        self.assertEqual(self.clip.text, "transcript")
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._PENDING)
-        typer.flush_pending_restore(max_wait=0)  # nothing pending: a no-op
-
-    def test_flush_waits_the_remaining_delay(self):
-        with self._hold_restore(), patch("typer.time.monotonic", return_value=100.0):
-            typer.paste_text("transcript")  # due at 101.0
-        waits = []
-        with patch("typer.time.monotonic", return_value=100.4), patch(
-            "typer.time.sleep", side_effect=waits.append
-        ):
-            typer.flush_pending_restore()
-        self.assertEqual(len(waits), 1)
-        self.assertAlmostEqual(waits[0], 0.6, places=6)
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_flush_wait_is_capped_and_skipped_when_due(self):
-        for now, max_wait, expected in ((100.0, 0.25, [0.25]), (102.0, 1.5, [])):
-            with self.subTest(now=now):
-                with self._hold_restore(), patch("typer.time.monotonic", return_value=100.0):
-                    typer.paste_text("transcript")
-                waits = []
-                with patch("typer.time.monotonic", return_value=now), patch(
-                    "typer.time.sleep", side_effect=waits.append
-                ):
-                    typer.flush_pending_restore(max_wait)
-                self.assertEqual(waits, expected)
-                self.assertIsNone(typer._PENDING)
-
-    def test_back_to_back_paste_waits_restores_then_snapshots_fresh(self):
-        with self._hold_restore():
-            typer.paste_text("first")
-            waits = []
-            with patch("typer.time.sleep", side_effect=waits.append):
-                typer.paste_text("second")
-        self.assertTrue(waits and 0 < waits[0] <= 1.0, waits)
-        self.assertEqual(
-            self.clip.events, [("write", "first"), ("restore", "user clip"), ("write", "second")]
-        )
-        self.assertEqual(typer._PENDING.snapshot.text, "user clip")
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_failed_restore_is_retried_then_kept_for_flush(self):
-        self.clip.fail_restores = 3
-        waits = []
-        with patch("typer.time.sleep", side_effect=waits.append):
-            typer.paste_text("transcript")
-        self.assertEqual(self.clip.restore_attempts, 3)
-        self.assertEqual(waits.count(typer._RESTORE_RETRY_BACKOFF_S), 2)
-        self.assertIsNotNone(typer._PENDING)
-        self.assertEqual(self.clip.text, "transcript")
-        typer.flush_pending_restore(max_wait=0)
-        self.assertIsNone(typer._PENDING)
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_flush_keeps_a_still_failing_restore(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        self.clip.fail_restores = 1
-        typer.flush_pending_restore(max_wait=0)
-        self.assertIsNotNone(typer._PENDING)
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_emptied_then_failed_write_is_kept_pending_and_retried(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        self.clip.empty_then_fail = 1
-        typer.flush_pending_restore(max_wait=0)
-        # The clipboard is now empty and its token moved, but this is FAILED,
-        # not "changed": the original stays pending.
-        self.assertEqual(self.clip.text, "")
-        self.assertIsNotNone(typer._PENDING)
-        typer.flush_pending_restore(max_wait=0)
-        self.assertIsNone(typer._PENDING)
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_token_mismatch_inside_restore_writes_nothing_and_never_retries(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        # Another app copies after the guard check but before the restore.
-        self.clip.token += 1
-        with patch("typer._clipboard_holds_payload", return_value=True):
-            typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.restores, [])
-        self.assertEqual(self.clip.restore_attempts, 1)
-        self.assertIsNone(typer._PENDING)
-
-    def test_full_format_original_is_restored(self):
-        self.clip.non_text = b"PNGDATA"
-        typer.paste_text("transcript")
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertEqual(self.clip.non_text, b"PNGDATA")
-
-    def test_read_failure_never_writes_empty_restore(self):
-        self.clip.readable = False
-        with patch("typer.time.sleep"):
-            typer.paste_text("transcript")
-        self.assertEqual(self.clip.writes, ["transcript"])
-        self.assertEqual(self.clip.restores, [])
-        self.assertEqual(self.clip.text, "transcript")
-
-    def test_really_empty_original_is_cleared_not_written(self):
-        self.clip.text = ""
-        typer.paste_text("transcript")
-        self.assertEqual(self.clip.writes, ["transcript"])
-        self.assertEqual(len(self.clip.restores), 1)
-        self.assertEqual(self.clip.text, "")
-
-    def test_incomplete_snapshot_types_instead(self):
-        self.clip.non_text = b"files"
-        self.clip.complete = False
-        typer.paste_text("short transcript")
-        self.mocks["send_text_bulk"].assert_called_once_with("short transcript")
-        self.mocks["send_paste"].assert_not_called()
-        self.assertEqual(self.clip.writes, [])
-        self.assertEqual(self.clip.non_text, b"files")
-
-    def test_incomplete_snapshot_long_text_typed_on_windows(self):
-        self.clip.non_text = b"files"
-        self.clip.complete = False
-        with patch.object(typer.sys, "platform", "win32"):
-            typer.paste_text("x" * 20000)
-        self.mocks["send_text_bulk"].assert_called_once()
-        self.mocks["send_paste"].assert_not_called()
-        self.assertEqual(self.clip.non_text, b"files")
-
-    def test_incomplete_snapshot_over_limit_still_pastes(self):
-        for platform, limit in (("win32", 20000), ("darwin", 20000), ("linux", 2000)):
-            with self.subTest(platform=platform):
-                self.clip = FakeClipboard(non_text=b"files", complete=False)
-                self.mocks["send_text_bulk"].reset_mock()
-                self.mocks["send_paste"].reset_mock()
-                with patch.object(typer.sys, "platform", platform):
-                    typer.paste_text("x" * (limit + 1))
-                self.mocks["send_text_bulk"].assert_not_called()
-                self.mocks["send_paste"].assert_called_once()
-                self.assertEqual(self.clip.text, "user clip")
-
-    def test_linux_types_only_up_to_2000_chars(self):
-        self.clip.non_text = b"files"
-        self.clip.complete = False
-        with patch.object(typer.sys, "platform", "linux"):
-            typer.paste_text("x" * 2000)
-        self.mocks["send_text_bulk"].assert_called_once()
-        self.mocks["send_paste"].assert_not_called()
-
-    def test_incomplete_snapshot_typing_failure_falls_back_to_paste(self):
-        self.clip.non_text = b"files"
-        self.clip.complete = False
-        self.mocks["send_text_bulk"].return_value = False
-        typer.paste_text("short")
-        self.mocks["send_paste"].assert_called_once()
-
-    def test_f7_settles_pending_restore_before_its_payload(self):
-        with self._hold_restore():
-            typer.paste_text("hold-to-talk text")
-        with patch("typer.time.sleep"):
-            typer.paste_text("live final", restore_clipboard=False)
-        self.assertIsNone(typer._PENDING)
-        self.assertEqual(
-            self.clip.events[-2:], [("restore", "user clip"), ("write", "live final")]
-        )
-        self.assertEqual(self.clip.text, "live final")
-
-
-class TestSelectionProbe(ClipboardSafetyBase):
     def _probe(self, selection="picked text"):
         def on_copy(label):
             self.copy_calls.append(label)
@@ -379,9 +170,207 @@ class TestSelectionProbe(ClipboardSafetyBase):
         ):
             self.mocks[name].side_effect = lambda label=label: on_copy(label)
         with patch("typer.time.sleep"):
-            result = typer.get_selected_text(timeout=0.2)
-        return result
+            return typer.get_selected_text(timeout=0.2)
 
+
+class TestSynchronousRestore(ClipboardSafetyBase):
+    def test_restore_happens_before_paste_returns_after_the_delay(self):
+        order = []
+        self.mocks["send_paste"].side_effect = lambda: order.append("paste")
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            order.append(("sleep", s))
+
+        with patch("typer.time.sleep", side_effect=sleep):
+            typer.paste_text("transcript")
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIn(("sleep", 1.0), order)
+        self.assertLess(order.index("paste"), order.index(("sleep", 1.0)))
+        self.assertEqual(self.clip.events, [("write", "transcript"), ("restore", "user clip")])
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_user_copy_during_delay_is_never_overwritten(self):
+        def sleep(s):
+            if s >= 0.15:
+                self.clip.user_copies("user copied during delay")
+
+        with patch("typer.time.sleep", side_effect=sleep):
+            typer.paste_text("transcript")
+        self.assertEqual(self.clip.text, "user copied during delay")
+        self.assertEqual(self.clip.restores, [])
+        self.assertEqual(self.clip.restore_attempts, 1)  # "changed": no retry
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_user_copy_detected_by_text_when_no_token(self):
+        self.use_token = False
+
+        def sleep(s):
+            if s >= 0.15:
+                self.clip.user_copies("app wrote this")
+
+        with patch("typer.time.sleep", side_effect=sleep):
+            typer.paste_text("transcript")
+        self.assertEqual(self.clip.text, "app wrote this")
+
+    def test_failed_restore_retries_with_same_guard_and_never_adopts_a_user_copy(self):
+        # Codex scenario: attempt 1 fails (clipboard busy, nothing written); the
+        # user copies before attempt 2. The retry must keep the payload guard
+        # and report "changed", not adopt the user's copy and overwrite it.
+        self.clip.open_failures = 1
+
+        def on_attempt(n):
+            if n == 2:
+                self.clip.user_copies("user copy between retries")
+
+        self.clip.on_restore_attempt = on_attempt
+        sleeps = self._paste()
+        payload_guard = self.clip.guards_seen[0]
+        self.assertEqual(self.clip.guards_seen, [payload_guard, payload_guard])
+        self.assertIn(typer._RESTORE_RETRY_BACKOFF_S, sleeps)
+        self.assertEqual(self.clip.text, "user copy between retries")
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_open_failure_keeps_the_old_guard(self):
+        self.clip.open_failures = 3
+        sleeps = self._paste()
+        guard = self.clip.guards_seen[0]
+        self.assertEqual(self.clip.guards_seen, [guard, guard, guard])
+        self.assertEqual(sleeps.count(typer._RESTORE_RETRY_BACKOFF_S), 2)
+        self.assertIsNotNone(typer._UNRESTORED)
+        self.assertEqual(typer._UNRESTORED.guard.token, guard)
+
+    def test_empty_then_failed_write_uses_the_in_session_token(self):
+        self.clip.empty_then_fail = 1
+        self._paste()
+        first, second = self.clip.guards_seen[:2]
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, first + 1)  # the token the failed attempt produced
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_unrestored_record_is_retried_by_the_next_paste(self):
+        self.clip.open_failures = 3
+        self._paste("first")
+        self.assertEqual(self.clip.text, "first")
+        self.assertIsNotNone(typer._UNRESTORED)
+        self._paste("second")
+        # The record was retried first; the second paste snapshotted fresh.
+        kinds = [e for e in self.clip.events if e[0] != "aborted"]
+        self.assertEqual(
+            kinds,
+            [
+                ("write", "first"),
+                ("restore", "user clip"),
+                ("write", "second"),
+                ("restore", "user clip"),
+            ],
+        )
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_unrestored_record_never_overwrites_a_newer_user_copy(self):
+        self.clip.open_failures = 3
+        self._paste("first")
+        self.clip.user_copies("newer user copy")
+        typer.flush_pending_restore()
+        self.assertEqual(self.clip.text, "newer user copy")
+        self.assertIsNone(typer._UNRESTORED)
+        self._paste("second")
+        self.assertEqual(self.clip.text, "newer user copy")
+
+    def test_flush_retries_the_unrestored_record_once(self):
+        self.clip.open_failures = 4
+        self._paste()
+        attempts = self.clip.restore_attempts
+        typer.flush_pending_restore()  # still failing: kept
+        self.assertEqual(self.clip.restore_attempts, attempts + 1)
+        self.assertIsNotNone(typer._UNRESTORED)
+        typer.flush_pending_restore(max_wait=0)
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIsNone(typer._UNRESTORED)
+        typer.flush_pending_restore()  # nothing left: a no-op
+
+    def test_restore_in_background_flag_is_off(self):
+        self.assertFalse(typer._RESTORE_IN_BACKGROUND)
+
+    def test_full_format_original_is_restored(self):
+        self.clip.non_text = b"PNGDATA"
+        self._paste()
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertEqual(self.clip.non_text, b"PNGDATA")
+
+    def test_read_failure_never_writes_empty_restore(self):
+        self.clip.readable = False
+        self._paste()
+        self.assertEqual(self.clip.writes, ["transcript"])
+        self.assertEqual(self.clip.restores, [])
+        self.assertEqual(self.clip.text, "transcript")
+
+    def test_really_empty_original_is_cleared_not_written(self):
+        self.clip.text = ""
+        self._paste()
+        self.assertEqual(self.clip.writes, ["transcript"])
+        self.assertEqual(len(self.clip.restores), 1)
+        self.assertEqual(self.clip.text, "")
+
+    def test_incomplete_snapshot_types_instead(self):
+        self.clip.non_text = b"files"
+        self.clip.complete = False
+        self._paste("short transcript")
+        self.mocks["send_text_bulk"].assert_called_once_with("short transcript")
+        self.mocks["send_paste"].assert_not_called()
+        self.assertEqual(self.clip.writes, [])
+        self.assertEqual(self.clip.non_text, b"files")
+
+    def test_incomplete_snapshot_long_text_typed_on_windows(self):
+        self.clip.non_text = b"files"
+        self.clip.complete = False
+        with patch.object(typer.sys, "platform", "win32"):
+            self._paste("x" * 20000)
+        self.mocks["send_text_bulk"].assert_called_once()
+        self.mocks["send_paste"].assert_not_called()
+        self.assertEqual(self.clip.non_text, b"files")
+
+    def test_incomplete_snapshot_over_limit_still_pastes(self):
+        for platform, limit in (("win32", 20000), ("darwin", 20000), ("linux", 2000)):
+            with self.subTest(platform=platform):
+                self.clip = FakeClipboard(non_text=b"files", complete=False)
+                self.mocks["send_text_bulk"].reset_mock()
+                self.mocks["send_paste"].reset_mock()
+                with patch.object(typer.sys, "platform", platform):
+                    self._paste("x" * (limit + 1))
+                self.mocks["send_text_bulk"].assert_not_called()
+                self.mocks["send_paste"].assert_called_once()
+                self.assertEqual(self.clip.text, "user clip")
+
+    def test_linux_types_only_up_to_2000_chars(self):
+        self.clip.non_text = b"files"
+        self.clip.complete = False
+        with patch.object(typer.sys, "platform", "linux"):
+            self._paste("x" * 2000)
+        self.mocks["send_text_bulk"].assert_called_once()
+        self.mocks["send_paste"].assert_not_called()
+
+    def test_incomplete_snapshot_typing_failure_falls_back_to_paste(self):
+        self.clip.non_text = b"files"
+        self.clip.complete = False
+        self.mocks["send_text_bulk"].return_value = False
+        self._paste("short")
+        self.mocks["send_paste"].assert_called_once()
+
+    def test_f7_leaves_payload_and_retries_unrestored_first(self):
+        self.clip.open_failures = 3
+        self._paste("hold-to-talk text")
+        self._paste("live final", restore_clipboard=False)
+        self.assertEqual(
+            self.clip.events[-2:], [("restore", "user clip"), ("write", "live final")]
+        )
+        self.assertEqual(self.clip.text, "live final")
+        self.assertIsNone(typer._UNRESTORED)
+
+
+class TestSelectionProbe(ClipboardSafetyBase):
     def test_plain_window_uses_ctrl_c(self):
         self.assertEqual(self._probe(), "picked text")
         self.assertEqual(self.copy_calls, ["ctrl+c"])
@@ -405,18 +394,17 @@ class TestSelectionProbe(ClipboardSafetyBase):
         self.assertEqual(self.clip.non_text, b"PNGDATA")
         self.assertEqual(self.clip.text, "user clip")
 
-    def test_probe_during_pending_restore_waits_and_restores_first(self):
-        with self._hold_restore():
-            typer.paste_text("transcript")
-        waits = []
-        with patch("typer.time.sleep", side_effect=waits.append):
-            self.mocks["send_copy"].side_effect = lambda: self.clip.user_copies("picked text")
-            self.assertEqual(typer.get_selected_text(timeout=0.2), "picked text")
-        self.assertTrue(waits and 0 < waits[0] <= 1.0, waits)
-        kinds = [e[0] for e in self.clip.events]
-        self.assertEqual(kinds[:3], ["write", "restore", "write"])  # payload, restore, sentinel
-        self.assertEqual(self.clip.events[1], ("restore", "user clip"))
-        self.assertIsNone(typer._PENDING)
+    def test_probe_guard_is_the_copy_it_observed(self):
+        self.assertEqual(self._probe(), "picked text")
+        # The guard moved from the sentinel token to the observed copy's token.
+        self.assertEqual(len(self.clip.guards_seen), 1)
+        self.assertEqual(self.clip.events[-1], ("restore", "user clip"))
+
+    def test_probe_retries_unrestored_record_first(self):
+        self.clip.open_failures = 3
+        self._paste("transcript")
+        self.assertEqual(self._probe(), "picked text")
+        self.assertIsNone(typer._UNRESTORED)
         self.assertEqual(self.clip.text, "user clip")
 
     def test_unreadable_clipboard_skips_probe(self):
@@ -431,6 +419,50 @@ class TestSelectionProbe(ClipboardSafetyBase):
         self.assertEqual(self._probe(), "")
         self.assertEqual(self.clip.writes, [])
         self.assertEqual(self.clip.non_text, b"files")
+
+
+class TestPasteProbeSerialization(ClipboardSafetyBase):
+    def test_probe_waits_for_paste_restore(self):
+        in_delay = threading.Event()
+        release = threading.Event()
+        lock = threading.Lock()  # FakeClipboard is not thread-safe on its own
+
+        def sleep(s):
+            if s >= 0.15 and threading.current_thread().name == "paste":
+                in_delay.set()
+                release.wait(5)
+
+        def on_copy():
+            with lock:
+                self.clip.user_copies("picked text")
+
+        self.mocks["send_copy"].side_effect = on_copy
+        results = {}
+        with patch("typer.time.sleep", side_effect=sleep):
+            paste = threading.Thread(
+                target=lambda: typer.paste_text("transcript"), name="paste"
+            )
+            probe = threading.Thread(
+                target=lambda: results.setdefault("sel", typer.get_selected_text(0.2)),
+                name="probe",
+            )
+            paste.start()
+            self.assertTrue(in_delay.wait(5))
+            probe.start()
+            probe.join(0.3)
+            # The paste holds the lock through its delay: the probe has not
+            # written its sentinel and the payload is still on the clipboard.
+            self.assertTrue(probe.is_alive())
+            self.assertEqual(self.clip.text, "transcript")
+            release.set()
+            paste.join(5)
+            probe.join(5)
+        self.assertEqual(results.get("sel"), "picked text")
+        kinds = [e[0] for e in self.clip.events]
+        # payload, paste's restore, then the probe's sentinel, copy, restore.
+        self.assertEqual(kinds[:3], ["write", "restore", "write"])
+        self.assertEqual(self.clip.events[1], ("restore", "user clip"))
+        self.assertEqual(self.clip.text, "user clip")
 
 
 class TestIdeHostTable(unittest.TestCase):
@@ -464,8 +496,10 @@ def _small_dib() -> bytes:
 class _FakeWinApi:
     """Stands in for the private ctypes binding inside _win_restore."""
 
-    def __init__(self, set_failures):
+    def __init__(self, set_failures, can_open=True):
         self.set_failures = set_failures
+        self.can_open = can_open
+        self.seq = 7
         self.calls = []
         self.user32 = self
 
@@ -476,23 +510,24 @@ class _FakeWinApi:
         return True
 
     def OpenClipboard(self, hwnd):
-        return True
+        return self.can_open
 
     def CloseClipboard(self):
         self.calls.append("close")
         return True
 
     def GetClipboardSequenceNumber(self):
-        return 7
+        return self.seq
 
     def EmptyClipboard(self):
         self.calls.append("empty")
+        self.seq += 1
         return True
 
 
 class TestWindowsRestoreOutcome(unittest.TestCase):
-    def _run(self, set_failures, expect_token=None):
-        api = _FakeWinApi(set_failures)
+    def _run(self, set_failures, expect_token=None, can_open=True):
+        api = _FakeWinApi(set_failures, can_open)
 
         def fake_set(_api, fmt, data):
             api.calls.append(("set", fmt))
@@ -504,23 +539,32 @@ class TestWindowsRestoreOutcome(unittest.TestCase):
         snap = _snap(text="t", formats=((clip_mod.CF_UNICODETEXT, b"t\x00\x00"),))
         with patch.object(clip_mod, "_win_api", return_value=api), patch.object(
             clip_mod, "_win_set_bytes", side_effect=fake_set
-        ):
-            return clip_mod._win_restore(snap, expect_token), api.calls
+        ), patch.object(clip_mod.time, "sleep"):
+            status, token_after = clip_mod._win_restore(snap, expect_token)
+        return status, token_after, api.calls
 
     def test_write_failure_after_empty_retries_once_in_session(self):
-        status, calls = self._run(set_failures=1)
+        status, _token, calls = self._run(set_failures=1)
         self.assertEqual(status, clip_mod.RESTORED)
         self.assertEqual(calls.count("empty"), 2)
         self.assertEqual(calls[-1], "close")
 
-    def test_write_failing_twice_after_empty_is_failed_not_changed(self):
-        status, calls = self._run(set_failures=2)
+    def test_write_failing_twice_after_empty_reports_in_session_token(self):
+        status, token_after, calls = self._run(set_failures=2, expect_token=7)
         self.assertEqual(status, clip_mod.FAILED)
         self.assertEqual(calls.count("empty"), 2)
+        self.assertEqual(token_after, 9)  # read inside the session, after our empties
 
     def test_token_mismatch_is_changed_and_empties_nothing(self):
-        status, calls = self._run(set_failures=0, expect_token=6)
+        status, token_after, calls = self._run(set_failures=0, expect_token=6)
         self.assertEqual(status, clip_mod.CHANGED)
+        self.assertIsNone(token_after)
+        self.assertNotIn("empty", calls)
+
+    def test_open_failure_writes_nothing_and_reports_no_token(self):
+        status, token_after, calls = self._run(set_failures=0, can_open=False)
+        self.assertEqual(status, clip_mod.FAILED)
+        self.assertIsNone(token_after)
         self.assertNotIn("empty", calls)
 
 
@@ -581,9 +625,6 @@ class TestWindowsRoundTrip(unittest.TestCase):
         self.assertEqual(snap.text, "")
         self.assertEqual(snap.formats, ())
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestWindowsFormatAllowList(unittest.TestCase):
@@ -684,3 +725,7 @@ class TestWindowsSnapshotBudget(unittest.TestCase):
             clip_mod, "_win_snapshot_blocking", return_value=_snap(text="quick")
         ):
             self.assertEqual(clip_mod._win_snapshot().text, "quick")
+
+
+if __name__ == "__main__":
+    unittest.main()

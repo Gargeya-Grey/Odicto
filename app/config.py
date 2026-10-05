@@ -542,7 +542,7 @@ class Config:
 
     # Timing & Feedback
     # Seconds after the paste chord before the previous clipboard is restored
-    # (runs in the background; a 0.15 s floor applies).
+    # (paste_text waits this long under the clipboard lock; a 0.15 s floor applies).
     PASTE_DELAY_SECONDS: float = _env_float("PASTE_DELAY_SECONDS", 0.15, 10.0)
     # A capture stops itself after this many seconds and is transcribed. 0 = no limit.
     MAX_RECORDING_SECONDS: int = _env_int("MAX_RECORDING_SECONDS", 0, 7200)
