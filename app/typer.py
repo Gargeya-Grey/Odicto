@@ -28,7 +28,9 @@ from platforms.clipboard import (
     ClipboardSnapshot,
     clipboard_change_token,
     clipboard_restore,
+    clipboard_read_text_token,
     clipboard_restore_result,
+    clipboard_write_text_token,
     CHANGED as RESTORE_CHANGED,
     RESTORED as RESTORE_RESTORED,
     clipboard_snapshot,
@@ -141,6 +143,51 @@ def _change_token() -> Optional[int]:
         return None
 
 
+def _write_owned(text: str, verify: bool = True, attempts: int = 3) -> tuple:
+    """Write Odicto's own clipboard text. Returns ``(ok, guard, landed_token)``.
+
+    Where the platform has change tokens, the write and its token come from
+    one clipboard session, so the guard can never be a user copy made a
+    moment later; ``landed_token`` is that token even when the read-back
+    failed. Without tokens (Linux) the guard is the text itself, written
+    through the classic verified (or, for a sentinel, plain) write.
+    """
+    if _change_token() is None:
+        ok = _clipboard_write_verified(text) if verify else _clipboard_write(text)
+        return ok, _Guard(token=None, payload=text), None
+    landed = None
+    for attempt in range(max(1, attempts)):
+        try:
+            wrote, token = clipboard_write_text_token(text)
+        except Exception:
+            wrote, token = False, None
+        if wrote and token is not None:
+            landed = token
+            if not verify or _clipboard_read() == text:
+                return True, _Guard(token=token, payload=text), landed
+        if attempt + 1 < attempts:
+            time.sleep(0.02)
+    return False, _Guard(token=landed, payload=text), landed
+
+
+def _observed_guard(seen: str) -> _Guard:
+    """Guard for a clipboard value the probe observed (an app's copy).
+
+    Text and token are read in one clipboard session; when they no longer
+    match ``seen`` the guard is text-only and the restore will see "changed"
+    rather than overwrite something newer.
+    """
+    if _change_token() is None:
+        return _Guard(token=None, payload=seen)
+    try:
+        text, token = clipboard_read_text_token()
+    except Exception:
+        text, token = None, None
+    if token is not None and text == seen:
+        return _Guard(token=token, payload=seen)
+    return _Guard(token=None, payload=seen)
+
+
 def _snapshot(attempts: int = 3) -> ClipboardSnapshot:
     """Snapshot the user's clipboard, retrying briefly while it is busy."""
     snap = None
@@ -233,7 +280,7 @@ def _guarded_restore(snap: ClipboardSnapshot, guard: _Guard, context: str) -> st
             return status
         if attempt + 1 < _RESTORE_RETRIES:
             time.sleep(_RESTORE_RETRY_BACKOFF_S)
-    _UNRESTORED = _Unrestored(snapshot=snap, guard=guard)
+    _record_unrestored(snap, guard)
     print(
         f"Warning: Failed to restore original clipboard {context}; "
         "will retry before the next paste or at shutdown",
@@ -242,28 +289,81 @@ def _guarded_restore(snap: ClipboardSnapshot, guard: _Guard, context: str) -> st
     return status
 
 
-def _retry_unrestored() -> None:
+def _guard_still_holds(guard: _Guard) -> bool:
+    """Read-only check that the clipboard still holds the guarded write."""
+    if guard.token is not None:
+        current = _change_token()
+        if current is not None:
+            return current == guard.token
+    return _clipboard_read() == guard.payload
+
+
+def _record_unrestored(snap: ClipboardSnapshot, guard: _Guard) -> None:
+    """Keep ``snap`` as the single unrestored record (a true original only)."""
+    global _UNRESTORED
+    _UNRESTORED = _Unrestored(snapshot=snap, guard=guard)
+
+
+def _retry_unrestored() -> Optional[_Unrestored]:
     """Retry the unrestored record once with its own guard. Caller holds the lock.
 
-    Its snapshot is never adopted as the next operation's original: after
-    this call the caller snapshots the clipboard fresh.
+    Returns the record when it still failed and the clipboard still holds
+    Odicto's earlier write. The caller must then use ``record.snapshot`` as
+    its original (a fresh snapshot would capture Odicto's own payload) and
+    call ``_take_over(record)`` right before it writes; the record stays in
+    place until then, so an operation that writes nothing loses nothing.
+    Returns None when there is no record left to carry.
     """
     global _UNRESTORED
     record = _UNRESTORED
     if record is None:
-        return
+        return None
     try:
         status, guard = _restore_once(record.snapshot, record.guard)
     except Exception as e:
         print(f"Warning: clipboard restore retry failed: {e}", flush=True)
-        return
+        status, guard = _RESTORE_FAILED, record.guard
     if status == _RESTORE_FAILED:
-        _UNRESTORED = _Unrestored(snapshot=record.snapshot, guard=guard)
+        record = _Unrestored(snapshot=record.snapshot, guard=guard)
+        _UNRESTORED = record
         print("Warning: earlier clipboard restore still failing", flush=True)
-        return
+        if _guard_still_holds(guard):
+            return record
+        _UNRESTORED = None  # someone else wrote the clipboard meanwhile
+        return None
     _UNRESTORED = None
     if status == _RESTORE_CHANGED:
         print("Notice: clipboard changed since the failed restore; keeping it", flush=True)
+    return None
+
+
+def _take_over(record: Optional[_Unrestored]) -> None:
+    """The caller is about to overwrite the clipboard and now owns ``record``.
+
+    Its snapshot (the true original) becomes the caller's original; if the
+    caller's own restore fails, ``_guarded_restore`` records it again.
+    """
+    global _UNRESTORED
+    if record is not None and _UNRESTORED is record:
+        _UNRESTORED = None
+
+
+# Set by request_restore_now(); ends an in-progress paste's post-chord wait.
+_RESTORE_NOW = threading.Event()
+
+
+def request_restore_now() -> None:
+    """End an in-progress paste's wait so its guarded restore runs at once.
+
+    main.py calls this at shutdown before waiting for the lifecycle lock. The
+    event is cleared at the start of every paste.
+    """
+    _RESTORE_NOW.set()
+
+
+def _wait_restore_window(timeout: float) -> None:
+    if timeout > 0:
+        _RESTORE_NOW.wait(timeout)
 
 
 def flush_pending_restore(max_wait: float = 1.5) -> None:
@@ -360,10 +460,10 @@ def get_selected_text(timeout: float = 0.35) -> str:
 
 
 def _get_selected_text_locked(timeout: float) -> str:
-    _retry_unrestored()
+    carried = _retry_unrestored()
     terminal = _terminal_target()
     ide = False if terminal else _ide_target()
-    original = _snapshot()
+    original = carried.snapshot if carried is not None else _snapshot()
     if not original.ok:
         print("Warning: clipboard unreadable; selection probe skipped", flush=True)
         return ""
@@ -375,13 +475,13 @@ def _get_selected_text_locked(timeout: float) -> str:
         return ""
 
     sentinel = f"\ufeffodicto-sel-{uuid.uuid4().hex}\ufeff"
-    if not _clipboard_write(sentinel):
+    _take_over(carried)
+    # The guard starts at the sentinel's own write and moves only to the copy
+    # the probe itself observed, so a later user copy is never overwritten.
+    wrote, guard, _landed = _write_owned(sentinel, verify=False, attempts=1)
+    if not wrote:
         print("Warning: could not write clipboard sentinel; selection probe degraded", flush=True)
         return _get_selected_text_legacy(original, timeout, terminal, ide)
-
-    # The guard starts at the sentinel's token and moves only to the copy the
-    # probe itself observed, so a later user copy is never overwritten.
-    guard = _Guard(token=_change_token(), payload=sentinel)
     selected = sentinel
     path = "empty"
     try:
@@ -393,7 +493,7 @@ def _get_selected_text_locked(timeout: float) -> str:
         if wm_copy_foreground():
             cur = _clipboard_read()
             if cur != sentinel and cur.strip():
-                guard = _Guard(token=_change_token(), payload=cur)
+                guard = _observed_guard(cur)
                 selected = cur
                 path = "WM_COPY"
 
@@ -404,7 +504,7 @@ def _get_selected_text_locked(timeout: float) -> str:
         if selected == sentinel:
             selected = _copy_chord_until_change(sentinel, timeout, terminal, ide)
             if selected != sentinel:
-                guard = _Guard(token=_change_token(), payload=selected)
+                guard = _observed_guard(selected)
                 if (selected or "").strip():
                     path = copy_label
 
@@ -415,7 +515,7 @@ def _get_selected_text_locked(timeout: float) -> str:
                 sentinel, min(timeout, 0.25), terminal, ide
             )
             if selected != sentinel:
-                guard = _Guard(token=_change_token(), payload=selected)
+                guard = _observed_guard(selected)
                 if (selected or "").strip():
                     path = f"{copy_label}-retry"
 
@@ -471,7 +571,7 @@ def _get_selected_text_legacy(
     """Fallback when sentinel write fails: old change-vs-original logic."""
     original_text = original.text
     selected = original_text
-    guard = _Guard(token=_change_token(), payload=original_text)
+    guard = _observed_guard(original_text)
     try:
         force_release_modifiers()
         _send_copy_chord(terminal, ide)
@@ -480,7 +580,7 @@ def _get_selected_text_legacy(
             time.sleep(0.02)
             cur = _clipboard_read()
             if cur != original_text:
-                guard = _Guard(token=_change_token(), payload=cur)
+                guard = _observed_guard(cur)
                 selected = cur
                 break
     except Exception as e:
@@ -520,10 +620,13 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                 return
             raise RuntimeError("Could not type into terminal; no paste chord was sent")
 
-        _retry_unrestored()
+        _RESTORE_NOW.clear()
+        carried = _retry_unrestored()
 
         if not restore_clipboard:
-            if not _clipboard_write_verified(text):
+            # F7 leaves its payload: a carried record cannot be restored after
+            # this and is dropped as "changed" by the next retry.
+            if not _write_owned(text)[0]:
                 raise RuntimeError("Could not write the paste payload to clipboard")
             _wait_modifiers_up(0.08)
             time.sleep(0.008)
@@ -531,7 +634,9 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             time.sleep(0.015)
             return
 
-        original = _snapshot()
+        # A carried record means the clipboard still holds Odicto's previous
+        # payload: its snapshot is the true original, never a fresh snapshot.
+        original = carried.snapshot if carried is not None else _snapshot()
 
         if original.ok and original.has_non_text and not original.complete:
             if len(text) <= _type_instead_limit():
@@ -550,15 +655,16 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                 flush=True,
             )
 
-        if not _clipboard_write_verified(text):
+        _take_over(carried)
+        wrote, guard, landed = _write_owned(text)
+        if not wrote:
             # Restore only if the payload did land (the read-back flaked);
             # otherwise the clipboard was not ours to touch.
-            if _clipboard_read() == text:
-                _guarded_restore(
-                    original, _Guard(token=_change_token(), payload=text), "after failed paste"
-                )
+            if landed is not None or (guard.token is None and _clipboard_read() == text):
+                _guarded_restore(original, guard, "after failed paste")
+            elif carried is not None:
+                _record_unrestored(original, carried.guard)
             raise RuntimeError("Could not write the paste payload to clipboard")
-        guard = _Guard(token=_change_token(), payload=text)
 
         try:
             _wait_modifiers_up(0.08)
@@ -571,7 +677,11 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
         # SendInput only queues the paste chord; Electron apps, busy browsers
         # and RDP sessions read the clipboard much later. The lock stays held,
         # so no probe or paste can replace the payload before they read it.
-        time.sleep(max(0.15, float(Config.PASTE_DELAY_SECONDS)))
+        # request_restore_now() (shutdown) ends the wait early; the 0.15 s
+        # floor always runs.
+        delay = max(0.15, float(Config.PASTE_DELAY_SECONDS))
+        time.sleep(0.15)
+        _wait_restore_window(delay - 0.15)
         _guarded_restore(original, guard, "after paste")
 
 

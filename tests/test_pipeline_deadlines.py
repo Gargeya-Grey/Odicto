@@ -594,6 +594,34 @@ class TestShutdownOrder(_Base):
         self.assertFalse(app.ready)
         app.recorder.close.assert_called_once()
 
+    def test_quit_during_long_paste_hurries_restore_and_waits_for_it(self):
+        app = app_fixture()
+        app.pid_file = "unused-test-pid"
+        app._SHUTDOWN_LOCK_TIMEOUT_S = 0.25
+        restore_now, pasting, finished = threading.Event(), threading.Event(), threading.Event()
+        order = []
+
+        def long_paste(text):
+            pasting.set()
+            restore_now.wait(5)  # PASTE_DELAY_SECONDS wait, ended early by the request
+            time.sleep(0.35)     # restoring the original clipboard takes longer than one wait
+            order.append("paste finished")
+            finished.set()
+
+        self.paste.side_effect = long_paste
+        self.stack.enter_context(patch("main.platforms.unhook_all"))
+        self.stack.enter_context(patch("main.flush_pending_restore"))
+        self.stack.enter_context(patch("typer.request_restore_now", create=True,
+                                       side_effect=lambda: (order.append("restore now"), restore_now.set())))
+        worker = threading.Thread(target=app.process_and_paste, args=(None, False),
+                                  kwargs={"pre_transcript": "words"})
+        worker.start()
+        self.assertTrue(pasting.wait(1))
+        app._shutdown()
+        self.assertTrue(finished.is_set(), "Quit returned while the paste still held the snapshot")
+        self.assertEqual(order, ["restore now", "paste finished"])
+        worker.join(2)
+
     def test_pipeline_does_not_start_insertion_after_closing(self):
         app = app_fixture()
         app.pid_file = "unused-test-pid"

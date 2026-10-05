@@ -125,6 +125,50 @@ def clipboard_change_token() -> Optional[int]:
     return None
 
 
+def clipboard_write_text_token(text: str) -> tuple:
+    """Write plain text and return ``(ok, token)`` for exactly that write.
+
+    The token identifies Odicto's own write, so a guard built from it can
+    never be a user copy made a moment later. Windows reads
+    ``GetClipboardSequenceNumber`` inside the same OpenClipboard session that
+    wrote. macOS uses the count ``clearContents`` returns: ``changeCount``
+    counts ownership changes, so the ``setString:forType:`` that follows does
+    not bump it (best effort, NSPasteboard has no lock). Linux has no token:
+    ``(ok, None)``. Never raises.
+    """
+    try:
+        if sys.platform == "win32":
+            return _win_write_text_token(text)
+        if sys.platform == "darwin":
+            return _mac_write_text_token(text)
+        return _text_restore(text), None
+    except Exception:
+        return False, None
+
+
+def clipboard_read_text_token() -> tuple:
+    """Read plain text and the change token of that same clipboard state.
+
+    Windows reads both inside one OpenClipboard session; macOS accepts the
+    read only when ``changeCount`` is equal before and after it. Returns
+    ``(text, token)``; ``token`` is None when it cannot be tied to the text
+    (Linux, busy clipboard). Never raises.
+    """
+    try:
+        if sys.platform == "win32":
+            return _win_read_text_token()
+        if sys.platform == "darwin":
+            from AppKit import NSPasteboard, NSPasteboardTypeString
+
+            pb = NSPasteboard.generalPasteboard()
+            before = int(pb.changeCount())
+            text = str(pb.stringForType_(NSPasteboardTypeString) or "")
+            return text, (before if int(pb.changeCount()) == before else None)
+    except Exception:
+        pass
+    return (_text_read() or ""), None
+
+
 # --- Text fallback (pyperclip) --------------------------------------------
 
 
@@ -229,6 +273,7 @@ class _WinApi:
         self.GlobalLock = sig(k.GlobalLock, [HGLOBAL], wintypes.LPVOID)
         self.GlobalUnlock = sig(k.GlobalUnlock, [HGLOBAL], wintypes.BOOL)
         self.GlobalSize = sig(k.GlobalSize, [HGLOBAL], SIZE_T)
+        self.GetUserDefaultLCID = sig(k.GetUserDefaultLCID, [], wintypes.DWORD)
 
         self.GetEnhMetaFileBits = sig(
             g.GetEnhMetaFileBits, [HANDLE, UINT, wintypes.LPVOID], UINT
@@ -465,12 +510,86 @@ def _win_set_bytes(api: _WinApi, fmt: int, data: bytes) -> bool:
     return True
 
 
+def _encode_or_ascii(text: str, codec: str) -> bytes:
+    """Encode with a Windows code-page codec; ASCII where it does not exist."""
+    try:
+        return text.encode(codec, "replace")
+    except LookupError:
+        return text.encode("ascii", "replace")
+
+
+def _win_text_family(api: _WinApi, text: str) -> list:
+    """CF_UNICODETEXT plus the CF_TEXT / CF_OEMTEXT / CF_LOCALE forms of ``text``.
+
+    Windows synthesizes the missing text formats at CloseClipboard, and each
+    synthesized format bumps the sequence number after the session ends, so a
+    token read inside the session would never match again. Writing the whole
+    family leaves nothing to synthesize: the in-session token is final.
+    """
+    import struct
+
+    nul = chr(0)
+    return [
+        (CF_UNICODETEXT, (text + nul).encode("utf-16-le")),
+        (CF_TEXT, _encode_or_ascii(text, "mbcs") + b"\x00"),
+        (CF_OEMTEXT, _encode_or_ascii(text, "oem") + b"\x00"),
+        (CF_LOCALE, struct.pack("<I", int(api.GetUserDefaultLCID()))),
+    ]
+
+
+def _win_complete_text_family(api: _WinApi, formats: tuple, text: str) -> tuple:
+    """Add the text formats Windows would otherwise synthesize at close."""
+    have = {int(fmt) for fmt, _ in formats}
+    if CF_UNICODETEXT not in have:
+        return formats
+    extra = [(f, d) for f, d in _win_text_family(api, text) if f not in have]
+    return tuple(formats) + tuple(extra)
+
+
+def _win_write_text_token(text: str) -> tuple:
+    """Write CF_UNICODETEXT; read the sequence number inside the same session."""
+    api = _win_api()
+    family = _win_text_family(api, text)
+    HWND_MESSAGE = -3
+    hwnd = api.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, HWND_MESSAGE, None, None, None)
+    try:
+        if not _win_open(api, hwnd):
+            return False, None
+        try:
+            if not api.EmptyClipboard():
+                return False, None
+            if not all(_win_set_bytes(api, fmt, data) for fmt, data in family):
+                return False, int(api.user32.GetClipboardSequenceNumber())
+            return True, int(api.user32.GetClipboardSequenceNumber())
+        finally:
+            api.CloseClipboard()
+    finally:
+        if hwnd:
+            api.DestroyWindow(hwnd)
+
+
+def _win_read_text_token() -> tuple:
+    """CF_UNICODETEXT and the sequence number of the same clipboard state."""
+    api = _win_api()
+    if not _win_open(api):
+        return (_text_read() or ""), None
+    try:
+        token = int(api.user32.GetClipboardSequenceNumber())
+        handle = api.GetClipboardData(CF_UNICODETEXT)
+        raw = _win_read_hglobal(api, handle) if handle else b""
+        text = (raw or b"").decode("utf-16-le", errors="replace").split(chr(0), 1)[0]
+        return text, token
+    finally:
+        api.CloseClipboard()
+
+
 def _win_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:
     """(status, token_after). See ``clipboard_restore_result``."""
     api = _win_api()
     formats = tuple(snap.formats or ())
     if not formats and snap.text:
-        formats = ((CF_UNICODETEXT, (snap.text + "\x00").encode("utf-16-le")),)
+        formats = ((CF_UNICODETEXT, (snap.text + chr(0)).encode("utf-16-le")),)
+    formats = _win_complete_text_family(api, formats, snap.text)
     # SetClipboardData needs an owner window after EmptyClipboard; a message-only
     # window (HWND_MESSAGE) created and destroyed on this thread serves.
     HWND_MESSAGE = -3
@@ -561,6 +680,20 @@ def _mac_snapshot() -> ClipboardSnapshot:
         has_non_text=has_non_text,
         ok=True,
     )
+
+
+def _mac_write_text_token(text: str) -> tuple:
+    try:
+        from AppKit import NSPasteboard, NSPasteboardTypeString
+    except Exception:
+        return _text_restore(text), None
+    pb = NSPasteboard.generalPasteboard()
+    cleared = int(pb.clearContents())
+    if not pb.setString_forType_(text, NSPasteboardTypeString):
+        return False, None
+    # changeCount counts ownership changes: clearContents bumps it and returns
+    # the new value; writing data to the pasteboard we now own does not.
+    return True, cleared
 
 
 def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:

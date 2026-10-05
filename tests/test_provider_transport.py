@@ -330,6 +330,26 @@ class TestSpeechTransport(unittest.TestCase):
         self.assertEqual(client._last_interaction_id, "earlier")
         self.assertEqual(ai.conversation_history, [])
 
+    def test_abandoned_spoken_reset_does_not_clear_newer_memory(self):
+        ai = refiner_fixture("gemini")
+        client = refiner._GeminiClient.__new__(refiner._GeminiClient)
+        client.model = "m"
+        client._last_interaction_id = "current"
+        client.client = MagicMock()
+        ai.client = client
+        token = ai.history_generation()  # dispatched ...
+        ai.abandon_inflight()            # ... abandoned before it reached refine()
+        ai.conversation_history = [{"role": "user", "content": "newer"},
+                                   {"role": "assistant", "content": "reply"}]
+        with ai.pinned_generation(token), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ai.refine("reset chat"), refiner._RESET_REPLY)
+        self.assertEqual(len(ai.conversation_history), 2)
+        self.assertEqual(client._last_interaction_id, "current")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ai.refine("reset chat"), refiner._RESET_REPLY)  # live call still resets
+        self.assertEqual(ai.conversation_history, [])
+        self.assertIsNone(client._last_interaction_id)
+
     def test_pinned_generation_survives_abandon_before_refine_starts(self):
         ai = refiner_fixture()
         token = ai.history_generation()

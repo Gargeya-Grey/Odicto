@@ -17,6 +17,8 @@ from config import Config
 from platforms import clipboard as clip_mod
 from platforms.clipboard import ClipboardSnapshot
 
+_REAL_WAIT_RESTORE_WINDOW = typer._wait_restore_window
+
 
 def _snap(text="", formats=(), complete=True, has_non_text=False, ok=True):
     return ClipboardSnapshot(
@@ -96,6 +98,14 @@ class FakeClipboard:
     def restore(self, snap, expect_token=None):
         return self.restore_result(snap, expect_token)[0] == "restored"
 
+    def write_token(self, text):
+        """clipboard_write_text_token: the token comes from the write itself."""
+        self.write(text)
+        return True, self.token
+
+    def read_token(self):
+        return self.text, self.token
+
     def user_copies(self, text):
         self.events.append(("user", text))
         self.text = text
@@ -143,13 +153,31 @@ class ClipboardSafetyBase(unittest.TestCase):
             patch(
                 "typer.send_copy_ide", side_effect=lambda: self.copy_calls.append("ctrl+insert")
             ),
+            patch(
+                "typer.clipboard_write_text_token",
+                side_effect=lambda t: self.clip.write_token(t),
+            ),
+            patch("typer.clipboard_read_text_token", side_effect=lambda: self.clip.read_token()),
+            patch("typer._wait_restore_window", side_effect=self._window),
             patch.object(Config, "PASTE_DELAY_SECONDS", 1.0),
+            # Safety net: nothing in these tests may reach the real OS clipboard.
+            patch.object(clip_mod, "_win_api", side_effect=AssertionError("real clipboard")),
+            patch.object(clip_mod, "_text_restore", side_effect=AssertionError("real clipboard")),
+            patch.object(clip_mod, "_text_read", side_effect=AssertionError("real clipboard")),
         ]
         self.mocks = {}
         for p in patches:
             self.mocks[p.attribute] = p.start()
             self.addCleanup(p.stop)
         self.addCleanup(setattr, typer, "_UNRESTORED", None)
+
+    def _window(self, timeout):
+        """Stands in for the post-chord wait (an Event wait in typer)."""
+        self.windows = getattr(self, "windows", [])
+        self.windows.append(timeout)
+        hook = getattr(self, "on_window", None)
+        if hook is not None:
+            hook(timeout)
 
     def _paste(self, text="transcript", **kwargs):
         """paste_text with time.sleep recorded instead of slept."""
@@ -177,17 +205,18 @@ class TestSynchronousRestore(ClipboardSafetyBase):
     def test_restore_happens_before_paste_returns_after_the_delay(self):
         order = []
         self.mocks["send_paste"].side_effect = lambda: order.append("paste")
-        sleeps = []
+        self.on_window = lambda t: order.append(("window", t))
 
-        def sleep(s):
-            sleeps.append(s)
-            order.append(("sleep", s))
-
-        with patch("typer.time.sleep", side_effect=sleep):
+        with patch("typer.time.sleep", side_effect=lambda s: order.append(("sleep", s))):
             typer.paste_text("transcript")
         self.assertEqual(self.clip.text, "user clip")
-        self.assertIn(("sleep", 1.0), order)
-        self.assertLess(order.index("paste"), order.index(("sleep", 1.0)))
+        # 0.15 s floor sleep, then the rest of the 1.0 s delay as an Event wait.
+        i_paste = order.index("paste")
+        i_floor = order.index(("sleep", 0.15), i_paste)
+        window = [e for e in order if e[0] == "window"]
+        self.assertEqual(len(window), 1)
+        self.assertAlmostEqual(window[0][1], 0.85)
+        self.assertLess(i_floor, order.index(window[0]))
         self.assertEqual(self.clip.events, [("write", "transcript"), ("restore", "user clip")])
         self.assertIsNone(typer._UNRESTORED)
 
@@ -370,6 +399,85 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self.assertIsNone(typer._UNRESTORED)
 
 
+class TestRoundThreeFixes(ClipboardSafetyBase):
+    def test_guard_is_the_payload_write_not_a_user_copy_right_after_it(self):
+        # A user copy lands right after the payload write (here: during its
+        # verification read). The guard must still be the payload's own token,
+        # so the restore reports "changed" and keeps the user's copy.
+        state = {"armed": True}
+        real_read = self.clip.read
+
+        def read():
+            value = real_read()
+            if state["armed"] and value == "transcript":
+                state["armed"] = False
+                self.clip.user_copies("user copy right after the write")
+            return value
+
+        self.mocks["clipboard_read"].side_effect = read
+        self._paste()
+        self.assertEqual(self.clip.text, "user copy right after the write")
+        self.assertEqual(self.clip.restores, [])
+
+    def test_probe_sentinel_guard_comes_from_its_own_write(self):
+        self.assertEqual(self._probe(), "picked text")
+        write_tokens = [e for e in self.clip.events if e[0] == "write"]
+        self.assertTrue(write_tokens[0][1].startswith("\ufeffodicto-sel-"))
+
+    def test_four_consecutive_failures_still_restore_the_true_original(self):
+        # Codex scenario: paste 1 fails 3 times, the next paste's retry of the
+        # record fails too (4th). Paste 2 must use the record's snapshot, not
+        # a fresh snapshot of paste 1's payload.
+        self.clip.open_failures = 4
+        self._paste("first")
+        self._paste("second")
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_record_keeps_the_true_original_when_everything_fails(self):
+        self.clip.open_failures = 7
+        self._paste("first")
+        self._paste("second")
+        self.assertIsNotNone(typer._UNRESTORED)
+        self.assertEqual(typer._UNRESTORED.snapshot.text, "user clip")
+        self.clip.open_failures = 0
+        typer.flush_pending_restore()
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_probe_after_double_failure_uses_the_record_snapshot(self):
+        self.clip.open_failures = 4
+        self._paste("first")
+        self.assertEqual(self._probe(), "picked text")
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_request_restore_now_ends_the_wait(self):
+        done = threading.Event()
+        self.mocks["_wait_restore_window"].side_effect = _REAL_WAIT_RESTORE_WINDOW
+
+        def run():
+            with patch.object(Config, "PASTE_DELAY_SECONDS", 10.0):
+                typer.paste_text("transcript")
+            done.set()
+
+        with patch("typer.time.sleep"):
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertFalse(done.wait(0.3))  # waiting out the 10 s delay
+            self.assertEqual(self.clip.text, "transcript")
+            typer.request_restore_now()
+            self.assertTrue(done.wait(2))
+            worker.join(2)
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_restore_now_flag_is_cleared_at_each_paste(self):
+        typer.request_restore_now()
+        seen = []
+        self.on_window = lambda t: seen.append(typer._RESTORE_NOW.is_set())
+        self._paste()
+        self.assertEqual(seen, [False])
+
+
 class TestSelectionProbe(ClipboardSafetyBase):
     def test_plain_window_uses_ctrl_c(self):
         self.assertEqual(self._probe(), "picked text")
@@ -519,6 +627,9 @@ class _FakeWinApi:
     def GetClipboardSequenceNumber(self):
         return self.seq
 
+    def GetUserDefaultLCID(self):
+        return 1033
+
     def EmptyClipboard(self):
         self.calls.append("empty")
         self.seq += 1
@@ -617,6 +728,12 @@ class TestWindowsRoundTrip(unittest.TestCase):
         current = clip_mod.clipboard_change_token()
         self.assertTrue(clip_mod.clipboard_restore(_snap(text="lands"), expect_token=current))
         self.assertEqual(clip_mod.clipboard_snapshot().text, "lands")
+
+    def test_write_text_token_is_the_token_of_that_write(self):
+        ok, token = clip_mod.clipboard_write_text_token("owned write")
+        self.assertTrue(ok)
+        self.assertEqual(token, clip_mod.clipboard_change_token())
+        self.assertEqual(clip_mod.clipboard_read_text_token(), ("owned write", token))
 
     def test_empty_snapshot_clears_clipboard(self):
         self.assertTrue(clip_mod.clipboard_restore(_snap(text="")))

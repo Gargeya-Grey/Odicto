@@ -808,7 +808,18 @@ class TextRefiner:
 
     def reset_context(self) -> None:
         """Clears the multi-turn conversation history (spoken 'reset chat' or hotkey)."""
+        self._reset_if_current(None)
+
+    def _reset_if_current(self, generation: Optional[int]) -> bool:
+        """Clear memory unless ``generation`` is stale (None: always clear).
+
+        The check and the clear are one step under the history lock, like reply
+        commits. Returns True when memory was cleared.
+        """
         with self._history_lock:
+            if not self._history_current(generation):
+                print(">>> Abandoned 'reset chat' ignored (memory unchanged).", flush=True)
+                return False
             self._history_generation += 1
             self._pending_turns = []
             self.conversation_history.clear()
@@ -816,6 +827,7 @@ class TextRefiner:
             if isinstance(self.client, _GeminiClient):
                 self.client.reset_context()
         print(">>> AI context cleared (fresh conversation).", flush=True)
+        return True
 
     def refine(
         self,
@@ -853,7 +865,9 @@ class TextRefiner:
 
         normalized = text.strip().lower().strip(".,!?")
         if normalized in _RESET_PHRASES:
-            self.reset_context()
+            # A call abandoned before it got here carries a stale pinned token:
+            # it must not clear a newer conversation. Same reply either way.
+            self._reset_if_current(getattr(self._pinned, "generation", None))
             return _RESET_REPLY
 
         budget = llm_deadline_seconds()

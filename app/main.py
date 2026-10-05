@@ -993,7 +993,21 @@ class DictationApp:
             platforms.unhook_all()
         except Exception as e:
             print(f"Warning: unhook failed: {e}", file=sys.stderr)
+        # A paste waiting PASTE_DELAY_SECONDS (up to 10 s) before it restores
+        # the user's clipboard must restore now, not after the process is gone.
+        try:
+            import typer as _typer
+            restore_now = getattr(_typer, "request_restore_now", None)
+            if callable(restore_now):
+                restore_now()
+        except Exception as e:
+            print(f"Warning: could not hurry the clipboard restore: {e}", file=sys.stderr)
         acquired = self._lifecycle_lock.acquire(timeout=self._SHUTDOWN_LOCK_TIMEOUT_S)
+        cycle = getattr(self, "_cycle", None)
+        if not acquired and cycle is not None and cycle.pasting:
+            # The insertion is restoring the user's original clipboard: allow it
+            # one more bounded wait so that snapshot is not lost at exit.
+            acquired = self._lifecycle_lock.acquire(timeout=self._SHUTDOWN_LOCK_TIMEOUT_S)
         if not acquired:
             print("Warning: an insertion is still running; continuing shutdown.",
                   file=sys.stderr, flush=True)
