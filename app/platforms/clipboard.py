@@ -125,25 +125,34 @@ def clipboard_change_token() -> Optional[int]:
     return None
 
 
-def clipboard_write_text_token(text: str) -> tuple:
-    """Write plain text and return ``(ok, token)`` for exactly that write.
+WRITTEN = "written"  # clipboard_write_text_token: the text is on the clipboard
+
+
+def clipboard_write_text_token(text: str, expect_token: Optional[int] = None) -> tuple:
+    """Write plain text. Returns ``(status, token)``.
+
+    ``status`` is WRITTEN, CHANGED (``expect_token`` given and the clipboard
+    changed since: nothing written) or FAILED. ``token`` is the change token
+    of the clipboard as this call left it whenever the call touched the
+    clipboard, including a FAILED write that had already emptied it; it is
+    None when nothing was written.
 
     The token identifies Odicto's own write, so a guard built from it can
     never be a user copy made a moment later. Windows reads
     ``GetClipboardSequenceNumber`` inside the same OpenClipboard session that
     wrote. macOS uses the count ``clearContents`` returns: ``changeCount``
     counts ownership changes, so the ``setString:forType:`` that follows does
-    not bump it (best effort, NSPasteboard has no lock). Linux has no token:
-    ``(ok, None)``. Never raises.
+    not bump it (best effort, NSPasteboard has no lock). Linux has no token
+    and ignores ``expect_token``. Never raises.
     """
     try:
         if sys.platform == "win32":
-            return _win_write_text_token(text)
+            return _win_write_text_token(text, expect_token)
         if sys.platform == "darwin":
-            return _mac_write_text_token(text)
-        return _text_restore(text), None
+            return _mac_write_text_token(text, expect_token)
+        return (WRITTEN if _text_restore(text) else FAILED), None
     except Exception:
-        return False, None
+        return FAILED, None
 
 
 def clipboard_read_text_token() -> tuple:
@@ -273,7 +282,7 @@ class _WinApi:
         self.GlobalLock = sig(k.GlobalLock, [HGLOBAL], wintypes.LPVOID)
         self.GlobalUnlock = sig(k.GlobalUnlock, [HGLOBAL], wintypes.BOOL)
         self.GlobalSize = sig(k.GlobalSize, [HGLOBAL], SIZE_T)
-        self.GetUserDefaultLCID = sig(k.GetUserDefaultLCID, [], wintypes.DWORD)
+        self.GetSystemDefaultLCID = sig(k.GetSystemDefaultLCID, [], wintypes.DWORD)
 
         self.GetEnhMetaFileBits = sig(
             g.GetEnhMetaFileBits, [HANDLE, UINT, wintypes.LPVOID], UINT
@@ -525,6 +534,9 @@ def _win_text_family(api: _WinApi, text: str) -> list:
     synthesized format bumps the sequence number after the session ends, so a
     token read inside the session would never match again. Writing the whole
     family leaves nothing to synthesize: the in-session token is final.
+
+    The system locale defines the ANSI ("mbcs") and OEM ("oem") code pages, so
+    CF_LOCALE is the system default LCID, not the user locale.
     """
     import struct
 
@@ -533,7 +545,7 @@ def _win_text_family(api: _WinApi, text: str) -> list:
         (CF_UNICODETEXT, (text + nul).encode("utf-16-le")),
         (CF_TEXT, _encode_or_ascii(text, "mbcs") + b"\x00"),
         (CF_OEMTEXT, _encode_or_ascii(text, "oem") + b"\x00"),
-        (CF_LOCALE, struct.pack("<I", int(api.GetUserDefaultLCID()))),
+        (CF_LOCALE, struct.pack("<I", int(api.GetSystemDefaultLCID()))),
     ]
 
 
@@ -546,21 +558,27 @@ def _win_complete_text_family(api: _WinApi, formats: tuple, text: str) -> tuple:
     return tuple(formats) + tuple(extra)
 
 
-def _win_write_text_token(text: str) -> tuple:
-    """Write CF_UNICODETEXT; read the sequence number inside the same session."""
+def _win_write_text_token(text: str, expect_token: Optional[int] = None) -> tuple:
+    """Write the text family; compare and read the sequence number in one session."""
     api = _win_api()
     family = _win_text_family(api, text)
     HWND_MESSAGE = -3
     hwnd = api.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, HWND_MESSAGE, None, None, None)
     try:
         if not _win_open(api, hwnd):
-            return False, None
+            return FAILED, None
         try:
+            if (
+                expect_token is not None
+                and int(api.user32.GetClipboardSequenceNumber()) != int(expect_token)
+            ):
+                return CHANGED, None
             if not api.EmptyClipboard():
-                return False, None
+                return FAILED, None
             if not all(_win_set_bytes(api, fmt, data) for fmt, data in family):
-                return False, int(api.user32.GetClipboardSequenceNumber())
-            return True, int(api.user32.GetClipboardSequenceNumber())
+                # Emptied but not written: report the token of that state.
+                return FAILED, int(api.user32.GetClipboardSequenceNumber())
+            return WRITTEN, int(api.user32.GetClipboardSequenceNumber())
         finally:
             api.CloseClipboard()
     finally:
@@ -682,18 +700,21 @@ def _mac_snapshot() -> ClipboardSnapshot:
     )
 
 
-def _mac_write_text_token(text: str) -> tuple:
+def _mac_write_text_token(text: str, expect_token: Optional[int] = None) -> tuple:
     try:
         from AppKit import NSPasteboard, NSPasteboardTypeString
     except Exception:
-        return _text_restore(text), None
+        return (WRITTEN if _text_restore(text) else FAILED), None
     pb = NSPasteboard.generalPasteboard()
-    cleared = int(pb.clearContents())
-    if not pb.setString_forType_(text, NSPasteboardTypeString):
-        return False, None
+    # Best effort: compared immediately before clearContents (no lock).
+    if expect_token is not None and int(pb.changeCount()) != int(expect_token):
+        return CHANGED, None
     # changeCount counts ownership changes: clearContents bumps it and returns
     # the new value; writing data to the pasteboard we now own does not.
-    return True, cleared
+    cleared = int(pb.clearContents())
+    if not pb.setString_forType_(text, NSPasteboardTypeString):
+        return FAILED, cleared
+    return WRITTEN, cleared
 
 
 def _mac_restore(snap: ClipboardSnapshot, expect_token: Optional[int] = None) -> tuple:

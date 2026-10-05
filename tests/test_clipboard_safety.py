@@ -9,6 +9,7 @@ from __future__ import annotations
 import struct
 import sys
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -45,6 +46,7 @@ class FakeClipboard:
         self.events = []
         self.open_failures = 0  # next N restores cannot open: nothing written
         self.empty_then_fail = 0  # next N restores empty the clipboard, then fail
+        self.write_empty_then_fail = 0  # next N owned writes empty it, then fail
         self.restore_attempts = 0
         self.guards_seen = []
         self.on_restore_attempt = None  # hook run before each attempt (simulate users)
@@ -98,10 +100,20 @@ class FakeClipboard:
     def restore(self, snap, expect_token=None):
         return self.restore_result(snap, expect_token)[0] == "restored"
 
-    def write_token(self, text):
-        """clipboard_write_text_token: the token comes from the write itself."""
+    def write_token(self, text, expect_token=None):
+        """clipboard_write_text_token: check, write and token in one step."""
+        if expect_token is not None and expect_token != self.token:
+            self.events.append(("write-aborted", text))
+            return "changed", None
+        if self.write_empty_then_fail:
+            self.write_empty_then_fail -= 1
+            self.text = ""
+            self.non_text = None
+            self.token += 1
+            self.events.append(("emptied", ""))
+            return "failed", self.token
         self.write(text)
-        return True, self.token
+        return "written", self.token
 
     def read_token(self):
         return self.text, self.token
@@ -120,6 +132,8 @@ class ClipboardSafetyBase(unittest.TestCase):
         self.clip = FakeClipboard()
         self.copy_calls = []
         typer._UNRESTORED = None
+        typer._reset_restore_now_for_tests()
+        self.addCleanup(typer._reset_restore_now_for_tests)
         patches = [
             patch("typer.clipboard_read", side_effect=lambda: self.clip.read()),
             patch("typer.clipboard_write", side_effect=lambda t: self.clip.write(t)),
@@ -155,7 +169,7 @@ class ClipboardSafetyBase(unittest.TestCase):
             ),
             patch(
                 "typer.clipboard_write_text_token",
-                side_effect=lambda t: self.clip.write_token(t),
+                side_effect=lambda t, expect_token=None: self.clip.write_token(t, expect_token),
             ),
             patch("typer.clipboard_read_text_token", side_effect=lambda: self.clip.read_token()),
             patch("typer._wait_restore_window", side_effect=self._window),
@@ -470,12 +484,93 @@ class TestRoundThreeFixes(ClipboardSafetyBase):
             worker.join(2)
         self.assertEqual(self.clip.text, "user clip")
 
-    def test_restore_now_flag_is_cleared_at_each_paste(self):
+    def test_restore_now_is_sticky_for_later_pastes(self):
+        # Quit's request must survive an insertion that starts afterwards.
         typer.request_restore_now()
-        seen = []
-        self.on_window = lambda t: seen.append(typer._RESTORE_NOW.is_set())
-        self._paste()
-        self.assertEqual(seen, [False])
+        self.mocks["_wait_restore_window"].side_effect = _REAL_WAIT_RESTORE_WINDOW
+        sleeps = []
+        with patch.object(Config, "PASTE_DELAY_SECONDS", 10.0):
+            started = time.monotonic()
+            for text in ("one", "two"):
+                with patch("typer.time.sleep", side_effect=sleeps.append):
+                    typer.paste_text(text)
+            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 2.0)
+        self.assertEqual(sleeps.count(0.15), 2)  # the floor still runs
+        self.assertTrue(typer._RESTORE_NOW.is_set())
+        self.assertEqual(self.clip.text, "user clip")
+
+
+class TestRoundFourFixes(ClipboardSafetyBase):
+    def test_write_that_emptied_then_failed_restores_the_original(self):
+        self.clip.write_empty_then_fail = 3
+        with self.assertRaises(RuntimeError), patch("typer.time.sleep"):
+            typer.paste_text("transcript")
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertIsNone(typer._UNRESTORED)
+        self.mocks["send_paste"].assert_not_called()
+
+    def test_write_that_emptied_and_restore_failing_records_the_original(self):
+        self.clip.write_empty_then_fail = 3
+        self.clip.open_failures = 3
+        with self.assertRaises(RuntimeError), patch("typer.time.sleep"):
+            typer.paste_text("transcript")
+        self.assertIsNotNone(typer._UNRESTORED)
+        self.assertEqual(typer._UNRESTORED.snapshot.text, "user clip")
+        typer.flush_pending_restore()
+        self.assertEqual(self.clip.text, "user clip")
+
+    def test_record_is_dropped_when_the_user_copied_after_the_failed_retry(self):
+        # Codex: A -> payload1, restore fails; next paste's retry fails; the
+        # user copies B; payload2 must restore B, never A over B.
+        self.clip.open_failures = 4
+
+        def on_attempt(n):
+            if n == 4:
+                self.clip.user_copies("B")
+
+        self.clip.on_restore_attempt = on_attempt
+        self._paste("payload1")
+        self._paste("payload2")
+        self.assertEqual(self.clip.text, "B")
+        self.assertIn(("write-aborted", "payload2"), self.clip.events)
+        self.assertIsNone(typer._UNRESTORED)
+
+    def test_probe_drops_stale_record_too(self):
+        self.clip.open_failures = 4
+
+        def on_attempt(n):
+            if n == 4:
+                self.clip.user_copies("B")
+
+        self.clip.on_restore_attempt = on_attempt
+        self._paste("payload1")
+        self.assertEqual(self._probe(), "picked text")
+        self.assertEqual(self.clip.text, "B")
+
+
+class TestWindowsTextFamily(unittest.TestCase):
+    class _Api:
+        def GetSystemDefaultLCID(self):
+            return 0x0809
+
+        def GetUserDefaultLCID(self):
+            raise AssertionError("CF_LOCALE must come from the system locale")
+
+    def test_locale_is_system_lcid_and_code_pages_match(self):
+        text = "caf\u00e9"
+        family = dict(clip_mod._win_text_family(self._Api(), text))
+        self.assertEqual(family[clip_mod.CF_LOCALE], struct.pack("<I", 0x0809))
+        self.assertEqual(family[clip_mod.CF_UNICODETEXT], (text + chr(0)).encode("utf-16-le"))
+        self.assertEqual(
+            family[clip_mod.CF_TEXT], clip_mod._encode_or_ascii(text, "mbcs") + bytes(1)
+        )
+        self.assertEqual(
+            family[clip_mod.CF_OEMTEXT], clip_mod._encode_or_ascii(text, "oem") + bytes(1)
+        )
+        if sys.platform == "win32":
+            self.assertEqual(family[clip_mod.CF_TEXT], text.encode("mbcs") + bytes(1))
+            self.assertEqual(family[clip_mod.CF_OEMTEXT], text.encode("oem", "replace") + bytes(1))
 
 
 class TestSelectionProbe(ClipboardSafetyBase):
@@ -627,7 +722,7 @@ class _FakeWinApi:
     def GetClipboardSequenceNumber(self):
         return self.seq
 
-    def GetUserDefaultLCID(self):
+    def GetSystemDefaultLCID(self):
         return 1033
 
     def EmptyClipboard(self):
@@ -730,10 +825,14 @@ class TestWindowsRoundTrip(unittest.TestCase):
         self.assertEqual(clip_mod.clipboard_snapshot().text, "lands")
 
     def test_write_text_token_is_the_token_of_that_write(self):
-        ok, token = clip_mod.clipboard_write_text_token("owned write")
-        self.assertTrue(ok)
+        status, token = clip_mod.clipboard_write_text_token("owned write")
+        self.assertEqual(status, clip_mod.WRITTEN)
         self.assertEqual(token, clip_mod.clipboard_change_token())
         self.assertEqual(clip_mod.clipboard_read_text_token(), ("owned write", token))
+        # Conditional write: a stale token writes nothing.
+        status, none = clip_mod.clipboard_write_text_token("must not land", expect_token=token - 1)
+        self.assertEqual((status, none), (clip_mod.CHANGED, None))
+        self.assertEqual(clip_mod.clipboard_read_text_token()[0], "owned write")
 
     def test_empty_snapshot_clears_clipboard(self):
         self.assertTrue(clip_mod.clipboard_restore(_snap(text="")))
