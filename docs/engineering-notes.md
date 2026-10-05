@@ -446,7 +446,10 @@ start and on every pipeline exit. Keep current F7 captions visible until finaliz
   pending-restore state (a retry adopting a user copy, a probe settling a newer paste early, a
   lost original on a second failure). Holding `_CLIPBOARD_LOCK` through the wait removes that
   state. The cost is that "Done" and the next AI probe or paste wait up to the delay; the text
-  itself appears just as fast.
+  itself appears just as fast. A restore that still fails after ~2 s of retries is dropped with
+  a HUD notice; no state carries to the next paste. A carry-over record (retry the lost original
+  before the next paste) was removed after three review rounds each found a fault in it (a stale
+  original restored over a newer user copy, a fresh snapshot skipping the typing fallback).
 - **Linux hotkeys without root stay unsupported.** No XGrabKey or evdev backend exists, and it
   cannot be tested on the development machine. The `keyboard` library needs euid 0; the `input`
   group is not enough. `odicto.py status` and the HUD report it.

@@ -296,9 +296,10 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
   macOS: NSPasteboard items; Linux: text, and a non-text clipboard falls back to typing).
   Restore is synchronous: `paste_text` holds the clipboard lock, waits `PASTE_DELAY_SECONDS`,
   then restores only if the clipboard still holds Odicto's payload (Windows checks the change
-  token inside the same OpenClipboard session that writes). A restore that keeps failing is kept
-  as one unrestored record; the next paste or probe and the shutdown flush retry it with the
-  same guard, so a newer user copy is never overwritten. No background restore thread exists. The AI
+  token inside the same OpenClipboard session that writes). A restore that still fails after
+  ~2 s of retries (same guard) is dropped with a HUD notice (`typer.last_paste_restore_failed()`);
+  no state carries to the next paste (the carry-over was removed after three review rounds).
+  No background restore thread exists. The AI
   selection probe sends Ctrl+Insert in IDE hosts (VS Code, JetBrains) instead of Ctrl+C, and
   returns `""` when the clipboard cannot be saved.
 - **Recorder:** an overflow or callback gap keeps the audio, processes it, and flags the HUD
@@ -306,8 +307,8 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
   PortAudio and falls back to the default device.
 - **Pipeline:** cloud STT that errors or times out falls back to local Whisper. An AI timeout
   keeps the raw text. Cancel and late results never paste. Init retries with backoff and leaves
-  no zombie. Shutdown removes hooks before it takes the lifecycle lock (3 s timeout) and retries
-  an unrestored clipboard record. In toggle mode the AI selection probe starts at capture start. Whisper
+  no zombie. Shutdown removes hooks before it takes the lifecycle lock (3 s timeout) and ends
+  an in-progress paste's restore wait early. In toggle mode the AI selection probe starts at capture start. Whisper
   prewarms at capture start. Preflight problems print and show in the HUD.
 - **Providers:** `http_clients.py` holds shared keep-alive clients with connect, read, write
   and pool timeouts. One shared Gemini client runs with SDK retries off. Groq and Gemini

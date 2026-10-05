@@ -131,7 +131,6 @@ class ClipboardSafetyBase(unittest.TestCase):
     def setUp(self):
         self.clip = FakeClipboard()
         self.copy_calls = []
-        typer._UNRESTORED = None
         typer._reset_restore_now_for_tests()
         self.addCleanup(typer._reset_restore_now_for_tests)
         patches = [
@@ -183,7 +182,6 @@ class ClipboardSafetyBase(unittest.TestCase):
         for p in patches:
             self.mocks[p.attribute] = p.start()
             self.addCleanup(p.stop)
-        self.addCleanup(setattr, typer, "_UNRESTORED", None)
 
     def _window(self, timeout):
         """Stands in for the post-chord wait (an Event wait in typer)."""
@@ -232,7 +230,7 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self.assertAlmostEqual(window[0][1], 0.85)
         self.assertLess(i_floor, order.index(window[0]))
         self.assertEqual(self.clip.events, [("write", "transcript"), ("restore", "user clip")])
-        self.assertIsNone(typer._UNRESTORED)
+        self.assertFalse(typer.last_paste_restore_failed())
 
     def test_user_copy_during_delay_is_never_overwritten(self):
         def sleep(s):
@@ -244,7 +242,7 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self.assertEqual(self.clip.text, "user copied during delay")
         self.assertEqual(self.clip.restores, [])
         self.assertEqual(self.clip.restore_attempts, 1)  # "changed": no retry
-        self.assertIsNone(typer._UNRESTORED)
+        self.assertFalse(typer.last_paste_restore_failed())
 
     def test_user_copy_detected_by_text_when_no_token(self):
         self.use_token = False
@@ -273,16 +271,7 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self.assertEqual(self.clip.guards_seen, [payload_guard, payload_guard])
         self.assertIn(typer._RESTORE_RETRY_BACKOFF_S, sleeps)
         self.assertEqual(self.clip.text, "user copy between retries")
-        self.assertIsNone(typer._UNRESTORED)
-
-    def test_open_failure_keeps_the_old_guard(self):
-        self.clip.open_failures = 3
-        sleeps = self._paste()
-        guard = self.clip.guards_seen[0]
-        self.assertEqual(self.clip.guards_seen, [guard, guard, guard])
-        self.assertEqual(sleeps.count(typer._RESTORE_RETRY_BACKOFF_S), 2)
-        self.assertIsNotNone(typer._UNRESTORED)
-        self.assertEqual(typer._UNRESTORED.guard.token, guard)
+        self.assertFalse(typer.last_paste_restore_failed())
 
     def test_empty_then_failed_write_uses_the_in_session_token(self):
         self.clip.empty_then_fail = 1
@@ -291,48 +280,7 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self.assertNotEqual(first, second)
         self.assertEqual(second, first + 1)  # the token the failed attempt produced
         self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._UNRESTORED)
-
-    def test_unrestored_record_is_retried_by_the_next_paste(self):
-        self.clip.open_failures = 3
-        self._paste("first")
-        self.assertEqual(self.clip.text, "first")
-        self.assertIsNotNone(typer._UNRESTORED)
-        self._paste("second")
-        # The record was retried first; the second paste snapshotted fresh.
-        kinds = [e for e in self.clip.events if e[0] != "aborted"]
-        self.assertEqual(
-            kinds,
-            [
-                ("write", "first"),
-                ("restore", "user clip"),
-                ("write", "second"),
-                ("restore", "user clip"),
-            ],
-        )
-        self.assertIsNone(typer._UNRESTORED)
-
-    def test_unrestored_record_never_overwrites_a_newer_user_copy(self):
-        self.clip.open_failures = 3
-        self._paste("first")
-        self.clip.user_copies("newer user copy")
-        typer.flush_pending_restore()
-        self.assertEqual(self.clip.text, "newer user copy")
-        self.assertIsNone(typer._UNRESTORED)
-        self._paste("second")
-        self.assertEqual(self.clip.text, "newer user copy")
-
-    def test_flush_retries_the_unrestored_record_once(self):
-        self.clip.open_failures = 4
-        self._paste()
-        attempts = self.clip.restore_attempts
-        typer.flush_pending_restore()  # still failing: kept
-        self.assertEqual(self.clip.restore_attempts, attempts + 1)
-        self.assertIsNotNone(typer._UNRESTORED)
-        typer.flush_pending_restore(max_wait=0)
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._UNRESTORED)
-        typer.flush_pending_restore()  # nothing left: a no-op
+        self.assertFalse(typer.last_paste_restore_failed())
 
     def test_restore_in_background_flag_is_off(self):
         self.assertFalse(typer._RESTORE_IN_BACKGROUND)
@@ -402,17 +350,6 @@ class TestSynchronousRestore(ClipboardSafetyBase):
         self._paste("short")
         self.mocks["send_paste"].assert_called_once()
 
-    def test_f7_leaves_payload_and_retries_unrestored_first(self):
-        self.clip.open_failures = 3
-        self._paste("hold-to-talk text")
-        self._paste("live final", restore_clipboard=False)
-        self.assertEqual(
-            self.clip.events[-2:], [("restore", "user clip"), ("write", "live final")]
-        )
-        self.assertEqual(self.clip.text, "live final")
-        self.assertIsNone(typer._UNRESTORED)
-
-
 class TestRoundThreeFixes(ClipboardSafetyBase):
     def test_guard_is_the_payload_write_not_a_user_copy_right_after_it(self):
         # A user copy lands right after the payload write (here: during its
@@ -437,33 +374,6 @@ class TestRoundThreeFixes(ClipboardSafetyBase):
         self.assertEqual(self._probe(), "picked text")
         write_tokens = [e for e in self.clip.events if e[0] == "write"]
         self.assertTrue(write_tokens[0][1].startswith("\ufeffodicto-sel-"))
-
-    def test_four_consecutive_failures_still_restore_the_true_original(self):
-        # Codex scenario: paste 1 fails 3 times, the next paste's retry of the
-        # record fails too (4th). Paste 2 must use the record's snapshot, not
-        # a fresh snapshot of paste 1's payload.
-        self.clip.open_failures = 4
-        self._paste("first")
-        self._paste("second")
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._UNRESTORED)
-
-    def test_record_keeps_the_true_original_when_everything_fails(self):
-        self.clip.open_failures = 7
-        self._paste("first")
-        self._paste("second")
-        self.assertIsNotNone(typer._UNRESTORED)
-        self.assertEqual(typer._UNRESTORED.snapshot.text, "user clip")
-        self.clip.open_failures = 0
-        typer.flush_pending_restore()
-        self.assertEqual(self.clip.text, "user clip")
-
-    def test_probe_after_double_failure_uses_the_record_snapshot(self):
-        self.clip.open_failures = 4
-        self._paste("first")
-        self.assertEqual(self._probe(), "picked text")
-        self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._UNRESTORED)
 
     def test_request_restore_now_ends_the_wait(self):
         done = threading.Event()
@@ -507,47 +417,95 @@ class TestRoundFourFixes(ClipboardSafetyBase):
         with self.assertRaises(RuntimeError), patch("typer.time.sleep"):
             typer.paste_text("transcript")
         self.assertEqual(self.clip.text, "user clip")
-        self.assertIsNone(typer._UNRESTORED)
+        self.assertFalse(typer.last_paste_restore_failed())
         self.mocks["send_paste"].assert_not_called()
 
-    def test_write_that_emptied_and_restore_failing_records_the_original(self):
-        self.clip.write_empty_then_fail = 3
-        self.clip.open_failures = 3
-        with self.assertRaises(RuntimeError), patch("typer.time.sleep"):
-            typer.paste_text("transcript")
-        self.assertIsNotNone(typer._UNRESTORED)
-        self.assertEqual(typer._UNRESTORED.snapshot.text, "user clip")
-        typer.flush_pending_restore()
-        self.assertEqual(self.clip.text, "user clip")
 
-    def test_record_is_dropped_when_the_user_copied_after_the_failed_retry(self):
-        # Codex: A -> payload1, restore fails; next paste's retry fails; the
-        # user copies B; payload2 must restore B, never A over B.
-        self.clip.open_failures = 4
+class TestNoCarryOver(ClipboardSafetyBase):
+    """A failed restore retries ~2 s, then is dropped; nothing carries over."""
 
-        def on_attempt(n):
-            if n == 4:
-                self.clip.user_copies("B")
+    def test_open_failure_retries_with_the_same_guard_then_gives_up(self):
+        self.clip.open_failures = 100
+        sleeps = self._paste()
+        guard = self.clip.guards_seen[0]
+        self.assertEqual(self.clip.guards_seen, [guard] * typer._RESTORE_RETRIES)
+        backoff = sleeps.count(typer._RESTORE_RETRY_BACKOFF_S)
+        self.assertEqual(backoff, typer._RESTORE_RETRIES - 1)
+        self.assertGreaterEqual(backoff * typer._RESTORE_RETRY_BACKOFF_S, 1.75)  # ~2 s
+        self.assertTrue(typer.last_paste_restore_failed())
+        self.assertEqual(self.clip.text, "transcript")  # dropped: payload stays
 
-        self.clip.on_restore_attempt = on_attempt
+    def test_flag_is_reset_by_the_next_paste_and_nothing_is_retried(self):
+        self.clip.open_failures = typer._RESTORE_RETRIES
+        self._paste("first")
+        self.assertTrue(typer.last_paste_restore_failed())
+        attempts = self.clip.restore_attempts
+        self._paste("second")
+        self.assertFalse(typer.last_paste_restore_failed())
+        # Exactly one restore for the second paste: no stale record retried.
+        self.assertEqual(self.clip.restore_attempts, attempts + 1)
+        self.assertEqual(self.clip.text, "first")  # its fresh original
+
+    def test_codex_a_then_b_scenario_ends_with_b(self):
+        self.clip.text = "A"
+        self.clip.open_failures = typer._RESTORE_RETRIES
         self._paste("payload1")
+        self.clip.user_copies("B")
         self._paste("payload2")
         self.assertEqual(self.clip.text, "B")
-        self.assertIn(("write-aborted", "payload2"), self.clip.events)
-        self.assertIsNone(typer._UNRESTORED)
+        self.assertNotIn(("restore", "A"), self.clip.events)
 
-    def test_probe_drops_stale_record_too(self):
-        self.clip.open_failures = 4
+    def test_changed_stops_retrying_at_once(self):
+        self.clip.open_failures = 1
 
         def on_attempt(n):
-            if n == 4:
-                self.clip.user_copies("B")
+            if n == 2:
+                self.clip.user_copies("user copy")
 
         self.clip.on_restore_attempt = on_attempt
-        self._paste("payload1")
-        self.assertEqual(self._probe(), "picked text")
-        self.assertEqual(self.clip.text, "B")
+        self._paste()
+        self.assertEqual(self.clip.restore_attempts, 2)
+        self.assertEqual(self.clip.text, "user copy")
+        self.assertFalse(typer.last_paste_restore_failed())
 
+    def test_incomplete_snapshot_types_after_a_failed_earlier_restore(self):
+        # Codex image scenario: an earlier restore failed; the user then copies
+        # an image the platform cannot save. The next paste must type.
+        self.clip.open_failures = typer._RESTORE_RETRIES
+        self._paste("first")
+        self.clip.user_copies("")
+        self.clip.non_text = b"image"
+        self.clip.complete = False
+        self._paste("second")
+        self.mocks["send_text_bulk"].assert_called_once_with("second")
+        self.assertEqual(self.clip.non_text, b"image")
+
+    def test_flush_is_a_no_op(self):
+        self.clip.open_failures = typer._RESTORE_RETRIES
+        self._paste()
+        attempts = self.clip.restore_attempts
+        typer.flush_pending_restore()
+        typer.flush_pending_restore(max_wait=0)
+        self.assertEqual(self.clip.restore_attempts, attempts)
+
+    def test_failed_payload_write_that_emptied_and_cannot_restore_sets_flag(self):
+        self.clip.write_empty_then_fail = 3
+        self.clip.open_failures = 100
+        with self.assertRaises(RuntimeError), patch("typer.time.sleep"):
+            typer.paste_text("transcript")
+        self.assertTrue(typer.last_paste_restore_failed())
+
+    def test_probe_sentinel_write_that_touched_clipboard_skips_and_restores(self):
+        self.clip.write_empty_then_fail = 1
+        self.assertEqual(self._probe(), "")
+        self.assertEqual(self.copy_calls, [])
+        self.assertEqual(self.clip.text, "user clip")
+        self.assertEqual(self.clip.guards_seen[0], self.clip.token - 1)
+
+    def test_f7_leaves_payload(self):
+        self._paste("live final", restore_clipboard=False)
+        self.assertEqual(self.clip.text, "live final")
+        self.assertEqual(self.clip.restore_attempts, 0)
 
 class TestWindowsTextFamily(unittest.TestCase):
     class _Api:
@@ -602,13 +560,6 @@ class TestSelectionProbe(ClipboardSafetyBase):
         # The guard moved from the sentinel token to the observed copy's token.
         self.assertEqual(len(self.clip.guards_seen), 1)
         self.assertEqual(self.clip.events[-1], ("restore", "user clip"))
-
-    def test_probe_retries_unrestored_record_first(self):
-        self.clip.open_failures = 3
-        self._paste("transcript")
-        self.assertEqual(self._probe(), "picked text")
-        self.assertIsNone(typer._UNRESTORED)
-        self.assertEqual(self.clip.text, "user clip")
 
     def test_unreadable_clipboard_skips_probe(self):
         self.clip.readable = False

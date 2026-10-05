@@ -329,6 +329,7 @@ class DictationApp:
         self._runtime_enabled = runtime
         self._closing = threading.Event()
         self._lifecycle_lock = threading.Lock()
+        self._init_lock = threading.Lock()
 
         # Hold-to-talk chord bookkeeping (set during hotkey bind).
         # Dictation chord (HOTKEY) and optional AI chord (AI_HOTKEY) share one primary key.
@@ -555,7 +556,21 @@ class DictationApp:
 
     # ------------------------------------------------------------------ boot
     def initialize_app(self) -> None:
-        """Runs the slow model loading and server initialization in a background thread."""
+        """Runs the slow model loading and server initialization in a background thread.
+
+        Single-flight: a second caller (tests call it directly while the
+        dictation-init thread also runs) waits for the first and then only
+        re-checks the finished state. Two concurrent runs would race on the
+        check-then-assign of recorder/transcriber/refiner and could swap in a
+        second instance after the first one was already handed out.
+        """
+        init_lock = self.__dict__.setdefault("_init_lock", threading.Lock())
+        with init_lock:
+            if self.ready:
+                return  # the other caller already finished initialisation
+            self._initialize_app_once()
+
+    def _initialize_app_once(self) -> None:
         # STRICT: never install keyboard hooks without exclusive single-instance ownership.
         # __main__ acquires first; unit tests call initialize_app() directly so we
         # acquire here only if the lock is not already held (never double-wait).
@@ -1400,6 +1415,7 @@ class DictationApp:
         """
         self.last_status = None
         cycle = self._claim_cycle()
+        restore_lost = False
         try:
             if self._closing.is_set():
                 return
@@ -1551,11 +1567,17 @@ class DictationApp:
                     paste_text(refined_text, restore_clipboard=False)
                 else:
                     paste_text(refined_text)
+                    restore_lost = self._paste_restore_failed()
 
             elapsed: float = time.time() - start_time
             print(f">>> Text pasted successfully in {elapsed:.2f} seconds!")
             if not (isinstance(notice, str) and notice):
                 notice = stt_notice or ("mic_gap" if cycle.gap else "")
+            if not live and restore_lost:
+                # Text arrived, but the user's previous clipboard is gone: say so
+                # above any other caveat.
+                print("Warning: the previous clipboard could not be restored.", flush=True)
+                notice = "clipboard_not_restored"
             self.last_status = notice or "success"
 
         except _Abort as stop:
@@ -1608,6 +1630,16 @@ class DictationApp:
             except Exception:
                 pass
         return contextlib.nullcontext
+
+    @staticmethod
+    def _paste_restore_failed() -> bool:
+        """True when typer reports the last paste could not restore the clipboard."""
+        try:
+            import typer as _typer
+            check = getattr(_typer, "last_paste_restore_failed", None)
+            return callable(check) and check() is True
+        except Exception:
+            return False
 
     @staticmethod
     def _abandon_ai(refiner) -> None:

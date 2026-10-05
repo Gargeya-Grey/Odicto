@@ -92,6 +92,7 @@ SUCCESS_NOTICE_LABELS = {
     "ai_timeout": "AI timed out · raw text",
     "stt_fallback": "Cloud slow · local speech",
     "mic_gap": "Mic gap · check text",
+    "clipboard_not_restored": "Clipboard not restored",
 }
 SUCCESS_STATUSES = ("success",) + tuple(SUCCESS_NOTICE_LABELS)
 # Nothing was inserted. "init_error" stays up until init succeeds.

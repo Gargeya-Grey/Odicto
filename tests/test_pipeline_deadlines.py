@@ -520,6 +520,37 @@ class TestInitRetry(_Base):
         self.assertIsNone(app.last_status)
         self.assertEqual(status_label(GuiState.ERROR, last_status="init_error", detail="mic"), "Mic unavailable")
 
+    def test_concurrent_init_calls_build_each_component_once(self):
+        # Root cause of a flaky frozen test: the dictation-init thread and a
+        # direct initialize_app() call raced on check-then-assign and could
+        # swap a second transcriber/refiner in after the first was handed out.
+        app = self.app()
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def slow_recorder(**kwargs):
+            entered.set()
+            release.wait(5)
+            return MagicMock()
+
+        with patch("main.AudioRecorder", side_effect=slow_recorder) as factory, \
+                patch("sys.stdout", new_callable=io.StringIO):
+            first = threading.Thread(target=app.initialize_app)
+            first.start()
+            self.assertTrue(entered.wait(1))
+            second = threading.Thread(target=app.initialize_app)
+            second.start()
+            second.join(0.1)
+            self.assertTrue(second.is_alive(), "second init must wait for the first")
+            release.set()
+            first.join(2)
+            second.join(2)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(main.WhisperTranscriber.call_count, 1)
+        self.assertEqual(main.TextRefiner.call_count, 1)
+        self.bind.assert_called_once()
+        self.assertTrue(app.ready)
+
     def test_partial_hook_bind_is_removed_before_retry(self):
         app = self.app()
         self.bind.side_effect = [RuntimeError("hook failed"), None]
@@ -630,6 +661,32 @@ class TestShutdownOrder(_Base):
         app.transcriber.transcribe.side_effect = lambda audio, **kw: (app._shutdown(), "words")[1]
         app.process_and_paste(np.zeros(10), False)
         self.paste.assert_not_called()
+
+
+class TestClipboardRestoreNotice(_Base):
+    def run_cycle(self, failed, live=False):
+        app = app_fixture()
+        check = self.stack.enter_context(
+            patch("typer.last_paste_restore_failed", create=True, return_value=failed))
+        app.process_and_paste(None, False, pre_transcript="words", live=live)
+        return app, check
+
+    def test_failed_restore_is_a_success_with_notice(self):
+        app, _ = self.run_cycle(True)
+        self.paste.assert_called_once_with("words")
+        self.assertEqual(app.last_status, "clipboard_not_restored")
+        self.assertEqual(status_label(GuiState.SUCCESS, last_status=app.last_status),
+                         "Clipboard not restored")
+
+    def test_restored_clipboard_is_plain_success(self):
+        app, _ = self.run_cycle(False)
+        self.assertEqual(app.last_status, "success")
+
+    def test_f7_never_asks(self):
+        with patch.object(Config, "effective_live_stt_provider", return_value="whisper"):
+            app, check = self.run_cycle(True, live=True)
+        check.assert_not_called()
+        self.assertEqual(app.last_status, "success")
 
 
 class TestHudNotices(unittest.TestCase):

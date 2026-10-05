@@ -24,7 +24,7 @@ from pathlib import Path
 # "node not available" JS gate is never allowed anywhere (dead gate).
 # ---------------------------------------------------------------------------
 GATE = {
-    "floor": 453,  # raised after the October review fixes (315 when the gate was introduced)
+    "floor": 454,  # raised after the October review fixes (315 when the gate was introduced)
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
