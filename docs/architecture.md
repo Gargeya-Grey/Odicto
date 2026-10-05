@@ -56,7 +56,88 @@ root independently of the working directory.
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.
 Run tests from the project root with `python -m unittest discover -s tests -t .`.
-The optional microphone diagnostic is `python -m tests.test_pipeline`.
+The optional microphone diagnostic is `python tools/manual_pipeline_check.py`.
+
+### Runtime recovery and diagnostics
+
+An ordinary start first acquires both ownership locks and exits if another owner
+holds them. Only the exclusive owner sweeps orphan processes before binding hooks.
+Double-clicking the root Windows `start_dictation.bat` explicitly restarts and
+keeps its result window open. `/min` and `/nostartup` remain ordinary starts;
+the internal Windows launcher also supports explicit `/restart`.
+The launcher waits for a fresh heartbeat from the verified owner and recent
+microphone callbacks before reporting ready (`odicto.py wait-ready`). A Windows
+virtual environment normally has a launcher PID and a child interpreter PID;
+stop output counts processes, not independent app instances. Any failed or
+unconfirmed termination cancels restart and retains ownership metadata.
+Process matching checks the executed Python script, rather than mentions of
+`main.py` inside an agent command. A stale PID file cannot authorize killing an
+unverified process. An intentional restart remains an explicit stop followed by
+start; debug launchers and setup Save perform that explicit restart.
+
+The microphone reuses one persistent stream during healthy operation. Startup
+retains bounded retries for a device that is not ready at login. Windows logs
+confirmed a Yeti endpoint disappearing and returning while its old stream stayed
+stalled. If callbacks are more than three seconds stale at the next capture,
+start closes the old stream before reopening the same device, then waits at most
+one second for fresh callbacks. Native stream operations are serialized against
+shutdown; an unsuccessful close cannot authorize a second stream. There is no
+background reopening or signal-volume trigger. Status reads never alter input.
+Healthy hotkeys reuse the stream and pre-roll without opening a device.
+Input overflow or a callback gap keeps the captured audio and flags the capture; Stop
+processes it and the HUD shows "Mic gap · check text". Only a dead stream with no audio
+errors. A capture longer than `MAX_RECORDING_SECONDS` stops itself and is processed.
+Reconnect refreshes PortAudio and falls back to the default device. Quiet speech remains valid.
+Native driver calls cannot be forcibly interrupted within Python; a driver that
+hangs during close/open can still require an explicit process restart.
+The production keyboard hook only snapshots the chord and enqueues an action;
+one daemon worker performs ordered capture actions, including reconnect. Device
+work never waits inside the global hook. Start/Stop order and modifier snapshots
+survive queued input, and shutdown discards queued work. Both dictation modes
+announce recording only after capture starts. Failed starts appear in the HUD.
+
+`python odicto.py status` reads a metadata heartbeat in `dictation-health.json`:
+PID, readiness, capture state, microphone closure state and callback age.
+Published readiness is false when callbacks are stale or input is closed; the
+internal initialized state still permits the next hotkey to reconnect input.
+Device name, host API and input peak/RMS are included; last completed capture
+duration and RMS survive ordinary pipeline cleanup. These are magnitude
+statistics, not recorded audio or a speech-quality verdict. Low volume or silence
+never changes the stream. The obsolete status-command-local lock flag is
+omitted because it did not describe ownership in the running app. A
+PID mismatch or heartbeat older than ten seconds is reported as stale. This
+proves monitor liveness, not Qt/hook/provider responsiveness. It contains no
+audio, transcript or credentials. Existing running versions need a restart to
+publish it. There is no automatic whole-process watchdog: an explicit stop or
+Quit must stay stopped, and a timed-out worker must never paste a late result.
+
+Audio status logging runs outside the real-time callback; assembling a finished
+capture also runs outside its buffer lock. `tools/verify.ps1` runs clean-config
+tests in an isolated source copy, without moving live `.env` or `prompt.txt`.
+Test instances explicitly omit runtime PID/heartbeat publication. Shutdown removes
+only its own PID while holding the install lock, invalidates live callbacks, and
+shares a gate with final text insertion so a late provider result cannot paste
+after Quit. Existing insertion finishes before shutdown takes that gate.
+
+Valid empty cloud speech responses remain empty instead of invoking another
+recognizer. Exact digital silence bypasses local Whisper decoding; no amplitude
+threshold suppresses quiet speech. Gemini unary speech requests use a 15-second
+HTTP timeout without SDK retries; Gemini AI requests default to 30 seconds while
+preserving the two-second polish timeout. These are HTTP phase/inactivity bounds,
+not absolute whole-cycle deadlines including retries or local model loading.
+
+Gemini Live owns a bounded audio queue. Overflow, transport errors or stop timeout
+mark the session incomplete: both its final and its HUD preview are discarded in
+favor of batch transcription of the complete in-memory recording. On timeout,
+the session cancels its async task on its owning loop, with at most 0.5 seconds
+additional cleanup. Synchronous native code cannot be forcibly cancelled; a
+noncooperative transport remains a limitation rather than being declared stopped.
+
+The verification gate requires clean process exit, complete expected test counts,
+expected skips and an exact successful summary. A printed `OK` followed by a
+timeout or failing exit no longer counts as a pass. Component-boundary tests also
+run in the three-platform CI workflow; local Windows success does not establish
+macOS/Linux runtime behavior.
 
 ## 2. System context
 
@@ -151,6 +232,7 @@ graph LR
     transcriber --> config
     refiner --> config
     refiner --> openrouter_catalog
+    refiner --> transcriber
     typer --> config
     typer --> platforms
     indicator --> app_state
@@ -295,15 +377,15 @@ instance:
 
 ```mermaid
 graph TD
-    Start["main.py starts"] --> Kill["platforms.kill_other_odicto_processes<br/>reap orphans from the pid file"]
-    Kill --> Lock{"acquire_lock()"}
+    Start["main.py starts"] --> Lock{"acquire_lock()"}
     Lock -->|Windows| Mutex["Named mutex<br/>Global then Local, install-scoped digest"]
     Mutex --> LockFile["msvcrt lockfile on dictation.lock"]
     Lock -->|macOS / Linux| Flock["fcntl.flock LOCK_EX and LOCK_NB<br/>on dictation.lock, pid written inside"]
     LockFile --> Held["_INSTANCE_LOCK_HELD = True"]
     Flock --> Held
     Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
-    Held --> Bind["_bind_hotkeys()"]
+    Held --> Kill["platforms.kill_other_odicto_processes<br/>reap verified orphan script processes"]
+    Kill --> Bind["_bind_hotkeys()"]
     Bind --> Gate{"ensure_can_bind_hotkeys()<br/>lock held AND platforms.lock_is_held()"}
     Gate -->|no| NoHooks["raise, refuse to install hooks"]
     Gate -->|yes| Hooks["platforms.hook_key"]
@@ -317,6 +399,7 @@ so a second copy in the same folder collides while a second *different* install 
 | Thread | Created by | Lives for | Notes |
 |---|---|---|---|
 | `dictation-init` | `DictationApp.__init__` | start-up only | builds recorder/transcriber/refiner, binds hotkeys |
+| `odicto-runtime-health` | `DictationApp` | process lifetime | metadata heartbeat; stops on shutdown |
 | hook thread | `platforms.hook_key` | process | invokes `on_press` / `on_release` / `on_live_toggle` |
 | `dictation-pipeline` | `on_release` | one cycle | `process_and_paste` |
 | `odicto-sel` | `process_and_paste` | one cycle | `ThreadPoolExecutor(max_workers=1)`, shut down in `finally` |
@@ -334,7 +417,7 @@ so a second copy in the same folder collides while a second *different* install 
 | `_polish_lock` (`refiner.py`) | prevents overlapping polish requests after a caller timeout |
 | Qt signals `_wake`, `_hide_req`, `_reset_flash`, `_image_request` | worker → Qt thread |
 
-## 9. Failure paths — this app is built never to fail
+## 9. Failure paths and recovery
 
 ```mermaid
 graph TD
@@ -490,7 +573,7 @@ These are known, chosen limits — not oversights:
 | `-m unittest tests.test_units` | 153 tests, 0 unexpected skips |
 | `-m unittest tests.test_equivalence` | the setup page renders identically to the recorded hashes; cascade resolvers unchanged |
 | clean-environment run | the suite also passes with no `.env` present, the way CI runs it |
-| `-m unittest tests.test_reliability` | 25 input, HUD, AI, and polish regression tests |
+| `tools/run_tests.py` | discovery of every `tests/test_*.py`, a count floor that only rises, a per-platform skip allow-list (the one gate for CI and `verify.ps1`) |
 | `-m unittest tests.test_layout` | Entry points and install-root paths work after relocation |
 | import smoke test | every top-level module imports |
 | backend syntax check | `app/platforms/macos.py` and `app/platforms/linux.py` compile |

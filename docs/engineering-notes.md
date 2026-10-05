@@ -432,3 +432,27 @@ reliability costs came from orchestration and resource policy.
 The HUD follow-up reproduced stale F7 captions when a later ordinary or AI capture
 entered PROCESSING. Clear capture-owned preview and committed text at ordinary capture
 start and on every pipeline exit. Keep current F7 captions visible until finalization ends.
+
+## October review: decision record
+
+- **The gap rule was reversed.** An overflow or callback gap used to discard the capture.
+  The invariant "dictation never fails" outranks the risk of one bad segment, so the audio is
+  now kept, processed, and flagged. The user sees "Mic gap · check text" in the HUD and can
+  judge the text. Only a dead stream with no audio errors.
+- **Clipboard restore is synchronous and guarded.** An immediate restore can run before the
+  target app reads the paste, which pastes the old content, so the restore waits
+  `PASTE_DELAY_SECONDS` and runs only if the clipboard still holds Odicto's payload. A deferred
+  (background) restore was built first and rejected: three review rounds each found races in its
+  pending-restore state (a retry adopting a user copy, a probe settling a newer paste early, a
+  lost original on a second failure). Holding `_CLIPBOARD_LOCK` through the wait removes that
+  state. The cost is that "Done" and the next AI probe or paste wait up to the delay; the text
+  itself appears just as fast. A restore that still fails after ~2 s of retries is dropped with
+  a HUD notice; no state carries to the next paste. A carry-over record (retry the lost original
+  before the next paste) was removed after three review rounds each found a fault in it (a stale
+  original restored over a newer user copy, a fresh snapshot skipping the typing fallback).
+- **Linux hotkeys without root stay unsupported.** No XGrabKey or evdev backend exists, and it
+  cannot be tested on the development machine. The `keyboard` library needs euid 0; the `input`
+  group is not enough. `odicto.py status` and the HUD report it.
+- **Abandoned provider calls may keep running.** After a deadline or a cancel, the worker thread
+  of a cloud call cannot be killed. It can finish in the background. Its result is dropped and
+  is never pasted.

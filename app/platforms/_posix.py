@@ -54,7 +54,6 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
     if psutil is None:
         return found
 
-    root = os.path.normcase(os.path.normpath(base.install_root()))
     try:
         for proc in psutil.process_iter(["pid", "cmdline", "cwd"]):
             try:
@@ -65,14 +64,7 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
                 continue
             if pid in protected or pid == 0:
                 continue
-            cmd = " ".join(cmdline)
-            if "main.py" not in cmd:
-                continue
-            cmd_norm = os.path.normcase(os.path.normpath(cmd))
-            if root in cmd_norm:
-                found.add(pid)
-                continue
-            if cwd and os.path.normcase(os.path.normpath(cwd)) == root:
+            if base.is_odicto_command(cmdline, cwd):
                 found.add(pid)
     except Exception:
         pass
@@ -121,12 +113,13 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     """Kill every other ``main.py`` for this install; returns attempted PIDs."""
     protected = _self_and_parent_pids()
     pids = set()
+    verified_pids = enumerate_odicto_pids()
 
     if pid_file and os.path.exists(pid_file):
         try:
             with open(pid_file) as f:
                 old_pid = int(f.read().strip())
-            if old_pid not in protected:
+            if old_pid not in protected and old_pid in verified_pids:
                 pids.add(old_pid)
         except Exception:
             pass
@@ -135,7 +128,7 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
         except Exception:
             pass
 
-    pids |= enumerate_odicto_pids()
+    pids |= verified_pids
     pids -= protected
 
     killed = []

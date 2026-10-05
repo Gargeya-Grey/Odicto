@@ -276,6 +276,16 @@ def send_copy_terminal() -> None:
     send_copy()
 
 
+def send_copy_ide() -> None:
+    """Copy chord for an IDE host. Cmd+C is never SIGINT on macOS."""
+    send_copy()
+
+
+def foreground_is_ide_host(extra=()) -> bool:
+    """Always False on macOS: Cmd+C copies and never interrupts a process."""
+    return False
+
+
 def send_paste() -> None:
     try:
         paste_chord()

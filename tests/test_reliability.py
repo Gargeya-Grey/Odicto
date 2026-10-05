@@ -2,6 +2,10 @@
 import base64
 import ctypes
 import sys
+import os
+import tempfile
+import json
+import io
 import threading
 import time
 import unittest
@@ -22,6 +26,9 @@ def app_fixture():
     app = DictationApp.__new__(DictationApp)
     app.state = AppState.PROCESSING
     app.state_lock = threading.Lock()
+    app._lifecycle_lock = threading.Lock()
+    app._closing = threading.Event()
+    app._runtime_enabled = False
     app.ready = True
     app.recorder = MagicMock()
     app.transcriber = MagicMock()
@@ -39,6 +46,13 @@ def app_fixture():
     app.audio_filepath = "unused-test-audio.wav"
     app.last_status = None
     app.use_llm = False
+    app._cycle = None
+    app._cycle_seq = 0
+    app._capture_seq = 0
+    app._early_probe = None
+    app.status_detail = None
+    app._preflight_error = None
+    app._hooks_bound = False
     app._cleanup_temp_file = MagicMock()
     return app
 
@@ -55,6 +69,333 @@ def refiner_fixture(provider="groq"):
 
 
 class TestReliability(unittest.TestCase):
+    def test_capture_start_failure_is_visible_while_idle(self):
+        from PySide6.QtWidgets import QApplication
+        from indicator import DictationIndicator
+        QApplication.instance() or QApplication([])
+        app = app_fixture()
+        app.state = AppState.IDLE
+        hud = DictationIndicator(app)
+        try:
+            app.last_status = "error"
+            hud._sync_from_app()
+            self.assertEqual(hud.gui_state, GuiState.ERROR)
+        finally:
+            hud._tick.stop()
+            hud.close()
+
+    def test_digital_silence_never_reaches_whisper_decoder(self):
+        with patch("recorder.sd.InputStream"), patch("main.threading.Thread") as worker:
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._callback(np.zeros((1024, 1), dtype=np.float32), 1024, None, None)
+                app = app_fixture()
+                app.recorder = recorder
+                app.state = AppState.RECORDING
+                app._record_started_at = time.monotonic() - 5
+                with patch.object(Config, "PLAY_AUDIO_CUES", False):
+                    app.on_release()
+                self.assertEqual(app.state, AppState.IDLE)
+                self.assertEqual(app.last_status, "empty")
+                worker.assert_not_called()
+            finally:
+                recorder.close()
+
+    def test_live_capture_failure_discards_partial_text_and_reports_error(self):
+        app = app_fixture()
+        app.state = AppState.RECORDING
+        app.live_active = True
+        app._record_started_at = time.monotonic() - 5
+        app.recorder.stop.side_effect = RuntimeError("Microphone stopped during recording")
+        session = app._live_session = MagicMock()
+        session.stop.return_value = "incomplete speech"
+        app.live_preview = "incomplete speech"
+        app.process_and_paste = MagicMock()
+        with patch.object(Config, "PLAY_AUDIO_CUES", False), patch("main.threading.Thread") as worker:
+            app.on_live_toggle()
+            call = worker.call_args.kwargs
+            call["target"](*call["args"])
+        session.stop.assert_called_once()
+        app.process_and_paste.assert_not_called()
+        self.assertEqual(app.state, AppState.IDLE)
+        self.assertEqual(app.last_status, "error")
+
+    def test_callback_loss_during_capture_keeps_audio_and_flags_gap(self):
+        # Owner rule (reversed from the old "reject after a gap"): the words
+        # captured before the gap are kept, processed, and the HUD says "mic_gap".
+        with patch("recorder.sd.InputStream"), patch("main.threading.Thread") as worker:
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._callback(np.ones((1024, 1), dtype=np.float32), 1024, None, None)
+                recorder._last_callback -= 4.0
+                app = app_fixture()
+                app.recorder = recorder
+                app.state = AppState.RECORDING
+                app._record_started_at = time.monotonic() - 5
+                app._keep_history = False
+                with patch.object(Config, "PLAY_AUDIO_CUES", False):
+                    app.on_release()
+                self.assertEqual(app.state, AppState.PROCESSING)
+                self.assertFalse(recorder.recording)
+                self.assertTrue(recorder.last_capture_gap)
+                worker.assert_called_once()
+                call = worker.call_args.kwargs
+                self.assertIsNotNone(call["args"][0])
+                with patch("main.paste_text") as paste, patch.object(Config, "POLISH_DICTATION", False):
+                    call["target"](*call["args"])
+                paste.assert_called_once_with("hello world")
+                app.transcriber.transcribe.assert_called_once()
+                self.assertEqual(app.last_status, "mic_gap")
+                self.assertEqual(app.state, AppState.IDLE)
+            finally:
+                recorder.close()
+
+    def test_dead_stream_without_audio_ends_as_error_without_transcription(self):
+        with patch("recorder.sd.InputStream"), patch("main.threading.Thread") as worker:
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._last_callback -= 4.0
+                app = app_fixture()
+                app.recorder = recorder
+                app.state = AppState.RECORDING
+                app._record_started_at = time.monotonic() - 5
+                app._keep_history = False
+                with patch.object(Config, "PLAY_AUDIO_CUES", False):
+                    app.on_release()
+                self.assertEqual(app.state, AppState.IDLE)
+                self.assertEqual(app.last_status, "error")
+                self.assertIsNone(recorder.last_audio_array)
+                self.assertFalse(recorder.recording)
+                worker.assert_not_called()
+                app.transcriber.transcribe.assert_not_called()
+            finally:
+                recorder.close()
+
+    def test_microphone_lifetime_has_no_background_resets(self):
+        with patch("recorder.sd.InputStream") as opened, patch("recorder.threading.Thread") as worker:
+            recorder = AudioRecorder()
+            try:
+                worker.assert_not_called()
+                for _ in range(10):
+                    recorder.health_snapshot()
+                opened.return_value.active = False
+                recorder.health_snapshot()
+                self.assertEqual(opened.call_count, 1)
+                opened.return_value.abort.assert_not_called()
+                opened.return_value.close.assert_not_called()
+            finally:
+                recorder.close()
+
+    def test_stalled_microphone_requires_fresh_callbacks_after_reconnect(self):
+        with patch("recorder.sd.InputStream") as opened, patch("recorder.threading.Thread"):
+            recorder = AudioRecorder()
+            try:
+                recorder._last_callback -= 4.0
+                with patch.object(recorder._callback_ready, "wait", return_value=False):
+                    with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                        recorder.start()
+                self.assertFalse(recorder.recording)
+                self.assertEqual(opened.call_count, 2)
+            finally:
+                recorder.close()
+
+    def test_restart_is_cancelled_when_windows_refuses_stop(self):
+        import odicto
+        with patch.object(odicto.platforms, "kill_other_odicto_processes", side_effect=PermissionError("access denied")), patch.object(
+            odicto.platforms, "release_lock"
+        ) as release:
+            self.assertEqual(odicto.cmd_stop(None), 1)
+        release.assert_not_called()
+        if sys.platform == "win32":
+            import platforms.windows as backend
+            with tempfile.TemporaryDirectory() as directory:
+                path = os.path.join(directory, "dictation.pid")
+                with open(path, "w") as f:
+                    f.write("987654")
+                with patch.object(backend, "_enumerate_odicto_pids", return_value={987654}), patch.object(
+                    backend.subprocess, "run", return_value=SimpleNamespace(returncode=5)
+                ), patch("psutil.pid_exists", return_value=True):
+                    with self.assertRaises(PermissionError):
+                        backend.kill_other_odicto_processes(path)
+                self.assertTrue(os.path.exists(path), "failed stop must preserve runtime ownership metadata")
+
+    def test_delayed_callback_does_not_abort_active_dictation(self):
+        with patch("recorder.sd.InputStream") as opened, patch("recorder.threading.Thread"):
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._last_callback -= 4.0
+                recorder.health_snapshot()
+                self.assertEqual(opened.call_count, 1, "a delayed callback must not restart a live recording")
+                opened.return_value.abort.assert_not_called()
+            finally:
+                recorder.close()
+
+
+    def test_input_health_measures_real_signal_without_changing_recording(self):
+        stream = MagicMock()
+        stream.device = 7
+        with patch("recorder.sd.InputStream", return_value=stream), patch("recorder.threading.Thread"), patch(
+            "recorder.sd.query_devices", return_value={"name": "Test microphone", "hostapi": 0}
+        ), patch("recorder.sd.query_hostapis", return_value={"name": "Test API"}):
+            recorder = AudioRecorder()
+            try:
+                self.assertEqual(recorder.health_snapshot()["callback_count"], 0)
+                recorder.start()
+                chunk = np.full((1024, 1), 0.125, dtype=np.float32)
+                recorder._callback(chunk, 1024, None, None)
+                snapshot = recorder.health_snapshot()
+                self.assertEqual(snapshot["callback_count"], 1)
+                self.assertEqual(snapshot["device"]["name"], "Test microphone")
+                self.assertEqual(snapshot["input_peak"], 0.125)
+                self.assertEqual(snapshot["input_rms"], 0.125)
+                self.assertTrue(recorder.stop())
+                np.testing.assert_array_equal(recorder.last_audio_array, chunk[:, 0])
+                self.assertEqual(recorder.health_snapshot()["last_capture"]["rms"], 0.125)
+                recorder._callback(np.zeros_like(chunk), 1024, None, None)
+                self.assertEqual(recorder.health_snapshot()["input_rms"], 0.0)
+                self.assertEqual(recorder.health_snapshot()["last_capture"]["rms"], 0.125)
+                self.assertFalse(recorder.health_snapshot()["closed"])
+            finally:
+                recorder.close()
+
+    def test_nonowner_cannot_overwrite_runtime_health(self):
+        app = app_fixture()
+        app._runtime_enabled = True
+        with patch("main.platforms.lock_is_held", return_value=False), patch("builtins.open") as write:
+            app._monitor_runtime()
+        write.assert_not_called()
+        app._runtime_enabled = False
+        with patch("main.platforms.lock_is_held", return_value=True), patch("builtins.open") as write:
+            app._monitor_runtime()
+        write.assert_not_called()
+
+
+    def test_duplicate_start_does_not_kill_running_application(self):
+        import main
+        with patch.object(main, "acquire_single_instance_lock", return_value=False), patch.object(
+            main.platforms, "kill_other_odicto_processes"
+        ) as kill:
+            self.assertFalse(main.claim_install("unused.pid"))
+        kill.assert_not_called()
+
+    def test_orphan_sweep_only_runs_after_exclusive_ownership(self):
+        import main
+        calls = []
+        with patch.object(main, "acquire_single_instance_lock", side_effect=lambda: calls.append("lock") or True), patch.object(
+            main.platforms, "kill_other_odicto_processes", side_effect=lambda path: calls.append("sweep")
+        ):
+            self.assertTrue(main.claim_install("unused.pid"))
+        self.assertEqual(calls, ["lock", "sweep"])
+
+    def test_stop_failure_returns_to_idle_without_insertion(self):
+        app = app_fixture()
+        app.state = AppState.RECORDING
+        app.recorder.stop.side_effect = RuntimeError("device disconnected")
+        with patch.object(Config, "PLAY_AUDIO_CUES", False), patch("main.threading.Thread") as worker:
+            app.on_release()
+        self.assertEqual(app.state, AppState.IDLE)
+        self.assertEqual(app.last_status, "error")
+        worker.assert_not_called()
+
+
+    def test_audio_callback_never_prints_status_to_disk(self):
+        with patch("recorder.sd.InputStream"), patch("recorder.threading.Thread"):
+            recorder = AudioRecorder()
+            try:
+                with patch("builtins.print") as output:
+                    recorder._callback(np.zeros((1024, 1), dtype=np.float32), 1024, None, "input overflow")
+                    output.assert_not_called()
+                    recorder.health_snapshot()
+                    output.assert_called_once()
+            finally:
+                recorder.close()
+
+    def test_long_capture_copy_does_not_block_audio_callback(self):
+        with patch("recorder.sd.InputStream"), patch("recorder.threading.Thread"):
+            recorder = AudioRecorder()
+            try:
+                recorder.start()
+                recorder._callback(np.zeros((1024, 1), dtype=np.float32), 1024, None, None)
+                concatenate = np.concatenate
+                def unlocked_copy(*args, **kwargs):
+                    self.assertTrue(recorder._lock.acquire(blocking=False))
+                    recorder._lock.release()
+                    return concatenate(*args, **kwargs)
+                with patch("recorder.np.concatenate", side_effect=unlocked_copy):
+                    self.assertFalse(recorder.stop())
+            finally:
+                recorder.close()
+
+
+    def test_failed_endpoint_close_prevents_second_device_open(self):
+        endpoint = MagicMock()
+        endpoint.start.side_effect = RuntimeError("start failed")
+        def close(ignore_errors=True):
+            if not ignore_errors:
+                raise RuntimeError("driver busy")
+        endpoint.close.side_effect = close
+        with patch("recorder.sd.InputStream", return_value=endpoint) as opened:
+            with self.assertRaisesRegex(RuntimeError, "driver busy"):
+                AudioRecorder()
+        self.assertEqual(opened.call_count, 1)
+
+    def test_shutdown_during_device_open_never_starts_endpoint(self):
+        with patch("recorder.sd.InputStream"), patch("recorder.threading.Thread"):
+            recorder = AudioRecorder()
+            recorder.close()
+            recorder._closed.clear()
+            endpoint = MagicMock()
+            def opening(**kwargs):
+                recorder._closed.set()
+                return endpoint
+            with patch("recorder.sd.InputStream", side_effect=opening):
+                recorder._open_persistent_stream(delays=(0.0,))
+            endpoint.start.assert_not_called()
+            endpoint.close.assert_called_once()
+            self.assertIsNone(recorder._stream)
+
+    def test_recycled_pid_file_never_kills_unverified_process(self):
+        if sys.platform == "win32":
+            import platforms.windows as backend
+            enumerator = "_enumerate_odicto_pids"
+        else:
+            import platforms._posix as backend
+            enumerator = "enumerate_odicto_pids"
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "dictation.pid")
+            with open(path, "w") as f:
+                f.write("987654")
+            with patch.object(backend, enumerator, return_value=set()), patch.object(backend.subprocess, "run") as execute:
+                self.assertEqual(backend.kill_other_odicto_processes(path), [])
+            execute.assert_not_called()
+
+    def test_status_rejects_stale_heartbeat_without_touching_microphone(self):
+        import odicto
+        with tempfile.TemporaryDirectory() as directory, patch.object(odicto, "_repo_root", return_value=directory), patch.object(
+            odicto.platforms, "lock_is_held", return_value=False
+        ), patch("sys.stdout", new_callable=io.StringIO) as output:
+            with open(os.path.join(directory, "dictation.pid"), "w") as f:
+                f.write("42")
+            with open(os.path.join(directory, "dictation-health.json"), "w") as f:
+                json.dump({"pid": 42, "updated_at": time.time() - 60}, f)
+            self.assertEqual(odicto.cmd_status(None), 0)
+            self.assertIn("stale or unavailable", output.getvalue())
+
+    def test_agent_commands_mentioning_main_are_not_application_processes(self):
+        from platforms import base
+        root = base.install_root()
+        script = os.path.join(root, "main.py")
+        self.assertTrue(base.is_odicto_command([sys.executable, script]))
+        self.assertTrue(base.is_odicto_command([sys.executable, "-B", "main.py"], root))
+        self.assertFalse(base.is_odicto_command([sys.executable, "-c", f"print({script!r})"], root))
+        self.assertFalse(base.is_odicto_command([sys.executable, "tools/test.py", script], root))
+        self.assertFalse(base.is_odicto_command([sys.executable, script + ".backup"]))
+        self.assertFalse(base.is_odicto_command(["bash", script]))
+
     def test_finished_f7_preview_does_not_reappear_when_normal_capture_stops(self):
         from PySide6.QtWidgets import QApplication
         from indicator import DictationIndicator
@@ -263,6 +604,7 @@ class TestReliability(unittest.TestCase):
     def test_bound_audio_listener_removed_and_ring_is_five_seconds_stereo(self):
         with patch.object(AudioRecorder, "_open_persistent_stream"):
             recorder = AudioRecorder(sample_rate=16000, channels=2)
+        recorder._stream = MagicMock(active=True)
         class Consumer:
             def push(self, audio):
                 pass

@@ -8,14 +8,20 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 import wave
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 
 from config import Config
+from http_clients import (
+    KEEPALIVE_SECONDS,
+    Prewarmer,
+    full_timeout,
+    origin_of,
+    shared_httpx_client,
+    warm_httpx_origin,
+)
 
 # Lazy: importing google-genai pulls pydantic + HTTP stacks. Whisper-only
 # boots never need that, so the SDK is loaded on first Gemini STT/Live use.
@@ -27,6 +33,12 @@ _google_genai_import_tried = False
 WhisperModel = None  # type: ignore
 
 _genai_client_lock = threading.Lock()
+# Serialises every local Whisper decode in the process (see WhisperTranscriber.transcribe).
+_WHISPER_INFERENCE_LOCK = threading.Lock()
+
+
+class LocalFallbackDisabled(RuntimeError):
+    """A cloud transcription failed and the caller owns the local fallback."""
 _genai_client = None
 _genai_client_key: Optional[str] = None
 _genai_client_factory = None
@@ -69,20 +81,42 @@ def whisper_device_attempts(
     return [("cuda", "float16"), ("cpu", "int8")]
 
 
-def get_genai_client(api_key: str):
-    """One SDK client per process for the same API key.
+def _genai_http_options() -> dict:
+    """SDK options for the shared client: no SDK retries, long-lived idle sockets.
+
+    Retries are off because every caller has its own deadline and a local
+    fallback. There is no client-wide timeout: the Live session lives as long
+    as the user speaks, so unary calls pass their own ``timeout``.
+    """
+    options: dict = {"retry_options": {"attempts": 0}}
+    try:
+        import httpx
+
+        options["client_args"] = {
+            "limits": httpx.Limits(keepalive_expiry=KEEPALIVE_SECONDS)
+        }
+    except Exception:
+        pass
+    return options
+
+
+def get_genai_client(api_key: str, factory=None):
+    """One SDK client per process for the same API key (STT, Live, AI, polish).
 
     The cache is keyed by both the key and the ``Client`` factory object so
-    tests that patch ``google_genai.Client`` still get a fresh mock.
+    tests that patch ``google_genai.Client`` still get a fresh mock. The
+    refiner passes its own ``google_genai.Client``; in production that is
+    the same class, so both modules share one client and one pool.
     """
     global _genai_client, _genai_client_key, _genai_client_factory
     key = (api_key or "").strip()
     if not key:
         return None
-    _ensure_google_genai()
-    if google_genai is None:
-        return None
-    factory = getattr(google_genai, "Client", None)
+    if factory is None:
+        _ensure_google_genai()
+        if google_genai is None:
+            return None
+        factory = getattr(google_genai, "Client", None)
     if factory is None:
         return None
     with _genai_client_lock:
@@ -93,7 +127,7 @@ def get_genai_client(api_key: str):
         ):
             return _genai_client
         try:
-            client = factory(api_key=key)
+            client = factory(api_key=key, http_options=_genai_http_options())
         except Exception:
             return None
         _genai_client = client
@@ -211,6 +245,58 @@ def _audio_to_wav_bytes(audio: Union[str, np.ndarray], sample_rate: int) -> byte
     raise TypeError(f"Unsupported audio type: {type(audio)}")
 
 
+def float32_to_flac_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
+    """Encode mono float32 PCM as in-memory 16-bit FLAC (about half a WAV's size)."""
+    import soundfile as sf
+
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.ndim > 1:
+        arr = np.mean(arr, axis=1) if arr.shape[-1] > 1 else arr.reshape(-1)
+    if arr.size == 0:
+        return b""
+    buf = io.BytesIO()
+    sf.write(
+        buf,
+        np.clip(arr, -1.0, 1.0),
+        int(sample_rate) or 16000,
+        format="FLAC",
+        subtype="PCM_16",
+    )
+    return buf.getvalue()
+
+
+def encode_upload_audio(
+    audio: Union[str, np.ndarray], sample_rate: int, prefer_flac: bool = False
+) -> Tuple[bytes, str]:
+    """Return ``(bytes, "flac" | "wav")`` for a speech upload.
+
+    FLAC is used only when asked for and when it encodes; any FLAC failure
+    falls back to WAV. File paths are uploaded as-is (WAV).
+    """
+    if prefer_flac and isinstance(audio, np.ndarray):
+        try:
+            data = float32_to_flac_bytes(audio, sample_rate)
+            if data:
+                return data, "flac"
+        except Exception:
+            pass
+    return _audio_to_wav_bytes(audio, sample_rate), "wav"
+
+
+def stt_deadline_seconds() -> float:
+    """Per-request bound for one cloud speech call (``STT_DEADLINE_SECONDS``)."""
+    try:
+        value = float(Config.STT_DEADLINE_SECONDS)
+    except Exception:
+        value = 20.0
+    return value if value > 0 else 20.0
+
+
+# Gemini unary STT keeps its 15 s cap unless the deadline is lower.
+GEMINI_STT_TIMEOUT_CAP = 15.0
+PREWARM_TIMEOUT_SECONDS = 2.0
+
+
 class WhisperTranscriber:
     def __init__(self) -> None:
         """Initializes the Whisper model with hardware acceleration detection and safety fallbacks."""
@@ -309,7 +395,9 @@ class WhisperTranscriber:
             flush=True,
         )
 
-    def transcribe(self, audio: Union[str, np.ndarray]) -> str:
+    def transcribe(
+        self, audio: Union[str, np.ndarray], allow_local_fallback: bool = True
+    ) -> str:
         """Transcribes audio to text (accepts filepath string or in-memory numpy array).
 
         Speed-oriented decode settings preserve accuracy for short push-to-talk clips
@@ -317,10 +405,13 @@ class WhisperTranscriber:
 
         Args:
             audio: Path to the mono WAV file, or in-memory 1D float32 numpy array.
+            allow_local_fallback: Ignored; this is the local engine. Accepted so
+                every transcriber shares one signature.
 
         Returns:
             str: The transcribed text.
         """
+        del allow_local_fallback
         if not self.model:
             raise RuntimeError("Whisper model is not loaded.")
 
@@ -366,18 +457,49 @@ class WhisperTranscriber:
                 "speech_pad_ms": 300,
             }
 
-        segments, _info = self.model.transcribe(audio, **transcribe_kwargs)
+        # One Whisper decode at a time, process-wide: an abandoned decode (a
+        # cloud fallback after the pipeline deadline) must not halve the CPU of
+        # the decode that matters. segments is lazy, so consume it inside.
+        with _WHISPER_INFERENCE_LOCK:
+            segments, _info = self.model.transcribe(audio, **transcribe_kwargs)
 
-        # Consume generator promptly; join without intermediate list growth for tiny clips.
-        parts: List[str] = []
-        for segment in segments:
-            text = segment.text
-            if text:
-                parts.append(text)
+            # Consume generator promptly; join without intermediate list growth for tiny clips.
+            parts: List[str] = []
+            for segment in segments:
+                text = segment.text
+                if text:
+                    parts.append(text)
         return "".join(parts).strip()
 
+    def prewarm(self) -> None:
+        """Nothing to warm: the model is loaded in ``__init__``."""
 
-def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: bytes) -> tuple:
+    def local_fallback(self, audio: Union[str, np.ndarray]) -> str:
+        return self.transcribe(audio)
+
+
+class _LocalWhisperFallback:
+    """Lazy local Whisper shared by the cloud backends for failures."""
+
+    _whisper: Optional[WhisperTranscriber]
+
+    def local_fallback(self, audio: Union[str, np.ndarray]) -> str:
+        """Transcribe with local Whisper, loading it on first use."""
+        lock = self.__dict__.setdefault("_whisper_lock", threading.Lock())
+        with lock:
+            if getattr(self, "_whisper", None) is None:
+                self._whisper = WhisperTranscriber()
+            whisper = self._whisper
+        return whisper.transcribe(audio)
+
+
+def _encode_multipart(
+    fields: dict,
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    file_content_type: str = "audio/wav",
+) -> tuple:
     """Build a multipart body. Returns (body, content_type)."""
     boundary = "----OdictoSttBoundary7f3a9c"
     chunks: List[bytes] = []
@@ -395,7 +517,7 @@ def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: 
         (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
-            f"Content-Type: audio/wav\r\n\r\n"
+            f"Content-Type: {file_content_type}\r\n\r\n"
         ).encode("utf-8")
     )
     chunks.append(file_bytes)
@@ -403,25 +525,33 @@ def _encode_multipart(fields: dict, file_field: str, filename: str, file_bytes: 
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
-def _post_bytes(url: str, data: bytes, headers: dict, timeout: float = 45.0) -> dict:
-    """POST and parse a JSON object. Raises RuntimeError on HTTP or bad JSON."""
-    req = urllib.request.Request(url, data=data, method="POST")
-    for key, value in headers.items():
-        req.add_header(key, value)
+def _post_bytes(
+    url: str, data: bytes, headers: dict, timeout: Optional[float] = None
+) -> dict:
+    """POST through the shared keep-alive pool and parse a JSON object.
+
+    ``timeout`` is the request budget in seconds (default
+    ``STT_DEADLINE_SECONDS``): connect is capped at 5 s; read and write each
+    get the whole budget. Raises RuntimeError on HTTP or bad JSON.
+    """
+    budget = stt_deadline_seconds() if timeout is None else max(0.5, float(timeout))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:
-            detail = ""
-        raise RuntimeError(f"HTTP {e.code} {detail}".strip()) from e
+        resp = shared_httpx_client().post(
+            url,
+            content=data,
+            headers=headers,
+            timeout=full_timeout(min(5.0, budget), budget),
+        )
     except Exception as e:
         raise RuntimeError(str(e) or type(e).__name__) from e
+    if resp.status_code >= 400:
+        try:
+            detail = resp.text[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"HTTP {resp.status_code} {detail}".strip())
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        payload = json.loads(resp.content.decode("utf-8"))
     except Exception as e:
         raise RuntimeError(f"speech response was not JSON ({e})") from e
     if not isinstance(payload, dict):
@@ -429,14 +559,14 @@ def _post_bytes(url: str, data: bytes, headers: dict, timeout: float = 45.0) -> 
     return payload
 
 
-def _transcript_from_payload(payload: dict) -> str:
+def _transcript_from_payload(payload: dict) -> Optional[str]:
     text = payload.get("text")
     if isinstance(text, str):
         return text.strip()
-    return ""
+    return None
 
 
-class CloudTranscriber:
+class CloudTranscriber(_LocalWhisperFallback):
     """Batch speech-to-text for Groq and OpenRouter.
 
     Groq takes an OpenAI-style multipart upload. OpenRouter takes base64
@@ -447,15 +577,32 @@ class CloudTranscriber:
     def __init__(self, kind: str) -> None:
         self.kind = (kind or "").strip().lower()
         self._whisper: Optional[WhisperTranscriber] = None
+        self._whisper_lock = threading.Lock()
+        self._prewarmer = Prewarmer()
 
-    def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
+    def _whisper_fallback(
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+    ) -> str:
+        if not allow:
+            raise LocalFallbackDisabled(reason)
         label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
             self.kind, self.kind or "Cloud"
         )
         print(f"{label} STT fallback to Whisper ({reason})", flush=True)
-        if self._whisper is None:
-            self._whisper = WhisperTranscriber()
-        return self._whisper.transcribe(audio)
+        return self.local_fallback(audio)
+
+    def prewarm(self) -> None:
+        """Open the TLS connection to the speech host in the background."""
+        try:
+            url, api_key, _model = self._endpoint()
+            if not api_key or not origin_of(url):
+                return
+            self._prewarmer.fire(
+                lambda: warm_httpx_origin(url, PREWARM_TIMEOUT_SECONDS),
+                name="odicto-stt-prewarm",
+            )
+        except Exception:
+            pass
 
     def _endpoint(self) -> tuple:
         """Return (url, api_key, model) for the configured backend."""
@@ -473,20 +620,31 @@ class CloudTranscriber:
         )
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+        self,
+        audio: Union[str, np.ndarray],
+        mode: Optional[str] = None,
+        allow_local_fallback: bool = True,
     ) -> str:
-        """Transcribe. ``mode`` is accepted so callers can share Gemini's signature."""
+        """Transcribe. ``mode`` is accepted so callers can share Gemini's signature.
+
+        ``allow_local_fallback=False`` raises LocalFallbackDisabled instead of
+        running local Whisper; the pipeline then owns the single fallback run.
+        """
         del mode
         if isinstance(audio, np.ndarray) and audio.size == 0:
             return ""
         url, api_key, model = self._endpoint()
         if not api_key:
-            return self._whisper_fallback(audio, "no API key")
+            return self._whisper_fallback(audio, "no API key", allow_local_fallback)
+        # Groq accepts FLAC (about half the bytes of WAV). OpenRouter's
+        # transcription endpoint is not documented to accept it: keep WAV.
         try:
-            wav_bytes = _audio_to_wav_bytes(audio, Config.SAMPLE_RATE or 16000)
+            audio_bytes, audio_format = encode_upload_audio(
+                audio, Config.SAMPLE_RATE or 16000, prefer_flac=self.kind == "groq"
+            )
         except Exception as e:
-            return self._whisper_fallback(audio, f"audio encode failed: {e}")
-        if not wav_bytes:
+            return self._whisper_fallback(audio, f"audio encode failed: {e}", allow_local_fallback)
+        if not audio_bytes:
             return ""
         language = Config.stt_language_hint()
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -495,8 +653,8 @@ class CloudTranscriber:
                 payload: dict = {
                     "model": model,
                     "input_audio": {
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "format": "wav",
+                        "data": base64.b64encode(audio_bytes).decode("ascii"),
+                        "format": audio_format,
                     },
                 }
                 if language:
@@ -510,16 +668,20 @@ class CloudTranscriber:
                 if language:
                     fields["language"] = language
                 body, content_type = _encode_multipart(
-                    fields, "file", "clip.wav", wav_bytes
+                    fields,
+                    "file",
+                    f"clip.{audio_format}",
+                    audio_bytes,
+                    file_content_type=f"audio/{audio_format}",
                 )
                 headers["Content-Type"] = content_type
-            result = _post_bytes(url, body, headers)
+            result = _post_bytes(url, body, headers, timeout=stt_deadline_seconds())
         except Exception as e:
-            return self._whisper_fallback(audio, str(e) or type(e).__name__)
+            return self._whisper_fallback(audio, str(e) or type(e).__name__, allow_local_fallback)
         text = _transcript_from_payload(result)
-        if text:
+        if text is not None:
             return text
-        return self._whisper_fallback(audio, "empty transcript")
+        return self._whisper_fallback(audio, "missing or invalid transcript", allow_local_fallback)
 
 
 def _transcription_config_payload(mode: str) -> dict:
@@ -533,7 +695,7 @@ def _transcription_config_payload(mode: str) -> dict:
     return cfg
 
 
-class GeminiTranscriber:
+class GeminiTranscriber(_LocalWhisperFallback):
     """Cloud STT via Gemini 3.5 Transcribe (unary Interactions API).
 
     Falls back to local Whisper on missing key, SDK errors, or empty output.
@@ -542,6 +704,8 @@ class GeminiTranscriber:
     def __init__(self) -> None:
         self._client = None
         self._whisper: Optional[WhisperTranscriber] = None
+        self._whisper_lock = threading.Lock()
+        self._prewarmer = Prewarmer()
         api_key = Config.GEMINI_API_KEY.strip()
         _ensure_google_genai()
         if google_genai is None:
@@ -560,25 +724,53 @@ class GeminiTranscriber:
         if self._client is None:
             print("Warning: Could not create Gemini STT client.", flush=True)
 
-    def _whisper_fallback(self, audio: Union[str, np.ndarray], reason: str) -> str:
+    def _whisper_fallback(
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+    ) -> str:
+        if not allow:
+            raise LocalFallbackDisabled(reason)
         print(f"Gemini STT fallback to Whisper ({reason})", flush=True)
-        if self._whisper is None:
-            self._whisper = WhisperTranscriber()
-        return self._whisper.transcribe(audio)
+        return self.local_fallback(audio)
+
+    def prewarm(self) -> None:
+        """Open the shared SDK client's connection in the background.
+
+        A model metadata GET is free and uses the same pooled connection as
+        ``interactions.create``.
+        """
+        try:
+            client = self._client
+            if client is None:
+                return
+            model = Config.GEMINI_TRANSCRIBE_MODEL or "gemini-3.5-transcribe"
+            timeout_ms = int(PREWARM_TIMEOUT_SECONDS * 1000)
+            self._prewarmer.fire(
+                lambda: client.models.get(
+                    model=model, config={"http_options": {"timeout": timeout_ms}}
+                ),
+                name="odicto-stt-prewarm",
+            )
+        except Exception:
+            pass
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], mode: Optional[str] = None
+        self,
+        audio: Union[str, np.ndarray],
+        mode: Optional[str] = None,
+        allow_local_fallback: bool = True,
     ) -> str:
         if isinstance(audio, np.ndarray) and audio.size == 0:
             return ""
         if self._client is None:
-            return self._whisper_fallback(audio, "no Gemini client")
+            return self._whisper_fallback(audio, "no Gemini client", allow_local_fallback)
 
         try:
-            wav_bytes = _audio_to_wav_bytes(audio, Config.SAMPLE_RATE or 16000)
+            audio_bytes, audio_format = encode_upload_audio(
+                audio, Config.SAMPLE_RATE or 16000, prefer_flac=True
+            )
         except Exception as e:
-            return self._whisper_fallback(audio, f"audio encode failed: {e}")
-        if not wav_bytes:
+            return self._whisper_fallback(audio, f"audio encode failed: {e}", allow_local_fallback)
+        if not audio_bytes:
             return ""
 
         resolved = (mode or Config.gemini_transcribe_mode() or "smart").strip().lower()
@@ -588,11 +780,12 @@ class GeminiTranscriber:
         try:
             interaction = self._client.interactions.create(
                 model=model,
+                timeout=min(GEMINI_STT_TIMEOUT_CAP, stt_deadline_seconds()),
                 input=[
                     {
                         "type": "audio",
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "mime_type": "audio/wav",
+                        "data": base64.b64encode(audio_bytes).decode("ascii"),
+                        "mime_type": f"audio/{audio_format}",
                     }
                 ],
                 generation_config={
@@ -601,12 +794,12 @@ class GeminiTranscriber:
             )
         except Exception as e:
             detail = str(getattr(e, "message", "")) or str(e)
-            return self._whisper_fallback(audio, detail.strip() or type(e).__name__)
+            return self._whisper_fallback(audio, detail.strip() or type(e).__name__, allow_local_fallback)
 
         text = getattr(interaction, "output_text", None)
-        if isinstance(text, str) and text.strip():
+        if isinstance(text, str):
             return text.strip()
-        return self._whisper_fallback(audio, "empty Gemini transcript")
+        return self._whisper_fallback(audio, "missing or invalid Gemini transcript", allow_local_fallback)
 
 
 class GeminiLiveSession:
@@ -632,6 +825,16 @@ class GeminiLiveSession:
         self._final_parts: List[str] = []
         self._error: Optional[str] = None
         self._final_wait_s: float = 0.8
+        self._incomplete_audio = threading.Event()
+        self._cancel_requested = threading.Event()
+        self._transport_lock = threading.Lock()
+        self._loop = None
+        self._task = None
+
+    @property
+    def needs_batch_fallback(self) -> bool:
+        """Whether a live draft/final may omit audio from the complete recording."""
+        return self._incomplete_audio.is_set() or bool(self._error)
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -640,41 +843,76 @@ class GeminiLiveSession:
         self._thread.start()
 
     def push_audio(self, chunk: np.ndarray) -> None:
-        if self._stop.is_set():
-            return
-        try:
-            self._chunks.put_nowait(np.ascontiguousarray(chunk, dtype=np.float32))
-        except queue.Full:
+        with self._transport_lock:
+            if self._stop.is_set():
+                return
+            owned_chunk = np.array(chunk, dtype=np.float32, order="C", copy=True)
             try:
-                self._chunks.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._chunks.put_nowait(np.ascontiguousarray(chunk, dtype=np.float32))
+                self._chunks.put_nowait(owned_chunk)
             except queue.Full:
-                pass
+                self._incomplete_audio.set()
+                try:
+                    self._chunks.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._chunks.put_nowait(owned_chunk)
+                except queue.Full:
+                    pass
 
     def stop(self, timeout: float = 8.0, final_wait_s: float = 0.8) -> str:
         """Join the session. ``final_wait_s`` bounds how long the single Live
-        call may keep streaming its authoritative final after stream end."""
+        call may keep streaming its authoritative final after stream end.
+
+        Timed-out I/O is cancelled on its owning event loop, with at most a
+        further 0.5 seconds allowed for transport/executor cleanup.
+        """
         self._final_wait_s = max(0.0, final_wait_s)
-        self._stop.set()
-        try:
-            self._chunks.put_nowait(None)  # type: ignore[arg-type]
-        except queue.Full:
-            pass
+        with self._transport_lock:
+            if not self._stop.is_set():
+                self._stop.set()
+                try:
+                    self._chunks.put_nowait(None)  # type: ignore[arg-type]
+                except queue.Full:
+                    pass  # sender drains queued PCM, then observes stop
         if self._thread is not None:
-            self._thread.join(timeout=timeout)
+            self._thread.join(timeout=max(0.0, timeout))
+            if self._thread.is_alive():
+                self._incomplete_audio.set()
+                self._cancel_requested.set()
+                with self._transport_lock:
+                    loop, task = self._loop, self._task
+                if loop is not None and task is not None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass  # loop finished between snapshot and cancellation
+                self._thread.join(timeout=0.5)
         if self._error:
             print(f"Gemini Live STT error: {self._error}", flush=True)
         return " ".join(p for p in self._final_parts if p).strip()
 
     def _thread_main(self) -> None:
         try:
-            asyncio.run(self._run())
+            asyncio.run(self._run_owned())
+        except asyncio.CancelledError:
+            pass  # stop() deliberately cancelled the session's own task
         except Exception as e:
-            self._error = str(e)
+            self._error = str(e) or type(e).__name__
             print(f"Gemini Live STT thread failed: {e}", flush=True)
+
+    async def _run_owned(self) -> None:
+        with self._transport_lock:
+            self._loop = asyncio.get_running_loop()
+            self._task = asyncio.current_task()
+        try:
+            # stop() may time out before this worker has started its event loop.
+            if self._cancel_requested.is_set():
+                return
+            await self._run()
+        finally:
+            with self._transport_lock:
+                self._loop = self._task = None
 
     async def _run(self) -> None:
         _ensure_google_genai()
@@ -734,7 +972,7 @@ class GeminiLiveSession:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:
-            self._error = str(getattr(e, "message", "")) or str(e)
+            self._error = str(getattr(e, "message", "")) or str(e) or type(e).__name__
 
     async def _send_loop(self, session, mime: str) -> None:
         while True:
@@ -754,7 +992,7 @@ class GeminiLiveSession:
                     audio=google_genai_types.Blob(data=pcm, mime_type=mime)
                 )
             except Exception as e:
-                self._error = str(e)
+                self._error = str(e) or type(e).__name__
                 break
         try:
             await session.send_realtime_input(audio_stream_end=True)

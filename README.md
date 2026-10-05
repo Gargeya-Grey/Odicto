@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
   <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
-  <img src="https://img.shields.io/badge/Linux-X11%2FWayland-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Linux-X11%3B%20Wayland%20limited-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
+  <img src="https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-Whisper%20%7C%20Gemini%203.5%20Transcribe-00C853?style=for-the-badge" alt="Whisper" />
   <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter%20%7C%20Gemini-FF6F00?style=for-the-badge" alt="LLM" />
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt" />
@@ -55,7 +55,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 |----|--------|
 | **Windows 10 / 11** | Supported |
 | **macOS 12+** | Supported (Accessibility + Input Monitoring permissions required) |
-| **Linux (X11 recommended)** | Supported (root or `input` group for global hooks) |
+| **Linux (X11)** | Supported on X11 only when run as **root** (the `keyboard` backend needs euid 0; `input` group membership is not enough). Wayland is limited. |
 
 Notes:
 - **macOS** runs Whisper on CPU. `faster-whisper` does not currently
@@ -65,8 +65,18 @@ Notes:
   avoid a ~1GB CUDA context at login. Larger models still try CUDA first.
   Set `WHISPER_DEVICE=cuda` to keep the model in GPU memory from startup
   and warm it so the first hotkey is not waiting on CUDA.
-- **Linux Wayland** needs `wl-clipboard` and may have compositor-specific
-  synthetic-keyboard limits; an X11 session is the most reliable target.
+- **Linux Wayland is limited.** HUD placement, terminal-window detection and
+  synthetic paste/typing can fail or fall back to defaults, and the clipboard
+  needs `wl-clipboard`. Use an X11 session for reliable behavior.
+- **Linux needs root.** The `keyboard` library only works with effective uid 0.
+  A non-root backend is not available yet. When you run as root, keep your
+  session environment or Qt, audio and the clipboard break:
+  `sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS .venv/bin/python main.py`
+  (installing is different: never run `install.sh` with sudo).
+- **Python 3.10 to 3.12.** The installers pin Python 3.12 (uv) or pick
+  3.12/3.11/3.10 (pip). Python 3.13+ is refused because `numpy<2` has no wheels.
+- `odicto.py status` lists known environment problems (missing Linux
+  packages, Wayland, root, macOS permissions) with the fix for each.
 
 ---
 
@@ -90,17 +100,21 @@ cd Odicto
 bash install.sh
 bash scripts/posix/setup.sh
 bash scripts/posix/run_debug.sh
-# Grant Accessibility + Input Monitoring when macOS prompts, then restart the app.
+# Grant Accessibility + Input Monitoring (System Settings > Privacy & Security)
+# to your terminal or Python, then restart the app. Check with:
+.venv/bin/python odicto.py status
 ```
 
-### Linux (X11 recommended)
+### Linux (X11)
 
 ```bash
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
-sudo bash install.sh   # or run as a user with access to /dev/input
+bash install.sh        # as your normal user; it prints the sudo apt/dnf/pacman/zypper command to run
 bash scripts/posix/setup.sh
-bash scripts/posix/run_debug.sh
+# The keyboard backend needs root. Keep your session variables:
+sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS bash scripts/posix/run_debug.sh
+.venv/bin/python odicto.py status   # lists remaining problems
 ```
 
 ---
@@ -114,7 +128,7 @@ The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10+**) |
+| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**; uv is pinned to 3.12) |
 | 2 | Create **`.venv`** |
 | 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
 | 4 | Copy **`.env.example` → `.env`** |
@@ -150,7 +164,7 @@ Pick your OS below, or use the one-command installers above.
 |------|-----|----------------|
 | **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
 | **uv** (recommended) | Fast, hash-verified dependency install | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) — the installers fetch it automatically when missing |
-| **Python 3.10+** | Runtime (needed only for the pip fallback; uv can fetch its own) | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Python 3.10 to 3.12** | Runtime (needed only for the pip fallback; uv fetches 3.12). 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
 | **Microphone** | Capture speech | Working default input device in system sound settings |
 | **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
 | **(Optional) One API key per cloud backend** | AI replies — Meta, OpenRouter, or Gemini (Ollama needs none) | Use `odicto.py setup`, or paste each into its `*_API_KEY` in `.env` |
@@ -162,9 +176,13 @@ Permissions:
 - **Windows**: admin usually **not** required. If global hotkeys fail on a
   locked-down PC, try running the terminal as Administrator once.
 - **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
-  System Settings → Privacy & Security when prompted.
-- **Linux**: run as root, or add your user to the `input` group. X11 is
-  recommended; on Wayland install `wl-clipboard`.
+  System Settings → Privacy & Security (add your terminal or Python). Without
+  them the app starts but hotkeys do nothing; `odicto.py status` reports
+  `macos_accessibility` / `macos_input_monitoring`.
+- **Linux**: run as **root** (the `input` group is not enough) and pass the
+  session environment (see Supported platforms). X11 is the reliable target;
+  Wayland is limited and needs `wl-clipboard`. Install `libportaudio2`, a
+  clipboard tool (`xclip`/`xsel`/`wl-clipboard`) and `xdotool`.
 
 ### 1. Clone
 
@@ -556,7 +574,13 @@ Behavior & UI:
 | `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
 | `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
 | `MIN_HOLD_MS` | `80` | Ignore shorter presses |
-| `PASTE_DELAY_SECONDS` | `0.05` | Clipboard settle before restore |
+| `PASTE_DELAY_SECONDS` | `1.0` | Wait after the paste chord before the clipboard restore (restores only if the clipboard still holds the pasted text) |
+| `MAX_RECORDING_SECONDS` | `600` | A capture stops itself and is processed after this long (0 = no limit) |
+| `STT_DEADLINE_SECONDS` | `20` | Time limit per speech stage; cloud STT then falls back to local Whisper |
+| `LLM_DEADLINE_SECONDS` | `30` | Time limit per AI reply or polish stage; raw text is kept on timeout |
+| `CANCEL_HOTKEY` | `esc` | Cancels PROCESSING; never suppressed; blank disables |
+| `LOG_TRANSCRIPTS` | `false` | `false` = the log holds lengths and timings only, no text |
+| `POLISH_MAX_CHARS` | `1200` | Polish is skipped for longer transcripts (0 = no limit) |
 | `TYPE_IN_TERMINAL` | `true` | Type the text (clipboard untouched) when the focused window is a terminal |
 | `EXTRA_TERMINAL_APPS` | *(empty)* | Comma-separated window classes / process names to also treat as terminals |
 
@@ -584,7 +608,7 @@ root independently of the working directory.
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.
 Run tests from the project root with `python -m unittest discover -s tests -t .`.
-The optional microphone diagnostic is `python -m tests.test_pipeline`.
+The optional microphone diagnostic is `python tools/manual_pipeline_check.py`.
 
 ## Architecture (quick map)
 
@@ -614,7 +638,7 @@ invariants not to break.
 | Symptom | Fix |
 |---------|-----|
 | No HUD on hotkey | Restart with `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux try root |
+| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux run as root (input group is not enough) and run `odicto.py status` |
 | Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
 | **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
 | Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
@@ -630,7 +654,7 @@ invariants not to break.
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
-| Linux hotkey/paste doesn't work | Run as root or add your user to the `input` group; on Wayland prefer X11 |
+| Linux hotkey/paste doesn't work | Run as root with your session env preserved (the `input` group is not enough); on Wayland prefer X11; `odicto.py status` shows what is missing |
 | Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |
 | Terminal pastes but never types | `TYPE_IN_TERMINAL=false` is set, or the window wasn't detected. On Linux X11 install `xdotool` or `xprop`; Wayland can't be detected |
 | Multi-line text ran as commands in the shell | Newlines are typed as-is, so each is **Enter**. Dictate a single line, or set `TYPE_IN_TERMINAL=false` to paste instead |
