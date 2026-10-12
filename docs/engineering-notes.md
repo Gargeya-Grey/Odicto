@@ -445,8 +445,8 @@ start and on every pipeline exit. Keep current F7 captions visible until finaliz
   (background) restore was built first and rejected: three review rounds each found races in its
   pending-restore state (a retry adopting a user copy, a probe settling a newer paste early, a
   lost original on a second failure). Holding `_CLIPBOARD_LOCK` through the wait removes that
-  state. The cost is that "Done" and the next AI probe or paste wait up to the delay; the text
-  itself appears just as fast. A restore that still fails after ~2 s of retries is dropped with
+  state. The pill shows "Done" when the paste key is sent (`paste_text`'s delivery callback),
+  but the clipboard wait still blocks the next capture, AI probe or paste for up to the delay. A restore that still fails after ~2 s of retries is dropped with
   a HUD notice; no state carries to the next paste. A carry-over record (retry the lost original
   before the next paste) was removed after three review rounds each found a fault in it (a stale
   original restored over a newer user copy, a fresh snapshot skipping the typing fallback).
@@ -456,3 +456,154 @@ start and on every pipeline exit. Keep current F7 captions visible until finaliz
 - **Abandoned provider calls may keep running.** After a deadline or a cancel, the worker thread
   of a cloud call cannot be killed. It can finish in the background. Its result is dropped and
   is never pasted.
+
+## Resting resource use (October)
+
+Goal: Odicto costs as little CPU and memory as possible while it waits, with no change to
+dictation behaviour. Every number below was measured on a Windows 11 laptop (i7-12650H,
+16 threads, Python 3.11, PySide6, MME input at 16 kHz mono) with throw-away harnesses that
+never bind a keyboard hook and never start `main.py`. CPU is process cycle counts divided
+by a calibrated clock (`QueryProcessCycleTime`); the 15.6 ms tick of `GetProcessTimes` is too
+coarse for sub-1 % loads. "Private" is Windows private bytes (committed memory); RSS is the
+working set. A running install, sampled read-only for 30 s, showed 0.42 % of one core,
+573 MB private, 37 MB working set and 30 threads while idle.
+
+### What each part costs at rest
+
+| Part | Idle CPU (% of one core) | Memory | Notes |
+|---|---|---|---|
+| Bare Python, sleeping | 0.001 | 18 MB RSS / 11 MB private | baseline |
+| Capture stream (`AudioRecorder`, MME, 1024-frame blocks) | 0.58 | about 1 MB | 15.6 callbacks per second |
+| ...of which the callback body | 0.013 | | 8 µs per call (`_callback`, called directly) |
+| ...of which PortAudio and the Python-to-C hand-off | about 0.57 | | a no-op callback costs the same: 0.8 at 1024 frames, 0.47 at 4096, WASAPI 0.95 (single runs, about ±0.2) |
+| Heartbeat thread (2 s) | 0.13 | negligible | 2.7 ms per beat: snapshot, JSON, write, replace |
+| HUD hidden (tick stopped), offscreen or real platform | 0.015 | see the PySide6 row | tray included |
+| HUD pill shown, offscreen | 6.7 to 8.4 | | 60 FPS repaint; a standing error pill did this forever |
+| `import numpy`, default OpenBLAS | | +18 MB RSS / **+496 MB private**, +15 threads | one memory pool per CPU thread |
+| `import numpy`, `OPENBLAS_NUM_THREADS=1` | | +18 MB RSS / +13 MB private, +0 threads | |
+| PySide6 (QtWidgets, QtGui) | | 0.18 s, +14 MB RSS / +7 MB private | |
+| `openai` | | 1.2 to 1.4 s, +31 MB RSS / +28 MB private | |
+| `google.genai` (with types) | | 1.3 to 1.6 s, +40 MB RSS / +36 MB private | |
+| `httpx` / `requests` / `pydantic` | | 0.25 / 0.37 / 0.13 s, +11 / +13 / +5 MB RSS | |
+| `faster_whisper` + `ctranslate2` (after numpy) | | 0.4 s, +19 MB RSS / +20 MB private | |
+| Whisper `tiny.en` CPU int8, loaded | within noise | 1.4 s warm (3.9 s cold disk), +100 MB RSS / **+741 MB private** | commit is the same at 1, 4 or 8 `cpu_threads` |
+| `soundfile`, `keyboard`, `python-dotenv`, `sounddevice` | | each under 0.4 s and 8 MB RSS | |
+
+Whole process, built like `DictationApp._init_attempt` (recorder, speech engine, refiner,
+HUD hidden, heartbeat), 45 s idle window, offscreen Qt:
+
+| Configuration | Private MB before / after | RSS MB before / after | Threads before / after | Idle CPU % before / after |
+|---|---|---|---|---|
+| Whisper speech, no AI | 1277 / 796 | 179 / 179 | 38 / 24 | 1.08 / 0.70 |
+| Gemini speech, no AI | 551 / 69 | 100 / 101 | 28 / 13 | 0.87 / 0.79 |
+| Groq speech and Groq AI | 547 / 66 | 98 / 97 | 28 / 13 | 0.87 / 0.80 |
+| Persistent "Mic unavailable" pill (HUD alone) | 27 / 28 | 49 / 49 | 11 / 13 | **6.7 / 0.5** |
+
+The CPU differences between the first three rows are within the run-to-run noise
+(about ±0.15); the memory and thread differences are not.
+
+### What changed, and why
+
+- **`OPENBLAS_NUM_THREADS=1` before numpy loads** (`app/main.py`, `setdefault`, so an explicit
+  value still wins). numpy's bundled OpenBLAS creates one worker and one large memory pool per
+  CPU thread at import: about 480 MB of committed memory and 15 idle threads. Odicto does no
+  large matrix work. Whisper decodes in ctranslate2, which has its own pool and is not
+  affected. Checked: decode of 5 / 30 / 60 s of audio took 0.33 / 0.35 / 0.69 s with the
+  default and 0.33 / 0.36 / 0.70 s with one thread. Whisper features differ by at most one
+  float32 step (1.2e-7 on values near 1.0) because a threaded dot product sums in a different
+  order; that is far below the int8 model's own rounding. Effect: 480 MB less commit and 15
+  fewer threads, at no cost in speed. It does not change the working set (RSS), only the
+  commit charge, which is the figure that task managers report as "committed" or "private".
+- **A finished, unchanging HUD pill repaints at 4 FPS instead of 60** (`app/indicator.py`).
+  A standing "Mic unavailable" or "Hotkeys failed" pill (`init_error` has no auto-hide) kept
+  the 16 ms paint timer running forever for 6.7 % of a core. When the check or cross has
+  finished fading in, nothing is resizing and no clock drives the glyph, every frame is
+  pixel-identical, so the interval becomes 250 ms. Any app notification (`_sync_from_app`)
+  or state change (`_sync_tick`) puts it back to 16 ms. Recording, processing and the
+  entrance and exit animations are never slowed. A test compares a grab before and after
+  forty skipped frames.
+- **Tray icon is the Odicto logo.** `logo_icon()` loads `assets/odicto-icon.svg`, then
+  `assets/odicto-icon-256.png`, from `paths.ROOT` (never the working directory). A file counts
+  only if it renders, so a missing Qt SVG plugin or a damaged file moves to the next one. If
+  neither loads, the old plain green square is still used so the tray never loses its icon.
+  The app does not set a window icon (the HUD is a tool window with no taskbar entry), so
+  there was nothing else to change.
+- **`Odicto <version>` is logged** beside `Code version: git <rev>` at start.
+
+### Already in place, now pinned by tests
+
+- Provider SDKs load only when configured. After `import main` no SDK, no Qt and no Whisper
+  is loaded. Cloud speech does not import `faster_whisper`; Gemini speech imports only
+  `google.genai`; an OpenAI-compatible chat provider imports only `openai`. A configured
+  provider still loads at startup, so first-use latency is unchanged.
+- The HUD's paint timer already stops once the pill has left (hidden: 0.015 % of a core).
+
+### Left as it is, and why
+
+- **Capture block size (1024 frames).** A 4096-frame block saves about 0.4 % of a core, but
+  `stop()` cannot see audio still inside the driver block, so a larger block clips up to
+  256 ms (now 64 ms) off the end of the last word. The persistent stream and its 0.4 s
+  pre-roll are what protect the first word; the block size protects the last.
+- **Heartbeat interval (2 s).** `odicto.py wait-ready` requires
+  `callback_age_s + heartbeat age < 3`, so the interval cannot grow without a change in
+  `app/odicto.py`. The beat costs 0.13 % of a core. Not applied.
+- **WASAPI instead of MME** costs the same (0.95 % against 0.86 %) and changes how device
+  endpoints behave; the reconnect and recovery paths were exercised on the current host API
+  only. Not applied.
+- **The HUD at 60 FPS while it is genuinely animating** (recording, thinking). That is the
+  design; it lasts seconds.
+- **`soundfile`** is only needed for the debug WAV, but `test_units` patches `recorder.sf`, so
+  the module-level import stays (1.4 MB).
+- **`psutil`** (+6 MB RSS) is imported by the platform layer on Windows.
+- **The 2.7 % idle figure** from an earlier sample could not be reproduced: the harness
+  parts above add up to 0.7 to 1.1 %, and a read-only sample of the running install showed
+  0.42 %. Typing system-wide through the keyboard hook, or a dictation in progress, would
+  explain a higher short sample.
+
+### Applied (owner decision, 12 Oct): the backup Whisper is released after 10 idle minutes
+
+At this commit Whisper is already loaded lazily when a cloud engine is active:
+`CloudTranscriber` and `GeminiTranscriber` build `WhisperTranscriber` only inside
+`local_fallback`, so a Gemini, Groq or OpenRouter install pays nothing for it until the first
+failure. Measured cost of that first failure, warm disk: import `faster_whisper` 0.3 to 0.5 s,
+model load 1.4 s, then a 5 s clip decodes in 0.33 s: about 2.2 s in all. On a cold disk the
+load took 3.9 s (about 5 s in all). Both fit inside the 20 s `STT_DEADLINE_SECONDS` that
+the local retry gets. It adds +100 MB RSS and **+741 MB private**, and the model then stays resident until the
+process exits (a process that has also decoded a clip holds 1.46 GB private before the BLAS
+limit and 0.98 GB after it).
+
+The proposal was to release the fallback model after a long idle period, so a rare cloud
+failure does not leave 741 MB committed for the rest of the day. The owner chose 10 minutes.
+The price is one more 1 to 5 s load on the next failure (0.9 to 2.0 s measured warm with
+tiny.en on the i7-12650H, about 5 s on a cold disk). Pre-loading Whisper at startup for a
+cloud install would be the opposite trade: +741 MB for a 2 s gain on a rare failure.
+
+How it works (`_LocalWhisperFallback` in `app/transcriber.py`): each backup use restarts a
+daemon `threading.Timer` (`WHISPER_FALLBACK_IDLE_SECONDS = 600`). The timer drops the model
+only when no backup decode runs and no newer use has restarted it (a generation number), then
+runs `gc.collect()`. The next failure loads the model again. The primary Whisper
+(`STT_PROVIDER=whisper`) and a live-only Whisper are separate objects and stay loaded.
+
+**MKL keeps memory per released model.** The first version released the model but kept
+about 124 MB per load-and-release cycle: committed memory after each release went 262, 386,
+511 MB (tiny.en, CPU int8). A load-only cycle did not grow (69, 66, 67, 68 MB); a decode did.
+The cause is the fast memory manager of the MKL inside ctranslate2: with
+`MKL_DISABLE_FAST_MM=1` the same decode cycles stay flat (104, 106, 104, 108 MB). Turning it
+off costs decode speed (5 s clip, two runs each: 0.29 s with the cache, 0.36 to 0.37 s
+without), so it is not set process-wide. `_backup_only_mkl_settings` sets it only for a
+backup load, only when neither the dictation nor the live engine is Whisper, and only before
+ctranslate2 loads (MKL reads it once); a value already in the environment wins. Measured
+through the real `local_fallback` path with a cloud engine: 819 to 822 MB loaded, 104 to
+108 MB after each of three releases.
+
+Children inherit the environment: the tray's setup page, and the Odicto that its Save
+starts. So the value goes with a marker, `ODICTO_SET_MKL_DISABLE_FAST_MM=1`, and the top of
+`app/main.py` removes a marked value before anything can load ctranslate2. Without that, a
+switch from a cloud engine to Whisper through Save would start a primary Whisper with the
+cache off (about 70 ms slower per 5 s clip). A value the user set has no marker and stays.
+
+### By eye
+
+Tray icon at 16, 24, 32, 48 and 64 px (graphite rounded square, jade mark) renders cleanly
+offscreen. Check it once on the real taskbar (light and dark), and check that a standing
+error pill looks the same as before.

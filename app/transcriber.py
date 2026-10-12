@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gc
 import io
 import json
 import os
@@ -297,12 +298,50 @@ GEMINI_STT_TIMEOUT_CAP = 15.0
 PREWARM_TIMEOUT_SECONDS = 2.0
 
 
+MKL_FAST_MM_VAR = "MKL_DISABLE_FAST_MM"
+MKL_FAST_MM_MARKER = "ODICTO_SET_MKL_DISABLE_FAST_MM"  # app/main.py reads the same name
+
+
+def _backup_only_mkl_settings() -> None:
+    """Turn off MKL's buffer cache when Whisper is only the cloud backup.
+
+    ctranslate2's MKL keeps about 120 MB of decode buffers for every model it has
+    served, even after the model is dropped, so each idle release of the backup
+    would leave that much behind. Without the cache the memory stays flat across
+    releases, and a decode takes about 20% longer (0.29 s to 0.36 s for a 5 s clip
+    with tiny.en). Only the backup pays that: a primary or live Whisper keeps the
+    cache. MKL reads the setting once, so it applies only before ctranslate2 loads,
+    and a value already in the environment wins.
+
+    Children inherit the environment (the tray's setup page, and the Odicto that its
+    Save starts), so Odicto marks the value as its own: app/main.py removes a marked
+    value before anything loads, and a later primary Whisper keeps MKL's cache.
+    """
+    if _ctranslate2_loaded() or MKL_FAST_MM_VAR in os.environ:
+        return
+    try:
+        if "whisper" in (Config.effective_stt_provider(), Config.effective_live_stt_provider()):
+            return
+    except Exception:
+        return
+    os.environ[MKL_FAST_MM_VAR] = "1"
+    os.environ[MKL_FAST_MM_MARKER] = "1"
+
+
+def _ctranslate2_loaded() -> bool:
+    return "ctranslate2" in sys.modules
+
+
 class WhisperTranscriber:
-    def __init__(self) -> None:
-        """Initializes the Whisper model with hardware acceleration detection and safety fallbacks."""
+    def __init__(self, backup: bool = False) -> None:
+        """Initializes the Whisper model with hardware acceleration detection and safety fallbacks.
+
+        ``backup`` marks the cloud backends' backup model, which is released when idle.
+        """
         self.model: Optional[WhisperModel] = None
         self.device: str = ""
         self.compute_type: str = ""
+        self._backup = backup
         self._load_model()
 
     def _load_model(self) -> None:
@@ -320,6 +359,8 @@ class WhisperTranscriber:
         last_error: Optional[Exception] = None
         global WhisperModel
         if WhisperModel is None:
+            if getattr(self, "_backup", False):
+                _backup_only_mkl_settings()
             from faster_whisper import WhisperModel as _WhisperModel
 
             WhisperModel = _WhisperModel
@@ -477,9 +518,24 @@ class WhisperTranscriber:
     def local_fallback(self, audio: Union[str, np.ndarray]) -> str:
         return self.transcribe(audio)
 
+    def release(self) -> None:
+        """Drop the model so its memory (about 740 MB committed on CPU) can be freed."""
+        self.model = None
+
+
+# The cloud backends' backup Whisper loads on the first cloud failure and is released
+# after this long without use. The next failure loads it again (1-5 s). The primary
+# Whisper (STT_PROVIDER=whisper) is a different object and stays loaded.
+WHISPER_FALLBACK_IDLE_SECONDS = 600.0
+
 
 class _LocalWhisperFallback:
-    """Lazy local Whisper shared by the cloud backends for failures."""
+    """Lazy local Whisper shared by the cloud backends for failures.
+
+    One failure would otherwise hold Whisper's memory for the rest of the session.
+    Each use restarts an idle timer; the timer drops the model only when no decode
+    runs and no newer use has restarted it.
+    """
 
     _whisper: Optional[WhisperTranscriber]
 
@@ -488,9 +544,48 @@ class _LocalWhisperFallback:
         lock = self.__dict__.setdefault("_whisper_lock", threading.Lock())
         with lock:
             if getattr(self, "_whisper", None) is None:
-                self._whisper = WhisperTranscriber()
+                self._whisper = WhisperTranscriber(backup=True)
             whisper = self._whisper
-        return whisper.transcribe(audio)
+            self._whisper_busy = getattr(self, "_whisper_busy", 0) + 1
+        try:
+            return whisper.transcribe(audio)
+        finally:
+            with lock:
+                self._whisper_busy -= 1
+                self._arm_whisper_release()
+
+    def _arm_whisper_release(self) -> None:
+        """Restart the idle timer. Call with ``_whisper_lock`` held."""
+        previous = getattr(self, "_whisper_timer", None)
+        if previous is not None:
+            previous.cancel()
+        self._whisper_generation = getattr(self, "_whisper_generation", 0) + 1
+        timer = threading.Timer(
+            WHISPER_FALLBACK_IDLE_SECONDS, self._release_idle_whisper,
+            args=(self._whisper_generation,))
+        timer.daemon = True
+        timer.name = "odicto-whisper-idle"
+        self._whisper_timer = timer
+        timer.start()
+
+    def _release_idle_whisper(self, generation: int) -> None:
+        lock = self.__dict__.setdefault("_whisper_lock", threading.Lock())
+        with lock:
+            if generation != getattr(self, "_whisper_generation", 0) or getattr(self, "_whisper_busy", 0):
+                return  # a newer use restarted the timer, or a decode still runs
+            whisper = getattr(self, "_whisper", None)
+            self._whisper = None
+            self._whisper_timer = None
+        if whisper is None:
+            return
+        try:
+            whisper.release()
+        except Exception:
+            pass
+        del whisper
+        gc.collect()
+        print(f"Local Whisper backup released after {WHISPER_FALLBACK_IDLE_SECONDS / 60:g} idle minutes.",
+              flush=True)
 
 
 def _encode_multipart(

@@ -1,5 +1,21 @@
 import contextlib
 import os
+
+# numpy's bundled OpenBLAS sizes one worker and one large memory pool per CPU
+# thread when it is imported: about 480 MB of committed memory and 15 idle
+# threads on a 16-thread machine. Odicto does no large matrix work (Whisper
+# decodes in ctranslate2, which has its own pool), so one BLAS thread costs no
+# speed. This must run before anything imports numpy; setdefault keeps an
+# explicit value from the environment.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+# A parent Odicto that used only the cloud backup Whisper turned MKL's buffer cache off
+# and marked it (transcriber._backup_only_mkl_settings). This process may use Whisper as
+# its main engine, so drop a marked value before ctranslate2 can load; a value the user
+# set has no marker and stays.
+if os.environ.pop("ODICTO_SET_MKL_DISABLE_FAST_MM", None) is not None:
+    os.environ.pop("MKL_DISABLE_FAST_MM", None)
+
 import json
 import queue
 from paths import ROOT
@@ -137,6 +153,7 @@ from transcriber import (
 )
 from refiner import TextRefiner
 from typer import (
+    delivery_callback,
     flush_pending_restore,
     get_selected_text,
     paste_text,
@@ -302,6 +319,12 @@ class DictationApp:
         except Exception:
             pass
         try:
+            from version import app_version
+
+            print(f"Odicto {app_version()}")
+        except Exception:
+            pass
+        try:
             print(
                 f"Resolved: provider={Config.LLM_PROVIDER} "
                 f"model={Config.effective_llm_model()} "
@@ -354,6 +377,9 @@ class DictationApp:
         self._live_key_held: bool = False
         self._live_committed: str = ""
         self.live_preview: str = ""
+        # True from the frame the paste key is sent until the cycle ends; the HUD
+        # shows Done then while the clipboard restore wait still runs.
+        self.paste_delivered: bool = False
         self._speech_backends = {}
         self._live_epoch: int = 0
 
@@ -1155,6 +1181,7 @@ class DictationApp:
 
             self._record_started_at = now
             self.last_status = None
+            self.paste_delivered = False
             # Ordinary captures cannot inherit a previous F7 preview.
             self._live_committed = self.live_preview = ""
             self.live_active = False
@@ -1293,6 +1320,7 @@ class DictationApp:
                 self._keep_history = False
                 self._record_started_at = now
                 self.last_status = None
+                self.paste_delivered = False
                 self._live_committed = self.live_preview = ""
                 try:
                     if Config.effective_live_stt_provider() == "gemini":
@@ -1562,12 +1590,13 @@ class DictationApp:
                     if cycle.cancel.is_set() or self._cycle is not cycle:
                         raise _Abort("cancelled")
                     cycle.pasting = True
-                if live:
-                    # Keep the final payload for asynchronous paste consumers.
-                    paste_text(refined_text, restore_clipboard=False)
-                else:
-                    paste_text(refined_text)
-                    restore_lost = self._paste_restore_failed()
+                with delivery_callback(self._on_paste_delivered):
+                    if live:
+                        # Keep the final payload for asynchronous paste consumers.
+                        paste_text(refined_text, restore_clipboard=False)
+                    else:
+                        paste_text(refined_text)
+                        restore_lost = self._paste_restore_failed()
 
             elapsed: float = time.time() - start_time
             print(f">>> Text pasted successfully in {elapsed:.2f} seconds!")
@@ -1590,6 +1619,19 @@ class DictationApp:
             self.last_status = "error"
         finally:
             self._finish_cycle()
+
+    def _on_paste_delivered(self) -> None:
+        """Pipeline thread, inside paste_text: the text is in the target app.
+
+        The HUD shows Done now; PROCESSING and the clipboard wait continue until
+        paste_text returns, and the notice logic may then replace the label.
+        """
+        self.paste_delivered = True
+        from indicator import SUCCESS_STATUSES
+
+        if self.last_status not in SUCCESS_STATUSES:
+            self.last_status = "success"
+        self._notify_ui()
 
     # ------------------------------------------------------------ pipeline stages
     def _claim_cycle(self) -> _Cycle:
@@ -1733,8 +1775,12 @@ class DictationApp:
             self._live_committed = self.live_preview = ""
             self._cycle = None
             if self._closing.is_set():
+                self.paste_delivered = False
                 return
             self._set_state(AppState.IDLE)
+            # Cleared after IDLE: a HUD sync in between must not see PROCESSING
+            # without delivery and redraw the ring under Done.
+            self.paste_delivered = False
             print("System Idle. Ready.")
 
 if __name__ == "__main__":
@@ -1757,6 +1803,10 @@ if __name__ == "__main__":
             f.write(str(os.getpid()))
     except Exception as e:
         print(f"Warning: Could not write PID file early: {e}", flush=True)
+
+    # The lock is held: listen for the per-install quit signal (admin-mode stop, no UAC).
+    import windows_admin
+    windows_admin.start_quit_listener(_install_root(), lambda: globals().get("app"))
 
     try:
         Config.validate()

@@ -94,6 +94,7 @@ class TestWindowsStop(unittest.TestCase):
     def test_recycled_saved_pid_never_kills_unrelated_process(self):
         self.enumerate.return_value = set()
         process = MagicMock()
+        process.name.return_value = "python.exe"
         process.cmdline.return_value = ["python.exe", "other.py"]
         process.cwd.return_value = self.backend.base.install_root()
         with patch("psutil.Process", return_value=process):
@@ -112,11 +113,49 @@ class TestWindowsStop(unittest.TestCase):
     def test_saved_owner_missed_by_enumeration_is_verified_before_stop(self):
         self.enumerate.return_value = set()
         process = MagicMock()
+        process.name.return_value = "python.exe"
         process.cmdline.return_value = ["python.exe", "main.py"]
         process.cwd.return_value = self.backend.base.install_root()
         with patch("psutil.Process", return_value=process):
             self.assertEqual(self.backend.kill_other_odicto_processes(self.path), [123456])
         self.run.assert_called_once()
+
+    def test_recycled_non_python_pid_with_inaccessible_command_can_be_removed(self):
+        import psutil
+        self.enumerate.return_value = set()
+        process = MagicMock()
+        process.name.return_value = "RzBTLEManager"
+        process.cmdline.side_effect = psutil.AccessDenied(123456)
+        process.cwd.side_effect = psutil.AccessDenied(123456)
+        with patch("psutil.Process", return_value=process):
+            self.assertEqual(self.backend.kill_other_odicto_processes(self.path), [])
+        process.cmdline.assert_not_called()
+        process.cwd.assert_not_called()
+        self.run.assert_not_called()
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_inaccessible_python_command_still_cancels_stop(self):
+        import psutil
+        self.enumerate.return_value = set()
+        process = MagicMock()
+        process.name.return_value = "pythonw.exe"
+        process.cmdline.side_effect = psutil.AccessDenied(123456)
+        with patch("psutil.Process", return_value=process):
+            with self.assertRaisesRegex(RuntimeError, "verify"):
+                self.backend.kill_other_odicto_processes(self.path)
+        self.assert_preserved()
+        self.run.assert_not_called()
+
+    def test_inaccessible_saved_process_name_still_cancels_stop(self):
+        import psutil
+        self.enumerate.return_value = set()
+        process = MagicMock()
+        process.name.side_effect = psutil.AccessDenied(123456)
+        with patch("psutil.Process", return_value=process):
+            with self.assertRaisesRegex(RuntimeError, "verify"):
+                self.backend.kill_other_odicto_processes(self.path)
+        self.assert_preserved()
+        self.run.assert_not_called()
 
 
 if __name__ == "__main__":

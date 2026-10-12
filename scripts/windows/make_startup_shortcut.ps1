@@ -3,6 +3,16 @@
 # the logon task is the reliable fallback.
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+
+# Admin mode on: an elevated Odicto needs the elevated logon task, and the limited task
+# below must never replace it. The helper does the whole job (or fails).
+if (Test-Path -LiteralPath (Join-Path $repo '.odicto-admin-enabled')) {
+  $adminHelper = Join-Path $PSScriptRoot 'admin_mode.ps1'
+  $winPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  & $winPowerShell -NoProfile -ExecutionPolicy Bypass -File $adminHelper -Action Configure
+  exit $LASTEXITCODE
+}
+
 $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 $lnk = Join-Path $startup 'Odicto.lnk'
 $bat = Join-Path $repo 'start_dictation.bat'
@@ -19,6 +29,8 @@ $s.Arguments = '"' + $repo + '\main.py"'
 $s.WorkingDirectory = $repo
 $s.WindowStyle = 7
 $s.Description = 'Start Odicto dictation at login (direct pythonw)'
+$icon = Join-Path $repo 'assets\odicto.ico'
+if (Test-Path -LiteralPath $icon) { $s.IconLocation = "$icon,0" }
 $s.Save()
 Write-Output "Created: $lnk"
 Write-Output "Target: $($s.TargetPath) $($s.Arguments)"

@@ -1,19 +1,32 @@
 #!/usr/bin/env bash
 # Zero-to-one installer for Odicto on macOS and Linux.
 # Windows users: use install.ps1.
+#
+# Flags: -Ollama   -Python <path|3.10|3.11|3.12>   -NoUv   -VenvOnly
+# A .venv that cannot run (copied from another machine, base Python removed) is renamed to
+# .venv-backup-<timestamp> and rebuilt. Nothing is deleted; .env and prompt.txt are untouched.
 set -euo pipefail
 
 SKIP_OLLAMA=0
 WITH_OLLAMA=0
+PYTHON_SPEC=""
+NO_UV=0
+VENV_ONLY=0
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
 WHISPER_MODEL="${WHISPER_MODEL:-tiny.en}"
 
-for arg in "$@"; do
-  case "$arg" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     -Ollama|--ollama) WITH_OLLAMA=1 ;;
     -SkipOllama|--skip-ollama) SKIP_OLLAMA=1 ;;  # deprecated no-op: skipped by default
-    *) echo "Unknown flag: $arg" >&2; exit 2 ;;
+    -Python|--python)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then echo "$1 needs a value: a path to python, or 3.10 / 3.11 / 3.12" >&2; exit 2; fi
+      PYTHON_SPEC="$2"; shift ;;
+    -NoUv|--no-uv) NO_UV=1 ;;
+    -VenvOnly|--venv-only) VENV_ONLY=1 ;;
+    *) echo "Unknown flag: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 OS="$(uname -s)"
@@ -25,10 +38,25 @@ esac
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
+# shellcheck source=scripts/posix/install_python.sh
+. "$REPO_DIR/scripts/posix/install_python.sh"
+
+# An explicit -Python is checked first, before anything is installed. A bad choice stops
+# here; it never falls back to another interpreter.
+PY=""
+if [ -n "$PYTHON_SPEC" ]; then
+  echo "==> Checking -Python $PYTHON_SPEC"
+  EARLY_UV=""
+  if [ "$NO_UV" = "0" ] && command -v uv >/dev/null 2>&1; then EARLY_UV="$(command -v uv)"; fi
+  PY="$(odicto_resolve_python "$PYTHON_SPEC" "$EARLY_UV")" || exit 1
+  echo "    Using $PY"
+fi
 
 echo "==> Detecting uv (fast, hash-verified package manager)"
 UV=""
-if command -v uv >/dev/null 2>&1; then
+if [ "$NO_UV" = "1" ]; then
+  echo "    uv skipped (-NoUv); using pip"
+elif command -v uv >/dev/null 2>&1; then
   UV="$(command -v uv)"
 else
   echo "    uv not found. Installing the standalone uv binary..."
@@ -47,7 +75,7 @@ else
 fi
 if [ -n "$UV" ]; then
   echo "    uv found: $UV"
-else
+elif [ "$NO_UV" = "0" ]; then
   echo "    Could not install uv; will fall back to pip (slower)."
 fi
 
@@ -56,20 +84,20 @@ if [ "$(id -u)" = "0" ]; then
   echo "          it only prints the system-package commands for you to run."
 fi
 
-PY=""
-if [ -z "$UV" ]; then
-  # numpy<2 has no wheels for Python 3.13+, so only 3.10 to 3.12 are accepted.
-  echo "==> Detecting Python 3.10-3.12 (needed only for the pip fallback)"
-  for candidate in python3.12 python3.11 python3.10 python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      if "$candidate" -c 'import sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] <= (3,12) else 1)' 2>/dev/null; then
-        PY="$candidate"
-        break
-      fi
-    fi
-  done
+# A venv that works needs no base Python found or installed, so it is judged first, by running it.
+VENV_DIR="$REPO_DIR/.venv"
+VENV_STATE="$(odicto_venv_state "$VENV_DIR")"
 
-  if [ -z "$PY" ]; then
+# Reuse an installed Python 3.10-3.12 (numpy<2 has no wheels for 3.13+). Nothing is downloaded
+# when one exists; uv fetches 3.12 only when none is installed.
+if [ -z "$PY" ] && [ "${VENV_STATE%% *}" != "healthy" ]; then
+  echo "==> Locating an installed Python 3.10-3.12"
+  if PY="$(odicto_find_python "$UV")"; then
+    echo "    Using $PY"
+  elif [ -n "$UV" ]; then
+    PY=""
+    echo "    None installed; uv will fetch Python 3.12"
+  else
     echo "    No Python 3.10, 3.11 or 3.12 found."
     for candidate in python3 python; do
       if command -v "$candidate" >/dev/null 2>&1; then
@@ -83,22 +111,42 @@ if [ -z "$UV" ]; then
       brew install python@3.12
       PY="$(brew --prefix python@3.12)/bin/python3.12"
     else
-      echo "    Install Python 3.12 (or 3.11 / 3.10) and re-run this script." >&2
+      echo "    Install Python 3.12 (or 3.11 / 3.10) and re-run this script, or pass -Python <path>." >&2
       exit 1
     fi
   fi
-  echo "    Using $PY"
 fi
 
-echo "==> Creating virtual environment"
-if [ ! -x ".venv/bin/python" ]; then
-  if [ -n "$UV" ]; then
-    "$UV" venv --python 3.12 .venv
-  else
-    "$PY" -m venv .venv
-  fi
-fi
+echo "==> Checking virtual environment (.venv)"
+case "$VENV_STATE" in
+  healthy*) echo "    .venv works (Python ${VENV_STATE#healthy }); keeping it" ;;
+  *)
+    if [ "$VENV_STATE" != "missing" ]; then
+      echo "    .venv cannot be used: ${VENV_STATE#* }"
+      BACKUP="$(odicto_venv_move_aside "$REPO_DIR" "$VENV_DIR")" || exit 1
+      echo "    Moved the old .venv to $BACKUP (kept, not deleted; .env and prompt.txt were not touched)."
+    fi
+    if [ -n "$UV" ]; then
+      if [ -n "$PY" ]; then
+        "$UV" venv --python "$PY" --no-python-downloads "$VENV_DIR"
+      else
+        "$UV" venv --python 3.12 "$VENV_DIR"
+      fi
+    else
+      "$PY" -m venv "$VENV_DIR"
+    fi
+    case "$(odicto_venv_state "$VENV_DIR")" in
+      healthy*) echo "    Created .venv" ;;
+      *) echo "The new .venv does not work. The old one, if any, was kept beside it." >&2; exit 1 ;;
+    esac
+    ;;
+esac
 VENV_PY=".venv/bin/python"
+
+if [ "$VENV_ONLY" = "1" ]; then
+  echo "    -VenvOnly: stopping after the virtual environment"
+  exit 0
+fi
 
 if [ "$PLATFORM" = linux ]; then
   echo "==> Checking Linux system packages"
@@ -183,6 +231,6 @@ fi
 echo
 echo "Install complete."
 echo "Next:"
-echo "  1. Run:  bash scripts/posix/setup.sh   (pick provider + paste key)"
-echo "  2. Run:  bash scripts/posix/run_debug.sh                     (grant permissions if asked)"
-echo "  3. Stop:  .venv/bin/python odicto.py stop"
+echo "  1. Run:  bash setup.sh   (pick provider + paste key)"
+echo "  2. Run:  bash start_dictation.sh   (or scripts/posix/run_debug.sh for a console log; grant permissions if asked)"
+echo "  3. Stop:  bash stop_dictation.sh"

@@ -3,6 +3,7 @@
 Usage:
     python odicto.py setup
     python odicto.py start
+    python odicto.py restart
     python odicto.py stop
     python odicto.py status
     python odicto.py config
@@ -45,13 +46,54 @@ def cmd_setup(_args) -> int:
     return 0
 
 
-def cmd_start(_args) -> int:
+def _elevated_exit(action: str, timeout=None):
+    """Exit code when an install in admin mode handles this lifecycle step, else None.
+
+    Admin mode runs the step through the logon task and the quit event, with no UAC prompt.
+    Only a missing task or event falls back to the elevated helper, and says so.
+    """
+    import windows_admin
+
+    try:
+        return windows_admin.run_if_needed(_repo_root(), action, timeout)
+    except RuntimeError as error:
+        print(f"Odicto admin mode: {error}", file=sys.stderr)
+        return 1
+
+
+def _spawn_owner() -> int:
     proc = platforms.spawn_detached([_venv_python(), _main_py()])
     print(f"Launch requested (PID {proc.pid}); use odicto.py status to check readiness.")
     return 0
 
 
+def cmd_start(_args) -> int:
+    """Start Odicto. A running, ready owner is left alone."""
+    elevated = _elevated_exit("Ensure")
+    if elevated is not None:
+        return elevated
+    return _spawn_owner()
+
+
+def cmd_restart(_args) -> int:
+    """Stop the running owner, then start a fresh one."""
+    elevated = _elevated_exit("Start")
+    if elevated is not None:
+        return elevated
+    stopped = _stop_processes()
+    if stopped != 0:
+        return stopped
+    return _spawn_owner()
+
+
 def cmd_stop(_args) -> int:
+    elevated = _elevated_exit("Stop")
+    if elevated is not None:
+        return elevated
+    return _stop_processes()
+
+
+def _stop_processes() -> int:
     pid_file = os.path.join(_repo_root(), "dictation.pid")
     try:
         killed = platforms.kill_other_odicto_processes(pid_file)
@@ -67,7 +109,10 @@ def cmd_stop(_args) -> int:
 
 
 def cmd_wait_ready(args) -> int:
-    """Wait for the actual owner and microphone, not just an early PID file."""
+    """Wait for the actual owner and microphone, not just an early PID file.
+
+    Reading the heartbeat needs no elevation, so a normal process can wait for an elevated owner.
+    """
     import psutil
     from platforms.base import is_odicto_command
 
@@ -85,8 +130,14 @@ def cmd_wait_ready(args) -> int:
                     and mic.get("callback_count", 0) > 0
                     and 0 <= mic.get("callback_age_s", 10) + age < 3):
                 owner = psutil.Process(pid)
+                try:
+                    cwd = owner.cwd()
+                except psutil.AccessDenied:
+                    # An elevated owner hides its working directory from a normal process.
+                    # Odicto starts main.py by absolute path, which needs no working directory.
+                    cwd = None
                 if (owner.create_time() <= health["updated_at"]
-                        and is_odicto_command(owner.cmdline(), owner.cwd())):
+                        and is_odicto_command(owner.cmdline(), cwd)):
                     print(f"Odicto ready (app PID {pid}); microphone receiving audio.")
                     return 0
         except (OSError, ValueError, KeyError, TypeError, psutil.Error):
@@ -180,6 +231,13 @@ def cmd_config(_args) -> int:
     return 0
 
 
+def cmd_version(_args) -> int:
+    from version import app_version
+
+    print(f"Odicto {app_version()}")
+    return 0
+
+
 def cmd_autostart(_args) -> int:
     main_py = _main_py()
     venv_py = _venv_python()
@@ -255,11 +313,13 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("setup", help="Open the local setup web page")
     sub.add_parser("start", help="Start Odicto in the background")
+    sub.add_parser("restart", help="Stop Odicto, then start it again")
     sub.add_parser("stop", help="Stop all Odicto processes")
     sub.add_parser("status", help="Show runtime status")
     wait_ready = sub.add_parser("wait-ready", help="Wait for app and microphone readiness")
     wait_ready.add_argument("--timeout", type=float, default=30.0)
     sub.add_parser("config", help="Show resolved configuration and where each value came from")
+    sub.add_parser("version", help="Show the Odicto version (the VERSION file)")
     sub.add_parser("autostart", help="Install autostart entry")
     sub.add_parser("remove-autostart", help="Remove autostart entry")
 
@@ -267,10 +327,12 @@ def main() -> int:
     handlers = {
         "setup": cmd_setup,
         "start": cmd_start,
+        "restart": cmd_restart,
         "stop": cmd_stop,
         "status": cmd_status,
         "wait-ready": cmd_wait_ready,
         "config": cmd_config,
+        "version": cmd_version,
         "autostart": cmd_autostart,
         "remove-autostart": cmd_remove_autostart,
     }

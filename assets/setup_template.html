@@ -3,1083 +3,663 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Odicto Setup</title>
+<link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="12 12 84 84"%3E%3Crect x="12" y="12" width="84" height="84" rx="20" fill="%231b1d20"/%3E%3Cg fill="none" stroke="%238EDCBB" stroke-width="7" stroke-linecap="round"%3E%3Cline x1="26.00" y1="69.00" x2="26.00" y2="39.00"/%3E%3Cline x1="32.71" y1="65.88" x2="43.29" y2="42.12"/%3E%3Cline x1="41.83" y1="61.36" x2="58.17" y2="46.64"/%3E%3Cline x1="52.49" y1="57.09" x2="71.51" y2="50.91"/%3E%3Cline x1="65.00" y1="54.00" x2="83.00" y2="54.00"/%3E%3C/g%3E%3C/svg%3E'>
 <style>
+/*
+ * Odicto setup: the Odicto mobile design system, laid out for a desktop.
+ * Graphite canvas, pale jade accent, thin line icons, inset grouped rows.
+ * Large surfaces stay neutral; the accent marks selection and small highlights.
+ * Motion only moves or fades (transform, opacity). The font ships with Odicto,
+ * so the page makes no network request of its own.
+ */
 @font-face {
-  font-family: 'Stack Sans';
-  font-style: normal;
+  font-family: 'Instrument Sans';
+  src: url('/assets/fonts/InstrumentSans-VF.ttf') format('truetype');
+  font-weight: 400 700;
   font-display: swap;
-  font-weight: 200 700;
-  src: url(https://cdn.jsdelivr.net/fontsource/fonts/stack-sans-text:vf@5.3.0/latin-wght-normal.woff2) format('woff2-variations');
 }
 
-/* Quiet Console — one visual system: matte neutrals, hairline edges,
-   a single pine signal color that only lights where commitment happens. */
 :root {
-  color-scheme: light dark;
-  --canvas: #f6f5f2;
-  --surface: #ffffff;
-  --surface-2: #faf9f7;
-  --inset: #f1efea;
-  --line: #e6e3de;
-  --line-strong: #d6d2cb;
-  --ink: #1c1b1f;
-  --muted: #6e6c75;
-  --faint: #9a98a0;
-
-  --accent: #14746b;
-  --accent-ink: #ffffff;
-  --accent-soft: #e7f1ef;
-  --accent-line: #14746b;
-
-  --ok: #46805c;
-  --ok-dot: #6ca880;
-  --ok-soft: #e9f2ec;
-  --warn: #8a6a1f;
-  --warn-dot: #c9a15a;
-  --warn-soft: #f5efdf;
-  --err: #a8443e;
-  --err-dot: #c45c56;
-  --err-soft: #f7eae9;
-  --info: #7a7395;
-  --info-dot: #948ea8;
-  --info-soft: #eeecf3;
-  --pending: #7b8398;
-  --pending-dot: #8c94a8;
-
-  --radius: 14px;
-  --radius-sm: 10px;
-  --radius-xs: 8px;
-  --shadow-float: 0 14px 36px -20px rgba(28, 27, 31, 0.38), 0 2px 8px -4px rgba(28, 27, 31, 0.16);
-  --shadow-menu: 0 20px 44px -16px rgba(28, 27, 31, 0.34), 0 6px 14px -8px rgba(28, 27, 31, 0.22);
-
-  --t-fast: 0.12s;
-  --t-med: 0.22s;
-  --t-slow: 0.26s;
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  color-scheme: dark;
+  /* Surfaces */
+  --canvas: #17191c;
+  --rail: #141619;
+  --paper: #1b1d20;
+  --field: #131517;
+  --raised: #24272b;
+  --raised-2: #303438;
+  /* Strokes: line is for hairlines; stroke is decoration only, never text */
+  --line: #3b4044;
+  --stroke: #737c80;
+  /* Text */
+  --text: #e7e5df;
+  --muted: #b2b5b5;
+  --faint: #8d9395;
+  /* Accent (links, focus, selected state) and action fill */
+  --accent: #8edcbb;
+  --action: #2a745d;
+  --action-hi: #2c7860;
+  --on-action: #f4f6f1;
+  --danger: #f2a39b;
+  --warn: #f2c27a;
+  --sky: #6fb7d6;
+  /* Derived */
+  --border: color-mix(in srgb, var(--text) 8%, transparent);
+  --border-ctl: color-mix(in srgb, var(--text) 13%, transparent);
+  --divider: color-mix(in srgb, var(--text) 6%, transparent);
+  --hover: color-mix(in srgb, var(--text) 4%, transparent);
+  --sel-fill: color-mix(in srgb, var(--accent) 14%, var(--paper));
+  --sel-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  --tint: color-mix(in srgb, var(--accent) 13%, transparent);
+  --action-fill: linear-gradient(180deg, var(--action-hi), var(--action));
+  --halo: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  --shadow: 0 18px 40px -18px rgb(0 0 0 / 0.65), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+  /* Shape */
+  --r-group: 16px;
+  --r-control: 12px;
+  --r-option: 8px;
+  --r-pill: 999px;
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-med: 180ms;
+  --t-slow: 320ms;
+  /* Type */
+  --font: 'Instrument Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Cascadia Mono', 'SF Mono', ui-monospace, Consolas, 'Liberation Mono', monospace;
+  /* Layout */
+  --rail-w: 264px;
+  --col: 760px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #121214;
-    --surface: #1c1c1f;
-    --surface-2: #232327;
-    --inset: #26262b;
-    --line: #2e2e34;
-    --line-strong: #3a3a42;
-    --ink: #ececf0;
-    --muted: #a2a2ac;
-    --faint: #7c7c86;
-
-    --accent: #5fc7b7;
-    --accent-ink: #0f2f2b;
-    --accent-soft: #17322f;
-    --accent-line: #5fc7b7;
-
-    --ok: #7fbf95;
-    --ok-dot: #7fbf95;
-    --ok-soft: #1a2a20;
-    --warn: #d3b173;
-    --warn-dot: #c9a15a;
-    --warn-soft: #2a2417;
-    --err: #d08079;
-    --err-dot: #d08079;
-    --err-soft: #2e1c1b;
-    --info: #a9a2c4;
-    --info-dot: #a9a2c4;
-    --info-soft: #232030;
-    --pending: #9aa2b6;
-    --pending-dot: #8c94a8;
-
-    --shadow-float: 0 16px 40px -22px rgba(0, 0, 0, 0.8), 0 2px 8px -4px rgba(0, 0, 0, 0.5);
-    --shadow-menu: 0 24px 52px -18px rgba(0, 0, 0, 0.85), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
-  }
-}
-html[data-motion="reduced"] {
-  --t-fast: 0.1s;
-  --t-med: 0.1s;
-  --t-slow: 0.1s;
-}
-html[data-motion="off"] {
-  --t-fast: 0s;
-  --t-med: 0s;
-  --t-slow: 0s;
+html[data-motion="reduced"] { --t-fast: 60ms; --t-med: 90ms; --t-slow: 120ms; }
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
 }
 
 * { box-sizing: border-box; }
-[hidden] { display: none !important; }
-html, body { height: 100%; }
+html { background: var(--canvas); }
 body {
   margin: 0;
-  background: var(--canvas);
-  color: var(--ink);
-  font-family: 'Stack Sans', ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 13.5px;
-  font-weight: 400;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
-h1, h2, h3, p { margin: 0; }
-code {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.92em;
-  background: var(--inset);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.05rem 0.32rem;
-}
-kbd {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11.5px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-bottom-width: 2px;
-  border-radius: 7px;
-  padding: 0.22rem 0.5rem;
-  white-space: nowrap;
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
-/* ---------------------------------------------------------------- shell */
-.app {
-  display: grid;
-  grid-template-columns: 244px minmax(0, 1fr);
   min-height: 100vh;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+  /* A jade glow from the top edge, a cooler echo at the right; both scroll away. */
+  background:
+    radial-gradient(ellipse 60% 55% at 38% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 72%) top / 100% 760px no-repeat,
+    radial-gradient(ellipse 45% 40% at 100% 4%, color-mix(in srgb, var(--sky) 8%, transparent), transparent 70%) top / 100% 760px no-repeat,
+    var(--canvas);
 }
+h1, h2, h3, p, ul { margin: 0; padding: 0; }
+ul { list-style: none; }
+button, input, select, textarea { font: inherit; letter-spacing: inherit; color: inherit; margin: 0; }
+button { appearance: none; background: none; border: 0; padding: 0; text-align: inherit; cursor: pointer; }
+button:disabled { opacity: 0.4; cursor: default; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 6px; background: var(--raised); color: var(--text); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-thumb { background: var(--raised-2); border-radius: 12px; border: 3px solid var(--canvas); }
+::-webkit-scrollbar-track { background: transparent; }
 
-/* ------------------------------------------------------------------ rail */
+/* ------------------------------------------------------------------ shell */
+.app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); min-height: 100vh; }
 .rail {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  gap: 36px;
-  padding: 24px 16px 16px;
-  background: var(--surface-2);
-  border-right: 1px solid var(--line);
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; gap: 22px;
+  padding: 26px 16px 20px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--rail) 78%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
-.logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 560;
-  font-size: 15px;
-  flex: 0 0 auto;
+.brand-mark { width: 26px; height: 26px; flex: none; }
+.brand-word { font-size: 21px; line-height: 24px; font-weight: 600; letter-spacing: -0.02em; }
+.brand-dot { color: var(--accent); }
+.brand-ver {
+  margin-left: auto; height: 22px; padding: 0 8px; display: inline-flex; align-items: center;
+  border-radius: var(--r-pill); background: var(--raised); color: var(--muted);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
-.brand-name { font-size: 15px; font-weight: 560; letter-spacing: -0.01em; }
-.brand-build { display: block; font-size: 11px; color: var(--faint); font-weight: 400; }
 
-.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
-.nav-eyebrow {
-  font-size: 11px;
-  font-weight: 560;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
-  padding: 0 10px 8px;
+/* Running state card in the rail */
+.run-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: var(--r-control);
+  background: var(--paper); border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
 }
+.run-dot {
+  position: relative; width: 9px; height: 9px; flex: none; border-radius: 50%;
+  background: var(--stroke);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--stroke) 18%, transparent);
+}
+[data-tone="ready"] .run-dot { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+[data-tone="ready"] .run-dot::after {
+  content: ''; position: absolute; inset: -4px; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: run-ping 2.4s var(--ease) infinite;
+}
+[data-tone="starting"] .run-dot { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 18%, transparent); }
+[data-tone="stopped"] .run-dot { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 16%, transparent); }
+@keyframes run-ping { 0% { transform: scale(0.6); opacity: 0.9; } 80%, 100% { transform: scale(2.2); opacity: 0; } }
+.run-text { display: flex; flex-direction: column; min-width: 0; }
+.run-title { font-size: 13.5px; line-height: 18px; font-weight: 600; }
+.run-sub { font-size: 12px; line-height: 16px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Navigation */
+.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
 .nav-pill {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  border: 1px solid transparent;
-  transform: translateY(0);
-  transition: transform var(--t-slow) var(--ease);
+  position: absolute; left: 0; top: 0; width: 100%; height: 40px;
+  border-radius: var(--r-control); background: var(--sel-fill);
+  box-shadow: inset 0 0 0 1px var(--sel-line);
+  transition: transform var(--t-slow) var(--ease), height var(--t-slow) var(--ease), width var(--t-slow) var(--ease);
   pointer-events: none;
-  z-index: 0;
 }
 .nav-item {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 36px;
-  padding: 0 10px;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: 13.5px;
-  font-weight: 480;
-  color: var(--muted);
-  cursor: pointer;
-  text-align: left;
-  transition: color var(--t-fast) ease;
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 12px;
+  height: 40px; padding: 0 12px; border-radius: var(--r-control);
+  color: var(--muted); font-size: 14px; font-weight: 500;
+  transition: color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
 }
-.nav-item:hover { color: var(--ink); }
-.nav-item[aria-current="true"] { color: var(--accent); }
-.nav-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--pending-dot);
-  flex: 0 0 auto;
-}
-.nav-dot.ok { background: var(--ok-dot); }
-.nav-dot.warn { background: var(--warn-dot); }
-.nav-dot.err { background: var(--err-dot); }
+.nav-item:hover { color: var(--text); background: var(--hover); }
+.nav-item[aria-current="true"] { color: var(--text); background: transparent; }
+.nav-item[aria-current="true"] svg.i { color: var(--accent); }
+.nav-label { flex: 1; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
+.nav-dot.warn { background: var(--warn); }
+.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 0 8px; }
+.rail-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.rail-link:hover { color: var(--accent); text-decoration: none; }
+.rail-link svg.i { width: 14px; height: 14px; }
+.rail-note { font-size: 11.5px; line-height: 16px; color: var(--faint); }
 
-.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 14px; padding: 0 4px; }
-.motion-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.motion-label { font-size: 11.5px; color: var(--faint); }
-.motion-group {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px;
-  background: var(--surface);
-}
-.motion-group button {
-  border: none;
-  background: transparent;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 480;
-  color: var(--muted);
-  padding: 3px 8px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-.motion-group button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
-.link {
-  display: inline-block;
-  width: auto;
-  padding: 4px 6px;
-  margin: 0;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 12px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-  text-align: left;
-}
-.link:hover { color: var(--err); }
-.link:disabled { opacity: 0.55; cursor: default; }
-
-/* ------------------------------------------------------------------ main */
-.main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.main-inner {
-  flex: 1;
-  width: 100%;
-  max-width: 1060px;
-  padding: 36px 40px 72px;
-}
+/* Main column */
+.main { min-width: 0; }
+.main-inner { max-width: var(--col); margin: 0 auto; padding: 52px 40px 160px; }
 .view { display: none; }
-.view.active { display: block; }
-.view.active > .group {
-  animation: view-in var(--t-med) var(--ease) backwards;
-}
-.view.active > .group:nth-child(2) { animation-delay: 25ms; }
-.view.active > .group:nth-child(3) { animation-delay: 50ms; }
-.view.active > .group:nth-child(4) { animation-delay: 75ms; }
-@keyframes view-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
+.view.active { display: block; animation: page-in var(--t-med) var(--ease) backwards; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+.page-head { margin-bottom: 8px; }
+.page-head h1 { font-size: 28px; line-height: 34px; font-weight: 600; letter-spacing: -0.025em; }
+.page-head p { margin-top: 6px; max-width: 580px; font-size: 14px; line-height: 21px; color: var(--muted); }
 
-.view-head { margin-bottom: 24px; }
-.view-title { font-size: 20px; font-weight: 560; letter-spacing: -0.015em; }
-.view-sub { color: var(--muted); margin-top: 4px; max-width: 68ch; }
-.eyebrow {
-  font-size: 11px;
-  font-weight: 560;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
+/* Sections: a small label above, an inset group below */
+.sect { margin-top: 28px; }
+.sect-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 10px; padding: 0 4px; }
+.sect-label h2 {
+  font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 72%, var(--muted));
 }
+.sect-label .sect-note { font-size: 12px; color: var(--faint); }
+.sect-foot { margin-top: 10px; padding: 0 4px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.sect-foot + .sect-foot { margin-top: 6px; }
 
-.group { margin-top: 36px; }
-.group:first-of-type { margin-top: 0; }
-.group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.group-title { font-size: 13.5px; font-weight: 560; }
-.group-note { font-size: 12px; color: var(--muted); max-width: 72ch; }
-.group-note code { white-space: nowrap; }
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 20px 22px;
+/* Groups: paper, hairline border, 16 px radius */
+.group {
+  background: var(--paper); border: 1px solid var(--border); border-radius: var(--r-group);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+  overflow: hidden;
 }
-.card + .card { margin-top: 16px; }
-.card-title { font-size: 15px; font-weight: 560; }
-.card-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-
-/* ---------------------------------------------------------------- fields */
-.field { margin-top: 16px; }
-.field:first-child { margin-top: 0; }
-.field-label {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 13.5px;
-  font-weight: 480;
+.group > li { position: relative; }
+.group > li + li::before {
+  content: ''; position: absolute; top: 0; right: 0; left: 16px; height: 1px; background: var(--divider);
 }
-.field-hint { font-weight: 400; color: var(--faint); font-size: 12px; }
-.field-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
-.field-note code { white-space: nowrap; }
-.saved-hint { font-weight: 400; font-size: 12px; color: var(--ok); }
-input[type=text], input[type=password], textarea, .cselect-trigger {
-  width: 100%;
-  min-height: 38px;
-  padding: 8px 11px;
-  font-family: inherit;
-  font-size: 15px;
-  font-weight: 400;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
+.row { display: flex; align-items: center; gap: 16px; min-height: 60px; padding: 14px 18px; }
+.row.block { flex-direction: column; align-items: stretch; gap: 12px; }
+.row-text { flex: 1; min-width: 0; }
+.row-text h3, .row-text .row-title { display: flex; align-items: center; gap: 8px; font-size: 14.5px; line-height: 20px; font-weight: 500; }
+.row-text p { margin-top: 2px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.row-ctl { display: flex; align-items: center; gap: 10px; flex: none; }
+.row-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.field-label { display: block; margin-bottom: 6px; font-size: 12.5px; line-height: 16px; font-weight: 500; color: var(--muted); }
+.field-label .hint { font-weight: 400; color: var(--faint); }
+.note { font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.note + .note { margin-top: 6px; }
+.inline-link { color: var(--accent); font-weight: 500; }
+.inline-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Chips and dots */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 22px; padding: 0 9px; border-radius: var(--r-pill);
+  background: var(--tint); color: var(--accent);
+  font-size: 11.5px; line-height: 16px; font-weight: 500; white-space: nowrap;
+}
+.chip.muted { background: var(--raised); color: var(--muted); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--stroke); }
+.dot.ok { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent); }
+.dot.info { background: var(--sky); }
+
+/* Buttons: one primary at most per area; secondary has a border; tertiary is text */
+.btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; padding: 0 16px; border-radius: var(--r-control);
+  font-size: 14px; line-height: 20px; font-weight: 500; white-space: nowrap;
+  transition: transform var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease), filter var(--t-fast) var(--ease);
+}
+.btn:active:not(:disabled) { transform: scale(0.98); }
+.btn.primary { background: var(--action-fill); color: var(--on-action); font-weight: 600; box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent), 0 6px 18px -8px color-mix(in srgb, var(--action) 80%, transparent); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.secondary { box-shadow: inset 0 0 0 1px var(--border-ctl); }
+.btn.secondary:hover:not(:disabled) { background: var(--hover); }
+.btn.tertiary { padding: 0 12px; color: var(--accent); }
+.btn.tertiary:hover:not(:disabled) { background: var(--tint); }
+.btn.danger { color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent); }
+.btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.btn.small { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+.btn.recording { color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 50%, transparent); }
+
+/* Inputs */
+input[type="text"], input[type="password"], textarea {
+  width: 100%; min-width: 0; height: 44px; padding: 0 14px;
+  border: 1px solid var(--border-ctl); border-radius: var(--r-control);
+  background: var(--field); color: var(--text); font-size: 14px; line-height: 20px;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 input::placeholder, textarea::placeholder { color: var(--faint); }
-input[type=text]:hover, input[type=password]:hover, textarea:hover { border-color: var(--muted); }
-input:focus, textarea:focus, .cselect-trigger:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: default; }
-
-.key-input { position: relative; }
-.key-input input { padding-right: 72px; }
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--halo); }
+input[readonly] { color: var(--muted); }
+textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(--mono); font-size: 13px; line-height: 20px; }
+.key-input { position: relative; display: flex; align-items: center; }
+.key-input input { padding-right: 76px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.02em; }
+.key-input input::placeholder { font-family: var(--font); font-size: 14px; letter-spacing: 0; }
 .reveal-btn {
-  position: absolute;
-  right: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  min-height: 28px;
-  padding: 2px 9px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 480;
-  color: var(--muted);
-  cursor: pointer;
+  position: absolute; right: 6px; height: 32px; padding: 0 10px; border-radius: var(--r-option);
+  color: var(--muted); font-size: 12.5px; font-weight: 500;
 }
-.reveal-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+.reveal-btn:hover { color: var(--text); background: var(--hover); }
 
-.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
-.row-2 > .field, .row-3 > .field { margin-top: 0; }
-.row-2:not(:first-child), .row-3:not(:first-child) { margin-top: 16px; }
-.row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px 16px; }
+/* Switch: a 40 x 24 track */
+.switch { position: relative; display: inline-grid; place-items: center; width: 52px; height: 40px; flex: none; cursor: pointer; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch-track {
+  position: relative; width: 40px; height: 24px; border-radius: var(--r-pill);
+  background: var(--field); box-shadow: inset 0 0 0 1px var(--border-ctl);
+  pointer-events: none;
+}
+.switch-track::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--action-fill); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  opacity: 0; transition: opacity var(--t-med) var(--ease);
+}
+.switch-thumb {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--muted); transition: transform var(--t-med) var(--ease), background-color var(--t-med) var(--ease);
+}
+.switch input:checked + .switch-track::before { opacity: 1; }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(16px); background: var(--on-action); }
+.switch input:focus-visible + .switch-track { box-shadow: inset 0 0 0 1.5px var(--accent), var(--halo); }
+.switch input:disabled + .switch-track { opacity: 0.4; }
+.switch.busy .switch-thumb { animation: thumb-wait 0.9s var(--ease) infinite alternate; }
+@keyframes thumb-wait { to { opacity: 0.35; } }
 
-/* -------------------------------------------------------- custom select */
-.cselect { position: relative; }
-.cselect select { display: none; }
-.cselect-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  cursor: pointer;
-  text-align: left;
-}
-.cselect-trigger:hover { border-color: var(--muted); }
-.cselect-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cselect-value.placeholder { color: var(--faint); }
-.cselect .chevron {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  color: var(--faint);
-  transition: transform var(--t-fast) ease;
-}
-.cselect.open .chevron { transform: rotate(180deg); }
-.cselect-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: 300;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 5px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-menu);
-  border-color: var(--line-strong);
-  transform-origin: top center;
-}
-.cselect-menu.drop-up {
-  top: auto;
-  bottom: calc(100% + 6px);
-  transform-origin: bottom center;
-}
-.cselect-menu[hidden] { display: none !important; }
-.cselect.open .cselect-menu { animation: menu-in var(--t-fast) var(--ease) backwards; }
-.cselect.closing .cselect-menu { animation: menu-out 90ms ease both; }
-@keyframes menu-in {
-  from { opacity: 0; transform: scale(0.98) translateY(-4px); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes menu-out {
-  from { opacity: 1; }
-  to { opacity: 0; transform: scale(0.99) translateY(-2px); }
-}
-.cselect-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 9px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  font-family: inherit;
-  font-size: 13.5px;
-  color: var(--ink);
-  cursor: pointer;
-  text-align: left;
-}
-.cselect-option:hover, .cselect-option.active { background: var(--accent-soft); }
-.cselect-option.selected { color: var(--accent); font-weight: 480; }
-.cselect-option.selected .check { opacity: 1; }
-.cselect-option .check { width: 14px; height: 14px; flex: 0 0 auto; opacity: 0; color: var(--accent); }
-.cselect-search {
-  position: sticky;
-  top: -5px;
-  z-index: 1;
-  padding: 2px 0 8px;
-  background: var(--surface);
-}
-.cselect-search input {
-  min-height: 32px;
-  padding: 5px 9px;
-  font-family: inherit;
-  font-size: 13px;
-  background: var(--surface-2);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-xs);
-}
-.cselect-search input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-.cselect-empty {
-  padding: 12px 10px;
-  font-size: 12px;
-  color: var(--faint);
-}
-
-/* ------------------------------------------------------- provider cards */
-.provider-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-}
-.provider-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 14px 15px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--t-fast) ease, background var(--t-fast) ease, transform var(--t-fast) ease;
-}
-.provider-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-.provider-card[aria-checked="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-.pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pc-name { font-size: 14px; font-weight: 480; }
-.pc-check { width: 15px; height: 15px; color: var(--accent); opacity: 0; transition: opacity var(--t-fast) ease; }
-.provider-card[aria-checked="true"] .pc-check { opacity: 1; }
-.pc-hint { font-size: 11.5px; color: var(--faint); }
-.pc-meta { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
-
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--pending-dot);
-  flex: 0 0 auto;
-}
-.dot.ok { background: var(--ok-dot); }
-.dot.warn { background: var(--warn-dot); }
-.dot.err { background: var(--err-dot); }
-.dot.info { background: var(--info-dot); }
-
-/* ---------------------------------------------------------- model chips */
-.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  padding: 3px 5px 3px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 11.5px;
-  color: var(--ink);
-  cursor: pointer;
-}
-.model-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-chip.active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
-.model-chip button {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  padding: 2px 4px;
-  color: var(--faint);
-  border-radius: 50%;
-}
-.model-chip button:hover { color: var(--err); }
-
-/* ------------------------------------------------------------- overview */
-.meters {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-.meter {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 18px 18px 16px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--t-fast) ease, transform var(--t-fast) ease;
-}
-.meter:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-.meter-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.meter-value {
-  font-size: 17px;
-  font-weight: 560;
-  letter-spacing: -0.01em;
-  margin-top: 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.meter-sub {
-  font-size: 12px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.meter-value.swapping, .meter-sub.swapping { animation: text-swap 150ms ease both; }
-@keyframes text-swap {
-  from { opacity: 0.2; filter: blur(2px); }
-  to { opacity: 1; filter: blur(0); }
-}
-
-.keycap-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  align-items: center;
-  padding: 16px 18px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.keycap-item { display: flex; align-items: center; gap: 8px; }
-.keycap-label { font-size: 11.5px; color: var(--faint); }
-.keycaps { display: inline-flex; gap: 4px; }
-.keycaps kbd { animation: key-pop 240ms var(--ease) both; }
-@keyframes key-pop {
-  0% { opacity: 0; transform: scale(0.95); }
-  60% { opacity: 0.8; transform: scale(1.02); }
-  100% { opacity: 1; transform: scale(1); }
-}
-
-/* ------------------------------------------------------------- controls */
-.gearbox .segmented {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 4px;
-  background: var(--inset);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+/* Segmented control: the selected segment slides under the labels */
+.segmented {
+  position: relative; display: grid; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr));
+  padding: 3px; border-radius: var(--r-control); background: var(--field);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .seg-knob {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 4px;
-  width: calc(50% - 4px);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--line);
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n, 2));
+  border-radius: 9px; background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line);
+  transform: translateX(calc(var(--i, 0) * 100%));
   transition: transform var(--t-slow) var(--ease);
 }
-.gearbox.short .seg-knob { transform: translateX(100%); }
-.gear {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  min-height: 52px;
-  padding: 8px 12px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  color: var(--muted);
-  cursor: pointer;
-  text-align: left;
-  transition: color var(--t-fast) ease;
+.segmented > button {
+  position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 34px; padding: 6px 10px; border-radius: 9px; color: var(--muted);
+  font-size: 13px; line-height: 18px; font-weight: 500; text-align: center;
+  transition: color var(--t-fast) var(--ease);
 }
-.gear:hover { color: var(--ink); }
-.gear.selected { color: var(--accent); }
-.gear-name { font-size: 13.5px; font-weight: 480; }
-.gear-hint { font-size: 11.5px; color: var(--faint); }
-.gear.selected .gear-hint { color: var(--muted); }
+.segmented > button[aria-pressed="true"] { color: var(--accent); }
+.segmented > button:focus-visible { outline-offset: -2px; }
+.gearbox .segmented > button { min-height: 58px; }
+.gear-name { font-size: 14px; font-weight: 600; color: inherit; }
+.gear-hint { margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.gearbox.long .seg-knob { --i: 0; }
+.gearbox.short .seg-knob { --i: 1; }
 
-.hotkey-row { display: flex; gap: 8px; align-items: center; }
-.hotkey-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; }
-.btn.recording { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-.shake { animation: shake 300ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
-@keyframes shake {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(2px); }
-  30%, 50%, 70% { transform: translateX(-3px); }
-  40%, 60% { transform: translateX(3px); }
+/* Custom select (app-drawn menu over a real select) */
+.cselect { position: relative; }
+.cselect > select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
+.cselect-trigger {
+  position: relative; display: flex; align-items: center; width: 100%; height: 44px;
+  padding: 0 40px 0 14px; border: 1px solid var(--border-ctl); border-radius: var(--r-control);
+  background: var(--field); color: var(--text); font-size: 14px; text-align: left;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
+.cselect-trigger:hover { border-color: color-mix(in srgb, var(--text) 20%, transparent); }
+.cselect.open .cselect-trigger, .cselect-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--halo); }
+.cselect-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cselect-value.placeholder { color: var(--muted); }
+.cselect-trigger .chevron { position: absolute; right: 14px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--muted); transition: transform var(--t-med) var(--ease); }
+.cselect.open .chevron { transform: rotate(180deg); }
+.cselect-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
+  display: flex; flex-direction: column; padding: 6px; max-height: 320px;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--paper);
+  box-shadow: var(--shadow);
+  animation: menu-in var(--t-fast) var(--ease) backwards;
+}
+.cselect-menu.drop-up { top: auto; bottom: calc(100% + 6px); animation-name: menu-in-up; }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes menu-in-up { from { opacity: 0; transform: translateY(4px); } }
+.cselect-search { flex: none; padding-bottom: 6px; }
+.cselect-search input { height: 38px; border-radius: var(--r-option); background: var(--field); }
+.cselect-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.cselect-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  min-height: 40px; padding: 9px 12px; border-radius: var(--r-option); font-size: 13.5px; line-height: 19px; text-align: left;
+}
+.cselect-option > span { min-width: 0; overflow-wrap: anywhere; }
+.cselect-option:hover, .cselect-option.active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cselect-option.selected { background: var(--sel-fill); color: var(--accent); }
+.cselect-option .check { width: 16px; height: 16px; flex: none; opacity: 0; }
+.cselect-option.selected .check { opacity: 1; }
+.cselect-empty { padding: 12px; font-size: 12.5px; color: var(--muted); }
 
-/* ------------------------------------------------------- verbatim toggle */
-.mode-switch { display: flex; align-items: center; gap: 12px; }
-.mode-label {
-  font-size: 13px;
-  color: var(--faint);
-  font-weight: 480;
-  transition: color var(--t-fast) ease;
+/* Keycaps */
+.keycaps { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.keycaps kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 28px; padding: 0 8px; border-radius: 8px;
+  background: linear-gradient(180deg, #2b2f33, #232629);
+  border: 1px solid var(--border-ctl); box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.35), 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1; font-weight: 500;
+  animation: key-in var(--t-med) var(--ease) backwards;
 }
-.mode-label.on { color: var(--ink); }
-.switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: 0 0 auto; }
-.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-.switch .slider {
-  position: absolute;
-  inset: 0;
-  background: var(--line-strong);
-  border-radius: 999px;
-  pointer-events: none;
-  transition: background var(--t-fast) ease;
-}
-.switch .slider::before {
-  content: "";
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  left: 3px;
-  top: 3px;
-  background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  transition: transform 200ms cubic-bezier(0.2, 1.2, 0.4, 1);
-}
-.switch input:checked + .slider { background: var(--accent); }
-.switch input:checked + .slider::before { transform: translateX(20px); }
-.switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+.keycaps kbd.sym { font-size: 16px; font-weight: 600; }
+.keycaps .plus { color: var(--faint); font-size: 12px; }
+@keyframes key-in { from { opacity: 0; transform: translateY(3px); } }
 
-/* ------------------------------------------------------------ prompt */
-.prompt-panel {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 22px 18px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.prompt-panel::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent);
-  opacity: 0.55;
-}
-.prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.prompt-title { font-size: 15px; font-weight: 560; }
-.prompt-chip {
-  font-size: 10.5px;
-  font-weight: 560;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 3px 9px;
-}
-.prompt-lede { font-size: 12px; color: var(--muted); margin-top: 6px; max-width: 78ch; }
-#prompt_slot { flex: 1; display: flex; min-height: 0; margin-top: 14px; }
-#prompt_slot textarea {
-  flex: 1;
-  min-height: 240px;
-  resize: none;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.55;
-}
-.prompt-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
-
-.prompt-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 3vh 3.5vw;
-  background: rgba(8, 8, 10, 0.52);
-}
-.prompt-overlay[hidden] { display: none !important; }
-.prompt-overlay-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-float);
-  padding: 18px 20px;
-  animation: modal-in var(--t-med) var(--ease) both;
-}
-@keyframes modal-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: none; }
-}
-.prompt-overlay-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.prompt-overlay-head span { font-size: 14px; font-weight: 560; }
-#prompt_overlay_body { flex: 1; min-height: 0; display: flex; }
-#prompt_overlay_body textarea {
-  flex: 1;
-  min-height: 0;
-  height: auto;
-  resize: none;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 14px;
-}
-
-/* --------------------------------------------------------------- buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 8px 16px;
-  font-family: inherit;
-  font-size: 13.5px;
-  font-weight: 480;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: background var(--t-fast) ease, border-color var(--t-fast) ease, box-shadow var(--t-fast) ease, transform var(--t-fast) ease;
-}
-.btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--accent); color: var(--accent-ink); }
-.btn.primary:hover { box-shadow: 0 6px 18px -10px var(--accent); }
-.btn.ghost { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
-.btn.ghost:hover { border-color: var(--muted); }
-.btn.quiet { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
-.btn.quiet:hover { color: var(--ink); }
-.btn:disabled { opacity: 0.55; cursor: default; }
-.btn.small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
-
-/* ----------------------------------------------------------------- dock */
-.dock {
-  position: sticky;
-  bottom: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0 -40px;
-  padding: 12px 40px;
-  background: color-mix(in srgb, var(--canvas) 88%, transparent);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--line);
-}
-@supports not (background: color-mix(in srgb, red 50%, transparent)) {
-  .dock { background: var(--canvas); }
-}
-.dock-left { display: flex; align-items: center; gap: 10px; }
-.dock-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  font-size: 11.5px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.chip.dirty { border-color: var(--warn-dot); color: var(--warn); background: var(--warn-soft); }
-
-.result-tag {
-  display: none;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 480;
-  max-width: 22rem;
+/* ------------------------------------------------------------------- home */
+.hero {
+  position: relative; display: flex; align-items: center; gap: 20px; margin-top: 24px;
+  padding: 22px 22px; border-radius: 20px; background: var(--paper);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent), var(--shadow);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.result-tag.show { display: inline-flex; }
-.result-tag.loading { background: var(--inset); color: var(--muted); border: 1px solid var(--line); }
-.result-tag.ok { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok-dot); }
-.result-tag.err { background: var(--err-soft); color: var(--err); border: 1px solid var(--err-dot); }
+.hero::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 70% 120% at 0% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%);
+}
+.hero-icon {
+  position: relative; display: grid; place-items: center; flex: none;
+  width: 64px; height: 64px; border-radius: 18px; background: #1f2225;
+  box-shadow: inset 0 0 0 1px var(--border), 0 10px 24px -12px rgb(0 0 0 / 0.8);
+}
+.hero-icon svg { width: 38px; height: 38px; }
+.hero-icon line { stroke-dasharray: 40; stroke-dashoffset: 40; animation: stroke-draw 700ms var(--ease) forwards; }
+.hero-icon line:nth-child(2) { animation-delay: 70ms; }
+.hero-icon line:nth-child(3) { animation-delay: 140ms; }
+.hero-icon line:nth-child(4) { animation-delay: 210ms; }
+.hero-icon line:nth-child(5) { animation-delay: 280ms; }
+@keyframes stroke-draw { to { stroke-dashoffset: 0; } }
+.hero-text { position: relative; flex: 1; min-width: 0; }
+.hero-title { font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.015em; }
+.hero-sub { margin-top: 3px; font-size: 13px; line-height: 18px; color: var(--muted); }
+.hero-side { position: relative; display: flex; align-items: center; gap: 10px; }
+.hero .chip { height: 26px; padding: 0 11px; font-size: 12.5px; }
 
-.spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  display: inline-block;
-  flex: 0 0 auto;
+.howto { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.howto-card {
+  display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--r-group);
+  background: var(--paper); border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-.check-pop { width: 14px; height: 14px; flex: 0 0 auto; animation: check-in 400ms var(--ease) both; }
-.check-pop path {
-  stroke-dasharray: 20;
-  stroke-dashoffset: 20;
-  animation: check-draw 400ms var(--ease) 80ms both;
-}
-@keyframes check-in {
-  from { opacity: 0; transform: scale(0.7) rotate(-12deg); filter: blur(2px); }
-  to { opacity: 1; transform: none; filter: blur(0); }
-}
-@keyframes check-draw { to { stroke-dashoffset: 0; } }
+.howto-top { display: flex; align-items: center; gap: 10px; }
+.tile { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 10px; background: var(--tint); color: var(--accent); }
+.howto-title { font-size: 14.5px; line-height: 20px; font-weight: 600; }
+.howto-desc { font-size: 12.5px; line-height: 18px; color: var(--muted); }
 
-.status {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  max-width: 44rem;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
+.rowbtn {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 60px; padding: 12px 18px;
+  color: var(--text); text-align: left; transition: background-color var(--t-fast) var(--ease);
 }
-.status.show { display: inline-flex; }
-.status.ok { background: var(--ok-soft); color: var(--ok); }
-.status.err { background: var(--err-soft); color: var(--err); }
-.status.neutral { background: var(--inset); color: var(--muted); }
+.rowbtn:hover { background: var(--hover); }
+.rowbtn:focus-visible { outline-offset: -2px; }
+.rowbtn > svg.i:last-child { color: var(--faint); transition: transform var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.rowbtn:hover > svg.i:last-child { color: var(--accent); transform: translateX(2px); }
+.meter-label { width: 128px; flex: none; font-size: 13px; color: var(--muted); }
+.meter-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.meter-value { font-size: 14.5px; line-height: 20px; font-weight: 500; }
+.meter-sub { font-size: 12.5px; line-height: 18px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter-value.swapping, .meter-sub.swapping { animation: swap-in var(--t-med) var(--ease); }
+@keyframes swap-in { from { opacity: 0; transform: translateY(3px); } }
 
-.toast-region {
-  position: fixed;
-  right: 20px;
-  bottom: 84px;
-  z-index: 120;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: min(30rem, calc(100vw - 40px));
-}
-.toast-region .status {
-  box-shadow: var(--shadow-float);
-  border: 1px solid var(--line);
-  animation: toast-in var(--t-med) var(--ease) both;
-}
-.toast-region .status.leaving { animation: toast-out 150ms ease both; }
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(12px) scale(0.98); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes toast-out {
-  from { opacity: 1; }
-  to { opacity: 0; transform: translateY(4px); }
-}
+/* -------------------------------------------------------- connections, AI */
+.key-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.key-name { font-size: 14.5px; line-height: 20px; font-weight: 600; }
+.key-uses { font-size: 12.5px; color: var(--muted); }
+.key-get { margin-left: auto; font-size: 12.5px; font-weight: 500; }
 
-.pull-status {
-  margin-top: 12px;
-  max-height: 12rem;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--muted);
-  background: var(--inset);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
+.provider-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 12px; }
+.provider-card {
+  position: relative; display: flex; flex-direction: column; gap: 4px; min-height: 92px; padding: 14px;
+  border-radius: 14px; background: var(--field); box-shadow: inset 0 0 0 1px var(--border);
+  text-align: left; transition: background-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 }
-.pull-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.pull-row .hint { font-size: 11.5px; color: var(--faint); }
+.provider-card:hover { box-shadow: inset 0 0 0 1px var(--border-ctl); }
+.provider-card:active { transform: scale(0.99); }
+.provider-card[aria-checked="true"] { background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); }
+.pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pc-name { font-size: 14.5px; line-height: 20px; font-weight: 600; }
+.pc-radio { width: 18px; height: 18px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--stroke); transition: box-shadow var(--t-fast) var(--ease); }
+.provider-card[aria-checked="true"] .pc-radio { box-shadow: inset 0 0 0 5px var(--accent); }
+.pc-hint { font-size: 12.5px; line-height: 17px; color: var(--muted); }
+.pc-meta { display: flex; align-items: center; gap: 7px; margin-top: auto; padding-top: 6px; font-size: 12px; color: var(--muted); }
+.pc-meta .dot { width: 7px; height: 7px; }
 
 .notice {
-  display: none;
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12.5px;
+  display: none; margin: 0 12px 12px; padding: 12px 14px; border-radius: var(--r-control);
+  background: var(--field); color: var(--muted); font-size: 13px; line-height: 18px;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .notice.show { display: block; }
+.notice strong { color: var(--text); font-weight: 600; }
 
-/* ------------------------------------------------------------- responsive */
-@media (max-width: 1199px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+.field-card { display: none; }
+.field-card.active { display: flex; animation: page-in var(--t-med) var(--ease) backwards; }
+#test_area { border-top: 1px solid var(--divider); }
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.model-chips:empty { display: none; }
+.model-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 10px; border-radius: var(--r-pill);
+  background: var(--raised); color: var(--muted); font-family: var(--mono); font-size: 12px; cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.model-chip.active { background: var(--sel-fill); color: var(--accent); box-shadow: inset 0 0 0 1px var(--sel-line); }
+.model-chip button { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--faint); font-size: 14px; line-height: 1; }
+.model-chip button:hover { color: var(--text); background: var(--hover); }
+.custom-model { margin-top: 8px; }
+
+.test-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.result-tag { display: none; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 500; }
+.result-tag.show { display: inline-flex; }
+.result-tag.ok { background: var(--tint); color: var(--accent); }
+.result-tag.err { background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); }
+.result-tag.loading { background: var(--raised); color: var(--muted); }
+.result-tag svg { width: 14px; height: 14px; }
+.check-pop path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: check-draw 360ms var(--ease) forwards; }
+@keyframes check-draw { to { stroke-dashoffset: 0; } }
+.shake { animation: shake 360ms var(--ease); }
+@keyframes shake { 20%, 60% { transform: translateX(-3px); } 40%, 80% { transform: translateX(3px); } }
+.status { display: none; font-size: 12.5px; line-height: 18px; color: var(--muted); overflow-wrap: anywhere; }
+.status.show { display: block; }
+.status.ok { color: var(--accent); }
+.status.err { color: var(--danger); }
+.spinner {
+  display: inline-block; width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor;
+  animation: spin 0.8s linear infinite; vertical-align: -2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.pull-status {
+  margin-top: 10px; padding: 10px 12px; max-height: 160px; overflow: auto; white-space: pre-wrap;
+  border-radius: var(--r-option); background: var(--field); color: var(--muted);
+  font-family: var(--mono); font-size: 11.5px; line-height: 16px;
+}
+
+/* Speech engine choices */
+.choice {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 64px; padding: 12px 18px;
+  text-align: left; transition: background-color var(--t-fast) var(--ease);
+}
+.choice:hover { background: var(--hover); }
+.choice:focus-visible { outline-offset: -2px; }
+.choice[aria-checked="true"] { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.choice-mark { width: 18px; height: 18px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--stroke); transition: box-shadow var(--t-fast) var(--ease); }
+.choice[aria-checked="true"] .choice-mark { box-shadow: inset 0 0 0 5px var(--accent); }
+.choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.choice-title { display: flex; align-items: center; gap: 8px; font-size: 14.5px; line-height: 20px; font-weight: 500; }
+.choice-desc { margin-top: 2px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
+
+/* Prompt editor */
+.prompt-panel { padding: 16px 18px 18px; }
+.prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.prompt-lede { font-size: 12.5px; color: var(--muted); }
+#SYSTEM_PROMPT { min-height: 240px; }
+.prompt-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.prompt-overlay {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 32px;
+  background: color-mix(in srgb, #000 55%, transparent); backdrop-filter: blur(6px);
+  animation: fade var(--t-med) var(--ease);
+}
+@keyframes fade { from { opacity: 0; } }
+.prompt-overlay-panel {
+  display: flex; flex-direction: column; width: min(1100px, 100%); height: min(860px, 100%);
+  padding: 18px; border-radius: 20px; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.prompt-overlay-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 15px; font-weight: 600; }
+#prompt_overlay_body { flex: 1; min-height: 0; display: flex; }
+#prompt_overlay_body textarea { flex: 1; height: 100% !important; resize: none; }
+
+/* Save bar and toasts float; they never move the page */
+.savebar {
+  position: fixed; bottom: 20px; left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2); z-index: 70;
+  width: min(var(--col) - 48px, calc(100vw - var(--rail-w) - 48px)); transform: translateX(-50%);
+  animation: rise var(--t-slow) var(--ease) backwards;
+}
+.savebar-inner {
+  display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 18px; border-radius: 16px;
+  background: color-mix(in srgb, var(--raised) 86%, transparent); border: 1px solid var(--line);
+  box-shadow: var(--shadow); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+}
+.savebar-text { flex: 1; display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 500; }
+.savebar-text .dot { background: var(--warn); }
+.savebar-sub { color: var(--muted); font-weight: 400; }
+@keyframes rise { from { opacity: 0; transform: translate(-50%, 16px); } }
+.toast-region { position: fixed; top: 20px; right: 20px; z-index: 95; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 40px)); pointer-events: none; }
+.toast-region .status {
+  display: flex; gap: 10px; padding: 12px 14px; border-radius: var(--r-control); pointer-events: auto;
+  background: var(--raised); border: 1px solid var(--border-ctl); box-shadow: var(--shadow);
+  color: var(--text); font-size: 13px; line-height: 18px;
+  animation: toast-in var(--t-med) var(--ease) backwards;
+}
+.toast-region .status::before { content: ''; width: 8px; height: 8px; margin-top: 5px; flex: none; border-radius: 50%; background: var(--sky); }
+.toast-region .status.ok::before { background: var(--accent); }
+.toast-region .status.err::before { background: var(--danger); }
+.toast-region .status.leaving { opacity: 0; transform: translateY(-4px); transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+.offline {
+  position: fixed; inset: auto 0 0 0; z-index: 99; display: flex; justify-content: center; padding: 16px;
+}
+.offline-inner {
+  display: flex; align-items: center; gap: 12px; max-width: 640px; padding: 12px 16px; border-radius: var(--r-control);
+  background: var(--raised); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); box-shadow: var(--shadow);
+  font-size: 13px; line-height: 18px;
+}
+.offline-inner .dot { background: var(--warn); }
+
+/* ---------------------------------------------------------------- narrow */
+@media (max-width: 980px) {
+  .app { display: block; }
   .rail {
-    position: sticky;
-    top: 0;
-    z-index: 70;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 16px;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    overflow-x: auto;
+    position: sticky; top: 0; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 12px 16px 0; border-right: 0; border-bottom: 1px solid var(--border);
   }
-  .nav { flex-direction: row; gap: 2px; flex: 1; }
-  .nav-eyebrow { display: none; }
-  .nav-pill { display: none; }
-  .nav-item { width: auto; padding: 0 14px; white-space: nowrap; }
-  .nav-item[aria-current="true"] { background: var(--accent-soft); }
-  .rail-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; gap: 12px; }
-  .meters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .main-inner { padding: 24px 20px 28px; }
-  .dock { margin: 0 -20px; padding: 12px 20px; }
+  .brand { padding: 0; }
+  .brand-ver { margin-left: 8px; }
+  .run-card { margin-left: auto; padding: 8px 12px; }
+  .run-sub { display: none; }
+  .nav { flex-direction: row; width: calc(100% + 32px); margin: 0 -16px; padding: 4px 16px 10px; overflow-x: auto; scrollbar-width: none; gap: 4px; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-item { flex: none; height: 36px; padding: 0 12px; gap: 8px; font-size: 13.5px; }
+  .nav-item svg.i { width: 16px; height: 16px; }
+  .nav-dot { display: none; }
+  .nav-pill { height: 36px; }
+  .rail-foot { display: none; }
+  .main-inner { padding: 28px 16px 150px; }
+  .savebar { left: 50%; width: calc(100vw - 32px); }
 }
-@media (max-width: 760px) {
-  .row-2, .row-3 { grid-template-columns: 1fr; }
-  .provider-grid { grid-template-columns: 1fr 1fr; }
-  .motion-row { display: none; }
-}
-@media (max-width: 560px) {
-  .meters { grid-template-columns: 1fr; }
-  .provider-grid { grid-template-columns: 1fr; }
-  .dock { flex-wrap: wrap; }
-  .dock-right { width: 100%; }
-  .toast-region { left: 12px; right: 12px; bottom: 120px; max-width: none; }
-  input[type=text], input[type=password], textarea, .cselect-trigger { font-size: 16px; }
-  .btn { font-size: 15px; }
-  .prompt-overlay { padding: 0; }
-  .prompt-overlay-panel { border-radius: 0; border: none; }
+@media (max-width: 720px) {
+  .howto, .provider-grid { grid-template-columns: minmax(0, 1fr); }
+  .provider-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row-grid { grid-template-columns: minmax(0, 1fr); }
+  .meter-label { width: 96px; }
+  .hero { flex-wrap: wrap; }
+  .page-head h1 { font-size: 24px; line-height: 30px; }
+  .row { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --t-fast: 0.1s; --t-med: 0.1s; --t-slow: 0.1s; }
-  .view.active > .group { animation: fade-in 0.1s linear both; }
-  .keycaps kbd { animation: fade-in 0.1s linear both; }
-  .meter-value.swapping, .meter-sub.swapping { animation: fade-in 0.1s linear both; }
-  .check-pop, .check-pop path { animation: fade-in 0.1s linear both; }
-  .shake { animation: none; }
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  .hero-icon line { stroke-dashoffset: 0; }
 }
-@media (prefers-reduced-motion: no-preference) {
-  html[data-motion="reduced"] .view.active > .group,
-  html[data-motion="reduced"] .keycaps kbd,
-  html[data-motion="reduced"] .meter-value.swapping,
-  html[data-motion="reduced"] .meter-sub.swapping,
-  html[data-motion="reduced"] .check-pop,
-  html[data-motion="reduced"] .check-pop.path { animation: fade-in 0.1s linear both; }
-}
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 </style>
 </head>
 <body>
 <div class="app">
   <aside class="rail">
     <div class="brand">
-      <span class="logo">O</span>
-      <span>
-        <span class="brand-name">Odicto</span>
-        <span class="brand-build">build v7 · per-provider keys</span>
+      <svg class="brand-mark" viewBox="18 18 72 72" fill="none" stroke="#8EDCBB" stroke-width="7" stroke-linecap="round" aria-hidden="true"><line x1="26.00" y1="69.00" x2="26.00" y2="39.00"/><line x1="32.71" y1="65.88" x2="43.29" y2="42.12"/><line x1="41.83" y1="61.36" x2="58.17" y2="46.64"/><line x1="52.49" y1="57.09" x2="71.51" y2="50.91"/><line x1="65.00" y1="54.00" x2="83.00" y2="54.00"/></svg>
+      <span class="brand-word">odicto<span class="brand-dot">.</span></span>
+      <span class="brand-ver" title="Odicto version">v__APP_VERSION__</span>
+    </div>
+
+    <div class="run-card" id="run_card" data-tone="unknown" role="status" aria-live="polite">
+      <span class="run-dot" aria-hidden="true"></span>
+      <span class="run-text">
+        <span class="run-title" id="run_title">Checking Odicto</span>
+        <span class="run-sub" id="run_sub">One moment</span>
       </span>
     </div>
 
     <nav class="nav" aria-label="Setup sections">
-      <span class="nav-eyebrow">Console</span>
       <span class="nav-pill" aria-hidden="true"></span>
-      <button type="button" class="nav-item" data-view="overview" aria-current="true"><span class="nav-dot" id="nav_dot_overview"></span>Overview</button>
-      <button type="button" class="nav-item" data-view="ai"><span class="nav-dot" id="nav_dot_ai"></span>AI</button>
-      <button type="button" class="nav-item" data-view="speech"><span class="nav-dot" id="nav_dot_speech"></span>Speech</button>
-      <button type="button" class="nav-item" data-view="controls"><span class="nav-dot" id="nav_dot_controls"></span>Controls</button>
-      <button type="button" class="nav-item" data-view="prompt"><span class="nav-dot" id="nav_dot_prompt"></span>Prompt</button>
+      <button type="button" class="nav-item" data-view="overview" aria-current="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg><span class="nav-label">Home</span><span class="nav-dot" id="nav_dot_overview"></span></button>
+      <button type="button" class="nav-item" data-view="connections"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.6 17.4A2 2 0 0 0 2 18.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r="1"/></svg><span class="nav-label">Connections</span><span class="nav-dot" id="nav_dot_keys"></span></button>
+      <button type="button" class="nav-item" data-view="ai"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.9 15.5A2 2 0 0 0 8.5 14l-6.1-1.6a.5.5 0 0 1 0-1L8.5 10A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0L14 8.5a2 2 0 0 0 1.5 1.4l6.1 1.6a.5.5 0 0 1 0 1L15.5 14a2 2 0 0 0-1.4 1.5l-1.6 6.1a.5.5 0 0 1-1 0z"/></svg><span class="nav-label">AI answers</span><span class="nav-dot" id="nav_dot_ai"></span></button>
+      <button type="button" class="nav-item" data-view="speech"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg><span class="nav-label">Speech</span><span class="nav-dot" id="nav_dot_speech"></span></button>
+      <button type="button" class="nav-item" data-view="controls"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M8 16h8"/></svg><span class="nav-label">Shortcuts</span><span class="nav-dot" id="nav_dot_controls"></span></button>
+      <button type="button" class="nav-item" data-view="prompt"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg><span class="nav-label">Prompt</span><span class="nav-dot" id="nav_dot_prompt"></span></button>
+      <button type="button" class="nav-item" data-view="system"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="nav-label">System</span><span class="nav-dot" id="nav_dot_system"></span></button>
     </nav>
 
     <div class="rail-foot">
-      <div class="motion-row">
-        <span class="motion-label">Motion</span>
-        <span class="motion-group" role="group" aria-label="Motion amount">
-          <button type="button" data-motion-level="off" aria-pressed="false">Off</button>
-          <button type="button" data-motion-level="reduced" aria-pressed="false">Reduced</button>
-          <button type="button" data-motion-level="full" aria-pressed="true">Full</button>
-        </span>
-      </div>
-      <button type="button" class="link" id="reset_button" onclick="resetSettings()">Reset settings to defaults</button>
+      <a class="rail-link" href="https://github.com/Gargeya-Grey/Odicto/releases" target="_blank" rel="noopener noreferrer">What's new in Odicto<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+      <span class="rail-note">Settings stay in <code>.env</code> on this computer.</span>
     </div>
   </aside>
 
@@ -1087,343 +667,369 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
     <div class="main-inner">
       <form id="setupForm" method="post" action="/save">
 
-        <!-- ============================================================ overview -->
-        <section class="view active" id="view-overview" aria-label="Overview">
-          <div class="view-head group">
-            <h1 class="view-title">Setup console</h1>
-            <p class="view-sub">Every backend remembers its own key, so you only ever enter it once. Everything saves to your local <code>.env</code> file.</p>
-          </div>
-          <div class="group">
-            <div class="meters">
-              <button type="button" class="meter" data-goto="ai">
-                <span class="meter-top"><span class="eyebrow">AI</span><span class="dot" id="meter_ai_dot"></span></span>
-                <span class="meter-value" id="meter_ai_value">-</span>
-                <span class="meter-sub" id="meter_ai_sub">-</span>
-              </button>
-              <button type="button" class="meter" data-goto="speech">
-                <span class="meter-top"><span class="eyebrow">Speech</span><span class="dot" id="meter_speech_dot"></span></span>
-                <span class="meter-value" id="meter_speech_value">-</span>
-                <span class="meter-sub" id="meter_speech_sub">-</span>
-              </button>
-              <button type="button" class="meter" data-goto="controls">
-                <span class="meter-top"><span class="eyebrow">Controls</span><span class="dot" id="meter_controls_dot"></span></span>
-                <span class="meter-value" id="meter_controls_value">-</span>
-                <span class="meter-sub" id="meter_controls_sub">-</span>
-              </button>
-              <button type="button" class="meter" data-goto="prompt">
-                <span class="meter-top"><span class="eyebrow">Prompt</span><span class="dot" id="meter_prompt_dot"></span></span>
-                <span class="meter-value" id="meter_prompt_value">-</span>
-                <span class="meter-sub" id="meter_prompt_sub">-</span>
-              </button>
+        <!-- ============================================================== home -->
+        <section class="view active" id="view-overview" aria-labelledby="h_overview">
+          <header class="page-head">
+            <h1 id="h_overview">Welcome to Odicto</h1>
+            <p>Speak anywhere on your computer. Odicto types what you say, or answers with AI. Every backend remembers its own key, so you only enter it once.</p>
+          </header>
+
+          <div class="hero" id="hero" data-tone="unknown">
+            <span class="hero-icon" aria-hidden="true"><svg viewBox="18 18 72 72" fill="none" stroke="#8EDCBB" stroke-width="7" stroke-linecap="round"><line x1="26.00" y1="69.00" x2="26.00" y2="39.00"/><line x1="32.71" y1="65.88" x2="43.29" y2="42.12"/><line x1="41.83" y1="61.36" x2="58.17" y2="46.64"/><line x1="52.49" y1="57.09" x2="71.51" y2="50.91"/><line x1="65.00" y1="54.00" x2="83.00" y2="54.00"/></svg></span>
+            <div class="hero-text">
+              <div class="hero-title" id="hero_title">Checking Odicto</div>
+              <div class="hero-sub" id="hero_sub">Reading its status on this computer.</div>
+            </div>
+            <div class="hero-side">
+              <span class="chip muted" id="hero_chip">Checking</span>
+              <button type="button" class="btn primary small" id="start_button" onclick="startOdicto()" hidden>Start Odicto</button>
             </div>
           </div>
-          <div class="group">
-            <div class="group-head">
-              <span class="group-title">Chords</span>
-              <span class="group-note">Live tap (F7) is always press once to start, press again to stop.</span>
+
+          <section class="sect" aria-labelledby="h_howto">
+            <div class="sect-label"><h2 id="h_howto">How to use</h2><span class="sect-note" id="howto_style">Long ride</span></div>
+            <div class="howto">
+              <div class="howto-card">
+                <div class="howto-top"><span class="tile"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg></span><span class="howto-title">Dictate</span></div>
+                <span class="keycaps" id="keycaps_hotkey"></span>
+                <p class="howto-desc" id="howto_dictate">Tap, speak, then tap again. Odicto types your words where the cursor is.</p>
+              </div>
+              <div class="howto-card">
+                <div class="howto-top"><span class="tile"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.9 15.5A2 2 0 0 0 8.5 14l-6.1-1.6a.5.5 0 0 1 0-1L8.5 10A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0L14 8.5a2 2 0 0 0 1.5 1.4l6.1 1.6a.5.5 0 0 1 0 1L15.5 14a2 2 0 0 0-1.4 1.5l-1.6 6.1a.5.5 0 0 1-1 0z"/></svg></span><span class="howto-title">Ask AI</span></div>
+                <span class="keycaps" id="keycaps_ai"></span>
+                <p class="howto-desc" id="howto_ai">Same gesture. Speak an instruction; selected text goes along as context.</p>
+              </div>
+              <div class="howto-card">
+                <div class="howto-top"><span class="tile"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h3l3-8 4 16 3-8h7"/></svg></span><span class="howto-title">Live</span></div>
+                <span class="keycaps" id="keycaps_live"></span>
+                <p class="howto-desc">Tap once to start live captions. Tap again to insert the text once.</p>
+              </div>
             </div>
-            <div class="keycap-strip">
-              <span class="keycap-item"><span class="keycap-label">Dictation</span><span class="keycaps" id="keycaps_hotkey"></span></span>
-              <span class="keycap-item"><span class="keycap-label">AI</span><span class="keycaps" id="keycaps_ai"></span></span>
-              <span class="keycap-item"><span class="keycap-label">Live</span><span class="keycaps" id="keycaps_live"></span></span>
-            </div>
-          </div>
+          </section>
+
+          <section class="sect" aria-labelledby="h_setup">
+            <div class="sect-label"><h2 id="h_setup">Your setup</h2></div>
+            <ul class="group">
+              <li><button type="button" class="rowbtn meter" data-goto="connections"><span class="meter-label">Connections</span><span class="meter-main"><span class="meter-value" id="meter_keys_value">-</span><span class="meter-sub" id="meter_keys_sub">-</span></span><span class="dot" id="meter_keys_dot"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></li>
+              <li><button type="button" class="rowbtn meter" data-goto="ai"><span class="meter-label">AI answers</span><span class="meter-main"><span class="meter-value" id="meter_ai_value">-</span><span class="meter-sub" id="meter_ai_sub">-</span></span><span class="dot" id="meter_ai_dot"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></li>
+              <li><button type="button" class="rowbtn meter" data-goto="speech"><span class="meter-label">Speech</span><span class="meter-main"><span class="meter-value" id="meter_speech_value">-</span><span class="meter-sub" id="meter_speech_sub">-</span></span><span class="dot" id="meter_speech_dot"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></li>
+              <li><button type="button" class="rowbtn meter" data-goto="controls"><span class="meter-label">Shortcuts</span><span class="meter-main"><span class="meter-value" id="meter_controls_value">-</span><span class="meter-sub" id="meter_controls_sub">-</span></span><span class="dot" id="meter_controls_dot"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></li>
+              <li><button type="button" class="rowbtn meter" data-goto="prompt"><span class="meter-label">Prompt</span><span class="meter-main"><span class="meter-value" id="meter_prompt_value">-</span><span class="meter-sub" id="meter_prompt_sub">-</span></span><span class="dot" id="meter_prompt_dot"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></li>
+            </ul>
+          </section>
+        </section>
+
+        <!-- ======================================================= connections -->
+        <section class="view" id="view-connections" aria-labelledby="h_connections">
+          <header class="page-head">
+            <h1 id="h_connections">Connections</h1>
+            <p>Every API key in one place. Odicto sends audio and text straight from this computer to the provider you choose. A saved key is never shown again; type a new one to replace it.</p>
+          </header>
+
+          <section class="sect" aria-labelledby="h_keys">
+            <div class="sect-label"><h2 id="h_keys">API keys</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div class="key-head"><span class="key-name">Groq</span><span class="chip muted" id="key_chip_GROQ_API_KEY">Not set</span><span class="key-uses">Speech, AI answers</span><a class="key-get" href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Get a key</a></div>
+                <div class="key-input">
+                  <input type="password" name="GROQ_API_KEY" id="GROQ_API_KEY" value="__GROQ_KEY__" data-saved="__GROQ_KEY_SAVED__" placeholder="Paste your Groq API key" autocomplete="off" spellcheck="false" aria-label="Groq API key">
+                  <button type="button" class="reveal-btn" data-reveal="GROQ_API_KEY">Show</button>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="key-head"><span class="key-name">Google Gemini</span><span class="chip muted" id="key_chip_GEMINI_API_KEY">Not set</span><span class="key-uses">Speech, live captions, AI answers</span><a class="key-get" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a key</a></div>
+                <div class="key-input">
+                  <input type="password" name="GEMINI_API_KEY" id="GEMINI_API_KEY" value="__GEMINI_KEY__" data-saved="__GEMINI_KEY_SAVED__" placeholder="Paste your Gemini API key" autocomplete="off" spellcheck="false" aria-label="Gemini API key">
+                  <button type="button" class="reveal-btn" data-reveal="GEMINI_API_KEY">Show</button>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="key-head"><span class="key-name">OpenRouter</span><span class="chip muted" id="key_chip_OPENROUTER_API_KEY">Not set</span><span class="key-uses">AI answers, speech</span><a class="key-get" href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">Get a key</a></div>
+                <div class="key-input">
+                  <input type="password" name="OPENROUTER_API_KEY" id="OPENROUTER_API_KEY" value="__OR_KEY__" data-saved="__OR_KEY_SAVED__" placeholder="Paste your OpenRouter key" autocomplete="off" spellcheck="false" aria-label="OpenRouter API key">
+                  <button type="button" class="reveal-btn" data-reveal="OPENROUTER_API_KEY">Show</button>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="key-head"><span class="key-name">Meta</span><span class="chip muted" id="key_chip_META_API_KEY">Not set</span><span class="key-uses">AI answers</span></div>
+                <div class="key-input">
+                  <input type="password" name="META_API_KEY" id="META_API_KEY" value="__META_KEY__" data-saved="__META_KEY_SAVED__" placeholder="Paste your Meta API key" autocomplete="off" spellcheck="false" aria-label="Meta API key">
+                  <button type="button" class="reveal-btn" data-reveal="META_API_KEY">Show</button>
+                </div>
+              </li>
+            </ul>
+            <p class="sect-foot">Quotes around a pasted key are fine; Odicto removes them. Ollama runs on this computer and needs no key.</p>
+          </section>
         </section>
 
         <!-- ================================================================ ai -->
-        <section class="view" id="view-ai" aria-label="AI backend">
-          <div class="view-head group">
-            <h1 class="view-title">AI backend</h1>
-            <p class="view-sub">Pick a backend and paste its key. Only the selected backend's settings are shown below.</p>
-          </div>
+        <section class="view" id="view-ai" aria-labelledby="h_ai">
+          <header class="page-head">
+            <h1 id="h_ai">AI answers</h1>
+            <p>The model that answers when you use the AI shortcut, and polishes dictation when you turn that on. Speech recognition is set on the Speech page.</p>
+          </header>
           <input type="hidden" name="LLM_PROVIDER" id="LLM_PROVIDER" value="__PROVIDER__">
-          <div class="group">
-            <div class="provider-grid" role="radiogroup" aria-label="AI backend">
-              <button type="button" class="provider-card" role="radio" data-value="meta" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">Meta API</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
-                <span class="pc-hint">cloud</span>
-                <span class="pc-meta"><span class="dot" id="pc_dot_meta"></span><span id="pc_key_meta">no key</span></span>
-              </button>
-              <button type="button" class="provider-card" role="radio" data-value="openrouter" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">OpenRouter</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
-                <span class="pc-hint">cloud</span>
-                <span class="pc-meta"><span class="dot" id="pc_dot_openrouter"></span><span id="pc_key_openrouter">no key</span></span>
-              </button>
-              <button type="button" class="provider-card" role="radio" data-value="gemini" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">Google Gemini</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
-                <span class="pc-hint">cloud</span>
-                <span class="pc-meta"><span class="dot" id="pc_dot_gemini"></span><span id="pc_key_gemini">no key</span></span>
-              </button>
-              <button type="button" class="provider-card" role="radio" data-value="ollama" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">Ollama</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
-                <span class="pc-hint">local</span>
-                <span class="pc-meta"><span class="dot ok" id="pc_dot_ollama"></span><span>no key needed</span></span>
-              </button>
-              <button type="button" class="provider-card" role="radio" data-value="groq" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">Groq</span></span>
-                <span class="pc-hint">fast cloud AI</span>
-                <span class="pc-meta">choose your chat model</span>
-              </button>
-              <button type="button" class="provider-card" role="radio" data-value="none" aria-checked="false">
-                <span class="pc-top"><span class="pc-name">None</span><svg class="pc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></span>
-                <span class="pc-hint">raw dictation</span>
-                <span class="pc-meta"><span class="dot"></span><span>no AI replies</span></span>
-              </button>
-            </div>
-            <div id="none-note" class="notice"><strong>Raw dictation only.</strong> Pick a backend above to enable AI replies.</div>
-          </div>
 
-          <div id="sec-ai" class="group">
-            <div class="field" id="field-groq">
-              <div class="card">
-                <div class="card-title">Groq AI</div>
-                <label class="field-label" for="GROQ_MODEL">Chat model</label>
-                <input type="text" name="GROQ_MODEL" id="GROQ_MODEL" value="__GROQ_MODEL__" list="groq-chat-models">
-                <datalist id="groq-chat-models"><option value="openai/gpt-oss-20b"></option><option value="openai/gpt-oss-120b"></option></datalist>
-                <p class="field-note">Use a model available to your Groq account. <button type="button" onclick="showView('speech')">Set Groq API key</button> on the Speech page; speech and chat models are independent.</p>
+          <section class="sect" aria-labelledby="h_provider">
+            <div class="sect-label"><h2 id="h_provider">Provider</h2></div>
+            <div class="group">
+              <div class="provider-grid" role="radiogroup" aria-labelledby="h_provider">
+                <button type="button" class="provider-card" role="radio" data-value="groq" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">Groq</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Fast cloud models</span>
+                  <span class="pc-meta"><span class="dot" id="pc_dot_groq"></span><span id="pc_key_groq">no key</span></span>
+                </button>
+                <button type="button" class="provider-card" role="radio" data-value="gemini" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">Google Gemini</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Cloud, sees screenshots</span>
+                  <span class="pc-meta"><span class="dot" id="pc_dot_gemini"></span><span id="pc_key_gemini">no key</span></span>
+                </button>
+                <button type="button" class="provider-card" role="radio" data-value="openrouter" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">OpenRouter</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Hundreds of cloud models</span>
+                  <span class="pc-meta"><span class="dot" id="pc_dot_openrouter"></span><span id="pc_key_openrouter">no key</span></span>
+                </button>
+                <button type="button" class="provider-card" role="radio" data-value="meta" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">Meta</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Cloud</span>
+                  <span class="pc-meta"><span class="dot" id="pc_dot_meta"></span><span id="pc_key_meta">no key</span></span>
+                </button>
+                <button type="button" class="provider-card" role="radio" data-value="ollama" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">Ollama</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Local, private, offline</span>
+                  <span class="pc-meta"><span class="dot ok" id="pc_dot_ollama"></span><span>no key needed</span></span>
+                </button>
+                <button type="button" class="provider-card" role="radio" data-value="none" aria-checked="false">
+                  <span class="pc-top"><span class="pc-name">None</span><span class="pc-radio"></span></span>
+                  <span class="pc-hint">Raw dictation only</span>
+                  <span class="pc-meta"><span class="dot"></span><span>no AI replies</span></span>
+                </button>
               </div>
+              <div id="none-note" class="notice"><strong>Raw dictation only.</strong> Pick a provider to turn on AI answers.</div>
             </div>
-            <div class="field">
-              <label class="field-label" for="AI_CLIPBOARD_IMAGE">Attach clipboard screenshot to AI queries</label>
-              <select name="AI_CLIPBOARD_IMAGE" id="AI_CLIPBOARD_IMAGE"><option value="false"__IMAGE_OFF__>Off</option><option value="true"__IMAGE_ON__>On</option></select>
-              <p class="field-note">Requires the visual indicator and an image-capable model. Selected text is still used as AI context.</p>
-            </div>
-            <div class="field" id="field-meta">
-              <div class="card">
-                <div class="card-title">Meta API</div>
-                <div class="card-sub">Backend default: <code>__META_MODEL_DEFAULT_NOTE__</code>__META_SAVED_HINT__</div>
-                <div class="field">
-                  <label class="field-label" for="META_API_KEY">API key__META_KEY_SAVED_HINT__</label>
-                  <div class="key-input">
-                    <input type="password" name="META_API_KEY" id="META_API_KEY" value="__META_KEY__" placeholder="paste your Meta API key - quotes are fine">
-                    <button type="button" class="reveal-btn" data-reveal="META_API_KEY">Show</button>
+          </section>
+
+          <div id="sec-ai">
+            <section class="sect" aria-labelledby="h_model">
+              <div class="sect-label"><h2 id="h_model">Model</h2><span class="sect-note" id="key_hint_ai"></span></div>
+              <div class="group">
+                <div class="field-card row block" id="field-groq">
+                  <div>
+                    <label class="field-label" for="GROQ_MODEL">Chat model</label>
+                    <input type="text" name="GROQ_MODEL" id="GROQ_MODEL" value="__GROQ_MODEL__" list="groq-chat-models" spellcheck="false">
+                    <datalist id="groq-chat-models"><option value="openai/gpt-oss-20b"></option><option value="openai/gpt-oss-120b"></option></datalist>
                   </div>
+                  <p class="note">Use a model your Groq account can reach. The speech model is separate and set on the Speech page.</p>
                 </div>
-                <div class="field">
-                  <label class="field-label" for="meta_model_select">Model</label>
-                  <div class="cselect">
-                    <select id="meta_model_select" onchange="syncModelSelect('meta')"></select>
+
+                <div class="field-card row block" id="field-meta">
+                  <p class="note">Backend default: <code>__META_MODEL_DEFAULT_NOTE__</code>__META_SAVED_HINT__</p>
+                  <div class="row-grid">
+                    <div>
+                      <label class="field-label" for="meta_model_select">Model</label>
+                      <div class="cselect"><select id="meta_model_select" onchange="syncModelSelect('meta')"></select></div>
+                      <input type="text" class="custom-model" id="meta_model_custom" style="display:none;" placeholder="Custom model id, e.g. __META_MODEL_DEFAULT__" spellcheck="false">
+                      <input type="hidden" name="META_MODEL" id="META_MODEL" value="__META_MODEL_SEED__">
+                      <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="__META_HISTORY_CSV__">
+                    </div>
+                    <div>
+                      <label class="field-label" for="meta_reasoning_select">Reasoning effort</label>
+                      <div class="cselect">
+                        <select id="meta_reasoning_select" onchange="syncEffort('meta')">
+                          <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
+                        </select>
+                      </div>
+                      <input type="hidden" name="META_REASONING_EFFORT" id="META_REASONING_EFFORT" value="__META_REASONING_SEED__">
+                    </div>
                   </div>
-                  <input type="text" id="meta_model_custom" style="display:none;margin-top:8px;" placeholder="custom model id, e.g. __META_MODEL_DEFAULT__">
-                  <input type="hidden" name="META_MODEL" id="META_MODEL" value="__META_MODEL_SEED__">
-                  <input type="hidden" name="META_MODEL_HISTORY" id="META_MODEL_HISTORY" value="__META_HISTORY_CSV__">
                   <div id="meta_model_chips" class="model-chips" aria-label="Saved models"></div>
                 </div>
-                <div class="field">
-                  <label class="field-label" for="meta_reasoning_select">Reasoning effort</label>
-                  <div class="cselect">
-                    <select id="meta_reasoning_select" onchange="syncEffort('meta')">
-                      <option value="">Backend default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="none">none (no reasoning)</option>
-                    </select>
-                  </div>
-                  <input type="hidden" name="META_REASONING_EFFORT" id="META_REASONING_EFFORT" value="__META_REASONING_SEED__">
-                </div>
-              </div>
-            </div>
 
-            <div class="field" id="field-openrouter">
-              <div class="card">
-                <div class="card-title">OpenRouter</div>
-                <div class="card-sub">Backend default: <code>openai/gpt-5.6-luna</code>__OPENROUTER_SAVED_HINT__</div>
-                <div class="field">
-                  <label class="field-label" for="OPENROUTER_API_KEY">API key__OPENROUTER_KEY_SAVED_HINT__</label>
-                  <div class="key-input">
-                    <input type="password" name="OPENROUTER_API_KEY" id="OPENROUTER_API_KEY" value="__OR_KEY__" placeholder="paste your OpenRouter key - quotes are fine">
-                    <button type="button" class="reveal-btn" data-reveal="OPENROUTER_API_KEY">Show</button>
+                <div class="field-card row block" id="field-openrouter">
+                  <p class="note">Backend default: <code>openai/gpt-5.6-luna</code>__OPENROUTER_SAVED_HINT__</p>
+                  <div>
+                    <label class="field-label" for="openrouter_model_select">Model <span class="hint">· search by name or id</span></label>
+                    <div class="cselect"><select id="openrouter_model_select" onchange="syncModelSelect('openrouter')"></select></div>
+                    <input type="text" class="custom-model" id="openrouter_model_custom" style="display:none;" placeholder="Custom slug, e.g. openai/gpt-4o-mini" spellcheck="false">
+                    <input type="hidden" name="OPENROUTER_MODEL" id="OPENROUTER_MODEL" value="__OR_MODEL_SEED__">
+                    <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="__OPENROUTER_HISTORY_CSV__">
+                    <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
                   </div>
-                </div>
-                <div class="field">
-                  <label class="field-label" for="openrouter_model_select">Model</label>
-                  <div class="cselect">
-                    <select id="openrouter_model_select" onchange="syncModelSelect('openrouter')"></select>
-                  </div>
-                  <input type="text" id="openrouter_model_custom" style="display:none;margin-top:8px;" placeholder="custom slug, e.g. openai/gpt-4o-mini">
-                  <input type="hidden" name="OPENROUTER_MODEL" id="OPENROUTER_MODEL" value="__OR_MODEL_SEED__">
-                  <input type="hidden" name="OPENROUTER_MODEL_HISTORY" id="OPENROUTER_MODEL_HISTORY" value="__OPENROUTER_HISTORY_CSV__">
-                  <div id="openrouter_model_chips" class="model-chips" aria-label="Saved models"></div>
-                </div>
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="openrouter_reasoning_select">Reasoning effort</label>
-                    <div class="cselect">
-                      <select id="openrouter_reasoning_select" onchange="syncEffort('openrouter')">
-                        <option value="">Backend default (none)</option><option value="none">none (no thinking)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
-                      </select>
+                  <div class="row-grid">
+                    <div>
+                      <label class="field-label" for="openrouter_reasoning_select">Reasoning effort</label>
+                      <div class="cselect">
+                        <select id="openrouter_reasoning_select" onchange="syncEffort('openrouter')">
+                          <option value="">Backend default (none)</option><option value="none">none (no thinking)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
+                        </select>
+                      </div>
+                      <input type="hidden" name="OPENROUTER_REASONING_EFFORT" id="OPENROUTER_REASONING_EFFORT" value="__OR_REASONING_SEED__">
                     </div>
-                    <input type="hidden" name="OPENROUTER_REASONING_EFFORT" id="OPENROUTER_REASONING_EFFORT" value="__OR_REASONING_SEED__">
-                  </div>
-                  <div class="field">
-                    <label class="field-label" for="openrouter_sort_select">Host ranking</label>
-                    <div class="cselect">
-                      <select id="openrouter_sort_select" onchange="syncEffort('openrouter_sort')">
-                        <option value="">Backend default (latency)</option><option value="latency">latency - fastest host</option><option value="throughput">throughput - highest tokens/sec</option><option value="price">price - cheapest host</option>
-                      </select>
+                    <div>
+                      <label class="field-label" for="openrouter_sort_select">Host ranking</label>
+                      <div class="cselect">
+                        <select id="openrouter_sort_select" onchange="syncEffort('openrouter_sort')">
+                          <option value="">Backend default (latency)</option><option value="latency">latency - fastest host</option><option value="throughput">throughput - highest tokens/sec</option><option value="price">price - cheapest host</option>
+                        </select>
+                      </div>
+                      <input type="hidden" name="OPENROUTER_PROVIDER_SORT" id="OPENROUTER_PROVIDER_SORT" value="__OR_SORT_SEED__">
                     </div>
-                    <input type="hidden" name="OPENROUTER_PROVIDER_SORT" id="OPENROUTER_PROVIDER_SORT" value="__OR_SORT_SEED__">
                   </div>
+                  <p class="note" id="openrouter_effort_note">Default is no thinking. Allowed levels load from OpenRouter for the selected model.</p>
+                  <p class="note">The default host ranking picks the lowest time to first token, not the cheapest host.</p>
                 </div>
-                <p class="field-note" id="openrouter_effort_note">Default is no thinking. Allowed levels load from OpenRouter for the selected model.</p>
-                <p class="field-note">Default host ranking is lowest time-to-first-token for the chosen model, not cheapest.</p>
-              </div>
-            </div>
 
-            <div class="field" id="field-gemini">
-              <div class="card">
-                <div class="card-title">Google Gemini</div>
-                <div class="card-sub">Backend default: <code>gemini-3.5-flash-lite</code>__GEMINI_SAVED_HINT__</div>
-                <div class="field">
-                  <label class="field-label" for="GEMINI_API_KEY">API key__GEMINI_KEY_SAVED_HINT__</label>
-                  <div class="key-input">
-                    <input type="password" name="GEMINI_API_KEY" id="GEMINI_API_KEY" value="__GEMINI_KEY__" placeholder="paste your Gemini API key - quotes are fine">
-                    <button type="button" class="reveal-btn" data-reveal="GEMINI_API_KEY">Show</button>
-                  </div>
-                </div>
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="gemini_model_select">Model</label>
-                    <div class="cselect">
-                      <select id="gemini_model_select" onchange="syncModelSelect('gemini')"></select>
+                <div class="field-card row block" id="field-gemini">
+                  <p class="note">Backend default: <code>gemini-3.5-flash-lite</code>__GEMINI_SAVED_HINT__</p>
+                  <div class="row-grid">
+                    <div>
+                      <label class="field-label" for="gemini_model_select">Model</label>
+                      <div class="cselect"><select id="gemini_model_select" onchange="syncModelSelect('gemini')"></select></div>
+                      <input type="text" class="custom-model" id="gemini_model_custom" style="display:none;" placeholder="Custom model id" spellcheck="false">
+                      <input type="hidden" name="GEMINI_MODEL" id="GEMINI_MODEL" value="__GEMINI_MODEL_SEED__">
+                      <input type="hidden" name="GEMINI_MODEL_HISTORY" id="GEMINI_MODEL_HISTORY" value="__GEMINI_HISTORY_CSV__">
                     </div>
-                    <input type="text" id="gemini_model_custom" style="display:none;margin-top:8px;" placeholder="custom model id">
-                    <input type="hidden" name="GEMINI_MODEL" id="GEMINI_MODEL" value="__GEMINI_MODEL_SEED__">
-                    <input type="hidden" name="GEMINI_MODEL_HISTORY" id="GEMINI_MODEL_HISTORY" value="__GEMINI_HISTORY_CSV__">
-                    <div id="gemini_model_chips" class="model-chips" aria-label="Saved models"></div>
-                  </div>
-                  <div class="field">
-                    <label class="field-label" for="gemini_thinking_select">Thinking level</label>
-                    <div class="cselect">
-                      <select id="gemini_thinking_select" onchange="syncEffort('gemini')">
-                        <option value="">Backend default (minimal)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
-                      </select>
+                    <div>
+                      <label class="field-label" for="gemini_thinking_select">Thinking level</label>
+                      <div class="cselect">
+                        <select id="gemini_thinking_select" onchange="syncEffort('gemini')">
+                          <option value="">Backend default (minimal)</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
+                        </select>
+                      </div>
+                      <input type="hidden" name="GEMINI_THINKING_LEVEL" id="GEMINI_THINKING_LEVEL" value="__GEMINI_THINKING_SEED__">
                     </div>
-                    <input type="hidden" name="GEMINI_THINKING_LEVEL" id="GEMINI_THINKING_LEVEL" value="__GEMINI_THINKING_SEED__">
                   </div>
+                  <div id="gemini_model_chips" class="model-chips" aria-label="Saved models"></div>
                 </div>
-              </div>
-            </div>
 
-            <div class="field" id="field-ollama">
-              <div class="card">
-                <div class="card-title">Ollama</div>
-                <div class="card-sub">Backend default: <code>qwen2.5:1.5b-instruct</code>__OLLAMA_SAVED_HINT__ · no key needed</div>
-                <div class="field">
-                  <label class="field-label" for="ollama_model_select">Model</label>
-                  <div class="cselect">
-                    <select id="ollama_model_select" onchange="syncModelSelect('ollama')"></select>
+                <div class="field-card row block" id="field-ollama">
+                  <p class="note">Backend default: <code>qwen2.5:1.5b-instruct</code>__OLLAMA_SAVED_HINT__ · runs on this computer, no key needed</p>
+                  <div>
+                    <label class="field-label" for="ollama_model_select">Model</label>
+                    <div class="cselect"><select id="ollama_model_select" onchange="syncModelSelect('ollama')"></select></div>
+                    <input type="text" class="custom-model" id="ollama_model_custom" style="display:none;" placeholder="Custom tag, e.g. llama3.2:3b" spellcheck="false">
+                    <input type="hidden" name="OLLAMA_MODEL" id="OLLAMA_MODEL" value="__OLLAMA_MODEL_SEED__">
+                    <input type="hidden" name="OLLAMA_MODEL_HISTORY" id="OLLAMA_MODEL_HISTORY" value="__OLLAMA_HISTORY_CSV__">
+                    <div id="ollama_model_chips" class="model-chips" aria-label="Saved models"></div>
                   </div>
-                  <input type="text" id="ollama_model_custom" style="display:none;margin-top:8px;" placeholder="custom tag, e.g. llama3.2:3b">
-                  <input type="hidden" name="OLLAMA_MODEL" id="OLLAMA_MODEL" value="__OLLAMA_MODEL_SEED__">
-                  <input type="hidden" name="OLLAMA_MODEL_HISTORY" id="OLLAMA_MODEL_HISTORY" value="__OLLAMA_HISTORY_CSV__">
-                  <div id="ollama_model_chips" class="model-chips" aria-label="Saved models"></div>
-                </div>
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="LLM_API_BASE">Ollama API base</label>
-                    <input type="text" name="LLM_API_BASE" id="LLM_API_BASE" value="__OLLAMA_BASE__">
+                  <div class="row-grid">
+                    <div>
+                      <label class="field-label" for="LLM_API_BASE">Ollama address</label>
+                      <input type="text" name="LLM_API_BASE" id="LLM_API_BASE" value="__OLLAMA_BASE__" spellcheck="false">
+                    </div>
+                    <div>
+                      <label class="field-label" for="LLM_NUM_CTX">Context window <span class="hint">· higher remembers more, runs slower</span></label>
+                      <input type="text" name="LLM_NUM_CTX" id="LLM_NUM_CTX" value="__LLM_NUM_CTX__" placeholder="2048">
+                    </div>
                   </div>
-                  <div class="field">
-                    <label class="field-label" for="LLM_NUM_CTX">Context window <span class="field-hint">higher = better memory, slower</span></label>
-                    <input type="text" name="LLM_NUM_CTX" id="LLM_NUM_CTX" value="__LLM_NUM_CTX__" placeholder="2048">
+                  <div class="test-row">
+                    <button type="button" id="pull_button" class="btn secondary small" onclick="startPull()">Download local model</button>
+                    <span class="note">Pulls the model chosen above with Ollama.</span>
                   </div>
+                  <div id="pull_status" class="pull-status" hidden></div>
                 </div>
-                <div class="pull-row">
-                  <button type="button" id="pull_button" class="btn quiet small" onclick="startPull()">Download local model</button>
-                  <span class="hint">pulls the model selected for Ollama above</span>
-                </div>
-                <div id="pull_status" class="pull-status" hidden></div>
-              </div>
-            </div>
 
-            <div class="field">
-              <div class="card">
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="LLM_MAX_TOKENS">Max output tokens <span class="field-hint">shared cap for every backend</span></label>
-                    <input type="text" name="LLM_MAX_TOKENS" id="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="1024">
+                <div class="row block" id="test_area">
+                  <div class="test-row">
+                    <button type="button" id="test_button" class="btn secondary" onclick="testConnection()">Test connection</button>
+                    <span id="test_tag" class="result-tag" role="status" aria-live="polite"></span>
                   </div>
+                  <div id="status" class="status" role="status"></div>
                 </div>
               </div>
-            </div>
+            </section>
+
+            <section class="sect" aria-labelledby="h_ai_options">
+              <div class="sect-label"><h2 id="h_ai_options">Options</h2></div>
+              <ul class="group">
+                <li class="row">
+                  <div class="row-text"><h3 id="t_image">Include clipboard screenshot</h3><p>Sends a copied screenshot with your AI question. Needs an image-capable model. Selected text is always sent as context.</p></div>
+                  <div class="row-ctl">
+                    <label class="switch"><input type="checkbox" data-select="AI_CLIPBOARD_IMAGE" aria-labelledby="t_image"__IMAGE_CHECKED__><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                    <select name="AI_CLIPBOARD_IMAGE" id="AI_CLIPBOARD_IMAGE" class="visually-hidden" tabindex="-1" aria-hidden="true"><option value="false"__IMAGE_OFF__>Off</option><option value="true"__IMAGE_ON__>On</option></select>
+                  </div>
+                </li>
+                <li class="row">
+                  <div class="row-text"><h3><label for="LLM_MAX_TOKENS">Longest answer</label></h3><p>Maximum output tokens for every provider.</p></div>
+                  <div class="row-ctl" style="width:140px"><input type="text" name="LLM_MAX_TOKENS" id="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="1024" inputmode="numeric"></div>
+                </li>
+              </ul>
+            </section>
           </div>
         </section>
 
         <!-- ============================================================ speech -->
-        <section class="view" id="view-speech" aria-label="Speech to text">
-          <div class="view-head group">
-            <h1 class="view-title">Speech to text</h1>
-            <p class="view-sub">One speech provider and model for raw dictation, AI mode, and the live tap (when live is set to auto). Gemini reuses <code>GEMINI_API_KEY</code>. OpenRouter reuses <code>OPENROUTER_API_KEY</code>.</p>
-          </div>
-          <div class="group">
-            <div class="card">
-              <div class="field">
-                <label class="field-label" for="STT_PROVIDER">STT provider</label>
-                <div class="cselect">
-                  <select name="STT_PROVIDER" id="STT_PROVIDER" onchange="syncSttProvider()">
-                    <option value="whisper"__STT_WHISPER_SELECTED__>whisper - local, offline</option>
-                    <option value="gemini"__STT_GEMINI_SELECTED__>gemini - Gemini 3.5 Transcribe (cloud)</option>
-                    <option value="groq"__STT_GROQ_SELECTED__>groq - Groq Whisper (cloud)</option>
-                    <option value="openrouter"__STT_OPENROUTER_SELECTED__>openrouter - OpenRouter speech-to-text</option>
-                    <option value="auto"__STT_AUTO_SELECTED__>auto - Gemini when a key is saved, else Whisper</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field">
-                <label class="field-label" for="POLISH_DICTATION">Polish dictated text</label>
-                <select name="POLISH_DICTATION" id="POLISH_DICTATION"><option value="false"__POLISH_OFF__>Off — raw transcription</option><option value="true"__POLISH_ON__>On — grammar, punctuation and capitalization</option></select>
-                <label class="field-label" for="POLISH_MODEL">Polish model <span class="field-hint">optional</span></label>
-                <input type="text" name="POLISH_MODEL" id="POLISH_MODEL" value="__POLISH_MODEL__" placeholder="Blank uses the chosen AI model">
-                <p class="field-note">Uses the selected AI provider. Waits up to two seconds, then inserts raw text if unavailable. Applies to ordinary dictation and F7; Gemini Smart is already polished. AI answers and conversation memory are separate.</p>
-                <p class="field-note">F7 shows interim captions in the HUD and inserts once on stop. Its finalized text stays on the clipboard.</p>
-              </div>
-              <div id="stt-gemini-fields"__STT_GEMINI_FIELDS_HIDDEN__>
-                <div class="field">
-                  <span class="field-label">Transcription mode</span>
-                  <div class="mode-switch" role="group" aria-label="Transcription mode">
-                    <span class="mode-label" id="mode_label_verbatim">Verbatim</span>
-                    <label class="switch">
-                      <input type="checkbox" id="stt_mode_toggle" __TRANSCRIBE_SMART_CHECKED__ onchange="syncTranscribeMode()">
-                      <span class="slider"></span>
-                    </label>
-                    <span class="mode-label" id="mode_label_smart">Smart</span>
-                  </div>
+        <section class="view" id="view-speech" aria-labelledby="h_speech">
+          <header class="page-head">
+            <h1 id="h_speech">Speech</h1>
+            <p>One speech engine turns your voice into text for dictation, AI answers and live captions. If a cloud engine fails, Odicto falls back to Whisper on this computer, so dictation never stops.</p>
+          </header>
+
+          <section class="sect" aria-labelledby="h_engine">
+            <div class="sect-label"><h2 id="h_engine">Speech engine</h2></div>
+            <ul class="group" role="radiogroup" aria-labelledby="h_engine">
+              <li><button type="button" class="choice" role="radio" data-stt="whisper" aria-checked="false"><span class="choice-mark"></span><span class="choice-text"><span class="choice-title">Whisper <span class="chip muted">On this computer</span></span><span class="choice-desc">Offline and free. Speed depends on your hardware.</span></span><span id="stt_state_whisper"></span></button></li>
+              <li><button type="button" class="choice" role="radio" data-stt="groq" aria-checked="false"><span class="choice-mark"></span><span class="choice-text"><span class="choice-title">Groq Whisper</span><span class="choice-desc">Whisper large in the cloud. Very fast.</span></span><span id="stt_state_groq"></span></button></li>
+              <li><button type="button" class="choice" role="radio" data-stt="gemini" aria-checked="false"><span class="choice-mark"></span><span class="choice-text"><span class="choice-title">Gemini Transcribe</span><span class="choice-desc">Smart mode removes filler words and applies your corrections.</span></span><span id="stt_state_gemini"></span></button></li>
+              <li><button type="button" class="choice" role="radio" data-stt="openrouter" aria-checked="false"><span class="choice-mark"></span><span class="choice-text"><span class="choice-title">OpenRouter</span><span class="choice-desc">Speech models hosted on OpenRouter, including Grok speech.</span></span><span id="stt_state_openrouter"></span></button></li>
+              <li><button type="button" class="choice" role="radio" data-stt="auto" aria-checked="false"><span class="choice-mark"></span><span class="choice-text"><span class="choice-title">Automatic</span><span class="choice-desc">Gemini when a Gemini key is saved, otherwise Whisper.</span></span><span id="stt_state_auto"></span></button></li>
+            </ul>
+            <select name="STT_PROVIDER" id="STT_PROVIDER" class="visually-hidden" tabindex="-1" aria-hidden="true" onchange="syncSttProvider()">
+              <option value="whisper"__STT_WHISPER_SELECTED__>whisper - local, offline</option>
+              <option value="gemini"__STT_GEMINI_SELECTED__>gemini - Gemini 3.5 Transcribe (cloud)</option>
+              <option value="groq"__STT_GROQ_SELECTED__>groq - Groq Whisper (cloud)</option>
+              <option value="openrouter"__STT_OPENROUTER_SELECTED__>openrouter - OpenRouter speech-to-text</option>
+              <option value="auto"__STT_AUTO_SELECTED__>auto - Gemini when a key is saved, else Whisper</option>
+            </select>
+            <p class="sect-foot">Cloud engines use the keys on the <button type="button" class="inline-link" onclick="showView('connections')">Connections</button> page.</p>
+          </section>
+
+          <section class="sect" id="stt-gemini-fields"__STT_GEMINI_FIELDS_HIDDEN__ aria-labelledby="h_gemini_stt">
+            <div class="sect-label"><h2 id="h_gemini_stt">Gemini Transcribe</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3 id="t_smart">Smart transcription <span class="chip muted" id="mode_label_verbatim" hidden>Verbatim</span><span class="chip" id="mode_label_smart" hidden>Smart</span></h3><p>On: removes ums, applies self-corrections and punctuates. Off: word for word.</p></div>
+                <div class="row-ctl">
+                  <label class="switch"><input type="checkbox" id="stt_mode_toggle" aria-labelledby="t_smart" __TRANSCRIBE_SMART_CHECKED__ onchange="syncTranscribeMode()"><span class="switch-track"><span class="switch-thumb"></span></span></label>
                   <input type="hidden" name="GEMINI_TRANSCRIBE_MODE" id="GEMINI_TRANSCRIBE_MODE" value="__TRANSCRIBE_MODE__">
-                  <p class="field-note">Off = verbatim (word-for-word). On = smart (strip ums, apply self-corrections, punctuate). Gemini only. Used for raw dictation, AI mode, and the live tap.</p>
                 </div>
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="GEMINI_TRANSCRIBE_LANGUAGE">Language hint <span class="field-hint">blank = auto-detect</span></label>
-                    <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" id="GEMINI_TRANSCRIBE_LANGUAGE" value="__TRANSCRIBE_LANG__" placeholder="en-US">
+              </li>
+              <li class="row block">
+                <div class="row-grid">
+                  <div>
+                    <label class="field-label" for="GEMINI_TRANSCRIBE_LANGUAGE">Language <span class="hint">· blank detects it</span></label>
+                    <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" id="GEMINI_TRANSCRIBE_LANGUAGE" value="__TRANSCRIBE_LANG__" placeholder="en-US" spellcheck="false">
                   </div>
-                  <div class="field">
-                    <label class="field-label" for="GEMINI_TRANSCRIBE_VOCABULARY">Custom vocabulary <span class="field-hint">comma-separated, optional</span></label>
+                  <div>
+                    <label class="field-label" for="GEMINI_TRANSCRIBE_VOCABULARY">Your words <span class="hint">· names and terms, comma-separated</span></label>
                     <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" id="GEMINI_TRANSCRIBE_VOCABULARY" value="__TRANSCRIBE_VOCAB__" placeholder="Odicto, Kubernetes">
                   </div>
                 </div>
-              </div>
-              <div id="stt-groq-fields"__STT_GROQ_FIELDS_HIDDEN__>
-                <div class="row-2">
-                  <div class="field">
-                    <label class="field-label" for="GROQ_API_KEY">Groq API key__GROQ_KEY_SAVED_HINT__</label>
-                    <div class="key-input">
-                      <input type="password" name="GROQ_API_KEY" id="GROQ_API_KEY" value="__GROQ_KEY__" placeholder="paste your Groq API key">
-                      <button type="button" class="reveal-btn" data-reveal="GROQ_API_KEY">Show</button>
-                    </div>
-                  </div>
-                  <div class="field">
-                    <label class="field-label" for="GROQ_STT_MODEL">Groq model</label>
-                    <input type="text" name="GROQ_STT_MODEL" id="GROQ_STT_MODEL" list="groq-stt-models" value="__GROQ_STT_MODEL__">
-                    <datalist id="groq-stt-models">
-                      <option value="whisper-large-v3-turbo"></option>
-                      <option value="whisper-large-v3"></option>
-                    </datalist>
-                  </div>
+              </li>
+            </ul>
+          </section>
+
+          <section class="sect" id="stt-groq-fields"__STT_GROQ_FIELDS_HIDDEN__ aria-labelledby="h_groq_stt">
+            <div class="sect-label"><h2 id="h_groq_stt">Groq Whisper</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div>
+                  <label class="field-label" for="GROQ_STT_MODEL">Speech model</label>
+                  <input type="text" name="GROQ_STT_MODEL" id="GROQ_STT_MODEL" list="groq-stt-models" value="__GROQ_STT_MODEL__" spellcheck="false">
+                  <datalist id="groq-stt-models"><option value="whisper-large-v3-turbo"></option><option value="whisper-large-v3"></option></datalist>
                 </div>
-                <p class="field-note">Groq hosts Whisper. <code>whisper-large-v3-turbo</code> is the fast default. The same model is used for raw dictation and AI mode.</p>
-              </div>
-              <div id="stt-openrouter-fields"__STT_OPENROUTER_FIELDS_HIDDEN__>
-                <div class="field">
-                  <label class="field-label" for="OPENROUTER_STT_MODEL">OpenRouter transcription model</label>
-                  <input type="text" name="OPENROUTER_STT_MODEL" id="OPENROUTER_STT_MODEL" list="openrouter-stt-models" value="__OPENROUTER_STT_MODEL__">
+                <p class="note"><code>whisper-large-v3-turbo</code> is the fast default.</p>
+              </li>
+            </ul>
+          </section>
+
+          <section class="sect" id="stt-openrouter-fields"__STT_OPENROUTER_FIELDS_HIDDEN__ aria-labelledby="h_or_stt">
+            <div class="sect-label"><h2 id="h_or_stt">OpenRouter speech</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div>
+                  <label class="field-label" for="OPENROUTER_STT_MODEL">Speech model</label>
+                  <input type="text" name="OPENROUTER_STT_MODEL" id="OPENROUTER_STT_MODEL" list="openrouter-stt-models" value="__OPENROUTER_STT_MODEL__" spellcheck="false">
                   <datalist id="openrouter-stt-models">
                     <option value="openai/whisper-large-v3"></option>
                     <option value="openai/whisper-1"></option>
@@ -1432,150 +1038,240 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
                     <option value="x-ai/grok-stt-1.0"></option>
                   </datalist>
                 </div>
-                <p class="field-note">Uses the OpenRouter key from the AI backend page. This model is only for speech-to-text, including Grok speech models such as <code>x-ai/grok-stt-1.0</code>. The chat model above stays separate.</p>
-              </div>
-            </div>
+                <p class="note">Only for speech, including Grok speech models such as <code>x-ai/grok-stt-1.0</code>. The chat model on AI answers stays separate.</p>
+              </li>
+            </ul>
+          </section>
 
-            <div class="card">
-              <div class="card-title">Whisper</div>
-              <div class="card-sub">Local, offline transcription. Also the fallback if a cloud speech call fails.</div>
-              <div class="row-2">
-                <div class="field">
-                  <label class="field-label" for="WHISPER_MODEL_SIZE">Model size</label>
-                  <div class="cselect">
-                    <select name="WHISPER_MODEL_SIZE" id="WHISPER_MODEL_SIZE" onchange="updateMeters()">
-                      __WHISPER_MODEL_OPTIONS__
-                    </select>
+          <section class="sect" aria-labelledby="h_whisper">
+            <div class="sect-label"><h2 id="h_whisper">Whisper on this computer</h2><span class="sect-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Fallback for the cloud engine</span></div>
+            <ul class="group">
+              <li class="row block">
+                <div class="row-grid">
+                  <div>
+                    <label class="field-label" for="WHISPER_MODEL_SIZE">Model size</label>
+                    <div class="cselect">
+                      <select name="WHISPER_MODEL_SIZE" id="WHISPER_MODEL_SIZE" onchange="updateMeters()">
+                        __WHISPER_MODEL_OPTIONS__
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label class="field-label" for="WHISPER_DEVICE">Device</label>
+                    <div class="cselect">
+                      <select name="WHISPER_DEVICE" id="WHISPER_DEVICE">
+                        __WHISPER_DEVICE_EXTRA__
+                        <option value="auto"__WHISPER_DEVICE_AUTO_SELECTED__>auto - tiny/base on CPU, larger models on GPU</option>
+                        <option value="cuda"__WHISPER_DEVICE_CUDA_SELECTED__>cuda - keep the model in GPU memory</option>
+                        <option value="cpu"__WHISPER_DEVICE_CPU_SELECTED__>cpu - always on the processor</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
-                <div class="field">
-                  <label class="field-label" for="WHISPER_DEVICE">Device</label>
-                  <div class="cselect">
-                    <select name="WHISPER_DEVICE" id="WHISPER_DEVICE">
-                      __WHISPER_DEVICE_EXTRA__
-                      <option value="auto"__WHISPER_DEVICE_AUTO_SELECTED__>auto - tiny/base on CPU, larger models on GPU</option>
-                      <option value="cuda"__WHISPER_DEVICE_CUDA_SELECTED__>cuda - keep the model in GPU memory</option>
-                      <option value="cpu"__WHISPER_DEVICE_CPU_SELECTED__>cpu - always on the processor</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-              <p class="field-note">Each size shows approximate GPU memory, including about 1 GB of CUDA runtime, and how it feels in use. More GPU memory means a slower transcription and less room for the rest of the laptop. auto keeps tiny and base off the GPU. cuda loads the chosen model into GPU memory at startup and warms it.</p>
-              <p class="field-note" id="stt-whisper-fallback-note"__STT_WHISPER_HIDDEN_SECOND__>Used if the selected cloud speech service is unavailable (no key, rate limit, or network).</p>
-            </div>
+                <p class="note">Each size shows its approximate GPU memory, including about 1 GB of CUDA runtime. Bigger models are more accurate and slower. Auto keeps tiny and base on the processor; cuda loads the model into GPU memory at startup and warms it.</p>
+              </li>
+            </ul>
+          </section>
 
-            <div class="card">
-              <div class="row-2">
-                <div class="field">
-                  <label class="field-label" for="LIVE_STT_PROVIDER">Live dictation engine (F7)</label>
+          <section class="sect" aria-labelledby="h_polish">
+            <div class="sect-label"><h2 id="h_polish">Text polish</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3 id="t_polish">Polish dictated text</h3><p>Fixes grammar, punctuation and capitals with your AI provider. Waits at most two seconds, then types the raw text. Gemini Smart is already polished.</p></div>
+                <div class="row-ctl">
+                  <label class="switch"><input type="checkbox" data-select="POLISH_DICTATION" aria-labelledby="t_polish"__POLISH_CHECKED__><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                  <select name="POLISH_DICTATION" id="POLISH_DICTATION" class="visually-hidden" tabindex="-1" aria-hidden="true"><option value="false"__POLISH_OFF__>Off — raw transcription</option><option value="true"__POLISH_ON__>On — grammar, punctuation and capitalization</option></select>
+                </div>
+              </li>
+              <li class="row block">
+                <div>
+                  <label class="field-label" for="POLISH_MODEL">Polish model <span class="hint">· blank uses the AI answers model</span></label>
+                  <input type="text" name="POLISH_MODEL" id="POLISH_MODEL" value="__POLISH_MODEL__" placeholder="Blank uses the chosen AI model" spellcheck="false">
+                </div>
+              </li>
+            </ul>
+          </section>
+
+          <section class="sect" aria-labelledby="h_live">
+            <div class="sect-label"><h2 id="h_live">Live captions</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div>
+                  <label class="field-label" for="LIVE_STT_PROVIDER">Live engine</label>
                   <div class="cselect">
                     <select name="LIVE_STT_PROVIDER" id="LIVE_STT_PROVIDER">
-                      <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto - same provider and model as above</option>
-                      <option value="gemini"__LIVE_STT_GEMINI_SELECTED__>gemini - Google Gemini Live (real-time caret streaming)</option>
+                      <option value="auto"__LIVE_STT_AUTO_SELECTED__>auto - same engine and model as above</option>
+                      <option value="gemini"__LIVE_STT_GEMINI_SELECTED__>gemini - Google Gemini Live (real-time captions)</option>
                       <option value="groq"__LIVE_STT_GROQ_SELECTED__>groq - Groq, same model, on release</option>
                       <option value="openrouter"__LIVE_STT_OPENROUTER_SELECTED__>openrouter - OpenRouter, same model, on release</option>
                       <option value="whisper"__LIVE_STT_WHISPER_SELECTED__>whisper - local Whisper, on release</option>
                     </select>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
+                <p class="note">Live shows captions in the Odicto pill while you speak and inserts the final text once. The final text also stays on the clipboard.</p>
+              </li>
+            </ul>
+          </section>
         </section>
 
-        <!-- ========================================================== controls -->
-        <section class="view" id="view-controls" aria-label="Controls">
-          <div class="view-head group">
-            <h1 class="view-title">Controls</h1>
-            <p class="view-sub">Chord style sets how the dictation and AI chords behave. Live tap (F7) is always press once to start, press again to stop. While Odicto is running, F7 is captured so it does not fire in other apps.</p>
-          </div>
-          <div class="group">
-            <div class="card">
-              <div class="gearbox __HOTKEY_GEAR_CLASS__" id="gearbox">
-                <input type="hidden" name="HOTKEY_TOGGLE" id="HOTKEY_TOGGLE" value="__HOTKEY_TOGGLE_TRUE__">
-                <div class="field-label">Chord style</div>
-                <div class="segmented" role="group" aria-label="Chord style">
-                  <span class="seg-knob" aria-hidden="true"></span>
-                  <button type="button" class="gear__HOTKEY_LONG_SELECTED__" data-toggle="true" aria-pressed="__HOTKEY_LONG_ARIA__">
-                    <span class="gear-name">Long ride</span>
-                    <span class="gear-hint">tap, speak, tap again</span>
-                  </button>
-                  <button type="button" class="gear__HOTKEY_SHORT_SELECTED__" data-toggle="false" aria-pressed="__HOTKEY_SHORT_ARIA__">
-                    <span class="gear-name">Short ride</span>
-                    <span class="gear-hint">hold while you talk</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+        <!-- ========================================================= shortcuts -->
+        <section class="view" id="view-controls" aria-labelledby="h_controls">
+          <header class="page-head">
+            <h1 id="h_controls">Shortcuts</h1>
+            <p>Choose how the dictation and AI shortcuts behave, and which keys start them. Live is always tap to start, tap again to stop. While Odicto runs, its keys do not reach other apps.</p>
+          </header>
 
-            <div class="card">
-              <div class="field">
-                <label class="field-label" for="HOTKEY">Dictation hotkey</label>
-                <div class="hotkey-row">
-                  <input type="text" name="HOTKEY" id="HOTKEY" value="__HOTKEY__" readonly>
-                  <button type="button" class="btn ghost small" data-record-for="HOTKEY" onclick="recordHotkey(this)">Press key</button>
-                </div>
-              </div>
-              <div class="field">
-                <label class="field-label" for="AI_HOTKEY">AI hotkey</label>
-                <div class="hotkey-row">
-                  <input type="text" name="AI_HOTKEY" id="AI_HOTKEY" value="__AI_HOTKEY__" readonly>
-                  <button type="button" class="btn ghost small" data-record-for="AI_HOTKEY" onclick="recordHotkey(this)">Press key</button>
-                </div>
-              </div>
-              <div class="field">
-                <label class="field-label" for="LIVE_HOTKEY">Live tap-to-talk hotkey</label>
-                <div class="hotkey-row">
-                  <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="__LIVE_HOTKEY__" readonly>
-                  <button type="button" class="btn ghost small" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Press key</button>
+          <section class="sect" aria-labelledby="h_style">
+            <div class="sect-label"><h2 id="h_style">Style</h2></div>
+            <div class="group">
+              <div class="row block">
+                <div class="gearbox __HOTKEY_GEAR_CLASS__" id="gearbox">
+                  <input type="hidden" name="HOTKEY_TOGGLE" id="HOTKEY_TOGGLE" value="__HOTKEY_TOGGLE_TRUE__">
+                  <div class="segmented" role="group" aria-label="Shortcut style">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HOTKEY_LONG_SELECTED__" data-toggle="true" aria-pressed="__HOTKEY_LONG_ARIA__">
+                      <span class="gear-name">Long ride</span>
+                      <span class="gear-hint">tap, speak, tap again</span>
+                    </button>
+                    <button type="button" class="gear__HOTKEY_SHORT_SELECTED__" data-toggle="false" aria-pressed="__HOTKEY_SHORT_ARIA__">
+                      <span class="gear-name">Short ride</span>
+                      <span class="gear-hint">hold while you talk</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
+
+          <section class="sect" aria-labelledby="h_keys_set">
+            <div class="sect-label"><h2 id="h_keys_set">Keys</h2><span class="sect-note">Change, then press the new keys together</span></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3><label for="HOTKEY">Dictate</label></h3><p>Types what you say.</p></div>
+                <div class="row-ctl">
+                  <span class="keycaps" id="keycaps_row_hotkey"></span>
+                  <input type="text" name="HOTKEY" id="HOTKEY" value="__HOTKEY__" readonly class="visually-hidden" tabindex="-1">
+                  <button type="button" class="btn secondary small" data-record-for="HOTKEY" onclick="recordHotkey(this)">Change</button>
+                </div>
+              </li>
+              <li class="row">
+                <div class="row-text"><h3><label for="AI_HOTKEY">Ask AI</label></h3><p>Starts a fresh AI answer.</p></div>
+                <div class="row-ctl">
+                  <span class="keycaps" id="keycaps_row_ai"></span>
+                  <input type="text" name="AI_HOTKEY" id="AI_HOTKEY" value="__AI_HOTKEY__" readonly class="visually-hidden" tabindex="-1">
+                  <button type="button" class="btn secondary small" data-record-for="AI_HOTKEY" onclick="recordHotkey(this)">Change</button>
+                </div>
+              </li>
+              <li class="row">
+                <div class="row-text"><h3><label for="LIVE_HOTKEY">Live</label></h3><p>Live captions, inserted once on stop.</p></div>
+                <div class="row-ctl">
+                  <span class="keycaps" id="keycaps_row_live"></span>
+                  <input type="text" name="LIVE_HOTKEY" id="LIVE_HOTKEY" value="__LIVE_HOTKEY__" readonly class="visually-hidden" tabindex="-1">
+                  <button type="button" class="btn secondary small" data-record-for="LIVE_HOTKEY" onclick="recordHotkey(this)">Change</button>
+                </div>
+              </li>
+            </ul>
+            <p class="sect-foot">Avoid Alt shortcuts: browsers move focus when Alt is released.</p>
+          </section>
         </section>
 
         <!-- ============================================================ prompt -->
-        <section class="view" id="view-prompt" aria-label="AI system prompt">
-          <div class="view-head group">
-            <h1 class="view-title">AI system prompt</h1>
-            <p class="view-sub">AI-mode assistant, not the transcriber. Edit here or in <code>prompt.txt</code>. Save writes that private file (not in git) and restarts Odicto. Restore default, then Save, to use the shipped <code>prompt.txt.example</code>.</p>
-          </div>
-          <div class="group">
-            <section class="prompt-panel" aria-label="Prompt editor">
-              <div class="prompt-head">
-                <span class="prompt-title">System prompt</span>
-                <span class="prompt-chip">persona</span>
-              </div>
-              <p class="prompt-lede">Using __PROMPT_SOURCE__.</p>
-              <div id="prompt_slot">
-                <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
-              </div>
-              <div class="prompt-toolbar">
-                <button type="button" class="btn ghost small" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
-                <button type="button" class="link" onclick="restoreDefaultPrompt()">Restore default</button>
-              </div>
-            </section>
-          </div>
+        <section class="view" id="view-prompt" aria-labelledby="h_prompt">
+          <header class="page-head">
+            <h1 id="h_prompt">AI prompt</h1>
+            <p>Instructions for AI answers, not for the transcriber. Save writes your private <code>prompt.txt</code> (not in git) and restarts Odicto. Restore default, then Save, to go back to the shipped <code>prompt.txt.example</code>.</p>
+          </header>
+          <section class="sect" aria-label="Prompt editor">
+            <div class="group">
+              <section class="prompt-panel" aria-label="Prompt editor">
+                <div class="prompt-head">
+                  <span class="prompt-lede">In use: <code id="prompt_source_label">__PROMPT_SOURCE__</code></span>
+                  <span class="chip muted">persona</span>
+                </div>
+                <div id="prompt_slot">
+                  <textarea name="SYSTEM_PROMPT" id="SYSTEM_PROMPT" rows="12" spellcheck="false">__SYSTEM_PROMPT__</textarea>
+                </div>
+                <div class="prompt-toolbar">
+                  <button type="button" class="btn secondary small" id="prompt_expand" onclick="togglePromptExpand()">Expand editor</button>
+                  <button type="button" class="btn tertiary small" onclick="restoreDefaultPrompt()">Restore default</button>
+                </div>
+              </section>
+            </div>
+          </section>
         </section>
 
-        <!-- ============================================================== dock -->
-        <div class="dock">
-          <div class="dock-left">
-            <button type="submit" class="btn primary">Save settings</button>
-            <button type="button" id="test_button" class="btn ghost" onclick="testConnection()">Test connection</button>
-            <span id="test_tag" class="result-tag" role="status" aria-live="polite"></span>
-          </div>
-          <div class="dock-right">
-            <span id="dirty_chip" class="chip dirty" hidden>Unsaved changes</span>
-            <div id="status" class="status" role="status"></div>
+        <!-- ============================================================ system -->
+        <section class="view" id="view-system" aria-labelledby="h_system">
+          <header class="page-head">
+            <h1 id="h_system">System</h1>
+            <p>How Odicto runs on this computer.</p>
+          </header>
+
+          <section class="sect" id="admin_section"__ADMIN_HIDDEN__ aria-labelledby="h_admin">
+            <div class="sect-label"><h2 id="h_admin">Administrator windows</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3 id="t_admin">Work in admin windows</h3><p>Lets Odicto hear its shortcuts while an Administrator window, such as an admin terminal, is in front. Odicto then starts with Windows through its own task, without a prompt. Windows asks for approval once when you change this.</p></div>
+                <div class="row-ctl">
+                  <label class="switch" id="admin_switch"><input type="checkbox" id="admin_toggle" data-nodirty="true" aria-labelledby="t_admin"__ADMIN_CHECKED__><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+              </li>
+              <li class="row" id="admin_note" hidden><p class="note" id="admin_note_text"></p></li>
+            </ul>
+          </section>
+
+          <section class="sect" aria-labelledby="h_about">
+            <div class="sect-label"><h2 id="h_about">About</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3>Odicto __APP_VERSION__</h3><p>Release notes and downloads are on GitHub.</p></div>
+                <div class="row-ctl"><a class="btn secondary small" href="https://github.com/Gargeya-Grey/Odicto/releases" target="_blank" rel="noopener noreferrer">What's new</a></div>
+              </li>
+              <li class="row">
+                <div class="row-text"><h3>This setup page</h3><p>Runs only while this tab is open. Close the tab when you are done; Odicto keeps running.</p></div>
+              </li>
+            </ul>
+          </section>
+
+          <section class="sect" aria-labelledby="h_motion">
+            <div class="sect-label"><h2 id="h_motion">Motion on this page</h2></div>
+            <div class="group">
+              <div class="row block">
+                <div class="segmented" id="motion_seg" role="group" aria-label="Motion amount" style="--n:3">
+                  <span class="seg-knob" aria-hidden="true"></span>
+                  <button type="button" data-motion-level="off" aria-pressed="false">Off</button>
+                  <button type="button" data-motion-level="reduced" aria-pressed="false">Reduced</button>
+                  <button type="button" data-motion-level="full" aria-pressed="true">Full</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="sect" aria-labelledby="h_reset">
+            <div class="sect-label"><h2 id="h_reset">Reset</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3>Reset all settings</h3><p>Clears saved API keys, models and shortcuts, and restores the shipped prompt.</p></div>
+                <div class="row-ctl"><button type="button" class="btn danger small" id="reset_button" onclick="resetSettings()">Reset</button></div>
+              </li>
+            </ul>
+          </section>
+        </section>
+
+        <!-- =========================================================== savebar -->
+        <div class="savebar" id="savebar" hidden>
+          <div class="savebar-inner">
+            <span class="savebar-text"><span class="dot"></span><span id="dirty_chip">Unsaved changes</span><span class="savebar-sub">· Save restarts Odicto</span></span>
+            <button type="button" class="btn tertiary" onclick="discardChanges()">Discard</button>
+            <button type="submit" class="btn primary" id="save_button">Save</button>
           </div>
         </div>
 
         <div id="prompt_overlay" class="prompt-overlay" hidden>
           <div class="prompt-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="prompt_overlay_title">
             <div class="prompt-overlay-head">
-              <span id="prompt_overlay_title">AI system prompt</span>
-              <button type="button" class="btn quiet small" id="prompt_overlay_close" onclick="togglePromptExpand()">Close</button>
+              <span id="prompt_overlay_title">AI prompt</span>
+              <button type="button" class="btn secondary small" id="prompt_overlay_close" onclick="togglePromptExpand()">Close</button>
             </div>
             <div id="prompt_overlay_body"></div>
           </div>
@@ -1587,6 +1283,7 @@ input:disabled, .cselect-trigger[aria-disabled="true"] { opacity: 0.55; cursor: 
 </div>
 
 <div class="toast-region" id="toast_region" role="status" aria-live="polite">__SERVER_STATUS__</div>
+<div class="offline" id="offline_banner" hidden><div class="offline-inner"><span class="dot"></span><span>This setup page has closed. Run <code>setup.bat</code> (or <code>setup.sh</code>) to open it again. Odicto keeps running.</span></div></div>
 
 <script>
 var DEFAULT_SYSTEM_PROMPT = __DEFAULT_SYSTEM_PROMPT_JSON__;
@@ -1596,7 +1293,7 @@ var OPENROUTER_REASONING = {};
 var OPENROUTER_NAMES = {};
 var OPENROUTER_ALL_EFFORTS = ['none','minimal','low','medium','high','xhigh','max'];
 var PROVIDER_LABELS = {
-  meta: 'Meta API',
+  meta: 'Meta',
   openrouter: 'OpenRouter',
   gemini: 'Google Gemini',
   ollama: 'Ollama',
@@ -1609,8 +1306,13 @@ var PROVIDER_KEY_IDS = {
   gemini: 'GEMINI_API_KEY',
   groq: 'GROQ_API_KEY'
 };
+var KEY_LABELS = { GROQ_API_KEY: 'Groq', GEMINI_API_KEY: 'Gemini', OPENROUTER_API_KEY: 'OpenRouter', META_API_KEY: 'Meta' };
 
 function el(id) { return document.getElementById(id); }
+function pageToken() {
+  var meta = document.querySelector('meta[name="odicto-token"]');
+  return meta ? meta.content : '';
+}
 
 // ---------------------------------------------------------------- motion
 function applyMotion(level) {
@@ -1618,7 +1320,12 @@ function applyMotion(level) {
   document.documentElement.setAttribute('data-motion', level);
   var buttons = document.querySelectorAll('[data-motion-level]');
   for (var i = 0; i < buttons.length; i++) {
-    buttons[i].setAttribute('aria-pressed', buttons[i].getAttribute('data-motion-level') === level ? 'true' : 'false');
+    var on = buttons[i].getAttribute('data-motion-level') === level;
+    buttons[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      var seg = el('motion_seg');
+      if (seg) seg.style.setProperty('--i', String(i));
+    }
   }
   try { localStorage.setItem('odicto-setup-motion', level); } catch (e) {}
 }
@@ -1651,14 +1358,22 @@ function showView(name) {
   }
   moveNavPill();
   if (name === 'prompt') setTimeout(syncPromptPanelHeight, 0);
+  try { history.replaceState(null, '', '#' + name); } catch (e) {}
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
-function moveNavPill() {
+function moveNavPill(instant) {
   var pill = document.querySelector('.nav-pill');
   var active = document.querySelector('.nav-item[aria-current="true"]');
   if (!pill || !active) return;
+  // First paint and layout changes snap; only a click slides the pill.
+  if (instant) pill.style.transition = 'none';
   pill.style.height = active.offsetHeight + 'px';
-  pill.style.transform = 'translateY(' + active.offsetTop + 'px)';
+  pill.style.width = active.offsetWidth + 'px';
+  pill.style.transform = 'translate(' + active.offsetLeft + 'px,' + active.offsetTop + 'px)';
+  if (instant) { void pill.offsetWidth; pill.style.transition = ''; }
+  if (active.scrollIntoView && window.innerWidth <= 980) {
+    active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }
 function initNav() {
   var items = document.querySelectorAll('.nav-item');
@@ -1673,6 +1388,15 @@ function initNav() {
       m.addEventListener('click', function () { showView(m.getAttribute('data-goto')); });
     })(meters[j]);
   }
+  var start = (location.hash || '').replace('#', '');
+  if (start && el('view-' + start)) showView(start);
+  moveNavPill(true);
+  // The page font changes item widths when it arrives.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { moveNavPill(true); });
+  window.addEventListener('hashchange', function () {
+    var name = (location.hash || '').replace('#', '');
+    if (name && name !== CURRENT_VIEW && el('view-' + name)) showView(name);
+  });
 }
 
 // -------------------------------------------------------- custom selects
@@ -1710,6 +1434,21 @@ function refreshCustomSelect(sel) {
   entry.valueEl.className = 'cselect-value' + (isPlaceholder ? ' placeholder' : '');
   if (entry.wrap.classList.contains('open')) renderCustomOptions(entry, true);
 }
+function svgIcon(cls, d, width) {
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', cls);
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', width || '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', d);
+  svg.appendChild(path);
+  return svg;
+}
 function renderCustomOptions(entry, keepActive) {
   var list = entry.list;
   list.innerHTML = '';
@@ -1731,19 +1470,9 @@ function renderCustomOptions(entry, keepActive) {
       if (keepActive && opt.value === entry.activeValue) item.className += ' active';
       var label = document.createElement('span');
       label.textContent = opt.textContent;
+      if (opt.title) item.title = opt.title;
       item.appendChild(label);
-      var check = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      check.setAttribute('class', 'check');
-      check.setAttribute('viewBox', '0 0 24 24');
-      check.setAttribute('fill', 'none');
-      check.setAttribute('stroke', 'currentColor');
-      check.setAttribute('stroke-width', '2.4');
-      check.setAttribute('stroke-linecap', 'round');
-      check.setAttribute('stroke-linejoin', 'round');
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M5 13l4 4L19 7');
-      check.appendChild(path);
-      item.appendChild(check);
+      item.appendChild(svgIcon('check', 'M20 6 9 17l-5-5', '2.2'));
       item.addEventListener('click', function () { chooseOption(entry, opt); });
       list.appendChild(item);
     })(opt);
@@ -1754,14 +1483,16 @@ function renderCustomOptions(entry, keepActive) {
     empty.textContent = query ? ('No matches for "' + raw.trim() + '".') : 'No options.';
     list.appendChild(empty);
   }
+  var active = list.querySelector('.cselect-option.active');
+  if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
 }
 function menuSpaceBelow(entry) {
   var rect = entry.trigger.getBoundingClientRect();
   var space = window.innerHeight - rect.bottom - 12;
-  var dock = document.querySelector('.dock');
-  if (dock) {
-    var dRect = dock.getBoundingClientRect();
-    space = Math.min(space, dRect.top - rect.bottom - 8);
+  var bar = el('savebar');
+  if (bar && !bar.hidden) {
+    var bRect = bar.getBoundingClientRect();
+    space = Math.min(space, bRect.top - rect.bottom - 8);
   }
   return space;
 }
@@ -1796,7 +1527,6 @@ function openCustomSelect(entry) {
     if (CUSTOM_SELECTS[i] !== entry) closeCustomSelect(CUSTOM_SELECTS[i], true);
   }
   entry.activeValue = entry.sel.value;
-  entry.wrap.classList.remove('closing');
   entry.wrap.classList.add('open');
   entry.trigger.setAttribute('aria-expanded', 'true');
   entry.menu.hidden = false;
@@ -1807,8 +1537,9 @@ function openCustomSelect(entry) {
     search.className = 'cselect-search';
     var input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Type to search...';
+    input.placeholder = 'Search';
     input.setAttribute('aria-label', 'Search options');
+    input.setAttribute('data-nodirty', 'true'); // filtering a list changes no setting
     search.appendChild(input);
     entry.menu.appendChild(search);
     entry.filterInput = input;
@@ -1847,8 +1578,6 @@ function closeCustomSelect(entry, immediate) {
   entry.trigger.setAttribute('aria-expanded', 'false');
   entry.menu.hidden = true;
   entry.wrap.classList.remove('open');
-  entry.wrap.classList.remove('closing');
-  if (!immediate) entry.wrap.classList.add('closing');
 }
 function moveCustomActive(entry, step) {
   var visible = entry.visible || [];
@@ -1868,29 +1597,23 @@ function initCustomSelect() {
     (function (wrap) {
       var sel = wrap.querySelector('select');
       if (!sel) return;
-      if (sel.id !== 'STT_PROVIDER' && sel.id !== 'LIVE_STT_PROVIDER') {
-        sel.setAttribute('aria-label', sel.id.replace(/_/g, ' '));
-      }
+      sel.tabIndex = -1;
+      sel.setAttribute('aria-hidden', 'true');
       var trigger = document.createElement('button');
       trigger.type = 'button';
       trigger.className = 'cselect-trigger';
       trigger.setAttribute('aria-haspopup', 'listbox');
       trigger.setAttribute('aria-expanded', 'false');
+      var label = document.querySelector('label[for="' + sel.id + '"]');
+      if (label) {
+        if (!label.id) label.id = 'lbl_' + sel.id;
+        trigger.setAttribute('aria-labelledby', label.id + ' ' + sel.id + '_value');
+      }
       var valueEl = document.createElement('span');
       valueEl.className = 'cselect-value';
+      valueEl.id = sel.id + '_value';
       trigger.appendChild(valueEl);
-      var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      chevron.setAttribute('class', 'chevron');
-      chevron.setAttribute('viewBox', '0 0 24 24');
-      chevron.setAttribute('fill', 'none');
-      chevron.setAttribute('stroke', 'currentColor');
-      chevron.setAttribute('stroke-width', '2');
-      chevron.setAttribute('stroke-linecap', 'round');
-      chevron.setAttribute('stroke-linejoin', 'round');
-      var chevPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      chevPath.setAttribute('d', 'M6 9l6 6 6-6');
-      chevron.appendChild(chevPath);
-      trigger.appendChild(chevron);
+      trigger.appendChild(svgIcon('chevron', 'm6 9 6 6 6-6', '2'));
       var menu = document.createElement('div');
       menu.className = 'cselect-menu';
       menu.setAttribute('role', 'listbox');
@@ -1898,6 +1621,7 @@ function initCustomSelect() {
       menu.addEventListener('click', function (e) { e.stopPropagation(); });
       wrap.appendChild(trigger);
       wrap.appendChild(menu);
+      if (label) label.addEventListener('click', function (e) { e.preventDefault(); trigger.focus(); });
       var entry = { wrap: wrap, sel: sel, trigger: trigger, valueEl: valueEl, menu: menu, activeValue: '', filterInput: null, list: null, visible: [] };
       CUSTOM_SELECTS.push(entry);
       trigger.addEventListener('click', function (e) {
@@ -1950,6 +1674,52 @@ function modelOptionOrder(p, ids) {
   return ids.slice().reverse();
 }
 
+// -------------------------------------------------------------- switches
+function initSwitches() {
+  var boxes = document.querySelectorAll('input[type="checkbox"][data-select]');
+  for (var i = 0; i < boxes.length; i++) {
+    (function (box) {
+      var sel = el(box.getAttribute('data-select'));
+      if (!sel) return;
+      box.checked = sel.value === 'true';
+      box.addEventListener('change', function () {
+        sel.value = box.checked ? 'true' : 'false';
+        updateMeters();
+      });
+    })(boxes[i]);
+  }
+}
+
+// ---------------------------------------------------------------- keys
+function keySaved(id) {
+  var input = el(id);
+  return !!(input && input.getAttribute('data-saved') === 'true');
+}
+function updateKeyChips() {
+  Object.keys(KEY_LABELS).forEach(function (id) {
+    var input = el(id);
+    var chip = el('key_chip_' + id);
+    if (!input || !chip) return;
+    var saved = keySaved(id);
+    var typed = input.value && input.value !== input.defaultValue;
+    if (typed && saved) { chip.className = 'chip warn'; chip.textContent = 'Replaces saved key'; }
+    else if (typed) { chip.className = 'chip warn'; chip.textContent = 'Not saved yet'; }
+    else if (input.value) { chip.className = 'chip'; chip.textContent = 'Saved'; }
+    else { chip.className = 'chip muted'; chip.textContent = 'Not set'; }
+  });
+}
+function initKeyInputs() {
+  Object.keys(KEY_LABELS).forEach(function (id) {
+    var input = el(id);
+    if (!input) return;
+    input.addEventListener('focus', function () {
+      if (keySaved(id) && input.value === input.defaultValue) input.select();
+    });
+    input.addEventListener('input', function () { updateKeyChips(); updateMeters(); });
+  });
+  updateKeyChips();
+}
+
 // -------------------------------------------------------------- provider
 function providerKeySaved(provider) {
   var id = PROVIDER_KEY_IDS[provider];
@@ -1973,10 +1743,26 @@ function updateProviderCards() {
       keyLabel.textContent = saved ? 'key saved' : 'no key';
     }
   }
+  var hint = el('key_hint_ai');
+  if (hint) {
+    var id = PROVIDER_KEY_IDS[current];
+    hint.innerHTML = '';
+    if (id && !providerKeySaved(current)) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'inline-link';
+      b.textContent = 'Add a ' + (KEY_LABELS[id] || '') + ' key';
+      b.addEventListener('click', function () { showView('connections'); setTimeout(function () { el(id).focus(); }, 60); });
+      hint.appendChild(b);
+    }
+  }
 }
 function selectProvider(value) {
   var hidden = el('LLM_PROVIDER');
-  if (hidden) hidden.value = value;
+  if (hidden && hidden.value !== value) {
+    hidden.value = value;
+    markDirty();
+  }
   showProvider(value);
 }
 function initProviderCards() {
@@ -2006,12 +1792,11 @@ function showProvider(v) {
   ['meta','openrouter','gemini','ollama','groq'].forEach(function(id) {
     var node = el('field-' + id);
     if (node) node.classList.toggle('active', id === v);
-    if (node) node.style.display = (id === v) ? '' : 'none';
   });
   var noneNote = el('none-note');
   if (noneNote) noneNote.classList.toggle('show', v === 'none');
   var secAi = el('sec-ai');
-  if (secAi) secAi.style.display = (v === 'none') ? 'none' : '';
+  if (secAi) secAi.hidden = (v === 'none');
   var tb = el('test_button');
   if (tb) tb.disabled = (v === 'none');
   updateProviderCards();
@@ -2023,6 +1808,7 @@ function showProvider(v) {
 function restoreDefaultPrompt() {
   var node = el('SYSTEM_PROMPT');
   node.value = DEFAULT_SYSTEM_PROMPT;
+  markDirty();
 }
 function initModelSelects() {
   var defaultLabels = {
@@ -2060,6 +1846,7 @@ function syncModelSelect(p) {
   if (val === '__custom__') { if (cust) { cust.style.display = ''; cust.focus(); } if (hid && cust) hid.value = cust.value; }
   else { if (cust) cust.style.display = 'none'; if (hid) hid.value = val; }
   if (p === 'openrouter') filterOpenrouterEffort();
+  _renderChips(p);
   refreshAllCustomSelects();
   updateMeters();
 }
@@ -2070,15 +1857,15 @@ function syncCustomModel(p) {
   if (p === 'openrouter') filterOpenrouterEffort();
   updateMeters();
 }
+var EFFORT_FIELDS = {
+  meta: ['meta_reasoning_select','META_REASONING_EFFORT'],
+  gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'],
+  openrouter: ['openrouter_reasoning_select','OPENROUTER_REASONING_EFFORT'],
+  openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
+};
 function initEffortSelects() {
-  var map = {
-    meta: ['meta_reasoning_select','META_REASONING_EFFORT'],
-    gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'],
-    openrouter: ['openrouter_reasoning_select','OPENROUTER_REASONING_EFFORT'],
-    openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
-  };
-  Object.keys(map).forEach(function(p) {
-    var sel = el(map[p][0]), hid = el(map[p][1]);
+  Object.keys(EFFORT_FIELDS).forEach(function(p) {
+    var sel = el(EFFORT_FIELDS[p][0]), hid = el(EFFORT_FIELDS[p][1]);
     if (sel && hid && hid.value) {
       var ok = [].slice.call(sel.options).some(function(o){ return o.value === hid.value; });
       if (ok) sel.value = hid.value;
@@ -2152,7 +1939,7 @@ function filterOpenrouterEffort() {
   }
   if (note) {
     if (!model) note.textContent = 'Default is no thinking. Allowed levels load from OpenRouter for the selected model.';
-    else if (!spec) note.textContent = 'Catalog has no reasoning info for this slug yet - Odicto still skips illegal none/minimal on Test.';
+    else if (!spec) note.textContent = 'The catalog has no reasoning data for this model yet. Test still skips levels the model rejects.';
     else if (spec.mandatory) note.textContent = 'This model requires thinking. Allowed: ' + allowed.join(', ') + '.';
     else note.textContent = 'Allowed: ' + allowed.join(', ') + '.';
   }
@@ -2183,13 +1970,7 @@ function loadOpenrouterCatalog() {
   });
 }
 function syncEffort(p) {
-  var map = {
-    meta: ['meta_reasoning_select','META_REASONING_EFFORT'],
-    gemini: ['gemini_thinking_select','GEMINI_THINKING_LEVEL'],
-    openrouter: ['openrouter_reasoning_select','OPENROUTER_REASONING_EFFORT'],
-    openrouter_sort: ['openrouter_sort_select','OPENROUTER_PROVIDER_SORT']
-  };
-  var pair = map[p]; if (!pair) return;
+  var pair = EFFORT_FIELDS[p]; if (!pair) return;
   var sel = el(pair[0]), hid = el(pair[1]);
   if (sel && hid) hid.value = sel.value;
   refreshAllCustomSelects();
@@ -2204,8 +1985,8 @@ function syncTranscribeMode() {
   if (hid) hid.value = on ? 'smart' : 'verbatim';
   var v = el('mode_label_verbatim');
   var s = el('mode_label_smart');
-  if (v) v.className = 'mode-label' + (on ? '' : ' on');
-  if (s) s.className = 'mode-label' + (on ? ' on' : '');
+  if (v) v.hidden = !!on;
+  if (s) s.hidden = !on;
   updateMeters();
 }
 function initTranscribeMode() {
@@ -2214,12 +1995,13 @@ function initTranscribeMode() {
   if (tog && hid) tog.checked = (hid.value || 'smart') !== 'verbatim';
   syncTranscribeMode();
 }
+var STT_KEYS = { groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
 function syncSttProvider() {
   var sel = el('STT_PROVIDER');
   var v = sel ? sel.value : 'whisper';
   var show = {
     'stt-gemini-fields': (v === 'gemini' || v === 'auto'),
-    'stt-groq-fields': v === 'groq' || (el('LLM_PROVIDER') || {}).value === 'groq',
+    'stt-groq-fields': v === 'groq',
     'stt-openrouter-fields': v === 'openrouter'
   };
   Object.keys(show).forEach(function(id) {
@@ -2228,7 +2010,47 @@ function syncSttProvider() {
   });
   var note = el('stt-whisper-fallback-note');
   if (note) note.hidden = (v === 'whisper');
+  var choices = document.querySelectorAll('.choice[data-stt]');
+  for (var i = 0; i < choices.length; i++) {
+    var value = choices[i].getAttribute('data-stt');
+    var on = value === v;
+    choices[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    choices[i].tabIndex = on ? 0 : -1;
+    var state = el('stt_state_' + value);
+    if (state) {
+      var keyId = STT_KEYS[value];
+      if (keyId && !(el(keyId) || {}).value) { state.className = 'chip warn'; state.textContent = 'Needs a key'; }
+      else { state.className = ''; state.textContent = ''; }
+    }
+  }
   updateMeters();
+}
+function setSttProvider(value) {
+  var sel = el('STT_PROVIDER');
+  if (!sel || sel.value === value) return;
+  sel.value = value;
+  markDirty();
+  syncSttProvider();
+}
+function initSttChoices() {
+  var choices = document.querySelectorAll('.choice[data-stt]');
+  for (var i = 0; i < choices.length; i++) {
+    (function (choice) {
+      choice.addEventListener('click', function () { setSttProvider(choice.getAttribute('data-stt')); });
+      choice.addEventListener('keydown', function (e) {
+        var keys = ['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft'];
+        if (keys.indexOf(e.key) < 0) return;
+        e.preventDefault();
+        var all = document.querySelectorAll('.choice[data-stt]');
+        var idx = 0;
+        for (var j = 0; j < all.length; j++) { if (all[j] === choice) idx = j; }
+        var forward = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+        var next = all[(idx + (forward ? 1 : -1) + all.length) % all.length];
+        setSttProvider(next.getAttribute('data-stt'));
+        next.focus();
+      });
+    })(choices[i]);
+  }
 }
 
 // ----------------------------------------------------------- chord style
@@ -2247,6 +2069,12 @@ function setHotkeyToggle(on) {
     gears[i].classList.toggle('selected', selected);
     gears[i].setAttribute('aria-pressed', selected ? 'true' : 'false');
   }
+  var style = el('howto_style');
+  if (style) style.textContent = on ? 'Long ride: tap, speak, tap again' : 'Short ride: hold while you talk';
+  var dictate = el('howto_dictate');
+  if (dictate) dictate.textContent = on
+    ? 'Tap, speak, then tap again. Odicto types your words where the cursor is.'
+    : 'Hold while you speak, then let go. Odicto types your words where the cursor is.';
   updateMeters();
 }
 function initGearbox() {
@@ -2257,6 +2085,7 @@ function initGearbox() {
   for (var i = 0; i < gears.length; i++) {
     gears[i].addEventListener('click', function() {
       setHotkeyToggle(this.getAttribute('data-toggle') === 'true');
+      markDirty();
     });
   }
 }
@@ -2264,8 +2093,7 @@ function initGearbox() {
 // -------------------------------------------------------- model history
 function _historyTokens(raw){ return (raw||'').split(',').map(function(s){return s.trim();}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}); }
 function _providerHistory(provider){
-  var id = provider.toUpperCase() + '_MODEL_HISTORY';
-  var hid = el(id);
+  var hid = el(provider.toUpperCase() + '_MODEL_HISTORY');
   return _historyTokens(hid ? hid.value : '');
 }
 function _writeHistory(provider, list){
@@ -2285,10 +2113,21 @@ function _renderChips(provider){
     chip.className = 'model-chip' + (m === curVal ? ' active' : '');
     chip.title = m;
     var label = document.createElement('span'); label.textContent = m; chip.appendChild(label);
-    var x = document.createElement('button'); x.type='button'; x.setAttribute('aria-label','Remove '+m); x.textContent='\u00d7';
-    x.addEventListener('click', function(e){ e.stopPropagation(); removeModel(provider, m); });
+    var x = document.createElement('button'); x.type='button'; x.setAttribute('aria-label','Remove '+m); x.textContent='×';
+    x.addEventListener('click', function(e){ e.stopPropagation(); removeModel(provider, m); markDirty(); });
     chip.appendChild(x);
-    chip.addEventListener('click', function(){ var sel=el(provider+'_model_select'); var hid=el(curId); if(hid) hid.value=m; if(sel) { var has=[].slice.call(sel.options).some(function(o){return o.value===m;}); if(!has){ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } sel.value=m; syncModelSelect(provider); _renderChips(provider);} });
+    chip.addEventListener('click', function(){
+      var sel = el(provider + '_model_select');
+      var hid = el(curId);
+      if (hid) hid.value = m;
+      if (sel) {
+        var has = [].slice.call(sel.options).some(function(o){ return o.value === m; });
+        if (!has) { var o = document.createElement('option'); o.value = m; o.textContent = m; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); }
+        sel.value = m;
+        syncModelSelect(provider);
+        markDirty();
+      }
+    });
     wrap.appendChild(chip);
   });
 }
@@ -2308,7 +2147,7 @@ function removeModel(provider, model){
 function rememberModel(provider, model){
   if(!model) return;
   var list=_providerHistory(provider);
-  if(list.indexOf(model)===-1){ list.push(model); _writeHistory(provider, list); var sel=el(provider+'_model_select'); if(sel && ![].slice.call(sel.options).some(function(o){return o.value===model;})){ var o=document.createElement('option'); o.value=model; o.textContent=model; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } _renderChips(provider); }
+  if(list.indexOf(model)===-1){ list.push(model); _writeHistory(provider, list); var sel=el(provider+'_model_select'); if(sel && ![].slice.call(sel.options).some(function(o){return o.value===model;})){ var o=document.createElement('option'); o.value=model; o.textContent=model; sel.insertBefore(o, sel.querySelector('option[value="__custom__"]')); } _renderChips(provider); markDirty(); }
   refreshAllCustomSelects();
 }
 
@@ -2331,9 +2170,14 @@ function setMeter(meter, value, sub, tone) {
     subEl.classList.add('swapping');
   }
   if (dotEl) dotEl.className = 'dot' + (tone ? ' ' + tone : '');
-  if (navDot) navDot.className = 'nav-dot' + (tone ? ' ' + tone : '');
+  if (navDot) navDot.className = 'nav-dot' + (tone === 'warn' ? ' warn' : '');
 }
 function updateMeters() {
+  var savedKeys = Object.keys(KEY_LABELS).filter(function (id) { return !!(el(id) || {}).value; });
+  setMeter('keys', savedKeys.length + ' of ' + Object.keys(KEY_LABELS).length + ' keys',
+    savedKeys.length ? savedKeys.map(function (id) { return KEY_LABELS[id]; }).join(', ') : 'No cloud keys yet',
+    savedKeys.length ? 'ok' : '');
+
   var hidden = el('LLM_PROVIDER');
   var provider = hidden ? (hidden.value || 'none') : 'none';
   var modelId = '';
@@ -2343,22 +2187,22 @@ function updateMeters() {
     if (!modelId) modelId = MODEL_DEFAULTS[provider] || '';
   }
   if (provider === 'none') {
-    setMeter('ai', 'None', 'raw dictation', '');
+    setMeter('ai', 'Off', 'raw dictation only', '');
   } else if (providerKeySaved(provider) || provider === 'ollama') {
     setMeter('ai', PROVIDER_LABELS[provider] || provider, modelId, 'ok');
   } else {
-    setMeter('ai', PROVIDER_LABELS[provider] || provider, 'key needed', 'warn');
+    setMeter('ai', PROVIDER_LABELS[provider] || provider, 'needs a key', 'warn');
   }
 
   var sttSel = el('STT_PROVIDER');
   var stt = sttSel ? sttSel.value : 'whisper';
   var mode = (el('GEMINI_TRANSCRIBE_MODE') || {}).value || 'smart';
   var sttLabels = {
-    whisper: 'Whisper (local)',
+    whisper: 'Whisper on this computer',
     gemini: 'Gemini Transcribe',
-    groq: 'Groq',
+    groq: 'Groq Whisper',
     openrouter: 'OpenRouter',
-    auto: 'Auto'
+    auto: 'Automatic'
   };
   var sttModel = '';
   if (stt === 'whisper') sttModel = 'whisper ' + ((el('WHISPER_MODEL_SIZE') || {}).value || '');
@@ -2366,46 +2210,91 @@ function updateMeters() {
   else if (stt === 'openrouter') sttModel = (el('OPENROUTER_STT_MODEL') || {}).value || '';
   else sttModel = stt + ' - ' + mode;
   var sttNeedsKey = (stt === 'gemini' && !providerKeySaved('gemini'))
-    || (stt === 'groq' && !((el('GROQ_API_KEY') || {}).value))
+    || (stt === 'groq' && !providerKeySaved('groq'))
     || (stt === 'openrouter' && !providerKeySaved('openrouter'));
-  setMeter('speech', sttLabels[stt] || stt, sttModel, sttNeedsKey ? 'warn' : 'ok');
+  setMeter('speech', sttLabels[stt] || stt, sttNeedsKey ? 'needs a key' : sttModel, sttNeedsKey ? 'warn' : 'ok');
 
-  var chord = (el('HOTKEY') || {}).value || '';
   var toggle = (el('HOTKEY_TOGGLE') || {}).value || 'true';
-  setMeter('controls', chord, toggle.toLowerCase() === 'false' ? 'Short ride' : 'Long ride', 'ok');
+  setMeter('controls', keyLabel((el('HOTKEY') || {}).value || ''), toggle.toLowerCase() === 'false' ? 'Short ride' : 'Long ride', 'ok');
 
   var srcEl = el('prompt_source_label');
   var src = srcEl ? srcEl.textContent : '';
   setMeter('prompt', src === 'prompt.txt' ? 'Custom' : 'Shipped default', src || 'prompt.txt.example', src === 'prompt.txt' ? 'ok' : 'info');
   updateProviderCards();
 }
+var KEY_NAMES = { ctrl: 'Ctrl', control: 'Ctrl', shift: 'Shift', alt: 'Alt', cmd: 'Cmd', command: 'Cmd', windows: 'Win', win: 'Win', grave: '`', space: 'Space', esc: 'Esc', enter: 'Enter', tab: 'Tab', up: '↑', down: '↓', left: '←', right: '→' };
+function keyName(part) {
+  var k = (part || '').toLowerCase();
+  if (KEY_NAMES[k]) return KEY_NAMES[k];
+  if (/^f\d+$/.test(k)) return k.toUpperCase();
+  if (k.length === 1) return k.toUpperCase();
+  return k.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+}
+function keyLabel(chord) {
+  return (chord || '').split('+').map(function (s) { return s.trim(); }).filter(Boolean).map(keyName).join(' + ');
+}
 function renderKeycaps(targetId, chord) {
   var wrap = el(targetId);
   if (!wrap) return;
   wrap.innerHTML = '';
   var parts = (chord || '').split('+').map(function(s){ return s.trim(); }).filter(Boolean);
+  if (!parts.length) {
+    var none = document.createElement('span');
+    none.className = 'chip muted';
+    none.textContent = 'Not set';
+    wrap.appendChild(none);
+    return;
+  }
   parts.forEach(function(part) {
     var kbd = document.createElement('kbd');
-    kbd.textContent = part;
+    kbd.textContent = keyName(part);
+    kbd.title = part;
+    if (/^[^A-Za-z0-9]$/.test(kbd.textContent)) kbd.className = 'sym';
     wrap.appendChild(kbd);
   });
 }
 function updateKeycaps() {
-  renderKeycaps('keycaps_hotkey', (el('HOTKEY') || {}).value || '');
-  renderKeycaps('keycaps_ai', (el('AI_HOTKEY') || {}).value || '');
-  renderKeycaps('keycaps_live', (el('LIVE_HOTKEY') || {}).value || '');
+  var pairs = [['HOTKEY', 'hotkey'], ['AI_HOTKEY', 'ai'], ['LIVE_HOTKEY', 'live']];
+  pairs.forEach(function (pair) {
+    var chord = (el(pair[0]) || {}).value || '';
+    renderKeycaps('keycaps_' + pair[1], chord);
+    renderKeycaps('keycaps_row_' + pair[1], chord);
+  });
 }
 
 // ------------------------------------------------------------- dirty flag
+var DIRTY = false;
 function markDirty() {
-  var chip = el('dirty_chip');
-  if (chip) chip.hidden = false;
+  if (DIRTY) return;
+  DIRTY = true;
+  var bar = el('savebar');
+  if (bar) bar.hidden = false;
+}
+function discardChanges() {
+  DIRTY = false;
+  location.reload();
 }
 function initDirtyTracking() {
   var form = el('setupForm');
   if (!form) return;
-  form.addEventListener('input', markDirty);
-  form.addEventListener('change', markDirty);
+  var handler = function (e) {
+    if (e.target && e.target.getAttribute && e.target.getAttribute('data-nodirty')) return;
+    markDirty();
+  };
+  form.addEventListener('input', handler);
+  form.addEventListener('change', handler);
+  form.addEventListener('submit', function () {
+    DIRTY = false;
+    // The response page opens on the same section.
+    form.action = '/save#' + CURRENT_VIEW;
+    var save = el('save_button');
+    if (save) { save.disabled = true; save.innerHTML = '<span class="spinner"></span> Saving'; }
+  });
+  window.addEventListener('beforeunload', function (e) {
+    if (!DIRTY) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
 }
 
 // ---------------------------------------------------------------- key reveal
@@ -2467,7 +2356,7 @@ async function startPull() {
     _pullTimer = setTimeout(pollPullStatus, 600);
   } catch (e) {
     btn.disabled = false;
-    node.textContent = 'Could not reach the local server.';
+    node.textContent = 'Could not reach the setup page server.';
   }
 }
 
@@ -2503,13 +2392,11 @@ function syncPromptPanelHeight() {
   var view = el('view-prompt');
   var ta = el('SYSTEM_PROMPT');
   if (!view || !ta || !view.classList.contains('active')) return;
-  var top = ta.getBoundingClientRect().top;
-  var reserve = 28;
+  var top = ta.getBoundingClientRect().top + window.scrollY;
+  var reserve = 96;
   var toolbar = document.querySelector('.prompt-toolbar');
-  if (toolbar) reserve += toolbar.offsetHeight + 14;
-  var dock = document.querySelector('.dock');
-  if (dock) reserve += dock.offsetHeight;
-  ta.style.height = Math.max(240, Math.round(window.innerHeight - top - reserve)) + 'px';
+  if (toolbar) reserve += toolbar.offsetHeight;
+  ta.style.height = Math.max(260, Math.round(window.innerHeight - top - reserve)) + 'px';
 }
 
 // ------------------------------------------------------------ hotkey capture
@@ -2539,6 +2426,7 @@ function recordHotkey(btn) {
   hotkeyRecorder = {
     btn: btn,
     targetId: btn.getAttribute('data-record-for'),
+    previous: el(btn.getAttribute('data-record-for')).value,
     modifiers: [],
     primary: null,
     pressed: new Set(),
@@ -2546,8 +2434,9 @@ function recordHotkey(btn) {
     keyup: null
   };
   btn.classList.add('recording');
-  btn.textContent = 'Press now...';
+  btn.textContent = 'Press keys...';
   el(hotkeyRecorder.targetId).value = '';
+  updateKeycaps();
 
   hotkeyRecorder.keydown = function(e) {
     e.preventDefault();
@@ -2594,12 +2483,16 @@ function stopHotkeyRecording(cancel) {
   document.removeEventListener('keydown', rec.keydown, true);
   document.removeEventListener('keyup', rec.keyup, true);
   rec.btn.classList.remove('recording');
-  rec.btn.textContent = 'Press key';
-  if (cancel) {
-    el(rec.targetId).value = '';
+  rec.btn.textContent = 'Change';
+  var input = el(rec.targetId);
+  if (cancel || !rec.primary) {
+    input.value = rec.previous;
+  } else if (input.value !== rec.previous) {
+    markDirty();
   }
   hotkeyRecorder = null;
   updateKeycaps();
+  updateMeters();
 }
 
 // ------------------------------------------------------------ status + test
@@ -2619,43 +2512,41 @@ function setTestTag(kind, text) {
   tag.innerHTML = icon + (text || '');
   tag.title = text || '';
 }
+function dismissLater(node) {
+  setTimeout(function() {
+    node.classList.add('leaving');
+    setTimeout(function() {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }, 200);
+  }, 7000);
+}
 function toast(kind, text) {
   var region = el('toast_region');
   if (!region) return;
   var node = document.createElement('div');
   node.className = 'status show ' + kind;
   node.setAttribute('role', 'status');
-  node.textContent = text;
+  var span = document.createElement('span');
+  span.textContent = text;
+  node.appendChild(span);
   region.appendChild(node);
-  setTimeout(function() {
-    node.classList.add('leaving');
-    setTimeout(function() {
-      if (node.parentNode) node.parentNode.removeChild(node);
-    }, 180);
-  }, 7000);
+  dismissLater(node);
 }
 function initServerToasts() {
   var region = el('toast_region');
   if (!region) return;
   var nodes = region.querySelectorAll('.status');
   for (var i = 0; i < nodes.length; i++) {
-    (function (node) {
-      node.classList.add('show');
-      setTimeout(function() {
-        node.classList.add('leaving');
-        setTimeout(function() {
-          if (node.parentNode) node.parentNode.removeChild(node);
-        }, 180);
-      }, 7000);
-    })(nodes[i]);
+    nodes[i].classList.add('show');
+    dismissLater(nodes[i]);
   }
 }
 
 async function testConnection() {
   var btn = el('test_button');
   btn.disabled = true;
-  setTestTag('loading', 'Testing...');
-  setStatus('neutral', '<span class="spinner"></span> Testing connection...');
+  setTestTag('loading', 'Testing');
+  setStatus('neutral', 'Sending a short test request to the provider...');
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, 30000);
   try {
@@ -2670,28 +2561,30 @@ async function testConnection() {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
     });
     var ct = resp.headers.get('content-type') || '';
-    if(!ct.includes('application/json')){ var txt = await resp.text(); var snippet = (txt||'').slice(0,800); throw new Error('The test endpoint returned a non-JSON response. Is the setup server still running? ' + snippet); }
+    if(!ct.includes('application/json')){ throw new Error('The setup page server sent an unexpected answer (HTTP ' + resp.status + '). Reopen setup and retry.'); }
     var data = await resp.json();
     if (data.ok) {
-      setTestTag('ok', 'Success');
+      setTestTag('ok', 'Connected');
       setStatus('ok', 'Connected successfully.');
       toast('ok', data.message);
       if(provider!=='none' && modelForHistory) rememberModel(provider, modelForHistory);
     } else {
-      setTestTag('err', 'Error');
-      setStatus('err', data.message);
-      var dock = el('test_tag');
-      if (dock) { dock.classList.remove('shake'); void dock.offsetWidth; dock.classList.add('shake'); }
+      setTestTag('err', 'Failed');
+      setStatus('err', '');
+      el('status').textContent = data.message;
+      var tag = el('test_tag');
+      if (tag) { tag.classList.remove('shake'); void tag.offsetWidth; tag.classList.add('shake'); }
     }
   } catch (e) {
     var msg = (e && e.message) ? e.message : String(e);
     if (e && e.name === 'AbortError') {
-      msg = 'Test timed out after 30s. Check your network and key, then try again.';
-    } else if (/Failed to fetch|Could not reach/i.test(msg)) {
-      msg = 'Could not reach the local setup server at 127.0.0.1. Is it still running? Try reopening the setup page via python odicto.py setup and retry.';
+      msg = 'The test timed out after 30 seconds. Check your network and key, then try again.';
+    } else if (/Failed to fetch|NetworkError/i.test(msg)) {
+      msg = 'The setup page server is not reachable. Run setup again and retry.';
     }
-    setTestTag('err', 'Error');
-    setStatus('err', msg);
+    setTestTag('err', 'Failed');
+    setStatus('err', '');
+    el('status').textContent = msg;
   } finally {
     clearTimeout(timer);
     btn.disabled = (el('LLM_PROVIDER').value === 'none');
@@ -2699,26 +2592,152 @@ async function testConnection() {
 }
 
 async function resetSettings() {
-  if (!confirm('Reset settings to defaults? This clears any saved API keys and model choices.')) {
+  if (!confirm('Reset all settings? This clears saved API keys, model choices and shortcuts.')) {
     return;
   }
   var btn = el('reset_button');
   btn.disabled = true;
-  setStatus('neutral', '<span class="spinner"></span> Resetting to defaults...');
   try {
     var resp = await fetch('/reset', { method: 'POST' });
     var data = await resp.json();
     if (data.ok) {
-      setStatus('ok', data.message);
+      DIRTY = false;
+      location.hash = '';
       location.reload();
     } else {
-      setStatus('err', data.message);
+      toast('err', data.message);
       btn.disabled = false;
     }
   } catch (e) {
-    setStatus('err', 'Could not reach the local server.');
+    toast('err', 'Could not reach the setup page server.');
     btn.disabled = false;
   }
+}
+
+// ------------------------------------------------------- running status
+var STATUS_TIMER = null;
+var STATUS_FAILS = 0;
+function renderStatus(s) {
+  var tone = 'stopped', title = 'Odicto is not running', sub = 'Start it to use your shortcuts.', chip = 'Stopped';
+  if (s.running && s.ready) {
+    tone = 'ready'; title = 'Odicto is ready'; chip = 'Ready';
+    sub = s.microphone ? ('Listening on ' + s.microphone) : 'Waiting for your shortcut.';
+    if (s.state && s.state !== 'IDLE') { chip = s.state.charAt(0) + s.state.slice(1).toLowerCase(); }
+  } else if (s.running) {
+    tone = 'starting'; title = 'Odicto is starting'; sub = 'Loading speech and the microphone.'; chip = 'Starting';
+  }
+  if (s.admin && s.running) sub += ' Admin windows on.';
+  var card = el('run_card');
+  if (card) card.setAttribute('data-tone', tone);
+  var hero = el('hero');
+  if (hero) hero.setAttribute('data-tone', tone);
+  if (el('run_title')) el('run_title').textContent = tone === 'ready' ? 'Running' : (tone === 'starting' ? 'Starting' : 'Not running');
+  if (el('run_sub')) el('run_sub').textContent = tone === 'ready' ? (s.microphone || 'Ready') : (tone === 'starting' ? 'Almost ready' : 'Start from Home');
+  if (el('hero_title')) el('hero_title').textContent = title;
+  if (el('hero_sub')) el('hero_sub').textContent = sub;
+  var chipEl = el('hero_chip');
+  if (chipEl) {
+    chipEl.textContent = chip;
+    chipEl.className = 'chip' + (tone === 'ready' ? '' : (tone === 'starting' ? ' warn' : ' muted'));
+    chipEl.hidden = tone === 'stopped';
+  }
+  var startBtn = el('start_button');
+  if (startBtn) startBtn.hidden = tone !== 'stopped';
+}
+// One poll loop only: a call while a request is out asks for one more poll after it.
+var STATUS_BUSY = false;
+var STATUS_AGAIN = false;
+function pollStatus() {
+  clearTimeout(STATUS_TIMER);
+  if (STATUS_BUSY) { STATUS_AGAIN = true; return; }
+  STATUS_BUSY = true;
+  fetch('/status?c=' + CLIENT_ID, { cache: 'no-store' }).then(function (r) {
+    if (!r.ok) throw new Error('status ' + r.status);
+    return r.json();
+  }).then(function (s) {
+    STATUS_FAILS = 0;
+    el('offline_banner').hidden = true;
+    renderStatus(s);
+  }).catch(function () {
+    STATUS_FAILS += 1;
+    if (STATUS_FAILS >= 2) el('offline_banner').hidden = false;
+  }).then(function () {
+    STATUS_BUSY = false;
+    clearTimeout(STATUS_TIMER);
+    if (STATUS_AGAIN) { STATUS_AGAIN = false; pollStatus(); return; }
+    STATUS_TIMER = setTimeout(pollStatus, document.hidden ? 60000 : 4000);
+  });
+}
+async function startOdicto() {
+  var btn = el('start_button');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting';
+  try {
+    var resp = await fetch('/start', { method: 'POST' });
+    var data = await resp.json();
+    toast(data.ok ? 'ok' : 'err', data.message);
+  } catch (e) {
+    toast('err', 'Could not reach the setup page server.');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Start Odicto';
+  pollStatus();
+}
+
+// ------------------------------------------------------------- admin mode
+async function setAdminMode(box) {
+  var wanted = box.checked;
+  var sw = el('admin_switch');
+  var note = el('admin_note');
+  var noteText = el('admin_note_text');
+  box.disabled = true;
+  if (sw) sw.classList.add('busy');
+  if (note) note.hidden = false;
+  if (noteText) noteText.textContent = 'Approve the Windows prompt to ' + (wanted ? 'turn this on' : 'turn this off') + '. Odicto restarts afterwards.';
+  try {
+    var resp = await fetch('/admin-mode', {
+      method: 'POST',
+      body: new URLSearchParams({ enabled: wanted ? 'true' : 'false' }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+    });
+    var data = await resp.json();
+    box.checked = !!data.enabled;
+    if (noteText) noteText.textContent = data.message;
+    toast(data.ok ? 'ok' : 'err', data.message);
+  } catch (e) {
+    box.checked = !wanted;
+    if (noteText) noteText.textContent = 'Could not reach the setup page server. Nothing changed.';
+  }
+  box.disabled = false;
+  if (sw) sw.classList.remove('busy');
+  pollStatus();
+}
+function initAdminToggle() {
+  var box = el('admin_toggle');
+  if (!box) return;
+  box.addEventListener('change', function () { setAdminMode(box); });
+}
+
+// -------------------------------------------------------- page lifecycle
+// The setup server lives only as long as its pages: closing the last tab tells it to stop.
+// Each page has its own id, so goodbye from one tab does not stop another.
+var CLIENT_ID = (function () {
+  try {
+    var bytes = new Uint8Array(9);
+    crypto.getRandomValues(bytes);
+    return Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  } catch (e) {
+    return String(Date.now()) + String(Math.random()).slice(2, 10);
+  }
+})();
+function initLifecycle() {
+  window.addEventListener('pagehide', function () {
+    if (!navigator.sendBeacon) return;
+    try { navigator.sendBeacon('/bye', new URLSearchParams({ _odicto_token: pageToken(), _odicto_client: CLIENT_ID })); } catch (e) {}
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) pollStatus();
+  });
 }
 
 // -------------------------------------------------------------------- boot
@@ -2731,12 +2750,18 @@ initEffortSelects();
 loadOpenrouterCatalog();
 initTranscribeMode();
 initGearbox();
+initSwitches();
+initSttChoices();
 syncSttProvider();
 showProvider((el("LLM_PROVIDER") || {}).value || "none");
 initKeyReveal();
+initKeyInputs();
 initDirtyTracking();
 initServerToasts();
+initAdminToggle();
+initLifecycle();
 updateKeycaps();
+pollStatus();
 ['meta','openrouter','gemini','ollama'].forEach(function(p){
   var ci=el(p+'_model_custom');
   if(ci) ci.addEventListener('input', function(){ syncCustomModel(p); });
@@ -2757,7 +2782,8 @@ document.addEventListener('keydown', function(e) {
     togglePromptExpand();
   }
 });
-window.addEventListener('resize', function() { moveNavPill(); syncPromptPanelHeight(); for (var i = 0; i < CUSTOM_SELECTS.length; i++) { if (CUSTOM_SELECTS[i].wrap.classList.contains('open')) placeCustomMenu(CUSTOM_SELECTS[i]); } });
+window.addEventListener('resize', function() { moveNavPill(true); syncPromptPanelHeight(); for (var i = 0; i < CUSTOM_SELECTS.length; i++) { if (CUSTOM_SELECTS[i].wrap.classList.contains('open')) placeCustomMenu(CUSTOM_SELECTS[i]); } });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveNavPill);
 setTimeout(function() { moveNavPill(); syncPromptPanelHeight(); updateMeters(); }, 0);
 </script>
 </body>

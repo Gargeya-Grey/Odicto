@@ -73,8 +73,10 @@ Notes:
   session environment or Qt, audio and the clipboard break:
   `sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS .venv/bin/python main.py`
   (installing is different: never run `install.sh` with sudo).
-- **Python 3.10 to 3.12.** The installers pin Python 3.12 (uv) or pick
-  3.12/3.11/3.10 (pip). Python 3.13+ is refused because `numpy<2` has no wheels.
+- **Python 3.10 to 3.12.** The installers reuse an installed Python 3.12, 3.11 or 3.10
+  (highest first). uv fetches 3.12 only when none is installed. Python 3.13+ is refused
+  because `numpy<2` has no wheels. `.venv` is tied to the machine and Python that made it;
+  see [Moving machines or removing Python](#moving-machines-or-removing-python).
 - `odicto.py status` lists known environment problems (missing Linux
   packages, Wayland, root, macOS permissions) with the fix for each.
 
@@ -88,9 +90,16 @@ Notes:
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\scripts\windows\setup.bat   # pick provider + paste key (or: python odicto.py setup)
+.\setup.bat              # pick provider + paste key (or: python odicto.py setup)
 .\start_dictation.bat
 ```
+
+Windows has three files at the root: `start_dictation.bat`, `setup.bat` and `stop_dictation.bat`.
+The installer also creates a **Start Menu** folder **Odicto** with the same three entries
+(**Odicto**, **Odicto Setup**, **Stop Odicto**), each with the Odicto logo. Running the
+installer again refreshes them; add `-NoShortcuts` to skip them. Odicto starts as a normal
+(not administrator) program. **Admin mode** is a switch on the setup page (see the
+Windows note under "Permissions" below).
 
 ### macOS
 
@@ -98,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh
-bash scripts/posix/setup.sh
+bash setup.sh
 bash scripts/posix/run_debug.sh
 # Grant Accessibility + Input Monitoring (System Settings > Privacy & Security)
 # to your terminal or Python, then restart the app. Check with:
@@ -111,7 +120,7 @@ bash scripts/posix/run_debug.sh
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh        # as your normal user; it prints the sudo apt/dnf/pacman/zypper command to run
-bash scripts/posix/setup.sh
+bash setup.sh
 # The keyboard backend needs root. Keep your session variables:
 sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS bash scripts/posix/run_debug.sh
 .venv/bin/python odicto.py status   # lists remaining problems
@@ -128,8 +137,8 @@ The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**; uv is pinned to 3.12) |
-| 2 | Create **`.venv`** |
+| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**) |
+| 2 | Reuse an installed Python 3.10-3.12 (`-Python` picks one), then create **`.venv`**, or repair a `.venv` that cannot run |
 | 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
 | 4 | Copy **`.env.example` → `.env`** |
 | 5 | Pre-download **Whisper** weights (`tiny.en` by default) |
@@ -147,10 +156,38 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
 bash install.sh -Ollama
 ```
 
+```powershell
+# Windows: use a specific installed Python (a path, or 3.10 / 3.11 / 3.12)
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Python 3.11
+# Other flags: -NoUv (use pip + venv instead of uv), -VenvOnly (create or repair .venv, then stop)
+```
+
+```bash
+bash install.sh -Python 3.11        # or a path; also -NoUv and -VenvOnly
+```
+
+An explicit `-Python` that is missing, will not run, or is outside 3.10-3.12 stops the
+installer. It never switches to another Python for you.
+
 Ollama and its model are **opt-in**: without the flag, nothing local-AI
 related is downloaded. If you pick Ollama on the setup page later, the page
 offers a **Download local model** button that pulls exactly the model you
 entered — and only then.
+
+### Moving machines or removing Python
+
+A `.venv` points at the Python that created it (`home` in `.venv/pyvenv.cfg`). It breaks when
+you copy the folder to another machine or uninstall that Python (for example Miniconda).
+`start_dictation.bat` then stops with a message instead of a config error. To repair:
+
+1. If an old Odicto is still running, right-click its tray icon and choose **Quit Odicto**.
+   (`stop_dictation.bat` needs the same `.venv`, so it cannot help here.)
+2. Run `install.ps1` (or `install.sh`) again. It runs the `.venv` to judge it. A `.venv` that
+   works is kept as it is, and no separate base Python is needed. A `.venv` that cannot run, or
+   is not Python 3.10-3.12, is renamed to `.venv-backup-<timestamp>` and rebuilt.
+3. Nothing is deleted, and `.env` and `prompt.txt` are never touched. Delete the backup yourself
+   when you no longer need it. The installer refuses to rename while Odicto holds
+   `dictation.lock` or another program runs from the `.venv`.
 
 ---
 
@@ -164,7 +201,7 @@ Pick your OS below, or use the one-command installers above.
 |------|-----|----------------|
 | **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
 | **uv** (recommended) | Fast, hash-verified dependency install | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) — the installers fetch it automatically when missing |
-| **Python 3.10 to 3.12** | Runtime (needed only for the pip fallback; uv fetches 3.12). 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Python 3.10 to 3.12** | Runtime. An installed one is reused; uv fetches 3.12 only if none exists. 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
 | **Microphone** | Capture speech | Working default input device in system sound settings |
 | **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
 | **(Optional) One API key per cloud backend** | AI replies — Meta, OpenRouter, or Gemini (Ollama needs none) | Use `odicto.py setup`, or paste each into its `*_API_KEY` in `.env` |
@@ -173,8 +210,13 @@ Pick your OS below, or use the one-command installers above.
 | **(Optional) Gemini API key** | Cloud LLM via Google Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 
 Permissions:
-- **Windows**: admin usually **not** required. If global hotkeys fail on a
-  locked-down PC, try running the terminal as Administrator once.
+- **Windows**: admin usually **not** required. Odicto cannot see keys typed into an
+  administrator window (for example an Administrator Windows Terminal). To dictate there,
+  turn on **Admin mode** on the setup page. It is off by default. Windows asks for approval
+  once for each change of the switch. While it is on, start, restart, stop and setup Save
+  show **no** approval prompt: Odicto starts from its own highest-privilege logon task and
+  quits through a per-install signal. Turning it off removes that task and starts Odicto
+  as a normal program. Only this install's own task and Startup shortcut are changed.
 - **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
   System Settings → Privacy & Security (add your terminal or Python). Without
   them the app starts but hotkeys do nothing; `odicto.py status` reports
@@ -427,10 +469,15 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 | Action | Windows | macOS / Linux |
 |--------|---------|---------------|
-| Configure provider | `scripts/windows/setup.bat` or `.venv\Scripts\python.exe odicto.py setup` | `bash scripts/posix/setup.sh` or `.venv/bin/python odicto.py setup` |
-| Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
+| Configure provider | `setup.bat` (Start Menu: **Odicto Setup**) or `.venv\Scripts\python.exe odicto.py setup` | `bash setup.sh` or `.venv/bin/python odicto.py setup` |
+| Start (background) | `start_dictation.bat` (Start Menu: **Odicto**) | `bash start_dictation.sh` |
 | Start (console logs) | `scripts/windows/run_debug.bat` | `bash scripts/posix/run_debug.sh` |
-| Stop | `scripts/windows/stop_dictation.bat` | `bash scripts/posix/stop_dictation.sh` |
+| Stop | `stop_dictation.bat` (Start Menu: **Stop Odicto**) | `bash stop_dictation.sh` |
+
+On Windows, `start_dictation.bat` shows the result and closes after about 3 seconds. It stays
+open when the start fails. A start leaves a running Odicto alone. `setup.bat` opens the setup
+page in your browser without a console window, and the page's server ends by itself when you
+close the page. `stop_dictation.bat` behaves like start: short on success, open on failure.
 
 ---
 
@@ -593,15 +640,16 @@ Behavior & UI:
 app/                Application modules and platforms/ OS backends
 assets/             Setup page HTML, CSS, and JavaScript
 tests/              Unit, reliability, equivalence, and layout tests
-scripts/windows/    Windows setup, debug, stop, and startup helpers
-scripts/posix/      macOS/Linux setup, debug, stop, and startup helpers
+scripts/windows/    Windows launcher implementations, debug, startup, install, and admin-mode helpers
+scripts/posix/      macOS/Linux launcher implementations, debug, and install helpers
 tools/              Verification and architecture tooling
 docs/               Architecture, engineering notes, and research
 ```
 
-The root keeps the README, dependency list, installers, settings templates, and small
-`main.py`, `odicto.py`, and `start_dictation.*` launchers. Existing startup shortcuts can
-continue to use those entry points. Private `.env` and `prompt.txt`, and ignored runtime
+The root keeps the README, dependency list, installers, settings templates, small
+`main.py` and `odicto.py` launchers, and three entry points per platform: `start_dictation`,
+`setup` and `stop_dictation` (`.bat` on Windows, `.sh` on macOS and Linux). They are thin
+wrappers over `scripts/`. Existing startup shortcuts can continue to use `main.py`. Private `.env` and `prompt.txt`, and ignored runtime
 logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
 root independently of the working directory.
 
@@ -628,7 +676,8 @@ invariants not to break.
 | `tools/verify.ps1` | Runs every gate used to prove behaviour is unchanged |
 | `tools/module_graph.py` | Regenerates the dependency diagram in `docs/architecture.md` |
 | `install.ps1` / `install.sh` | Zero-to-one installers (uv-first, pip fallback) |
-| `scripts/windows/setup.bat` / `scripts/posix/setup.sh` | Launchers for the setup page |
+| `start_dictation` / `setup` / `stop_dictation` (`.bat`, `.sh`) | Root entry points; wrappers over `scripts/windows/` and `scripts/posix/` |
+| `scripts/windows/admin_mode.ps1` + `app/windows_admin.py` | Admin mode switch (one prompt per change), task start, quit signal |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---
@@ -652,7 +701,7 @@ invariants not to break.
 | Ollama still using RAM on Meta/OpenRouter/Gemini | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
-| Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
+| Import errors, or the launcher says `.venv ... cannot run` | Run the installer again; it repairs `.venv` (see [Moving machines or removing Python](#moving-machines-or-removing-python)) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
 | Linux hotkey/paste doesn't work | Run as root with your session env preserved (the `input` group is not enough); on Wayland prefer X11; `odicto.py status` shows what is missing |
 | Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |
@@ -674,6 +723,18 @@ invariants not to break.
 .venv/bin/python -m unittest tests.test_units -v
 bash scripts/posix/run_debug.sh
 ```
+
+### Versions and releases
+
+- `VERSION` holds the one version, `MAJOR.MINOR.PATCH`. The setup page shows it, and
+  `python odicto.py version` prints it.
+- [`CHANGELOG.md`](CHANGELOG.md) has one section per version.
+- To release: bump `VERSION`, add its `CHANGELOG.md` section, merge to `main`, then run
+  the **Release** workflow from the Actions tab. It refuses a version that already has a
+  tag, runs the test gate, and publishes `Odicto-v<version>.zip` with its `.sha256`
+  file. The release notes are the changelog section plus
+  [`tools/release/release-notes.md`](tools/release/release-notes.md).
+- Downloads: [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases).
 
 ---
 

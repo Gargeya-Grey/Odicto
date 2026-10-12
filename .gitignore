@@ -2,9 +2,11 @@
 .env
 prompt.txt
 *.pid
+.odicto-admin-enabled
 
 # Python
 .venv/
+.venv-backup*/
 venv/
 __pycache__/
 *.py[cod]

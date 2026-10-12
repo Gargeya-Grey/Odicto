@@ -8,10 +8,12 @@ verbosely, then enforces:
 
 Stdlib only. Usage (from anywhere):  python tools/run_tests.py
 """
+import contextlib
 import fnmatch
 import os
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -24,12 +26,20 @@ from pathlib import Path
 # "node not available" JS gate is never allowed anywhere (dead gate).
 # ---------------------------------------------------------------------------
 GATE = {
-    "floor": 454,  # raised after the October review fixes (315 when the gate was introduced)
+    # Prior floor 518, plus the setup page and release tests, the root launchers, the
+    # admin switch, resting resource use, the final-review fixes and the idle release of
+    # the backup Whisper: 719 discovered on Windows minus 24 in Windows-only installer classes.
+    "floor": 695,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
         "win32": ["tests.test_clipboard_safety.TestWindowsRoundTrip.*"],
         "other": [
+            "tests.test_windows_admin.TestHelperDecisions.*",
+            "tests.test_windows_admin.TestHelperParses.*",
+            "tests.test_windows_admin.TestQuitEventRoundTrip.*",
+            "tests.test_launchers.TestBatFilesRun.*",
+            "tests.test_resource_use.TestBlasThreads.test_importing_main_commits_little_memory_on_windows",
             "tests.test_reliability.*.test_win32_input_union_size_and_partial_input_never_retried",
             "tests.test_process_lifecycle.TestWindowsStop.*",
             "tests.test_units.*.test_side_exclusive_scan_codes_right_ctrl",
@@ -45,6 +55,28 @@ GATE = {
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@contextlib.contextmanager
+def _elevation_probe_boundary():
+    """Keep the gate off the real UAC prompt once an install has opted in to always-admin.
+
+    With .odicto-admin-enabled present, windows_admin.run_if_needed() launches the elevated
+    helper from an unelevated process, and the older tests that replace only the spawn/kill
+    boundaries (start, stop, restart) would reach that launch. On Windows the whole run
+    therefore sees "already elevated" from the native probe windows_admin._is_user_an_admin,
+    the one native call that decides it. Nothing under test is disabled: run_if_needed and its
+    callers still run, and the admin regressions (tests/test_windows_admin.py) patch the probe
+    themselves to false / raising / true, which overrides this default for their duration.
+    Windows tests always mock native boundaries; the real elevated lifecycle is verified
+    separately at runtime, never by this gate. Other platforms are unchanged.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    import windows_admin  # tests/__init__ put app/ on sys.path during discovery
+    with unittest.mock.patch.object(windows_admin, "_is_user_an_admin", return_value=True):
+        yield
+
+
 def main() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     for stream in (sys.stdout, sys.stderr):
@@ -57,7 +89,8 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         str(ROOT / "tests"), pattern="test_*.py", top_level_dir=str(ROOT))
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
-    result = runner.run(suite)
+    with _elevation_probe_boundary():
+        result = runner.run(suite)
 
     problems = []
     if result.failures or result.errors:
