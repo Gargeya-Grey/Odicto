@@ -1,6 +1,5 @@
 """Production action dispatch with fake hooks and no microphone or input injection."""
 import threading
-import time
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -43,26 +42,28 @@ class TestHotkeyDispatch(unittest.TestCase):
     def test_slow_reconnect_returns_hook_immediately_and_orders_stop(self):
         entered, resume, stopped = threading.Event(), threading.Event(), threading.Event()
         self.addCleanup(resume.set)
-        calls = []
+        calls, seen = [], {}
         def start():
             calls.append("start")
+            seen["thread"] = threading.get_ident()
             entered.set()
-            self.assertTrue(resume.wait(2))
+            # Set only after the hook calls below return: run inline, this wait times out.
+            seen["resumed"] = resume.wait(5)
         def stop():
             calls.append("stop")
             stopped.set()
         self.app.recorder.start.side_effect = start
         self.app.on_release = stop
-        before = time.monotonic()
         self.assertFalse(self.key())
-        self.assertLess(time.monotonic() - before, 0.2)
         self.assertTrue(entered.wait(1))
+        self.assertNotEqual(seen["thread"], threading.get_ident(), "a slow start must not run on the hook thread")
         self.assertFalse(self.key(), "key repeat stays suppressed")
         self.key("up")
         self.key()
         self.assertEqual(calls, ["start"])
         resume.set()
         self.assertTrue(stopped.wait(1))
+        self.assertTrue(seen["resumed"], "the hook must return while start() is still running")
         self.assertEqual(calls, ["start", "stop"])
 
     def test_queued_capture_preserves_its_modifier_snapshot(self):

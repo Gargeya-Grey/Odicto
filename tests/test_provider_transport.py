@@ -392,27 +392,30 @@ class TestSpeechTransport(unittest.TestCase):
 
 class TestPrewarm(unittest.TestCase):
     def test_cloud_prewarm_is_non_blocking_rate_limited_and_never_raises(self):
-        entered, release = threading.Event(), threading.Event()
+        returned, done = threading.Event(), threading.Event()
+        seen = {}
 
         def stalled(*args):
-            entered.set()
-            release.wait(2)
+            seen["thread"] = threading.get_ident()
+            # Set only after both prewarm() calls return: run inline, this wait times out.
+            seen["caller_returned_first"] = returned.wait(5)
+            done.set()
             raise OSError("network down")
 
         backend = transcriber.CloudTranscriber("groq")
         backend._endpoint = lambda: ("https://api.example.invalid/v1/audio", "synthetic-key", "m")
         try:
             with patch.object(transcriber, "warm_httpx_origin", side_effect=stalled) as warm:
-                started = time.monotonic()
                 backend.prewarm()
                 backend.prewarm()
-                self.assertLess(time.monotonic() - started, 0.2)
-                self.assertTrue(entered.wait(2))
-                release.set()
+                returned.set()
+                self.assertTrue(done.wait(2))
+                self.assertNotEqual(seen["thread"], threading.get_ident(), "warm-up must run off the caller thread")
+                self.assertTrue(seen["caller_returned_first"], "prewarm() must return before the warm-up ends")
                 time.sleep(0.05)
                 self.assertEqual(warm.call_count, 1, "second prewarm inside 20 s must not fire")
         finally:
-            release.set()
+            returned.set()
 
     def test_prewarm_survives_endpoint_and_thread_errors(self):
         backend = transcriber.CloudTranscriber("groq")
@@ -435,12 +438,25 @@ class TestPrewarm(unittest.TestCase):
     def test_refiner_prewarm_targets_provider_host_only(self):
         r = refiner_fixture("openrouter")
         r.client.base_url = "https://openrouter.ai/api/v1/"
-        done = threading.Event()
-        with patch.object(refiner, "warm_httpx_origin", side_effect=lambda url: (done.set(), 1 / 0)) as warm:
-            started = time.monotonic()
-            r.prewarm()
-            self.assertLess(time.monotonic() - started, 0.2)
-            self.assertTrue(done.wait(2))
+        returned, done = threading.Event(), threading.Event()
+        seen = {}
+
+        def warm_up(url):
+            seen["thread"] = threading.get_ident()
+            # Set only after prewarm() returns: run inline, this wait times out.
+            seen["caller_returned_first"] = returned.wait(5)
+            done.set()
+            raise ZeroDivisionError("warm-up failed")
+
+        try:
+            with patch.object(refiner, "warm_httpx_origin", side_effect=warm_up) as warm:
+                r.prewarm()
+                returned.set()
+                self.assertTrue(done.wait(2))
+        finally:
+            returned.set()
+        self.assertNotEqual(seen["thread"], threading.get_ident(), "warm-up must run off the caller thread")
+        self.assertTrue(seen["caller_returned_first"], "prewarm() must return before the warm-up ends")
         warm.assert_called_once_with("https://openrouter.ai/api/v1/")
         r.client.chat.completions.create.assert_not_called()
 
