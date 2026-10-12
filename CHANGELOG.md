@@ -4,6 +4,12 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.0.1] - 2026-10-12
+
+### Fixed
+
+- The installers (`install.ps1`, `install.sh`) no longer move a broken `.venv` aside while a program still runs from it. Before, they missed a program that was started through another spelling of the install folder: a Windows short path such as `C:\Users\RUNNER~1\...`, a symlinked folder, or a command relative to the folder, such as `.venv/bin/python main.py` (the macOS and Linux launchers start Odicto this way). Now the installer stops and shows the PID of that program.
+
 ## [1.0.0] - 2026-10-12
 
 First versioned release.
