@@ -1,6 +1,18 @@
+"""MANUAL microphone check; it is NOT part of the test gate.
+
+Records 5 seconds from the default microphone, then runs local Whisper and the
+configured LLM refiner and prints timings. Run it by hand from the repo root:
+
+    .venv\\Scripts\\python.exe tools\\manual_pipeline_check.py     (Windows)
+    .venv/bin/python tools/manual_pipeline_check.py              (macOS/Linux)
+"""
 import os
+import sys
 import time
 import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
+
 from config import Config
 from recorder import AudioRecorder, play_beep
 from transcriber import WhisperTranscriber

@@ -85,7 +85,40 @@ class _Theme:
 _S = 8
 
 
-def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[str] = None) -> str:
+# Text was inserted, with a caveat the user should see.
+SUCCESS_NOTICE_LABELS = {
+    "ai_fallback": "AI failed · raw text",
+    "polish_fallback": "Polish skipped · raw text",
+    "ai_timeout": "AI timed out · raw text",
+    "stt_fallback": "Cloud slow · local speech",
+    "mic_gap": "Mic gap · check text",
+    "clipboard_not_restored": "Clipboard not restored",
+}
+SUCCESS_STATUSES = ("success",) + tuple(SUCCESS_NOTICE_LABELS)
+# Nothing was inserted. "init_error" stays up until init succeeds.
+ERROR_STATUS_LABELS = {
+    "empty": "No speech",
+    "cancelled": "Cancelled",
+    "stt_timeout": "Speech timed out",
+}
+ERROR_STATUSES = ("error", "init_error", "preflight") + tuple(ERROR_STATUS_LABELS)
+# Short reasons for "init_error" / "preflight" (app.status_detail holds the code).
+INIT_REASON_LABELS = {
+    "mic": "Mic unavailable",
+    "speech": "Speech engine failed",
+    "ai": "AI setup failed",
+    "hotkeys": "Hotkeys failed",
+    "linux_not_root": "Needs root · see log",
+    "linux_missing_clipboard_tool": "Clipboard tool missing",
+    "linux_missing_portaudio": "PortAudio missing",
+    "macos_accessibility": "Allow Accessibility",
+    "macos_input_monitoring": "Allow Input Monitoring",
+}
+_INIT_REASON_DEFAULT = "Not ready · see log"
+
+
+def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[str] = None,
+                 detail: Optional[str] = None) -> str:
     """Pure label map (unit-testable without Qt paint)."""
     if state == GuiState.BOOTING:
         return "Starting"
@@ -96,12 +129,12 @@ def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[s
             return last_status.capitalize()
         return "Thinking" if use_llm else "Transcribing"
     if state == GuiState.SUCCESS:
-        return {"ai_fallback": "AI failed · raw text",
-                "polish_fallback": "Polish skipped · raw text"}.get(last_status, "Done")
+        return SUCCESS_NOTICE_LABELS.get(last_status, "Done")
     if state == GuiState.ERROR:
-        if last_status == "empty":
-            return "No speech"
-        return "Failed"
+        if last_status in ("init_error", "preflight"):
+            return INIT_REASON_LABELS.get(detail, _INIT_REASON_DEFAULT) if isinstance(
+                detail, str) else _INIT_REASON_DEFAULT
+        return ERROR_STATUS_LABELS.get(last_status, "Failed")
     if state == GuiState.RESET:
         return "Context cleared"
     return ""
@@ -123,7 +156,9 @@ def _all_status_labels() -> list[str]:
         status_label(GuiState.ERROR, last_status="empty"),
         status_label(GuiState.ERROR, last_status="error"),
         status_label(GuiState.RESET),
-        "Polishing", "Finalizing", "AI failed · raw text", "Polish skipped · raw text",
+        "Polishing", "Finalizing",
+        *SUCCESS_NOTICE_LABELS.values(), *ERROR_STATUS_LABELS.values(),
+        *INIT_REASON_LABELS.values(), _INIT_REASON_DEFAULT,
     ]
 
 
@@ -432,9 +467,9 @@ class DictationIndicator(QWidget):
         try:
             from app_state import AppState
 
-            if getattr(self.app, "state", None) == AppState.IDLE and getattr(
-                self.app, "last_status", None
-            ) in ("success", "error", "empty"):
+            last_status = getattr(self.app, "last_status", None)
+            if getattr(self.app, "state", None) == AppState.IDLE and last_status in (
+                "success",) + ERROR_STATUSES and last_status != "init_error":
                 self.app.last_status = None
         except Exception:
             pass
@@ -465,11 +500,9 @@ class DictationIndicator(QWidget):
             came_from_processing = prev_app_state == AppState.PROCESSING
             if not ready and last_status is None:
                 target = GuiState.BOOTING
-            elif last_status in ("success", "ai_fallback", "polish_fallback") and came_from_processing:
+            elif last_status in SUCCESS_STATUSES and came_from_processing:
                 target = GuiState.SUCCESS
-            elif last_status in ("error", "empty") and (
-                came_from_processing or not ready
-            ):
+            elif last_status in ERROR_STATUSES:
                 target = GuiState.ERROR
             else:
                 target = GuiState.HIDDEN
@@ -539,8 +572,13 @@ class DictationIndicator(QWidget):
         self._apply_win32_exstyles()
         self.raise_()
 
-        if new_state in (GuiState.SUCCESS, GuiState.ERROR):
-            self._hide_timer.start(1200 if new_state == GuiState.SUCCESS else 1500)
+        last_status = getattr(self.app, "last_status", None)
+        if new_state == GuiState.ERROR and last_status == "init_error":
+            pass  # not ready: stay visible until init succeeds (no auto-hide)
+        elif new_state in (GuiState.SUCCESS, GuiState.ERROR):
+            # A preflight problem gets time to be read; it explains silent hotkeys.
+            hold_ms = 6000 if last_status == "preflight" else 1500
+            self._hide_timer.start(1200 if new_state == GuiState.SUCCESS else hold_ms)
         elif new_state == GuiState.RESET:
             self._hide_timer.start(1200)
 
@@ -760,7 +798,8 @@ class DictationIndicator(QWidget):
         p.drawLine(QPointF(div_x, mid - 8), QPointF(div_x, mid + 8))
 
         last_status = getattr(self.app, "last_status", None)
-        label = status_label(self.gui_state, use_llm, last_status)
+        label = status_label(self.gui_state, use_llm, last_status,
+                             getattr(self.app, "status_detail", None))
 
         chip_on = _show_ai_chip(self.gui_state, use_llm)
         chip_w = self._chip_width() if chip_on else 0.0
@@ -818,7 +857,8 @@ class DictationIndicator(QWidget):
         p.drawLine(QPointF(div_x, mid - 9), QPointF(div_x, mid + 9))
 
         last_status = getattr(self.app, "last_status", None)
-        label = status_label(self.gui_state, use_llm, last_status)
+        label = status_label(self.gui_state, use_llm, last_status,
+                             getattr(self.app, "status_detail", None))
         live_on = getattr(self.app, "live_active", False) is True
         chip_on = _show_ai_chip(self.gui_state, use_llm)
         chip_label = "Live" if live_on else ("AI" if chip_on else "")

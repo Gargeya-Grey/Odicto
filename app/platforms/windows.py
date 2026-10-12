@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import time
+import psutil
 from typing import Optional, Tuple
 
 from platforms import base
@@ -53,115 +54,92 @@ def _enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
     protected = _self_and_parent_pids()
     if exclude_pid is not None:
         protected.add(exclude_pid)
-    root_fwd = os.path.normcase(os.path.normpath(base.install_root())).replace("\\", "/")
     found: set = set()
 
-    ps = (
-        "$ErrorActionPreference='SilentlyContinue'; "
-        "Get-CimInstance Win32_Process -Filter "
-        "\"Name = 'python.exe' OR Name = 'pythonw.exe'\" | "
-        "ForEach-Object { "
-        "  if ($_.CommandLine) { "
-        "    Write-Output (($_.ProcessId).ToString() + \"`t\" + $_.CommandLine) "
-        "  } "
-        "}"
-    )
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        if result.returncode != 0 or not result.stdout:
-            return found
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line or "\t" not in line:
+    # psutil is required; relative launches resolve against the actual cwd.
+    for process in psutil.process_iter(["pid", "name"]):
+        try:
+            if process.pid in protected or (process.info.get("name") or "").lower() not in ("python.exe", "pythonw.exe"):
                 continue
-            pid_s, cmd = line.split("\t", 1)
-            if not pid_s.isdigit():
-                continue
-            pid = int(pid_s)
-            if pid in protected:
-                continue
-            # normcase folds "/" into "\\" on Windows, so the forward-slash
-            # normalization must happen after it to match root_fwd. Doing it
-            # before silently made every match fail (orphan kill dead-ends).
-            cmd_n = os.path.normcase(cmd.replace('"', "")).replace("\\", "/")
-            if "main.py" in cmd_n and root_fwd in cmd_n:
-                found.add(pid)
-    except Exception as e:
-        print(f"Warning: process enum failed: {e}")
-
+            if base.is_odicto_command(process.cmdline(), process.cwd()):
+                found.add(process.pid)
+        except (psutil.Error, OSError):
+            continue
     return found
 
 
 def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
+    """Stop verified install processes, retaining ownership metadata on failure."""
     protected = _self_and_parent_pids()
     pids_to_kill: set = set()
+    verified_pids = _enumerate_odicto_pids()
 
+    old_pid = None
     if pid_file and os.path.exists(pid_file):
         try:
             with open(pid_file) as f:
                 old_pid = int(f.read().strip())
-            if old_pid not in protected:
-                pids_to_kill.add(old_pid)
         except Exception as e:
             print(f"Warning: Could not read PID file: {e}")
+    if old_pid is not None and old_pid not in protected and old_pid not in verified_pids:
+        # Enumeration may have missed an inaccessible live owner. Distinguish
+        # that uncertainty from a dead or recycled, unrelated PID before clearing
+        # ownership metadata; a PID file alone never authorizes termination.
         try:
-            os.remove(pid_file)
-        except Exception:
+            process = psutil.Process(old_pid)
+            if base.is_odicto_command(process.cmdline(), process.cwd()):
+                pids_to_kill.add(old_pid)
+        except psutil.NoSuchProcess:
             pass
-
-    pids_to_kill |= _enumerate_odicto_pids()
+        except (psutil.Error, OSError) as e:
+            raise RuntimeError(f"Could not verify saved Odicto PID {old_pid}; restart cancelled") from e
+    pids_to_kill |= verified_pids
     pids_to_kill -= protected
 
     killed: list = []
     for pid in sorted(pids_to_kill):
-        print(f"Killing stale Odicto instance (PID {pid})...")
+        # A venv launcher and its interpreter are separate processes belonging
+        # to one app instance; an explicit restart does not mean either is stale.
+        print(f"Stopping Odicto process (PID {pid})...")
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=_CREATE_NO_WINDOW,
+                timeout=5,
             )
+            if isinstance(result.returncode, int) and result.returncode != 0:
+                if psutil.pid_exists(pid):
+                    raise PermissionError(f"Windows refused to stop Odicto PID {pid} (exit {result.returncode})")
             killed.append(pid)
+        except PermissionError:
+            raise  # preserve the PID file and cancel restart instead of claiming success
         except Exception as e:
-            print(f"Warning: Could not kill PID {pid}: {e}")
+            raise RuntimeError(f"Could not stop Odicto PID {pid}: {e}; restart cancelled") from e
 
     if killed:
-        time.sleep(0.45)
-        # Robust: taskkill returns before the tree is fully gone. Wait until
-        # every target PID is actually dead (or a bounded timeout expires) so
-        # the new instance never boots while the old one still holds hooks.
-        deadline = time.time() + 8.0
+        # taskkill can return before the tree has exited. Direct native PID
+        # checks avoid repeatedly spawning tasklist and a fixed delay when all
+        # targets have already exited. Unknown liveness always cancels restart.
+        deadline = time.monotonic() + 8.0
         pending = set(killed)
-        while pending and time.time() < deadline:
-            still_alive = set()
-            for pid in sorted(pending):
-                try:
-                    out = subprocess.run(
-                        ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                        creationflags=_CREATE_NO_WINDOW,
-                    )
-                    if str(pid) in (out.stdout or ""):
-                        still_alive.add(pid)
-                except Exception:
-                    still_alive.add(pid)
-            pending = still_alive
-            if pending:
-                time.sleep(0.5)
-        if pending:
-            print(
-                f"Warning: PIDs still alive after kill wait: {sorted(pending)} "
-                "(old hooks may still own hotkeys)"
-            )
+        while pending:
+            try:
+                pending = {pid for pid in pending if psutil.pid_exists(pid)}
+            except Exception as e:
+                raise RuntimeError(f"Could not verify Odicto shutdown: {e}; restart cancelled") from e
+            if not pending:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"Odicto processes did not exit: {sorted(pending)}; restart cancelled")
+            time.sleep(min(0.1, remaining))
+    if pid_file:
+        try:
+            os.remove(pid_file)
+        except FileNotFoundError:
+            pass
     return killed
 
 
@@ -171,6 +149,15 @@ def _try_acquire_mutex(timeout_ms: int) -> bool:
     import ctypes
 
     kernel32 = ctypes.windll.kernel32
+    # HANDLE is pointer-sized. ctypes' default int return truncates it on Win64.
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    kernel32.ReleaseMutex.restype = ctypes.c_int
     handle = None
     name = ""
     for candidate in _mutex_names_for_install():
@@ -184,11 +171,6 @@ def _try_acquire_mutex(timeout_ms: int) -> bool:
         _INSTANCE_MUTEX_HANDLE = None
         _INSTANCE_MUTEX_NAME = ""
         return False
-
-    last_err = kernel32.GetLastError()
-    if last_err == _ERROR_ALREADY_EXISTS:
-        print(f"Mutex busy ({name}); stopping orphans, then waiting...", flush=True)
-        kill_other_odicto_processes(base.pid_file_path())
 
     wait = kernel32.WaitForSingleObject(handle, int(timeout_ms))
     if wait in (_WAIT_OBJECT_0, _WAIT_ABANDONED):

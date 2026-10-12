@@ -280,6 +280,25 @@ def foreground_is_terminal(extra=()) -> bool:
     return is_terminal_identifier(info, extra)
 
 
+def foreground_is_ide_host(extra=()) -> bool:
+    """True when the focused window belongs to an IDE with an integrated terminal.
+
+    VS Code, JetBrains IDEs and similar hosts are not terminals, yet plain
+    Ctrl+C in their integrated terminal is SIGINT. The selection probe sends
+    Ctrl+Insert to them instead. Linux overrides this in ``platforms.linux``.
+    An unresolved window reports False; this never raises.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        info = _win_foreground_window_info()
+        from platforms.base import is_ide_host_identifier
+
+        return is_ide_host_identifier(info, extra)
+    except Exception:
+        return False
+
+
 def copy_chord() -> None:
     press("ctrl")
     time.sleep(0.01)
@@ -320,6 +339,22 @@ def send_copy_terminal() -> None:
         release("ctrl")
     except Exception:
         send("ctrl+shift+c")
+
+
+def send_copy_ide() -> None:
+    """Copy chord for an IDE host — Ctrl+Insert, never plain Ctrl+C.
+
+    Ctrl+Insert copies in the editor and in the integrated terminal of VS Code
+    and JetBrains IDEs, where plain Ctrl+C would interrupt a running process.
+    """
+    try:
+        press("ctrl")
+        time.sleep(0.01)
+        press_and_release("insert")
+        time.sleep(0.01)
+        release("ctrl")
+    except Exception:
+        send("ctrl+insert")
 
 
 def send_paste() -> None:

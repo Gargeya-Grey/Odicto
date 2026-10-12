@@ -281,4 +281,44 @@ selection/image context, waits at most two seconds, and keeps raw text on failur
 Gemini Smart skips the extra call. `AI_CLIPBOARD_IMAGE=false` makes screenshots
 explicit; when enabled the HUD reads them on Qt's GUI thread. Auto Whisper uses
 CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must be
-16000. Run both `test_units` and `test_reliability`; the full gate includes both.
+16000. Run `.\tools\verify.ps1` (or `python tools/run_tests.py`); it is the full gate.
+
+## Reliability behaviour
+
+- **Timing keys** (invalid numbers log a warning naming the key and fall back to the default):
+  `PASTE_DELAY_SECONDS` (default 1.0; wait after the paste chord before the clipboard restore, 0.15-10),
+  `MAX_RECORDING_SECONDS` (600; auto-stop and process, 0 = no limit),
+  `STT_DEADLINE_SECONDS` (20) and `LLM_DEADLINE_SECONDS` (30) are wall-clock limits per stage,
+  `CANCEL_HOTKEY` (`esc`; cancels PROCESSING, never suppressed, blank disables),
+  `LOG_TRANSCRIPTS` (`false`; `dictation.log` holds lengths and timings, never text),
+  `POLISH_MAX_CHARS` (1200; polish is skipped above it, 0 = no limit). Polish wait scales with length.
+- **Clipboard:** `platforms/clipboard.py` snapshots every format (Windows: all HGLOBAL formats;
+  macOS: NSPasteboard items; Linux: text, and a non-text clipboard falls back to typing).
+  Restore is synchronous: `paste_text` holds the clipboard lock, waits `PASTE_DELAY_SECONDS`,
+  then restores only if the clipboard still holds Odicto's payload (Windows checks the change
+  token inside the same OpenClipboard session that writes). A restore that still fails after
+  ~2 s of retries (same guard) is dropped with a HUD notice (`typer.last_paste_restore_failed()`);
+  no state carries to the next paste (the carry-over was removed after three review rounds).
+  No background restore thread exists. The AI
+  selection probe sends Ctrl+Insert in IDE hosts (VS Code, JetBrains) instead of Ctrl+C, and
+  returns `""` when the clipboard cannot be saved.
+- **Recorder:** an overflow or callback gap keeps the audio, processes it, and flags the HUD
+  (`Mic gap · check text`). Only a dead stream with no audio errors. Reconnect refreshes
+  PortAudio and falls back to the default device.
+- **Pipeline:** cloud STT that errors or times out falls back to local Whisper. An AI timeout
+  keeps the raw text. Cancel and late results never paste. Init retries with backoff and leaves
+  no zombie. Shutdown removes hooks before it takes the lifecycle lock (3 s timeout) and ends
+  an in-progress paste's restore wait early. In toggle mode the AI selection probe starts at capture start. Whisper
+  prewarms at capture start. Preflight problems print and show in the HUD.
+- **Providers:** `http_clients.py` holds shared keep-alive clients with connect, read, write
+  and pool timeouts. One shared Gemini client runs with SDK retries off. Groq and Gemini
+  receive FLAC uploads; OpenRouter stays WAV.
+- **Setup page:** each launch makes a CSRF token (`X-Odicto-Token` header or hidden field).
+  The Host header is checked strictly. Bodies are capped at 1 MiB (411 no length, 400 bad
+  length, 413 too large).
+- **Status:** `odicto.py status` lists environment problems. POSIX start waits with
+  `odicto.py wait-ready`.
+- **Test gate:** `tools/run_tests.py` discovers `tests/test_*.py`, enforces a test-count floor
+  that may only rise, and a per-platform skip allow-list. CI and `verify.ps1` both use it.
+  `tests/test_units.py` is hash-frozen; a re-base needs a numbered reason line in
+  `tools/verify.ps1`. The mic diagnostic is `tools/manual_pipeline_check.py` (manual, not in the gate).

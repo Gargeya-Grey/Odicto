@@ -1,19 +1,14 @@
-# One-command gate runner for the efficient-modular refactor experiment.
+# One-command gate runner for Odicto.
 #
-# Every gate the refactor relies on, in one place:
-#   1. test_units.py must be byte-identical to the recorded baseline (rule 1)
-#   2. test_units: expected test count and skipped count (a bare "OK" is not enough:
-#      the setup-page JS gate self-skips when `node` is missing, so a dead gate
-#      would still report OK)
-#   3. test_equivalence: the independent oracle added for this refactor
-#   4. import smoke test across all top-level modules
-#   5. syntax check for platforms/macos.py and platforms/linux.py, which cannot be
+#   1. test_units.py must match the recorded hash (its assertions cannot be quietly weakened)
+#   2. the whole test suite via tools/run_tests.py (the same call CI makes): discovery of every
+#      tests/test_*.py, a test-count floor and a per-platform skip allow-list. Floors and the
+#      allow-list live in tools/run_tests.py only.
+#   3. import smoke test across all top-level modules
+#   4. syntax check for platforms/macos.py and platforms/linux.py, which cannot be
 #      imported on Windows (CI is the real gate for those; see .github/workflows/ci.yml)
-#   6. a clean-environment run: .env and prompt.txt temporarily moved OUTSIDE the repo
-#      so the suite runs like CI does. Backups live outside the repo on purpose -
-#      `.env.bak` inside the repo is not gitignored and would put live API keys one
-#      `git add -A` away from being committed.
-#   7. LOC accounting against origin/main
+#   5. an isolated source copy runs the same suite without live configuration
+#   6. LOC accounting against origin/main (skipped with a note if origin/main is not fetched)
 #
 # Usage:  .\tools\verify.ps1 [-SkipCleanEnv] [-Quiet]
 
@@ -29,39 +24,27 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-# Hash of test_units.py. It is frozen so its assertions cannot be quietly weakened to make a
-# change pass. It has been re-based twice, each deliberately and documented here:
-# (1) test_openrouter_glm53_keeps_explicit_high relied on the developer's shell exporting
-#     OPENROUTER_REASONING_EFFORT, so it passed locally and failed on CI. That edit pinned
-#     _PRESENT_AT_IMPORT inside the test.
-# (2) The F7 live polish feature (LIVE_POLISH: swap the streamed draft for the official
-#     smart-mode final) updated two live-stop tests to the new intended behavior and added
-#     five (150 -> 155). No existing assertion was weakened: both updated tests still hold
-#     under LIVE_POLISH=false, and the new tests pin swap, failure-keeps-draft, and routing.
-# (3) The LIVE_POLISH pass was removed: per the official Gemini Live transcription docs,
-#     SMART-mode `input_transcription` finals are already the authoritative cleaned text,
-#     so the whole-clip unary re-transcription on stop only added latency. The five polish
-#     tests shrank to two: keep-streamed-text when no final exists, and cleanup swapping
-#     the interim draft for the authoritative final (155 -> 151). No weakened assertion.
-# (4) Speech providers: Groq, Grok, and OpenRouter, plus a CUDA warmup on local
-#     Whisper. Raw dictation and AI mode now share the selected speech provider
-#     (151 -> 156). The old AI-chord tests that required local Whisper were
-#     replaced with tests that require the same engine on both chords. The
-#     live-auto helper now follows that provider. No assertion was loosened
-#     to hide a failure.
-# (5) The direct Grok speech API was removed. Grok transcription is an
-#     OpenRouter model slug. The Grok endpoint test went with it (156 -> 155).
-# (6) Gemini Live stop now drains queued PCM before ending the stream and
-#     commits the authoritative smart final over any interim draft. Two stop
-#     tests were updated and one sender-drain test was added (155 -> 156).
-# (7) F7 now previews in the HUD and inserts once while PROCESSING. Tests pin
-#     that contract, valid Interactions image payloads, fail-closed insertion and
-#     bounded CUDA probing. Removed three tests with the deleted caret editor and unused context helper (156 -> 153).
-#     Independent test_reliability exercises the new failure modes and polish.
-# (8) Folder layout: only the two fixture paths now resolve from tests/ to the install root.
-#     All 153 assertions remain unchanged.
-$ExpectedTestUnitsHash = 'C7C91E296A3C25DFA7BD642D5DC791F4D7653917EBB8478739DFB18DF8D95D4A'
-$ExpectedUnitTestCount = 153
+# Hash of test_units.py. It protects the assertions in that file from being weakened to make a
+# change pass. It does NOT pin test counts (tools/run_tests.py has a rising floor instead).
+# A re-base needs a numbered reason line below stating what changed and that no assertion was
+# weakened. History:
+# (1) test_openrouter_glm53_keeps_explicit_high pinned _PRESENT_AT_IMPORT inside the test.
+# (2) F7 live polish: two live-stop tests updated to the new behavior, five added.
+# (3) LIVE_POLISH pass removed; five polish tests shrank to two.
+# (4) Speech providers Groq/Grok/OpenRouter and a CUDA warmup; AI-chord tests replaced.
+# (5) Direct Grok speech API removed; its endpoint test went with it.
+# (6) Gemini Live stop drains queued PCM; two stop tests updated, one added.
+# (7) F7 previews in the HUD and inserts once; three tests removed with the caret editor.
+# (8) Folder layout: only the two fixture paths resolve from tests/ to the install root.
+# (9) October review fixes. TestOdicto.setUp adds patches only: a text-only fake clipboard
+#     snapshot, no-op rich restore and change token, IDE host off, inline deferred restore.
+#     Three expected values follow intended changes, each still an exact assertion:
+#     Groq upload clip.wav -> clip.flac; Gemini upload audio/wav -> audio/flac; the Gemini
+#     client is built with retries off and keep-alive (http_options). No assertion removed
+#     or loosened; still 153 tests. test_whisper_transcriber_loading_fallback skips on macOS
+#     only: macOS forces CPU under auto, so its CUDA->CPU path cannot run there (it failed
+#     on macOS CI since 4d8302d). It still runs on Windows and Linux.
+$ExpectedTestUnitsHash = '776D6B6E71F7899EE3B9553F270487AC57DF276F309D68B44703A1CCC9B12D3B'
 
 $Script:Failures = @()
 
@@ -94,7 +77,6 @@ if (-not (Test-Path $Python)) {
 
 $env:QT_QPA_PLATFORM = 'offscreen'
 $OnWindows = ($env:OS -eq 'Windows_NT')
-$ExpectedSkips = if ($OnWindows) { 0 } else { 2 }
 
 $Scratch = if ($env:COMMANDCODE_SCRATCHPAD) { $env:COMMANDCODE_SCRATCHPAD } else { Join-Path $env:TEMP 'odicto-verify' }
 if (-not (Test-Path $Scratch)) { New-Item -ItemType Directory -Path $Scratch -Force | Out-Null }
@@ -112,14 +94,8 @@ foreach ($name in @('.env', 'prompt.txt')) {
     }
 }
 
-# Runs python in a child job with a hard timeout, writing output to a file so partial
-# output survives a kill. This exists because of a pre-existing hazard: the unit suite
-# prints "OK" and then can stall at interpreter shutdown with
-#   Exception ignored in: BaseEventLoop.__del__
-#   AttributeError: 'ProactorEventLoop' object has no attribute '_ssock_'
-# (Gemini Live asyncio teardown; triggered by GC timing). Treating output-based success
-# as authoritative keeps the gate reliable without hiding a genuine hang, which would
-# produce no "Ran N tests" / "OK" line at all.
+# A successful test summary alone is insufficient: process exit, timeout, count
+# and skips must also pass, including failures during interpreter teardown.
 $GateTimeoutSeconds = 180
 
 function Invoke-Python {
@@ -144,20 +120,6 @@ function Invoke-Python {
     return [pscustomobject]@{ Text = $text; Code = $code; TimedOut = $timedOut }
 }
 
-function Get-SkipCount {
-    param([string]$Output)
-    $match = [regex]::Match($Output, 'skipped=(\d+)')
-    if ($match.Success) { return [int]$match.Groups[1].Value }
-    return 0
-}
-
-function Get-RunCount {
-    param([string]$Output)
-    $match = [regex]::Match($Output, 'Ran (\d+) tests?')
-    if ($match.Success) { return [int]$match.Groups[1].Value }
-    return -1
-}
-
 # ---------------------------------------------------------------- 1. test file frozen
 Write-Step 'Gate 1: test_units.py is unchanged'
 # Normalize Git's checkout line endings so this same checkpoint works on all OSes.
@@ -167,61 +129,22 @@ try {
     $actualHash = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($unitSource))).Replace('-', '')
 } finally { $hasher.Dispose() }
 if ($actualHash -ne $ExpectedTestUnitsHash) {
-    Add-Failure "test_units.py changed (expected $ExpectedTestUnitsHash, got $actualHash). The oracle must stay frozen for this experiment."
+    Add-Failure "test_units.py changed (expected $ExpectedTestUnitsHash, got $actualHash). Re-base only with a numbered reason line in verify.ps1."
 } else {
     Add-Pass 'test_units.py matches the checkpoint hash'
 }
 
-# ------------------------------------------------------------- 2. the unit tests
-Write-Step 'Gate 2: unit tests (test_units)'
-$units = Invoke-Python @('-m', 'unittest', 'tests.test_units')
-$runCount = Get-RunCount $units.Text
-$skipCount = Get-SkipCount $units.Text
-if ($runCount -ne $ExpectedUnitTestCount) {
-    Add-Failure "expected $ExpectedUnitTestCount tests, ran $runCount"
-} elseif ($skipCount -ne $ExpectedSkips) {
-    Add-Failure "expected $ExpectedSkips skipped on this OS, saw $skipCount (a silently skipped gate is not a passing gate)"
-} elseif ($units.Text -notmatch 'OK') {
-    Add-Failure "test_units did not report OK"
+# ------------------------------------------------------------- 2. the test suite
+Write-Step 'Gate 2: test suite (tools/run_tests.py: discovery, floor, skip allow-list)'
+$suite = Invoke-Python @('tools/run_tests.py') 600
+if ($suite.Code -ne 0 -or $suite.TimedOut -or $suite.Text -notmatch '(?m)^GATE OK\s*$') {
+    Add-Failure "test gate failed (exit $($suite.Code), timed out: $($suite.TimedOut)); last lines:`n$(($suite.Text -split "`n" | Select-Object -Last 25) -join "`n")"
 } else {
-    $note = if ($units.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-    Add-Pass "$runCount ran, $skipCount skipped, OK$note"
+    Add-Pass ([regex]::Match($suite.Text, '(?m)^GATE: .*$').Value)
 }
 
-# --------------------------------------------------------- 3. the equivalence oracle
-Write-Step 'Gate 3: equivalence oracle (test_equivalence)'
-# Reliability is independent of the historical equivalence oracle.
-$reliability = Invoke-Python @('-m', 'unittest', 'tests.test_reliability')
-$reliabilityCount = Get-RunCount $reliability.Text
-$reliabilitySkips = Get-SkipCount $reliability.Text
-$expectedReliabilitySkips = if ($OnWindows) { 0 } else { 1 }
-if ($reliability.Code -ne 0 -or $reliabilityCount -ne 25 -or $reliabilitySkips -ne $expectedReliabilitySkips) {
-    Add-Failure "reliability regressions failed or count changed:`n$($reliability.Text)"
-} else {
-    Add-Pass '25 input ownership, HUD and polish regression tests passed (only Win32 ABI is skipped off Windows)'
-}
-
-$equiv = Invoke-Python @('-m', 'unittest', 'tests.test_equivalence')
-$equivSkips = Get-SkipCount $equiv.Text
-if ($equiv.Text -notmatch 'OK') {
-    Add-Failure "test_equivalence did not report OK"
-} elseif ($equivSkips -ne 0) {
-    Add-Failure "test_equivalence skipped $equivSkips tests - the oracle must always run in full"
-} else {
-    $note = if ($equiv.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-    Add-Pass ("{0} ran, 0 skipped, OK{1}" -f (Get-RunCount $equiv.Text), $note)
-}
-
-Write-Step 'Layout regressions (entry points and install-root paths)'
-$layout = Invoke-Python @('-m', 'unittest', 'tests.test_layout')
-if ($layout.Code -ne 0 -or (Get-RunCount $layout.Text) -ne 4 -or $layout.Text -notmatch 'OK') {
-    Add-Failure "layout checks failed:`n$($layout.Text)"
-} else {
-    Add-Pass '4 layout checks passed without launching the application'
-}
-
-# --------------------------------------------------------------- 4. import smoke test
-Write-Step 'Gate 4: import smoke test'
+# --------------------------------------------------------------- 3. import smoke test
+Write-Step 'Gate 3: import smoke test'
 $smokeModules = 'main, refiner, indicator, setup_web, config, transcriber, typer, recorder, odicto, openrouter_catalog'
 $smoke = Invoke-Python @('-c', "import sys; sys.path.insert(0, 'app'); import $smokeModules")
 if ($smoke.Code -ne 0) {
@@ -230,8 +153,8 @@ if ($smoke.Code -ne 0) {
     Add-Pass 'all top-level modules import'
 }
 
-# ------------------------------------------------- 5. macOS/Linux backends (syntax)
-Write-Step 'Gate 5: cross-platform backend syntax (macOS/Linux are not importable here)'
+# ------------------------------------------------- 4. macOS/Linux backends (syntax)
+Write-Step 'Gate 4: cross-platform backend syntax (macOS/Linux are not importable here)'
 # One file per invocation: PowerShell 5.1 splits a multi-line -c script into separate
 # arguments, so a here-string would arrive at python truncated.
 $syntaxFailed = $false
@@ -246,71 +169,37 @@ if (-not $syntaxFailed) {
     Add-Pass 'platforms/macos.py and platforms/linux.py compile (CI is the real gate)'
 }
 
-# --------------------------------------------------- 6. clean-environment (no .env)
+# --------------------------------------------------- 5. clean-environment (no .env)
 if ($SkipCleanEnv) {
-    Write-Step 'Gate 6: clean-environment run (SKIPPED)'
+    Write-Step 'Gate 5: clean-environment run (SKIPPED)'
 } else {
-    Write-Step 'Gate 6: clean-environment run (.env and prompt.txt moved outside the repo)'
-    $envPath = Join-Path $RepoRoot '.env'
-    $promptPath = Join-Path $RepoRoot 'prompt.txt'
-    $hadEnv = Test-Path -LiteralPath $envPath
-    $hadPrompt = Test-Path -LiteralPath $promptPath
-    if (Test-Path $backupDir) { Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
-    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-
-    # Moving .env is NOT sufficient. If the shell also exports the config keys (common when
-    # a developer exports .env into their environment), os.getenv still sees them, so
-    # _PRESENT_AT_IMPORT is non-empty and the run is not clean at all - it silently diverges
-    # from CI. That is exactly how a real CI-only failure (test_openrouter_glm53_keeps_explicit_high)
-    # stayed hidden locally. Clear config's known keys too, then restore them.
-    $envGuard = @{}
-    $knownKeys = (Invoke-Python @('-c', "import sys; sys.path.insert(0, 'app'); from config import KNOWN_ENV_KEYS; print(chr(10).join(sorted(KNOWN_ENV_KEYS)))")).Text
-    foreach ($key in ($knownKeys -split "`r?`n" | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*$' })) {
-        $value = [Environment]::GetEnvironmentVariable($key)
-        if ($null -ne $value) {
-            $envGuard[$key] = $value
-            Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
-        }
-    }
-
-    $cleanResult = $null
-    try {
-        if ($hadEnv) { Move-Item -LiteralPath $envPath -Destination (Join-Path $backupDir '.env') -Force }
-        if ($hadPrompt) { Move-Item -LiteralPath $promptPath -Destination (Join-Path $backupDir 'prompt.txt') -Force }
-        $cleanResult = Invoke-Python @('-m', 'unittest', 'tests.test_units')
-    } finally {
-        if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
-            Move-Item -LiteralPath (Join-Path $backupDir '.env') -Destination $envPath -Force
-        }
-        if ($hadPrompt -and -not (Test-Path -LiteralPath $promptPath)) {
-            Move-Item -LiteralPath (Join-Path $backupDir 'prompt.txt') -Destination $promptPath -Force
-        }
-        foreach ($key in $envGuard.Keys) {
-            Set-Item -Path "Env:$key" -Value $envGuard[$key]
-        }
-    }
-
-    if ($hadEnv -and -not (Test-Path -LiteralPath $envPath)) {
-        Add-Failure "'.env' was NOT restored after the clean-environment run - restore it from $backupDir"
-    } elseif (-not $cleanResult -or $cleanResult.Text -notmatch 'OK') {
-        Add-Failure "clean-environment run failed (this is how CI runs; a local .env can mask it):`n$($cleanResult.Text)"
+    Write-Step 'Gate 5: isolated clean-environment run (live configuration stays in place)'
+    $cleanResult = Invoke-Python @('-B', 'tools/verify_clean.py') 600
+    if ($cleanResult.Code -ne 0 -or $cleanResult.TimedOut -or $cleanResult.Text -notmatch '(?m)^GATE OK\s*$') {
+        Add-Failure "isolated clean-environment run failed; last lines:`n$(($cleanResult.Text -split "`n" | Select-Object -Last 25) -join "`n")"
     } else {
-        $note = if ($cleanResult.TimedOut) { ' (process lingered at shutdown; killed)' } else { '' }
-        Add-Pass "suite passes with no .env present and $($envGuard.Count) exported config vars cleared, all restored$note"
+        Add-Pass 'test gate passed in an isolated source copy; private files untouched'
     }
 }
 
-# ---------------------------------------------------------------- 7. LOC accounting
-# Note: untracked files are invisible to `git diff`, so the refactor's LOC figure is
-# only complete once each phase is committed.
-Write-Step 'Gate 7: LOC accounting vs origin/main'
+# ---------------------------------------------------------------- 6. LOC accounting
+# Note: untracked files are invisible to `git diff`.
+Write-Step 'Gate 6: LOC accounting vs origin/main'
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-$diff = (& git diff --stat origin/main 2>$null | Out-String)
-$gitCode = $LASTEXITCODE
+& git rev-parse --verify --quiet origin/main *> $null
+$haveMain = ($LASTEXITCODE -eq 0)
+$diff = ''
+$gitCode = 0
+if ($haveMain) {
+    $diff = (& git diff --stat origin/main 2>$null | Out-String)
+    $gitCode = $LASTEXITCODE
+}
 $ErrorActionPreference = $previous
-if ($gitCode -ne 0) {
-    Add-Failure 'git diff --stat origin/main failed (is origin/main fetched?)'
+if (-not $haveMain) {
+    Write-Host '  note: origin/main is not fetched; LOC accounting skipped' -ForegroundColor Yellow
+} elseif ($gitCode -ne 0) {
+    Add-Failure 'git diff --stat origin/main failed'
 } elseif (-not $Quiet) {
     Write-Host $diff
 }

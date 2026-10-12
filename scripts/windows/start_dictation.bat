@@ -29,6 +29,7 @@ if "%~1"=="/nostartup" (
 REM Direct double-click / manual start - full-featured path.
 if "%~1"=="" goto :fullstart
 if /I "%~1"=="/min" goto :fullstart
+if /I "%~1"=="/restart" goto :fullstart
 goto :eof
 
 :fullstart
@@ -43,56 +44,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Stop every previous instance (PID file + any leftover main.py for this folder).
-call "%~dp0stop_dictation.bat" /nopause
-
-REM Lightweight orphan re-check via PowerShell only. Do not import main.py here -
-REM that would load keyboard/Whisper/Qt just for a PID scan and slow login start.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$rootN = [System.IO.Path]::GetFullPath('%ODICTO_ROOT%\').TrimEnd('\').ToLowerInvariant(); " ^
-  "$left = @(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" -ErrorAction SilentlyContinue | " ^
-  "  Where-Object { $_.CommandLine -and ($_.CommandLine -match 'main\.py') -and ($_.CommandLine.ToLowerInvariant().Contains($rootN)) }); " ^
-  "if ($left.Count -gt 0) { exit 1 } else { exit 0 }"
-if errorlevel 1 (
-  echo WARNING: stale Odicto python processes still running - trying one more stop...
+REM Ordinary start leaves a live owner alone. The app takes both locks before
+REM sweeping orphans. For an intentional restart, run stop_dictation.bat first.
+if /I "%~1"=="/restart" (
+  echo Restarting Odicto...
   call "%~dp0stop_dictation.bat" /nopause
-  REM ~2s settle - ping works when stdin is redirected; timeout.exe often does not.
-  ping -n 3 127.0.0.1 >nul
+  if errorlevel 1 (
+    echo FAILED to stop the existing instance. Restart cancelled.
+    exit /b 1
+  )
 )
-
-REM Brief settle so Windows releases low-level keyboard hooks from the killed process
-REM before the new instance installs its own (avoids a brief double-hook window).
-ping -n 2 127.0.0.1 >nul
 
 set "PYW=%ODICTO_ROOT%\.venv\Scripts\pythonw.exe"
 REM Launch fresh (pythonw = no console).
 start "" /MIN "%PYW%" "%ODICTO_ROOT%\main.py"
 
-REM Wait up to 30s for dictation.pid (written right after the single-instance
-REM lock). Cold starts are slow: PySide6/Whisper/keyboard imports plus antivirus
-REM scanning can take longer than older 10s waits, so poll generously.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$pidFile = Join-Path '%ODICTO_ROOT%\' 'dictation.pid'; " ^
-  "$deadline = (Get-Date).AddSeconds(30); " ^
-  "while ((Get-Date) -lt $deadline) { " ^
-  "  if (Test-Path -LiteralPath $pidFile) { exit 0 }; " ^
-  "  Start-Sleep -Milliseconds 500 " ^
-  "}; exit 1"
-if errorlevel 1 (
-  REM No PID file after 30s. If an Odicto process is still alive it is just
-  REM booting slowly; do not report a false failure - the HUD shows when ready.
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$rootN = [System.IO.Path]::GetFullPath('%ODICTO_ROOT%\').TrimEnd('\').ToLowerInvariant(); " ^
-    "$alive = @(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" -ErrorAction SilentlyContinue | " ^
-    "  Where-Object { $_.CommandLine -and ($_.CommandLine -match 'main\.py') -and ($_.CommandLine.ToLowerInvariant().Contains($rootN)) }); " ^
-    "if ($alive.Count -gt 0) { exit 0 } else { exit 1 }"
-  if errorlevel 1 (
-    echo FAILED to start - no dictation.pid appeared and no Odicto process is running. Check dictation.log and .env.
-    pause
-    exit /b 1
-  )
-  echo Started - boot still in progress. The HUD pill appears when Whisper is ready.
-) else (
-  echo Started (dictation.pid present)
-)
-exit /b 0
+REM Confirm a fresh owner heartbeat and microphone callbacks, not just a PID file.
+"%PY%" "%ODICTO_ROOT%\odicto.py" wait-ready --timeout 30
+exit /b %errorlevel%

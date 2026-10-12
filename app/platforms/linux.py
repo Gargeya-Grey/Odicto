@@ -85,6 +85,26 @@ def foreground_is_terminal(extra=()) -> bool:
     return is_terminal_identifier((name,), extra)
 
 
+def foreground_is_ide_host(extra=()) -> bool:
+    """True when the focused window is an IDE with an integrated terminal (X11 only).
+
+    Uses the same X11 active-window lookup as ``foreground_is_terminal``.
+    Wayland or an unresolved window returns False; this never raises.
+    """
+    from platforms.base import is_ide_host_identifier
+
+    try:
+        pid = _x11_active_window_pid()
+        if not pid:
+            return False
+        import psutil
+
+        name = psutil.Process(pid).name()
+        return is_ide_host_identifier((name,), extra)
+    except Exception:
+        return False
+
+
 def apply_window_exstyles(widget) -> None:
     # Qt window flags handle topmost/click-through on X11/Wayland.
     return None

@@ -21,6 +21,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: requirements.txt
 
+      # The setup-page JS syntax gate needs node; the skip allow-list refuses a skip.
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -32,28 +38,17 @@ jobs:
           uv venv --python 3.12 .venv
           uv pip install --python .venv -r requirements.txt
 
-      - name: Run unit tests (Windows)
+      # One gate for every OS: tools/run_tests.py discovers tests/test_*.py, then enforces
+      # no failures, a minimum test count and a per-platform skip allow-list (so a
+      # self-skipping gate, e.g. the JS check without node, fails instead of passing).
+      - name: Run test gate (Windows)
         if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m unittest tests.test_units tests.test_reliability tests.test_layout -v
+        run: .venv\Scripts\python.exe tools/run_tests.py
         env:
           QT_QPA_PLATFORM: offscreen
 
-      - name: Run unit tests (macOS/Linux)
+      - name: Run test gate (macOS/Linux)
         if: runner.os != 'Windows'
-        run: .venv/bin/python -m unittest tests.test_units tests.test_reliability tests.test_layout -v
-        env:
-          QT_QPA_PLATFORM: offscreen
-
-      # Independent equivalence oracle for the refactor: pins the rendered setup
-      # page and the config cascade resolvers. Must be byte-identical on all OSes.
-      - name: Run equivalence oracle (Windows)
-        if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe -m unittest tests.test_equivalence -v
-        env:
-          QT_QPA_PLATFORM: offscreen
-
-      - name: Run equivalence oracle (macOS/Linux)
-        if: runner.os != 'Windows'
-        run: .venv/bin/python -m unittest tests.test_equivalence -v
+        run: .venv/bin/python tools/run_tests.py
         env:
           QT_QPA_PLATFORM: offscreen

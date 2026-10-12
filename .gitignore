@@ -18,6 +18,8 @@ __pycache__/
 dictation.log
 dictation.pid
 dictation.lock
+dictation-health.json
+dictation-health.json.*.tmp
 *.log
 
 # OS / editor
@@ -34,6 +36,7 @@ test_ollama.txt
 
 # Agent / editor bookkeeping
 .commandcode/
+work/gc-artifacts/
 
 # Build
 dist/
