@@ -560,10 +560,13 @@ class TestAIBudget(unittest.TestCase):
             client.reset_mock()
             refiner.reset_openrouter_effort_cache()
             client.chat.completions.create.side_effect = [RuntimeError("reasoning is mandatory"), _reply()]
-            refiner._openrouter_create(
-                client, {"model": "vendor/strict"}, timeout=http_clients.full_timeout(5, 30),
-                deadline=time.monotonic() + 20.0,
-            )
+            # A frozen clock: with a real one that does not advance between the two reads
+            # (Windows CI), (now + 20.0) - now can round to 20.00000000000003.
+            with patch("refiner.time.monotonic", return_value=1000.0):
+                refiner._openrouter_create(
+                    client, {"model": "vendor/strict"}, timeout=http_clients.full_timeout(5, 30),
+                    deadline=1000.0 + 20.0,
+                )
             retry_timeout = client.chat.completions.create.call_args_list[1].kwargs["timeout"]
             _assert_full_timeout(self, retry_timeout)
             self.assertLessEqual(retry_timeout.read, 20.0)
