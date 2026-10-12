@@ -291,18 +291,41 @@ function Get-OdictoProcessSnapshot {
     @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
 }
 
+function Get-OdictoFolderSpellings {
+    # The spellings of one folder that a process path or command line can contain: the long
+    # form (GetFullPath, which in Windows PowerShell 5.1 expands 8.3 names) and the 8.3 short
+    # form, for example C:\Users\RUNNER~1\... A folder that does not exist, or a volume without
+    # 8.3 names, gives only the long form. No trailing backslash.
+    param([Parameter(Mandatory)][string]$Dir)
+    $long = ([IO.Path]::GetFullPath($Dir)).TrimEnd('\')
+    $long
+    try {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        if ($fso.FolderExists($long)) {
+            $short = ([string]$fso.GetFolder($long).ShortPath).TrimEnd('\')
+            if ($short -and $short -ine $long) { $short }
+        }
+    } catch { }
+}
+
 function Get-OdictoVenvUsers {
-    # Processes that run from this .venv, or run this install's main.py. A failed process
-    # query throws: the caller must treat "cannot tell" as "in use". A Python process whose
-    # path or command line cannot be read (another user, elevated) also counts as in use,
-    # but only if it stays unreadable: a process that is starting or exiting can lack
-    # metadata for a moment. The list is taken again after a short wait. A process is dropped
-    # only when it is gone, or readable and not using this install. Any Python process that
-    # is unreadable on the last look stays a user (fail closed).
+    # Processes that run from this .venv, or run this install's main.py. A process can name
+    # the install folder in any spelling: long, 8.3 short, partly short (C:\Users\RUNNER~1\...)
+    # or \\?\-prefixed. The path and command line are matched as written against the long and
+    # short spellings, and again after each rooted path in them is expanded to its long form.
+    # Junction, subst and mapped-drive spellings are not resolved; dictation.lock still guards
+    # Odicto itself. A failed process query throws: the caller must treat "cannot tell" as "in
+    # use". A Python process whose path or command line cannot be read (another user, elevated)
+    # also counts as in use, but only if it stays unreadable: a process that is starting or
+    # exiting can lack metadata for a moment. The list is taken again after a short wait. A
+    # process is dropped only when it is gone, or readable and not using this install. Any
+    # Python process that is unreadable on the last look stays a user (fail closed).
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$VenvDir,
           [int]$Retries = 3, [int]$DelayMs = 200)
-    $prefix = ([IO.Path]::GetFullPath($VenvDir)).TrimEnd('\') + '\'
-    $mainPy = ([IO.Path]::GetFullPath($Root)).TrimEnd('\') + '\main.py'
+    $prefixes = @(Get-OdictoFolderSpellings -Dir $VenvDir | ForEach-Object { $_ + '\' })
+    $mainPys = @(Get-OdictoFolderSpellings -Dir $Root | ForEach-Object { $_ + '\main.py' })
+    # python.exe, pythonw.exe, python3.12.exe, or the 8.3 name of a longer one (PYTHON~1.EXE).
+    $pythonName = '^(?:pythonw?[\d.]*|python~\d+)\.exe$'
     $ignoreCase = [StringComparison]::OrdinalIgnoreCase
     $scan = {
         $found = @{ Users = @(); Unreadable = @() }
@@ -310,10 +333,33 @@ function Get-OdictoVenvUsers {
             if ($p.ProcessId -eq $PID) { continue }
             $exe = [string]$p.ExecutablePath
             $cmd = [string]$p.CommandLine
-            $isPython = ([string]$p.Name) -match '^pythonw?[\d.]*\.exe$'
-            if ($exe.StartsWith($prefix, $ignoreCase) -or
-                $cmd.IndexOf($prefix, $ignoreCase) -ge 0 -or
-                ($isPython -and $cmd.IndexOf($mainPy, $ignoreCase) -ge 0)) {
+            # The executable path, then each quoted or bare word of the command line, in long form.
+            # WMI reports a process in the spelling that started it (C:\Users\RUNNER~1\..., or
+            # \\?\C:\...); GetFullPath expands 8.3 names in Windows PowerShell 5.1. A word that is
+            # not a rooted path, or that GetFullPath rejects, gives ''. Inline: a function call per
+            # process doubles the time of a look.
+            $words = @($exe)
+            foreach ($m in [regex]::Matches($cmd, '"([^"]*)"|([^\s"]+)')) { $words += $m.Groups[1].Value + $m.Groups[2].Value }
+            $long = @(foreach ($word in $words) {
+                $word = $word -replace '^\\\\\?\\(?=[A-Za-z]:\\)', ''
+                if ($word -match '^(?:[A-Za-z]:[\\/]|\\\\)') { try { [IO.Path]::GetFullPath($word) } catch { '' } } else { '' }
+            })
+            $isPython = ([string]$p.Name) -match $pythonName -or
+                        [IO.Path]::GetFileName($long[0]) -match $pythonName
+            # One line per path, as written and in long form (a path never holds a line break).
+            $lines = "`n" + ((@($exe) + $long) -join "`n") + "`n"
+            $isUser = $false
+            foreach ($prefix in $prefixes) {
+                if ($cmd.IndexOf($prefix, $ignoreCase) -ge 0 -or
+                    $lines.IndexOf("`n" + $prefix, $ignoreCase) -ge 0) { $isUser = $true }
+            }
+            if ($isPython) {
+                foreach ($mainPy in $mainPys) {
+                    if ($cmd.IndexOf($mainPy, $ignoreCase) -ge 0 -or
+                        $lines.IndexOf("`n" + $mainPy + "`n", $ignoreCase) -ge 0) { $isUser = $true }
+                }
+            }
+            if ($isUser) {
                 $found.Users += $p
             } elseif ($isPython -and (-not $exe -or -not $cmd)) {
                 $found.Unreadable += $p

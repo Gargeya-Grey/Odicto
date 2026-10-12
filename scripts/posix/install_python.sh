@@ -130,25 +130,39 @@ odicto_venv_state() {
   fi
 }
 
-# odicto_venv_users ROOT VENV: lists processes that run from VENV or run ROOT/main.py.
-# Fails (so the caller refuses) when the process list cannot be read.
+# odicto_venv_users ROOT...: lists processes ("PID <pid>: <command>") that run from ROOT/.venv
+# or run ROOT/main.py. Pass every known spelling of the install folder: ps shows a command as
+# it was typed, so a symlinked folder (or /var against /private/var on macOS) is different
+# text. On Linux /proc/<pid>/exe also names each program by its physical path. Fails (so the
+# caller refuses) when the process list cannot be read.
 odicto_venv_users() {
-  local root="$1" venv="$2" listing line
-  listing="$(ps -A -o command= 2>/dev/null)" || return 2
-  while IFS= read -r line; do
-    case "$line" in
-      "$venv"/*|*" $venv/"*|*" $root/main.py"*|"$root/main.py"*) printf '%s\n' "$line" ;;
-    esac
+  local listing pid cmd exe root proc=""
+  listing="$(ps -A -o pid= -o command= 2>/dev/null)" || return 2
+  if [ -L /proc/self/exe ]; then proc=1; fi
+  while read -r pid cmd; do
+    exe=""
+    if [ -n "$proc" ]; then exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || exe=""; fi
+    for root in "$@"; do
+      case "$cmd" in
+        "$root/.venv"/*|*" $root/.venv/"*|*" $root/main.py"*|"$root/main.py"*)
+          printf 'PID %s: %s\n' "$pid" "$cmd"; continue 2 ;;
+      esac
+      case "$exe" in
+        "$root/.venv"/*) printf 'PID %s: %s\n' "$pid" "$cmd"; continue 2 ;;
+      esac
+    done
   done <<<"$listing"
   return 0
 }
 
 # odicto_venv_move_aside ROOT VENV: renames VENV to ROOT/.venv-backup-<timestamp> (unique) and
 # prints the new path. It never deletes. It refuses when VENV is not exactly ROOT/.venv, is a
-# symlink, or is in use by a running process (including Odicto).
+# symlink, or is in use by a running process (including Odicto) that names the install folder
+# by its physical path or by ROOT as given (on Linux also any program file inside .venv).
 odicto_venv_move_aside() {
-  local root venv users stamp backup n=0 suffix
+  local root given venv users stamp backup n=0 suffix
   root="$(cd -P "$1" 2>/dev/null && pwd)" || { echo "Install folder '$1' does not exist." >&2; return 1; }
+  given="$(cd "$1" 2>/dev/null && pwd)" || given="$root"
   venv="$root/.venv"
   if [ "$(cd -P "$(dirname "$2")" 2>/dev/null && pwd)/$(basename "$2")" != "$venv" ]; then
     echo "Refusing to move '$2': it is not the .venv directly inside the install folder." >&2
@@ -162,7 +176,7 @@ odicto_venv_move_aside() {
     echo "Refusing to move '$venv': it is not a directory." >&2
     return 1
   fi
-  if ! users="$(odicto_venv_users "$root" "$venv")"; then
+  if ! users="$(odicto_venv_users "$root" "$given")"; then
     echo "Cannot tell whether Odicto is running. Quit Odicto from its tray icon (Quit Odicto), then re-run." >&2
     return 1
   fi
