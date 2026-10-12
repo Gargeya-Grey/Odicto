@@ -130,18 +130,35 @@ odicto_venv_state() {
   fi
 }
 
+# odicto_process_cwd PID: prints the working folder of PID as a physical path (Linux /proc,
+# else lsof), or nothing when it cannot be read (for example another user's process).
+odicto_process_cwd() {
+  if [ -L "/proc/$1/cwd" ]; then
+    readlink "/proc/$1/cwd" 2>/dev/null || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1 || true
+  fi
+}
+
 # odicto_venv_users ROOT...: lists processes ("PID <pid>: <command>") that run from ROOT/.venv
 # or run ROOT/main.py. Pass every known spelling of the install folder: ps shows a command as
 # it was typed, so a symlinked folder (or /var against /private/var on macOS) is different
-# text. On Linux /proc/<pid>/exe also names each program by its physical path. Fails (so the
-# caller refuses) when the process list cannot be read.
+# text. On Linux /proc/<pid>/exe also names each program by its physical path. A relative
+# command (the launchers run ".venv/bin/python main.py" from the install folder) names the
+# folder only through its working folder, which is read for those commands alone. Fails (so
+# the caller refuses) when the process list cannot be read.
 odicto_venv_users() {
-  local listing pid cmd exe root proc=""
+  local listing pid cmd exe cwd root proc=""
   listing="$(ps -A -o pid= -o command= 2>/dev/null)" || return 2
   if [ -L /proc/self/exe ]; then proc=1; fi
   while read -r pid cmd; do
     exe=""
+    cwd=""
     if [ -n "$proc" ]; then exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || exe=""; fi
+    case "$cmd" in
+      .venv/*|./.venv/*|*" main.py"|*" main.py "*|*" ./main.py"|*" ./main.py "*)
+        cwd="$(odicto_process_cwd "$pid")" || cwd="" ;;
+    esac
     for root in "$@"; do
       case "$cmd" in
         "$root/.venv"/*|*" $root/.venv/"*|*" $root/main.py"*|"$root/main.py"*)
@@ -150,6 +167,9 @@ odicto_venv_users() {
       case "$exe" in
         "$root/.venv"/*) printf 'PID %s: %s\n' "$pid" "$cmd"; continue 2 ;;
       esac
+      if [ -n "$cwd" ] && [ "$cwd" = "$root" ]; then
+        printf 'PID %s: %s\n' "$pid" "$cmd"; continue 2
+      fi
     done
   done <<<"$listing"
   return 0
@@ -158,7 +178,8 @@ odicto_venv_users() {
 # odicto_venv_move_aside ROOT VENV: renames VENV to ROOT/.venv-backup-<timestamp> (unique) and
 # prints the new path. It never deletes. It refuses when VENV is not exactly ROOT/.venv, is a
 # symlink, or is in use by a running process (including Odicto) that names the install folder
-# by its physical path or by ROOT as given (on Linux also any program file inside .venv).
+# by its physical path or by ROOT as given, or that runs .venv/... or main.py relative to it
+# (on Linux also any program file inside .venv).
 odicto_venv_move_aside() {
   local root given venv users stamp backup n=0 suffix
   root="$(cd -P "$1" 2>/dev/null && pwd)" || { echo "Install folder '$1' does not exist." >&2; return 1; }

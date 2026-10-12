@@ -850,6 +850,31 @@ else:
             self.assertEqual(0, code, err)
             self.assertFalse(venv.exists())
 
+        def test_move_aside_refuses_a_program_started_relative_to_the_install_folder(self):
+            # scripts/posix/start_dictation.sh runs ".venv/bin/python main.py" from the install
+            # folder: the command names that folder only through the process's working folder.
+            venv = self.broken_venv()
+            os.unlink(venv / "bin" / "python")
+            shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
+            (self.install / "main.py").write_text("import time\ntime.sleep(60)\n")
+            cases = [
+                (".venv program", [".venv/bin/odicto-fake-app", "60"]),
+                ("python main.py", [sys.executable, "main.py"]),
+            ]
+            for label, args in cases:
+                with self.subTest(label):
+                    proc = subprocess.Popen(args, cwd=str(self.install))
+                    self.addCleanup(proc.kill)
+                    try:
+                        self.assert_move_refused_for(proc, self.install)
+                    finally:
+                        proc.kill()
+                        proc.wait(timeout=30)
+                    self.assertTrue(venv.is_dir())
+            code, out, err = self.move()
+            self.assertEqual(0, code, err)
+            self.assertFalse(venv.exists())
+
         def test_move_aside_refuses_while_the_app_holds_dictation_lock(self):
             import fcntl
             venv = self.broken_venv()

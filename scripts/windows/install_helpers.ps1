@@ -324,6 +324,9 @@ function Get-OdictoVenvUsers {
           [int]$Retries = 3, [int]$DelayMs = 200)
     $prefixes = @(Get-OdictoFolderSpellings -Dir $VenvDir | ForEach-Object { $_ + '\' })
     $mainPys = @(Get-OdictoFolderSpellings -Dir $Root | ForEach-Object { $_ + '\main.py' })
+    # Only words on the install's own volume are expanded: a path elsewhere cannot be inside it,
+    # and GetFullPath can wait on the network for a \\server\share\ABC~1 path.
+    $volume = ([IO.Path]::GetPathRoot($prefixes[0])).TrimEnd('\')
     # python.exe, pythonw.exe, python3.12.exe, or the 8.3 name of a longer one (PYTHON~1.EXE).
     $pythonName = '^(?:pythonw?[\d.]*|python~\d+)\.exe$'
     $ignoreCase = [StringComparison]::OrdinalIgnoreCase
@@ -336,13 +339,15 @@ function Get-OdictoVenvUsers {
             # The executable path, then each quoted or bare word of the command line, in long form.
             # WMI reports a process in the spelling that started it (C:\Users\RUNNER~1\..., or
             # \\?\C:\...); GetFullPath expands 8.3 names in Windows PowerShell 5.1. A word that is
-            # not a rooted path, or that GetFullPath rejects, gives ''. Inline: a function call per
-            # process doubles the time of a look.
+            # not a rooted path on the install's volume, or that GetFullPath rejects, gives ''.
+            # Inline: a function call per process doubles the time of a look.
             $words = @($exe)
             foreach ($m in [regex]::Matches($cmd, '"([^"]*)"|([^\s"]+)')) { $words += $m.Groups[1].Value + $m.Groups[2].Value }
             $long = @(foreach ($word in $words) {
                 $word = $word -replace '^\\\\\?\\(?=[A-Za-z]:\\)', ''
-                if ($word -match '^(?:[A-Za-z]:[\\/]|\\\\)') { try { [IO.Path]::GetFullPath($word) } catch { '' } } else { '' }
+                if ($word -match '^(?:[A-Za-z]:[\\/]|\\\\)' -and $word.StartsWith($volume, $ignoreCase)) {
+                    try { [IO.Path]::GetFullPath($word) } catch { '' }
+                } else { '' }
             })
             $isPython = ([string]$p.Name) -match $pythonName -or
                         [IO.Path]::GetFileName($long[0]) -match $pythonName

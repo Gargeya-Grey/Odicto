@@ -29,10 +29,10 @@ from pathlib import Path
 GATE = {
     # Prior floor 518, plus the setup page and release tests, the root launchers, the
     # admin switch, resting resource use, the final-review fixes and the idle release of
-    # the backup Whisper: 719 discovered on Windows minus 24 in Windows-only installer classes.
-    # Plus 5 installer tests that start a process through a second spelling of the install
-    # folder (3 Windows-only, 2 macOS/Linux-only). Windows discovers 722, macOS/Linux 707.
-    "floor": 700,
+    # the backup Whisper: 695, the tests that every platform discovers. Plus 6 installer tests
+    # that start a process through another spelling of the install folder (3 Windows-only,
+    # 3 macOS/Linux-only): 701. Windows discovers 722 (27 Windows-only), macOS/Linux 708.
+    "floor": 701,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
