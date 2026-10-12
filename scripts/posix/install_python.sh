@@ -145,11 +145,12 @@ odicto_process_cwd() {
 # it was typed, so a symlinked folder (or /var against /private/var on macOS) is different
 # text. On Linux /proc/<pid>/exe also names each program by its physical path. A relative
 # command (the launchers run ".venv/bin/python main.py" from the install folder) names the
-# folder only through its working folder, which is read for a .venv/ command or a Python that
-# runs main.py (an editor with main.py open is not a user). Fails (so the caller refuses)
-# when the process list cannot be read.
+# folder only through its working folder, which is read for a .venv/ command or a program
+# named python* that runs main.py (an editor with main.py open is not a user). A Python whose
+# own path holds a space is not recognised there. Fails (so the caller refuses) when the
+# process list cannot be read.
 odicto_venv_users() {
-  local listing pid cmd exe cwd root proc=""
+  local listing pid cmd exe cwd prog root proc=""
   listing="$(ps -A -o pid= -o command= 2>/dev/null)" || return 2
   if [ -L /proc/self/exe ]; then proc=1; fi
   while read -r pid cmd; do
@@ -157,8 +158,14 @@ odicto_venv_users() {
     cwd=""
     if [ -n "$proc" ]; then exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || exe=""; fi
     case "$cmd" in
-      .venv/*|./.venv/*|*[Pp]ython*" main.py"|*[Pp]ython*" main.py "*|*[Pp]ython*" ./main.py"|*[Pp]ython*" ./main.py "*)
-        cwd="$(odicto_process_cwd "$pid")" || cwd="" ;;
+      .venv/*|./.venv/*) cwd="$(odicto_process_cwd "$pid")" || cwd="" ;;
+      *" main.py"|*" main.py "*|*" ./main.py"|*" ./main.py "*)
+        # Only when the program itself is a Python (python3, macOS "Python"), not an
+        # argument: "vim install_python.sh main.py" is an editor.
+        prog="${cmd%% *}"
+        case "${prog##*/}" in
+          [Pp]ython*) cwd="$(odicto_process_cwd "$pid")" || cwd="" ;;
+        esac ;;
     esac
     for root in "$@"; do
       case "$cmd" in

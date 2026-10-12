@@ -875,8 +875,11 @@ else:
                         proc.kill()
                         proc.wait(timeout=30)
                     self.assertTrue(venv.is_dir())
-            # An editor with main.py open in the install folder is not a user: only Python counts.
-            editor = subprocess.Popen(["tail", "-f", "main.py"], cwd=str(self.install), stdout=subprocess.DEVNULL)
+            # An editor with main.py open in the install folder is not a user: only a program named
+            # python counts, not an argument that contains "python".
+            (self.install / "install_python.sh").write_text("")
+            editor = subprocess.Popen(["tail", "-f", "install_python.sh", "main.py"], cwd=str(self.install),
+                                      stdout=subprocess.DEVNULL)
             self.addCleanup(editor.kill)
             try:
                 code, out, err = self.move()
