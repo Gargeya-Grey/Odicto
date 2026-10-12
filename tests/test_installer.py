@@ -296,7 +296,9 @@ if sys.platform == "win32":
 
         # ---- a process started through another spelling of the install folder -----------------
         def short_path(self, path):
-            """The 8.3 spelling of an existing path. Skips when the volume has no 8.3 names."""
+            """The 8.3 spelling of an existing path. Skips when the volume has no 8.3 names (a Dev
+            Drive, or 8.3 creation turned off); tools/run_tests.py allows that skip. CI's temp
+            folder (C:\\Users\\RUNNER~1) always has them, so there the test fails instead."""
             import ctypes
             from ctypes import wintypes
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -306,6 +308,8 @@ if sys.platform == "win32":
             if not kernel32.GetShortPathNameW(str(path), buffer, len(buffer)):
                 raise ctypes.WinError(ctypes.get_last_error())
             if buffer.value.lower() == str(path).lower():
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    self.fail("CI's temp folder must have 8.3 names; %s has none" % path)
                 self.skipTest("the volume of %s has no 8.3 names" % path)
             return buffer.value
 
@@ -871,7 +875,14 @@ else:
                         proc.kill()
                         proc.wait(timeout=30)
                     self.assertTrue(venv.is_dir())
-            code, out, err = self.move()
+            # An editor with main.py open in the install folder is not a user: only Python counts.
+            editor = subprocess.Popen(["tail", "-f", "main.py"], cwd=str(self.install), stdout=subprocess.DEVNULL)
+            self.addCleanup(editor.kill)
+            try:
+                code, out, err = self.move()
+            finally:
+                editor.kill()
+                editor.wait(timeout=30)
             self.assertEqual(0, code, err)
             self.assertFalse(venv.exists())
 

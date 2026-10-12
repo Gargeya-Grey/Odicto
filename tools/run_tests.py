@@ -22,7 +22,8 @@ from pathlib import Path
 # FLOORS MAY ONLY RISE. Never lower "floor" to make a run pass: a lower count means
 # tests were deleted or are no longer discovered. Raise it when tests are added.
 # "allowed_skips" maps a platform to fnmatch patterns over full test ids
-# (tests.module.Class.method). Windows allows only the self-skipping real-clipboard round trip.
+# (tests.module.Class.method). Windows allows only tests that skip themselves on a developer
+# machine and always run on CI: the real-clipboard round trip and the 8.3 short-path installer tests.
 # Off Windows only tests that are decorated skipUnless(win32) may skip. A skipped
 # "node not available" JS gate is never allowed anywhere (dead gate).
 # ---------------------------------------------------------------------------
@@ -36,7 +37,12 @@ GATE = {
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
-        "win32": ["tests.test_clipboard_safety.TestWindowsRoundTrip.*"],
+        # The 8.3 short-path installer tests skip themselves when the temp folder's volume has
+        # no 8.3 names (a Dev Drive); CI's temp folder has them, and there they fail instead.
+        "win32": ["tests.test_clipboard_safety.TestWindowsRoundTrip.*",
+                  "tests.test_installer.TestWindowsInstaller.test_move_aside_refuses_a_venv_program_started_through_a_short_path",
+                  "tests.test_installer.TestWindowsInstaller.test_move_aside_refuses_python_running_main_py_through_a_short_path",
+                  "tests.test_installer.TestWindowsInstaller.test_other_spellings_in_the_process_list_are_recognised"],
         "other": [
             "tests.test_windows_admin.TestHelperDecisions.*",
             "tests.test_windows_admin.TestHelperParses.*",

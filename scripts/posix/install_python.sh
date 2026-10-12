@@ -145,8 +145,9 @@ odicto_process_cwd() {
 # it was typed, so a symlinked folder (or /var against /private/var on macOS) is different
 # text. On Linux /proc/<pid>/exe also names each program by its physical path. A relative
 # command (the launchers run ".venv/bin/python main.py" from the install folder) names the
-# folder only through its working folder, which is read for those commands alone. Fails (so
-# the caller refuses) when the process list cannot be read.
+# folder only through its working folder, which is read for a .venv/ command or a Python that
+# runs main.py (an editor with main.py open is not a user). Fails (so the caller refuses)
+# when the process list cannot be read.
 odicto_venv_users() {
   local listing pid cmd exe cwd root proc=""
   listing="$(ps -A -o pid= -o command= 2>/dev/null)" || return 2
@@ -156,7 +157,7 @@ odicto_venv_users() {
     cwd=""
     if [ -n "$proc" ]; then exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || exe=""; fi
     case "$cmd" in
-      .venv/*|./.venv/*|*" main.py"|*" main.py "*|*" ./main.py"|*" ./main.py "*)
+      .venv/*|./.venv/*|*[Pp]ython*" main.py"|*[Pp]ython*" main.py "*|*[Pp]ython*" ./main.py"|*[Pp]ython*" ./main.py "*)
         cwd="$(odicto_process_cwd "$pid")" || cwd="" ;;
     esac
     for root in "$@"; do
@@ -178,7 +179,7 @@ odicto_venv_users() {
 # odicto_venv_move_aside ROOT VENV: renames VENV to ROOT/.venv-backup-<timestamp> (unique) and
 # prints the new path. It never deletes. It refuses when VENV is not exactly ROOT/.venv, is a
 # symlink, or is in use by a running process (including Odicto) that names the install folder
-# by its physical path or by ROOT as given, or that runs .venv/... or main.py relative to it
+# by its physical path or by ROOT as given, or that runs .venv/... or Python main.py relative to it
 # (on Linux also any program file inside .venv).
 odicto_venv_move_aside() {
   local root given venv users stamp backup n=0 suffix
