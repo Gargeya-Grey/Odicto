@@ -294,6 +294,105 @@ if sys.platform == "win32":
             self.assertEqual(0, code, text)
             self.assertFalse(venv.exists())
 
+        # ---- a process started through another spelling of the install folder -----------------
+        def short_path(self, path):
+            """The 8.3 spelling of an existing path. Skips when the volume has no 8.3 names (a Dev
+            Drive, or 8.3 creation turned off); tools/run_tests.py allows that skip. CI's temp
+            folder (C:\\Users\\RUNNER~1) always has them, so there the test fails instead."""
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+            kernel32.GetShortPathNameW.restype = wintypes.DWORD
+            buffer = ctypes.create_unicode_buffer(32768)
+            if not kernel32.GetShortPathNameW(str(path), buffer, len(buffer)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if buffer.value.lower() == str(path).lower():
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    self.fail("CI's temp folder must have 8.3 names; %s has none" % path)
+                self.skipTest("the volume of %s has no 8.3 names" % path)
+            return buffer.value
+
+        def start_hidden(self, args):
+            proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    creationflags=0x08000000)
+            self.addCleanup(proc.kill)
+            return proc
+
+        def assert_move_refused_for(self, proc, root):
+            code, text = self.move(root=root, venv=os.path.join(str(root), ".venv"), pids=[proc.pid])
+            self.assertEqual(1, code, text)
+            self.assertIn("PID %d" % proc.pid, text)
+            self.assertIn("Quit Odicto", text)
+
+        def test_move_aside_refuses_a_venv_program_started_through_a_short_path(self):
+            # WMI reports a process in the spelling that started it. C:\Users\RUNNER~1\... (CI's
+            # temp folder) names the same .venv as the long path, so the installer must refuse.
+            venv = self.install_venv(self.broken_template)
+            runner = venv / "Scripts" / "odicto-fake-app.exe"
+            shutil.copy(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "ping.exe", runner)
+            cases = [  # (how the process is started, the install folder the installer is given)
+                ("8.3 path", self.short_path(runner), self.install),
+                ("one 8.3 folder", self.short_path(self.work) + str(runner)[len(str(self.work)):], self.install),
+                ("long path, 8.3 install folder", str(runner), self.short_path(self.install)),
+            ]
+            for label, exe, root in cases:
+                with self.subTest(label):
+                    proc = self.start_hidden([exe, "-n", "60", "127.0.0.1"])
+                    try:
+                        self.assert_move_refused_for(proc, root)
+                    finally:
+                        proc.kill()
+                        proc.wait(timeout=30)
+                    self.assertTrue(venv.is_dir())
+            code, text = self.move()
+            self.assertEqual(0, code, text)
+            self.assertFalse(venv.exists())
+
+        def test_move_aside_refuses_python_running_main_py_through_a_short_path(self):
+            # A Python outside the .venv that runs this install's main.py: only its command line
+            # names the install folder, in the spelling that started it.
+            root = self.work / "Odicto Home"         # a long name, so its 8.3 name differs
+            shutil.copytree(self.broken_template, root / ".venv")
+            (root / "main.py").write_text("import time\ntime.sleep(60)\n", encoding="ascii")
+            python = getattr(sys, "_base_executable", sys.executable)   # not a venv launcher
+            cases = [
+                ("8.3 path", self.short_path(root / "main.py")),
+                ("one 8.3 folder", self.short_path(self.work) + r"\Odicto Home\main.py"),
+            ]
+            for label, main_py in cases:
+                with self.subTest(label):
+                    proc = self.start_hidden([python, main_py])
+                    try:
+                        self.assert_move_refused_for(proc, root)
+                    finally:
+                        proc.kill()
+                        proc.wait(timeout=30)
+            code, text = self.move(root=root, venv=root / ".venv")
+            self.assertEqual(0, code, text)
+            self.assertFalse((root / ".venv").exists())
+
+        def test_other_spellings_in_the_process_list_are_recognised(self):
+            # python3.11.exe started through an 8.3 path has a WMI Name such as PYTHON~1.EXE, or a
+            # hashed one such as PY4F2A~1.EXE; its expanded path still says python3.11.exe. A
+            # \\?\-prefixed path is the same folder. Notepad with main.py open is not a user.
+            exe = self.work / "fakes" / "python3.11.exe"
+            exe.write_bytes(b"")
+            fakes = r"""
+            function Get-OdictoProcessSnapshot {
+                $main = Join-Path $env:T_ROOT 'main.py'
+                $app = '\\?\' + (Join-Path $env:T_VENV 'Scripts\odicto-fake-app.exe')
+                @([pscustomobject]@{ProcessId=900011; Name='PY4F2A~1.EXE'; ExecutablePath=$env:T_EXE; CommandLine="`"$env:T_EXE`" `"$main`""},
+                  [pscustomobject]@{ProcessId=900012; Name='PYTHON~1.EXE'; ExecutablePath=$null; CommandLine=$null},
+                  [pscustomobject]@{ProcessId=900013; Name='odicto-fake-app.exe'; ExecutablePath=$app; CommandLine='odicto-fake-app.exe -n 60'},
+                  [pscustomobject]@{ProcessId=900014; Name='notepad.exe'; ExecutablePath='C:\Windows\notepad.exe'; CommandLine="notepad `"$main`""})
+            }
+            """
+            found = _ps_json(fakes + "ConvertTo-Json -Compress -InputObject @(Get-OdictoVenvUsers -Root $env:T_ROOT "
+                             "-VenvDir $env:T_VENV -Retries 0 | ForEach-Object { [int]$_.ProcessId })",
+                             T_EXE=self.short_path(exe), T_ROOT=str(self.install), T_VENV=str(self.install / ".venv"))
+            self.assertEqual([900011, 900012, 900013], sorted(found))
+
         # A fake process list: PID 900001 is the Python process whose metadata changes by mode.
         FAKE_PROCESSES = r"""
         $script:calls = 0
@@ -696,6 +795,102 @@ else:
             proc.wait(timeout=30)
             code, out, err = self.move()
             self.assertEqual(0, code, err)
+
+        # ---- a process started through another spelling of the install folder -----------------
+        def linked_install(self):
+            """A second spelling of the install folder: a symlink beside it."""
+            link = self.work / "linked install"
+            os.symlink(str(self.install), str(link))
+            return link
+
+        def assert_move_refused_for(self, proc, root):
+            code, out, err = _bash('odicto_venv_move_aside "$R" "$V"', R=str(root), V=str(root / ".venv"))
+            self.assertEqual(1, code, err)
+            self.assertIn("PID %d" % proc.pid, err)
+            self.assertIn("Quit Odicto", err)
+
+        def test_move_aside_refuses_a_venv_program_started_through_a_symlink(self):
+            # ps shows a command as it was typed, so <link>/.venv/... and <real>/.venv/... are
+            # different text. The installer matches the physical and the given spelling.
+            venv = self.broken_venv()
+            os.unlink(venv / "bin" / "python")
+            shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
+            link = self.linked_install()
+            cases = [  # (how the process is started, the install folder the installer is given)
+                ("symlink path", link, link),
+                ("physical path, symlinked install folder", self.install, link),
+            ]
+            if sys.platform.startswith("linux"):
+                # /proc/<pid>/exe names the program by its physical path. macOS has no /proc, so
+                # there a spelling the installer is not given stays unknown (dictation.lock remains).
+                cases.append(("symlink path, physical install folder", link, self.install))
+            for label, started, given in cases:
+                with self.subTest(label):
+                    proc = subprocess.Popen([str(started / ".venv" / "bin" / "odicto-fake-app"), "60"])
+                    self.addCleanup(proc.kill)
+                    try:
+                        self.assert_move_refused_for(proc, given)
+                    finally:
+                        proc.kill()
+                        proc.wait(timeout=30)
+                    self.assertTrue(venv.is_dir())
+            code, out, err = self.move()
+            self.assertEqual(0, code, err)
+            self.assertFalse(venv.exists())
+
+        def test_move_aside_refuses_python_running_main_py_through_a_symlink(self):
+            venv = self.broken_venv()
+            (self.install / "main.py").write_text("import time\ntime.sleep(60)\n")
+            link = self.linked_install()
+            proc = subprocess.Popen([sys.executable, str(link / "main.py")])
+            self.addCleanup(proc.kill)
+            try:
+                self.assert_move_refused_for(proc, link)
+            finally:
+                proc.kill()
+                proc.wait(timeout=30)
+            self.assertTrue(venv.is_dir())
+            code, out, err = self.move()
+            self.assertEqual(0, code, err)
+            self.assertFalse(venv.exists())
+
+        def test_move_aside_refuses_a_program_started_relative_to_the_install_folder(self):
+            # scripts/posix/start_dictation.sh runs ".venv/bin/python main.py" from the install
+            # folder: the command names that folder only through the process's working folder.
+            venv = self.broken_venv()
+            os.unlink(venv / "bin" / "python")
+            shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
+            (self.install / "main.py").write_text("import time\ntime.sleep(60)\n")
+            # The rule reads the program name, the first word of the command. A Python whose own
+            # path holds a space is an accepted miss, so start it under a space-free name.
+            os.symlink(os.path.realpath(sys.executable), str(self.install / "python3"))
+            cases = [
+                (".venv program", [".venv/bin/odicto-fake-app", "60"]),
+                ("python main.py", ["./python3", "main.py"]),
+            ]
+            for label, args in cases:
+                with self.subTest(label):
+                    proc = subprocess.Popen(args, cwd=str(self.install))
+                    self.addCleanup(proc.kill)
+                    try:
+                        self.assert_move_refused_for(proc, self.install)
+                    finally:
+                        proc.kill()
+                        proc.wait(timeout=30)
+                    self.assertTrue(venv.is_dir())
+            # An editor with main.py open in the install folder is not a user: only a program named
+            # python counts, not an argument that contains "python".
+            (self.install / "install_python.sh").write_text("")
+            editor = subprocess.Popen(["tail", "-f", "install_python.sh", "main.py"], cwd=str(self.install),
+                                      stdout=subprocess.DEVNULL)
+            self.addCleanup(editor.kill)
+            try:
+                code, out, err = self.move()
+            finally:
+                editor.kill()
+                editor.wait(timeout=30)
+            self.assertEqual(0, code, err)
+            self.assertFalse(venv.exists())
 
         def test_move_aside_refuses_while_the_app_holds_dictation_lock(self):
             import fcntl
