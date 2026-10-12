@@ -1,5 +1,14 @@
 import contextlib
 import os
+
+# numpy's bundled OpenBLAS sizes one worker and one large memory pool per CPU
+# thread when it is imported: about 480 MB of committed memory and 15 idle
+# threads on a 16-thread machine. Odicto does no large matrix work (Whisper
+# decodes in ctranslate2, which has its own pool), so one BLAS thread costs no
+# speed. This must run before anything imports numpy; setdefault keeps an
+# explicit value from the environment.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 import json
 import queue
 from paths import ROOT
@@ -300,6 +309,12 @@ class DictationApp:
             ).stdout.strip()
             if rev:
                 print(f"Code version: git {rev}")
+        except Exception:
+            pass
+        try:
+            from version import app_version
+
+            print(f"Odicto {app_version()}")
         except Exception:
             pass
         try:
