@@ -574,7 +574,8 @@ limit and 0.98 GB after it).
 
 The proposal was to release the fallback model after a long idle period, so a rare cloud
 failure does not leave 741 MB committed for the rest of the day. The owner chose 10 minutes.
-The price is one more 2 to 5 s load on the next failure. Pre-loading Whisper at startup for a
+The price is one more 1 to 5 s load on the next failure (0.9 to 2.0 s measured warm with
+tiny.en on the i7-12650H, about 5 s on a cold disk). Pre-loading Whisper at startup for a
 cloud install would be the opposite trade: +741 MB for a 2 s gain on a rare failure.
 
 How it works (`_LocalWhisperFallback` in `app/transcriber.py`): each backup use restarts a
@@ -594,6 +595,12 @@ backup load, only when neither the dictation nor the live engine is Whisper, and
 ctranslate2 loads (MKL reads it once); a value already in the environment wins. Measured
 through the real `local_fallback` path with a cloud engine: 819 to 822 MB loaded, 104 to
 108 MB after each of three releases.
+
+Children inherit the environment: the tray's setup page, and the Odicto that its Save
+starts. So the value goes with a marker, `ODICTO_SET_MKL_DISABLE_FAST_MM=1`, and the top of
+`app/main.py` removes a marked value before anything can load ctranslate2. Without that, a
+switch from a cloud engine to Whisper through Save would start a primary Whisper with the
+cache off (about 70 ms slower per 5 s clip). A value the user set has no marker and stays.
 
 ### By eye
 

@@ -9,6 +9,13 @@ import os
 # explicit value from the environment.
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+# A parent Odicto that used only the cloud backup Whisper turned MKL's buffer cache off
+# and marked it (transcriber._backup_only_mkl_settings). This process may use Whisper as
+# its main engine, so drop a marked value before ctranslate2 can load; a value the user
+# set has no marker and stays.
+if os.environ.pop("ODICTO_SET_MKL_DISABLE_FAST_MM", None) is not None:
+    os.environ.pop("MKL_DISABLE_FAST_MM", None)
+
 import json
 import queue
 from paths import ROOT

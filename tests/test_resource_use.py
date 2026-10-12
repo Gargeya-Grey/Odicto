@@ -237,52 +237,94 @@ class TestBackupWhisperIsReleasedWhenIdle(unittest.TestCase):
 class TestBackupOnlyMklSetting(unittest.TestCase):
     """MKL's buffer cache keeps ~120 MB per released model; only a backup-only Whisper turns it off."""
 
+    VAR, MARK = "MKL_DISABLE_FAST_MM", "ODICTO_SET_MKL_DISABLE_FAST_MM"
+
     def _decide(self, stt="groq", live="groq", loaded=False, preset=None):
-        import sys as _sys
+        import transcriber
+
+        with patch.dict(os.environ), \
+                patch.object(transcriber, "_ctranslate2_loaded", return_value=loaded), \
+                patch.object(transcriber.Config, "effective_stt_provider", return_value=stt), \
+                patch.object(transcriber.Config, "effective_live_stt_provider", return_value=live):
+            os.environ.pop(self.VAR, None)
+            os.environ.pop(self.MARK, None)
+            if preset is not None:
+                os.environ[self.VAR] = preset
+            transcriber._backup_only_mkl_settings()
+            return os.environ.get(self.VAR), os.environ.get(self.MARK)
+
+    def test_a_cloud_only_setup_turns_the_cache_off_and_marks_it(self):
+        self.assertEqual(self._decide(), ("1", "1"))
+
+    def test_a_primary_or_live_whisper_keeps_the_cache(self):
+        self.assertEqual(self._decide(stt="whisper", live="whisper"), (None, None))
+        self.assertEqual(self._decide(stt="groq", live="whisper"), (None, None))
+
+    def test_too_late_once_ctranslate2_is_loaded(self):
+        self.assertEqual(self._decide(loaded=True), (None, None))
+
+    def test_a_value_the_user_set_wins_and_is_not_marked(self):
+        self.assertEqual(self._decide(preset="0"), ("0", None))
+
+    def test_only_a_backup_load_applies_the_setting(self):
+        import types
+        from unittest.mock import MagicMock
 
         import transcriber
 
-        env = {} if preset is None else {"MKL_DISABLE_FAST_MM": preset}
-        with patch.dict(os.environ, env), patch.dict(_sys.modules), \
-                patch.object(transcriber.Config, "effective_stt_provider", return_value=stt), \
-                patch.object(transcriber.Config, "effective_live_stt_provider", return_value=live):
-            if preset is None:
-                os.environ.pop("MKL_DISABLE_FAST_MM", None)
-            if loaded:
-                _sys.modules["ctranslate2"] = object()
+        fake = types.ModuleType("faster_whisper")
+        fake.WhisperModel = MagicMock()
+        missing = object()
+        saved = sys.modules.get("faster_whisper", missing)
+        sys.modules["faster_whisper"] = fake
+
+        def restore():
+            if saved is missing:
+                sys.modules.pop("faster_whisper", None)
             else:
-                _sys.modules.pop("ctranslate2", None)
-            transcriber._backup_only_mkl_settings()
-            return os.environ.get("MKL_DISABLE_FAST_MM")
+                sys.modules["faster_whisper"] = saved
 
-    def test_a_cloud_only_setup_turns_the_cache_off(self):
-        self.assertEqual(self._decide(), "1")
+        self.addCleanup(restore)
+        for backup, calls in ((True, 1), (False, 0)):
+            with patch.object(transcriber, "WhisperModel", None), \
+                    patch.object(transcriber, "_backup_only_mkl_settings") as decide, \
+                    patch.object(transcriber, "whisper_device_attempts", return_value=[("cpu", "int8")]), \
+                    patch.object(transcriber.Config, "WHISPER_DEVICE", "cpu"), \
+                    redirect_stdout(io.StringIO()):
+                transcriber.WhisperTranscriber(backup=backup)
+            self.assertEqual(decide.call_count, calls, "backup=%s" % backup)
 
-    def test_a_primary_or_live_whisper_keeps_the_cache(self):
-        self.assertIsNone(self._decide(stt="whisper", live="whisper"))
-        self.assertIsNone(self._decide(stt="groq", live="whisper"))
 
-    def test_too_late_once_ctranslate2_is_loaded(self):
-        self.assertIsNone(self._decide(loaded=True))
+class TestChildOdictoDropsTheInheritedSetting(unittest.TestCase):
+    """The tray's setup page and the Odicto its Save starts inherit the parent's environment."""
 
-    def test_a_value_in_the_environment_wins(self):
-        self.assertEqual(self._decide(preset="0"), "0")
+    def test_a_marked_value_is_removed_before_anything_loads(self):
+        info = _probe("import main",
+                      extra="[os.environ.get('MKL_DISABLE_FAST_MM'), os.environ.get('ODICTO_SET_MKL_DISABLE_FAST_MM')]",
+                      MKL_DISABLE_FAST_MM="1", ODICTO_SET_MKL_DISABLE_FAST_MM="1")
+        self.assertEqual(info["extra"], [None, None])
+
+    def test_a_value_the_user_set_stays(self):
+        info = _probe("import main", extra="os.environ.get('MKL_DISABLE_FAST_MM')",
+                      MKL_DISABLE_FAST_MM="1", ODICTO_SET_MKL_DISABLE_FAST_MM=None)
+        self.assertEqual(info["extra"], "1")
 
 
 class TestPrimaryWhisperStaysLoaded(unittest.TestCase):
     """STT_PROVIDER=whisper keeps its model: releasing it would slow every dictation."""
 
-    def test_the_primary_whisper_never_starts_a_release_timer(self):
+    def test_the_dictation_and_live_whisper_are_not_backups(self):
+        import ast
+
         import transcriber
 
-        _FakeTimer.made = []
-        whisper = transcriber.WhisperTranscriber.__new__(transcriber.WhisperTranscriber)
-        whisper.model = object()
-        with patch.object(transcriber.threading, "Timer", _FakeTimer), \
-                patch.object(whisper, "transcribe", return_value="w"):
-            self.assertEqual(whisper.local_fallback("clip"), "w")
-        self.assertEqual(_FakeTimer.made, [])
-        self.assertIsNotNone(whisper.model)
+        self.assertFalse(issubclass(transcriber.WhisperTranscriber, transcriber._LocalWhisperFallback))
+        tree = ast.parse((APP_DIR / "main.py").read_text(encoding="utf-8"))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and getattr(node.func, "id", None) == "WhisperTranscriber"]
+        self.assertGreaterEqual(len(calls), 2, "the dictation engine and the live engine")
+        for call in calls:
+            self.assertEqual((call.args, call.keywords), ([], []), ast.dump(call))
 
     def test_release_drops_the_model(self):
         import transcriber

@@ -298,6 +298,10 @@ GEMINI_STT_TIMEOUT_CAP = 15.0
 PREWARM_TIMEOUT_SECONDS = 2.0
 
 
+MKL_FAST_MM_VAR = "MKL_DISABLE_FAST_MM"
+MKL_FAST_MM_MARKER = "ODICTO_SET_MKL_DISABLE_FAST_MM"  # app/main.py reads the same name
+
+
 def _backup_only_mkl_settings() -> None:
     """Turn off MKL's buffer cache when Whisper is only the cloud backup.
 
@@ -308,15 +312,24 @@ def _backup_only_mkl_settings() -> None:
     with tiny.en). Only the backup pays that: a primary or live Whisper keeps the
     cache. MKL reads the setting once, so it applies only before ctranslate2 loads,
     and a value already in the environment wins.
+
+    Children inherit the environment (the tray's setup page, and the Odicto that its
+    Save starts), so Odicto marks the value as its own: app/main.py removes a marked
+    value before anything loads, and a later primary Whisper keeps MKL's cache.
     """
-    if "ctranslate2" in sys.modules:
+    if _ctranslate2_loaded() or MKL_FAST_MM_VAR in os.environ:
         return
     try:
         if "whisper" in (Config.effective_stt_provider(), Config.effective_live_stt_provider()):
             return
     except Exception:
         return
-    os.environ.setdefault("MKL_DISABLE_FAST_MM", "1")
+    os.environ[MKL_FAST_MM_VAR] = "1"
+    os.environ[MKL_FAST_MM_MARKER] = "1"
+
+
+def _ctranslate2_loaded() -> bool:
+    return "ctranslate2" in sys.modules
 
 
 class WhisperTranscriber:
@@ -511,7 +524,7 @@ class WhisperTranscriber:
 
 
 # The cloud backends' backup Whisper loads on the first cloud failure and is released
-# after this long without use. The next failure loads it again (2-5 s). The primary
+# after this long without use. The next failure loads it again (1-5 s). The primary
 # Whisper (STT_PROVIDER=whisper) is a different object and stays loaded.
 WHISPER_FALLBACK_IDLE_SECONDS = 600.0
 
