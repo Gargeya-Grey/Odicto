@@ -6,7 +6,9 @@
 .DESCRIPTION
   Safe for humans and coding agents. Idempotent where possible.
   Installs Python deps into .\.venv, prepares .env, optionally installs
-  Ollama + pulls the default LLM, and warms the Whisper model.
+  Ollama + pulls the default LLM, and warms the Whisper model. It also creates or
+  refreshes a Start Menu folder "Odicto" with Odicto, Odicto Setup and Stop Odicto
+  (skip with -NoShortcuts).
 
   A .venv is tied to the machine and Python that made it. A .venv that cannot
   run (for example its base Python was uninstalled) is renamed to
@@ -26,6 +28,7 @@ param(
     [string]$WhisperModel = "tiny.en",
     [string]$Python,      # an installed Python to use: path to python.exe, or 3.10 / 3.11 / 3.12
     [switch]$NoUv,        # use pip + venv instead of uv
+    [switch]$NoShortcuts, # do not create the Start Menu shortcuts
     [switch]$VenvOnly     # create or repair .venv, then stop (no packages, no Whisper)
 )
 
@@ -167,6 +170,19 @@ if (-not (Test-Path ".\.env")) {
     Write-Ok ".env already present (left unchanged)"
 }
 
+# --- Start Menu shortcuts (idempotent; skip with -NoShortcuts) ---
+if ($NoShortcuts) {
+    Write-Ok "Start Menu shortcuts skipped (-NoShortcuts)"
+} else {
+    Write-Step "Creating Start Menu shortcuts"
+    try {
+        $menuFolder = New-OdictoStartMenuShortcuts -Root $PSScriptRoot
+        Write-Ok "Start Menu > Odicto: Odicto, Odicto Setup, Stop Odicto ($menuFolder)"
+    } catch {
+        Write-Warn "Could not create the Start Menu shortcuts: $($_.Exception.Message)"
+    }
+}
+
 # --- Optional: Ollama (opt-in with -Ollama) ---
 if ($Ollama) {
     Write-Step "Checking Ollama"
@@ -219,9 +235,10 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host @"
 
 Next steps:
-  1. Open the setup page to pick a provider and paste its key:
-     .\scripts\windows\setup.bat
-  2. Start the app:
+  1. Open the setup page to pick a provider and paste its key
+     (Start Menu > Odicto > Odicto Setup, or):
+     .\setup.bat
+  2. Start the app (Start Menu > Odicto > Odicto, or):
      .\start_dictation.bat
      (or scripts\windows\run_debug.bat for a console log)
   3. Click into any text field
@@ -241,6 +258,7 @@ Next steps:
   Meta/OpenRouter/Gemini do not start Ollama. Quit the Ollama tray app
   separately if you want to free local LLM RAM/VRAM.
 
-Stop with scripts\windows\stop_dictation.bat
+Stop with Start Menu > Odicto > Stop Odicto, or .\stop_dictation.bat
+Admin mode (Odicto hooks keys in administrator windows) is a switch on the setup page.
 
 "@

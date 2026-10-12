@@ -7,10 +7,11 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent
     app_dir = root / "app"
     sys.path.insert(0, str(app_dir))
-    # An opted-in install runs elevated; this decides before the app's single-instance gate.
+    # An install in admin mode runs elevated. A normal process starts the elevated logon task
+    # instead (no prompt) and exits; this decides before the app's single-instance gate.
     import windows_admin
     try:
-        admin_exit = windows_admin.run_if_needed(root)
+        admin_exit = windows_admin.run_if_needed(root, "Ensure")
     except RuntimeError as error:
         # pythonw has no stderr; the failure must still exit 1 instead of raising here.
         if sys.stderr is not None:

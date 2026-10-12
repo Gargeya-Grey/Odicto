@@ -43,7 +43,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Flags: `-Ollama` (opt-in: install Ollama + pull the default local model),
-`-OllamaModel qwen2.5:1.5b-instruct`, `-WhisperModel tiny.en`.
+`-OllamaModel qwen2.5:1.5b-instruct`, `-WhisperModel tiny.en`, `-NoShortcuts` (skip the
+Start Menu folder "Odicto" with Odicto, Odicto Setup and Stop Odicto; the installer
+refreshes it on every full run).
 
 ### macOS / Linux
 
@@ -69,6 +71,7 @@ button that pulls the model only when the user picks Ollama as provider.
 5. Warm Whisper: `.\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
 6. Tests: `.\.venv\Scripts\python.exe -m unittest tests.test_units -v`
 7. Start: `.\start_dictation.bat` or `.\scripts\windows\run_debug.bat`
+   (root entry points: `start_dictation.bat`, `setup.bat`, `stop_dictation.bat`)
 
 ### macOS
 
@@ -80,7 +83,7 @@ button that pulls the model only when the user picks Ollama as provider.
 4. Optional AI: `brew install ollama && ollama pull qwen2.5:1.5b-instruct`
 5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
 6. Tests: `.venv/bin/python -m unittest tests.test_units -v`
-7. Start: `bash scripts/posix/run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
+7. Start: `bash start_dictation.sh` or `bash scripts/posix/run_debug.sh` (grant Accessibility + Input Monitoring when prompted)
 
 ### Linux
 
@@ -109,11 +112,11 @@ After install, configure a provider and API key without hand-editing `.env`:
 
 ```bash
 # Windows
-.\scripts\windows\setup.bat
-# or: .\.venv\Scripts\python.exe odicto.py setup
+.\setup.bat
+# or: .\.venv\Scripts\pythonw.exe odicto.py setup
 
 # macOS / Linux
-bash scripts/posix/setup.sh
+bash setup.sh
 # or: .venv/bin/python odicto.py setup
 ```
 
@@ -238,8 +241,17 @@ supplied it) with:
   GPU memory from startup. That load runs one silent warmup so the first
   hotkey does not wait on CUDA kernel setup. macOS uses CPU (int8).
   faster-whisper has no Metal backend.
-- Stop with `scripts/windows/stop_dictation.bat` / `bash scripts/posix/stop_dictation.sh`, or
+- Stop with `stop_dictation.bat` / `bash stop_dictation.sh`, or
   `.venv/bin/python odicto.py stop`.
+- **Admin mode (Windows)** is off by default and is a switch on the setup page. On means the
+  gitignored marker `.odicto-admin-enabled`, a highest-privilege logon task named `Odicto`, and a
+  Startup shortcut at that task. Only `scripts/windows/admin_mode.ps1` writes them, through UAC
+  once per switch change (`windows_admin.set_admin_mode`). With the switch on, `start_dictation.bat`,
+  `odicto.py start|restart|stop` and setup Save show no UAC prompt: start runs `schtasks /Run /TN
+  Odicto`; stop and restart signal the per-install quit event (`Local\Odicto-quit-<12 hex>`, made
+  by the owner after it holds the lock) and wait for the owner PID to exit. A missing task or event
+  falls back to the helper (UAC) and says why. Never run `admin_mode.ps1`, `schtasks`, or any start
+  or stop script in a test or an agent session on a machine that runs Odicto for real.
 
 ## STRICT: single instance only (never stack keyboard hooks)
 

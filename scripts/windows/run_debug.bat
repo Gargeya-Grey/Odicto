@@ -3,15 +3,15 @@ setlocal EnableExtensions
 for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
 cd /d "%ODICTO_ROOT%"
 
-REM Opt-in always-admin install (.odicto-admin-enabled): the owner must run elevated, and an
-REM elevated process cannot be started with a console attached to this unelevated window. So
-REM debug mode does one helper Start (UAC prompt, stop, elevated background start, wait ready)
-REM and returns; the startup warnings and crash output of a console run are not shown. This is
-REM decided BEFORE anything is stopped, so declining UAC leaves the running owner untouched.
+REM Admin mode (.odicto-admin-enabled): the owner must run elevated, and an elevated process
+REM cannot be started with a console attached to this normal window. So debug mode restarts
+REM the background instance (no UAC prompt; odicto.py quits it through its quit event and runs
+REM its logon task) and returns. The startup warnings and crash output of a console run are
+REM not shown. This is decided BEFORE anything is stopped.
 if not exist "%ODICTO_ROOT%\.odicto-admin-enabled" goto :normal_debug
-echo This install runs Odicto elevated, so it cannot run in this console.
-echo Starting the elevated background instance instead; no console output will be shown.
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%ODICTO_ROOT%\scripts\windows\start_dictation_admin.ps1" -Action Start
+echo Admin mode is on, so Odicto cannot run in this console.
+echo Restarting the background instance instead; no console output will be shown.
+"%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\odicto.py" restart
 set "ODICTO_EXIT=%ERRORLEVEL%"
 echo Exit code: %ODICTO_EXIT%
 pause

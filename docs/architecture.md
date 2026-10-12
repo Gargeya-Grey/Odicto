@@ -62,9 +62,15 @@ The optional microphone diagnostic is `python tools/manual_pipeline_check.py`.
 
 An ordinary start first acquires both ownership locks and exits if another owner
 holds them. Only the exclusive owner sweeps orphan processes before binding hooks.
-Double-clicking the root Windows `start_dictation.bat` explicitly restarts and
-keeps its result window open. `/min` and `/nostartup` remain ordinary starts;
-the internal Windows launcher also supports explicit `/restart`.
+The Windows root has three entry points: `start_dictation.bat`, `setup.bat` and
+`stop_dictation.bat`, thin wrappers over `scripts/windows/` (macOS and Linux: `.sh`
+wrappers over `scripts/posix/`). A double-click on the root `start_dictation.bat` is an
+ordinary start that leaves a running owner alone; it shows the result, closes after about
+three seconds on success and stays open on failure. `/min` and `/nostartup` are ordinary
+starts; the internal Windows launcher also supports explicit `/restart`.
+`setup.bat` starts `pythonw odicto.py setup` and exits; the setup server ends when its page
+closes. `install.ps1` refreshes the Start Menu folder "Odicto" (Odicto, Odicto Setup, Stop
+Odicto, with `assets/odicto.ico`) unless `-NoShortcuts` is given.
 The launcher waits for a fresh heartbeat from the verified owner and recent
 microphone callbacks before reporting ready (`odicto.py wait-ready`). A Windows
 virtual environment normally has a launcher PID and a child interpreter PID;
@@ -76,17 +82,38 @@ unverified process. An intentional restart remains an explicit stop followed by
 start; debug launchers and setup Save perform that explicit restart.
 
 A normal-integrity Odicto cannot hook keys typed into an elevated window, such as an
-Administrator Windows Terminal. An install can therefore opt in to always-admin by creating
-the gitignored, install-specific marker `.odicto-admin-enabled`; only
-`scripts/windows/start_dictation_admin.ps1 -Action Configure` writes it, after it has
-registered the user's own highest-privilege `Odicto` logon task and pointed the Startup
-shortcut at it. With the marker present and no elevation, `app/windows_admin.py`
-(`run_if_needed`) hands root `main.py`, `odicto.py start|stop|wait-ready`, setup Save and
-`start_dictation.bat` to that helper. The helper runs the whole lifecycle elevated, so
-elevation comes before the ownership-validated stop and a Medium process never tries to
-kill the elevated owner. It never approves UAC itself and never deletes files or tasks. Without the marker
-nothing changes, and no other machine is elevated. The single-instance gate in `app/main.py`
-is unchanged and still runs after elevation.
+Administrator Windows Terminal. **Admin mode** is therefore a per-install switch, off by
+default, on the setup page. The switch is the gitignored, install-specific marker
+`.odicto-admin-enabled`. `windows_admin.set_admin_mode(root, enabled)` runs
+`scripts/windows/admin_mode.ps1` once through UAC (one prompt per change). On: register the
+user's own highest-privilege `Odicto` logon task, point the Startup shortcut at it, write the
+marker, restart Odicto elevated. Off (`-Action Disable`): refuse unless the task and shortcut
+are exactly this install's shape, stop the elevated owner, remove the task, point the shortcut
+back at direct `pythonw`, delete the marker; then a normal Odicto starts. The helper never
+approves UAC itself.
+
+With the marker present and no elevation, daily use shows no prompt. `run_if_needed`
+(root `main.py`, `odicto.py start|restart|stop`, setup Save) decides:
+
+- start (`Ensure`): a running, ready owner (`odicto.py wait-ready`) is left alone; otherwise
+  `schtasks /Run /TN Odicto` starts it (the task is highest-privilege and belongs to this user),
+  then `wait-ready --timeout 30`.
+- restart (`Start`): `request_quit`, wait for the old PID to exit, then the task, then
+  `wait-ready`. No new owner starts before the old PID is gone; the single-instance gate in
+  `app/main.py` remains the final authority.
+- stop: `request_quit` first. The elevated helper `Stop` runs only when the event is missing or
+  the owner did not exit, and the fallback prints why.
+
+The quit signal is a named event `Local\Odicto-quit-<12 hex of the install root hash>`. The
+owner creates it only after it holds the single-instance lock (`windows_admin.start_quit_listener`,
+called once in `app/main.py`). Its security descriptor
+`D:(A;;0x100002;;;<user SID>)S:(ML;;NW;;;ME)` lets a Medium-integrity process of the same user
+signal it. A daemon thread blocks on it (no polling) and posts the tray "Quit Odicto" steps
+(tray hide, `QApplication.quit`) to the Qt thread, so `DictationApp._shutdown` runs as for the
+tray menu. `odicto.py wait-ready` needs no elevation: it reads the heartbeat and treats an
+unreadable working directory of an elevated owner as "unknown", still requiring the absolute
+`main.py` path. Without the marker nothing changes and nothing elevates. The single-instance
+gate in `app/main.py` is unchanged.
 
 The microphone reuses one persistent stream during healthy operation. Startup
 retains bounded retries for a device that is not ready at login. Windows logs
@@ -205,7 +232,7 @@ save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page
 | `app/app_state.py` | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
 | `app/platforms/` | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
 | `app/paths.py` | Canonical install root; keeps settings and runtime paths stable after moves | `ROOT` |
-| `app/windows_admin.py` | Opt-in always-admin: delegates lifecycle to the elevated PowerShell helper when the install marker exists and the process is not elevated; stdlib only | `run_if_needed` |
+| `app/windows_admin.py` | Admin mode: the switch (`set_admin_mode`), task start and quit-event stop with no UAC, helper fallback; stdlib only at import | `run_if_needed`, `set_admin_mode`, `admin_mode_enabled`, `request_quit`, `start_quit_listener` |
 
 ### 3.1 The platform layer
 

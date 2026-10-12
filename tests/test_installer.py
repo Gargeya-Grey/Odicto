@@ -21,6 +21,21 @@ HELPERS_SH = ROOT / "scripts" / "posix" / "install_python.sh"
 SECRET_ENV = b"GEMINI_API_KEY=fixture-not-a-real-key\r\n"
 PROMPT = b"fixture prompt\n"
 
+# The process scan (Get-OdictoProcessSnapshot) is the one boundary these tests control. The real
+# one lists every process on the machine, so a running Odicto (an elevated pythonw.exe whose path
+# a normal process cannot read) would make the venv move-aside check refuse for a reason that has
+# nothing to do with the fixture. The helper logic above the boundary stays real.
+#   * no processes: the machine is quiet.
+#   * only the PIDs a test started: real CIM data for those processes and nothing else.
+SCAN_NO_PROCESSES = "function Get-OdictoProcessSnapshot { @() }\n"
+SCAN_ONLY_TEST_PIDS = r"""
+function Get-OdictoProcessSnapshot {
+    foreach ($id in @($env:ODICTO_TEST_PIDS -split ',' | Where-Object { $_ })) {
+        Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$id" -ErrorAction Stop
+    }
+}
+"""
+
 
 def _supported(version=None):
     major, minor = (version or sys.version_info)[:2]
@@ -212,8 +227,9 @@ if sys.platform == "win32":
             self.assertEqual("Broken", state(self.install / ".venv")["State"])
 
         # ---- moving a venv aside -----------------------------------------------------------
-        def move(self, root=None, venv=None):
-            return _ps("Move-OdictoVenvAside -Root $env:T_ROOT -VenvDir $env:T_VENV",
+        def move(self, root=None, venv=None, pids=()):
+            return _ps(SCAN_ONLY_TEST_PIDS + "Move-OdictoVenvAside -Root $env:T_ROOT -VenvDir $env:T_VENV",
+                       ODICTO_TEST_PIDS=",".join(str(pid) for pid in pids),
                        T_ROOT=str(root or self.install), T_VENV=str(venv or self.install / ".venv"))
 
         def test_move_aside_keeps_everything_and_never_reuses_a_name(self):
@@ -264,14 +280,14 @@ if sys.platform == "win32":
             proc = subprocess.Popen([str(runner), "-n", "60", "127.0.0.1"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, creationflags=0x08000000)
             self.addCleanup(proc.kill)
-            code, text = self.move()
+            code, text = self.move(pids=[proc.pid])
             self.assertEqual(1, code, text)
             self.assertIn("PID %d" % proc.pid, text)
             self.assertIn("Quit Odicto", text)
             self.assertTrue(venv.is_dir())
             proc.kill()
             proc.wait(timeout=30)
-            code, text = self.move()
+            code, text = self.move(pids=[proc.pid])
             self.assertEqual(0, code, text)
             self.assertFalse(venv.exists())
 
@@ -360,11 +376,88 @@ if sys.platform == "win32":
             self.assertTrue(lock_path.is_file(), "the lock file is never deleted")
             self.assertFalse(venv.exists())
 
+        # ---- Start Menu shortcuts ------------------------------------------------------------
+        def shortcut_install(self):
+            """A fake install folder with the three root launchers and the real icon."""
+            root = self.work / "Odicto Home"
+            (root / "assets").mkdir(parents=True)
+            for name in ("start_dictation.bat", "setup.bat", "stop_dictation.bat"):
+                (root / name).write_text("@echo off\r\n", encoding="ascii")
+            shutil.copy(ROOT / "assets" / "odicto.ico", root / "assets" / "odicto.ico")
+            return root
+
+        READ_SHORTCUTS = (
+            "$ws = New-Object -ComObject WScript.Shell; "
+            "@(Get-ChildItem -LiteralPath (Join-Path $env:T_PROGRAMS 'Odicto') -Filter *.lnk | Sort-Object Name | "
+            "ForEach-Object { $l = $ws.CreateShortcut($_.FullName); "
+            "[pscustomobject]@{ Name = $_.BaseName; Target = $l.TargetPath; Args = $l.Arguments; "
+            "WorkDir = $l.WorkingDirectory; Icon = $l.IconLocation } }) | ConvertTo-Json -Compress")
+
+        def test_start_menu_shortcuts_are_created_with_icon_and_working_directory(self):
+            root, programs = self.shortcut_install(), self.work / "Programs"
+            programs.mkdir()
+            env = dict(T_ROOT=str(root), T_PROGRAMS=str(programs))
+            code, text = _ps("New-OdictoStartMenuShortcuts -Root $env:T_ROOT -ProgramsDir $env:T_PROGRAMS", **env)
+            self.assertEqual(0, code, text)
+            self.assertEqual(str(programs / "Odicto"), text.splitlines()[-1])
+            links = {row["Name"]: row for row in _ps_json(self.READ_SHORTCUTS, **env)}
+            self.assertEqual({"Odicto", "Odicto Setup", "Stop Odicto"}, set(links))
+            expected = {"Odicto": "start_dictation.bat", "Odicto Setup": "setup.bat", "Stop Odicto": "stop_dictation.bat"}
+            for name, bat in expected.items():
+                with self.subTest(shortcut=name):
+                    self.assertEqual(str(root / bat).lower(), links[name]["Target"].lower())
+                    self.assertEqual(str(root).lower(), links[name]["WorkDir"].lower())
+                    self.assertEqual((str(root / "assets" / "odicto.ico") + ",0").lower(), links[name]["Icon"].lower())
+                    self.assertEqual("", links[name]["Args"])
+
+        def test_start_menu_shortcuts_are_idempotent_and_leave_other_files_alone(self):
+            root, programs = self.shortcut_install(), self.work / "Programs"
+            (programs / "Odicto").mkdir(parents=True)
+            (programs / "Odicto" / "notes.txt").write_text("not ours")
+            env = dict(T_ROOT=str(root), T_PROGRAMS=str(programs))
+            for _ in range(2):
+                code, text = _ps("New-OdictoStartMenuShortcuts -Root $env:T_ROOT -ProgramsDir $env:T_PROGRAMS", **env)
+                self.assertEqual(0, code, text)
+            self.assertEqual(["Odicto Setup.lnk", "Odicto.lnk", "Stop Odicto.lnk", "notes.txt"],
+                             sorted(p.name for p in (programs / "Odicto").iterdir()))
+            self.assertEqual(3, len(_ps_json(self.READ_SHORTCUTS, **env)))
+            self.assertEqual("not ours", (programs / "Odicto" / "notes.txt").read_text())
+
+        def test_start_menu_shortcuts_refresh_when_the_install_moves(self):
+            programs = self.work / "Programs"
+            programs.mkdir()
+            first = self.shortcut_install()
+            moved = self.work / "Moved Odicto"
+            create = "New-OdictoStartMenuShortcuts -Root $env:T_ROOT -ProgramsDir $env:T_PROGRAMS"
+            code, text = _ps(create, T_ROOT=str(first), T_PROGRAMS=str(programs))
+            self.assertEqual(0, code, text)
+            first.rename(moved)
+            env = dict(T_ROOT=str(moved), T_PROGRAMS=str(programs))
+            code, text = _ps(create, **env)
+            self.assertEqual(0, code, text)
+            links = _ps_json(self.READ_SHORTCUTS, **env)
+            self.assertEqual(3, len(links))
+            for row in links:
+                self.assertTrue(row["Target"].lower().startswith(str(moved).lower()), row)
+                self.assertEqual(str(moved).lower(), row["WorkDir"].lower())
+
+        def test_start_menu_shortcuts_refuse_a_root_without_the_launchers(self):
+            root, programs = self.shortcut_install(), self.work / "Programs"
+            programs.mkdir()
+            (root / "setup.bat").unlink()
+            code, text = _ps("New-OdictoStartMenuShortcuts -Root $env:T_ROOT -ProgramsDir $env:T_PROGRAMS",
+                             T_ROOT=str(root), T_PROGRAMS=str(programs))
+            self.assertEqual(1, code, text)
+            self.assertIn("Missing setup.bat", text)
+            self.assertFalse((programs / "Odicto").exists(), "nothing is created when a launcher is missing")
+
         # ---- the real installer entry point --------------------------------------------------
         def installer(self, *args, env=None):
             (self.install / "scripts" / "windows").mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / "install.ps1", self.install / "install.ps1")
-            shutil.copy(HELPERS_PS1, self.install / "scripts" / "windows" / "install_helpers.ps1")
+            # The copy ends with a quiet process scan (see SCAN_NO_PROCESSES); the original is untouched.
+            (self.install / "scripts" / "windows" / "install_helpers.ps1").write_text(
+                HELPERS_PS1.read_text(encoding="utf-8") + "\n" + SCAN_NO_PROCESSES, encoding="utf-8")
             done = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                  "-File", str(self.install / "install.ps1"), "-NoUv", "-VenvOnly", *args],
