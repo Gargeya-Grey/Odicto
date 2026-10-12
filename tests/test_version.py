@@ -25,6 +25,19 @@ class TestVersion(unittest.TestCase):
         heading = "## [%s]" % version.app_version()
         self.assertIn("\n" + heading, changelog, "add a %s section to CHANGELOG.md" % heading)
 
+    def test_cli_prints_the_version(self):
+        import contextlib
+        import io
+        import sys
+        from unittest import mock
+
+        import odicto
+
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["odicto", "version"]), contextlib.redirect_stdout(out):
+            self.assertEqual(odicto.main(), 0)
+        self.assertEqual(out.getvalue().strip(), "Odicto %s" % version.app_version())
+
     def test_release_workflow_reads_the_version_file(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("Get-Content VERSION", workflow)

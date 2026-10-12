@@ -724,6 +724,18 @@ invariants not to break.
 bash scripts/posix/run_debug.sh
 ```
 
+### Versions and releases
+
+- `VERSION` holds the one version, `MAJOR.MINOR.PATCH`. The setup page shows it, and
+  `python odicto.py version` prints it.
+- [`CHANGELOG.md`](CHANGELOG.md) has one section per version.
+- To release: bump `VERSION`, add its `CHANGELOG.md` section, merge to `main`, then run
+  the **Release** workflow from the Actions tab. It refuses a version that already has a
+  tag, runs the test gate, and publishes `Odicto-v<version>.zip` with its `.sha256`
+  file. The release notes are the changelog section plus
+  [`tools/release/release-notes.md`](tools/release/release-notes.md).
+- Downloads: [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases).
+
 ---
 
 ## Privacy

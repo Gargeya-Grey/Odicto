@@ -318,6 +318,8 @@ class TestSetAdminMode(_AdminRootCase):
     def setUp(self):
         super().setUp()
         self.patch_object(windows_admin, "_is_windows", return_value=True)
+        # GitHub's Windows runners are elevated; pin the probe so tests mean a normal caller.
+        self.elevated = self.patch_object(windows_admin, "_is_user_an_admin", return_value=False)
         self.scratch = tempfile.mkdtemp(prefix="odicto-admin-test-scratch-")
         self.addCleanup(lambda: os.path.isdir(self.scratch) and os.rmdir(self.scratch))
         self.patch_object(windows_admin.tempfile, "mkdtemp", return_value=self.scratch)
@@ -402,6 +404,21 @@ class TestSetAdminMode(_AdminRootCase):
         self.assertNotIn("-InstallStartup", self.commands[0][0])
         self.spawn.assert_called_once_with([pythonw, os.path.join(self.root, "main.py")])
         self.assertIn("off", message)
+
+    def test_turning_off_from_an_elevated_caller_starts_nothing(self):
+        """A setup page opened from the elevated owner's tray would start Odicto elevated."""
+        self.write_marker()
+        self.make_pythonw()
+        self.effect = lambda: os.remove(self.marker_file)
+        for probe in ({"return_value": True}, {"side_effect": OSError("no shell32")}):
+            with self.subTest(probe=probe):
+                os.makedirs(self.scratch, exist_ok=True)  # each helper run removes it
+                self.elevated.configure_mock(**probe)
+                ok, message = windows_admin.set_admin_mode(self.root, False)
+                self.assertTrue(ok, message)
+                self.assertIn("start_dictation.bat", message)
+                self.spawn.assert_not_called()
+                self.write_marker()
 
     def test_turning_off_with_the_marker_left_behind_does_not_start_anything(self):
         self.write_marker()

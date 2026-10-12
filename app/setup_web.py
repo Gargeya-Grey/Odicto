@@ -789,10 +789,7 @@ def _admin_mode_state() -> tuple:
     try:
         import windows_admin
 
-        probe = getattr(windows_admin, "admin_mode_enabled", None)
-        if probe is not None:
-            return (True, bool(probe(str(ROOT))))
-        return (True, os.path.isfile(windows_admin.marker_path(str(ROOT))))
+        return (True, bool(windows_admin.admin_mode_enabled(str(ROOT))))
     except Exception:
         return (True, False)
 
@@ -861,10 +858,7 @@ def set_admin_mode(enabled: bool) -> dict:
     try:
         import windows_admin
 
-        setter = getattr(windows_admin, "set_admin_mode", None)
-        if setter is None:
-            return {"ok": False, "enabled": current, "message": "This Odicto version cannot change admin mode."}
-        ok, message = setter(str(ROOT), bool(enabled))
+        ok, message = windows_admin.set_admin_mode(str(ROOT), bool(enabled))
     except Exception as error:  # the helper never raises; this is a last guard
         ok, message = False, f"Admin windows mode did not change ({error})."
     _, now = _admin_mode_state()
@@ -872,7 +866,21 @@ def set_admin_mode(enabled: bool) -> dict:
 
 
 def start_odicto() -> dict:
-    """Start Odicto from the page (the same stop-then-start as Save)."""
+    """Start Odicto from the page. The button shows only while Odicto is stopped.
+
+    Admin mode uses "Ensure" (run the logon task, no UAC prompt); otherwise this is the
+    same stop-then-start as Save.
+    """
+    try:
+        from windows_admin import run_if_needed
+
+        elevated = run_if_needed(str(ROOT), "Ensure")
+    except Exception as error:
+        return {"ok": False, "message": f"Odicto did not start ({error})."}
+    if elevated is not None:
+        if elevated == 0:
+            return {"ok": True, "message": "Odicto is starting."}
+        return {"ok": False, "message": f"Odicto did not start (exit code {elevated})."}
     try:
         message = restart_odicto()
     except Exception as error:  # an elevated restart reports failure by raising

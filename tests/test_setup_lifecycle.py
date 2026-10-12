@@ -172,6 +172,23 @@ class StartAndAdminRouteTests(_ServerCase):
 
 
 class StartOdictoTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import windows_admin
+
+        patcher = mock.patch.object(windows_admin, "run_if_needed", return_value=None)
+        self.admin = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_admin_mode_ensures_through_the_task_and_never_restarts(self) -> None:
+        restart = mock.Mock()
+        with mock.patch.object(setup_web, "restart_odicto", restart):
+            for code, ok in ((0, True), (3, False)):
+                self.admin.return_value = code
+                result = setup_web.start_odicto()
+                self.assertEqual(result["ok"], ok, code)
+        self.admin.assert_called_with(str(setup_web.ROOT), "Ensure")
+        restart.assert_not_called()
+
     def test_messages_drop_the_settings_prefix(self) -> None:
         cases = {
             "Settings saved. Odicto is restarting with the new settings.": (True, "Odicto is starting."),

@@ -231,6 +231,13 @@ def cmd_config(_args) -> int:
     return 0
 
 
+def cmd_version(_args) -> int:
+    from version import app_version
+
+    print(f"Odicto {app_version()}")
+    return 0
+
+
 def cmd_autostart(_args) -> int:
     main_py = _main_py()
     venv_py = _venv_python()
@@ -312,6 +319,7 @@ def main() -> int:
     wait_ready = sub.add_parser("wait-ready", help="Wait for app and microphone readiness")
     wait_ready.add_argument("--timeout", type=float, default=30.0)
     sub.add_parser("config", help="Show resolved configuration and where each value came from")
+    sub.add_parser("version", help="Show the Odicto version (the VERSION file)")
     sub.add_parser("autostart", help="Install autostart entry")
     sub.add_parser("remove-autostart", help="Remove autostart entry")
 
@@ -324,6 +332,7 @@ def main() -> int:
         "status": cmd_status,
         "wait-ready": cmd_wait_ready,
         "config": cmd_config,
+        "version": cmd_version,
         "autostart": cmd_autostart,
         "remove-autostart": cmd_remove_autostart,
     }

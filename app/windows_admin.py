@@ -629,6 +629,14 @@ def _start_normal_odicto(root: str) -> Tuple[bool, str]:
     if not os.path.isfile(pythonw):
         return True, "Admin mode is off. Start Odicto from the Start Menu; .venv is missing."
     try:
+        elevated = _is_user_an_admin()
+    except Exception:
+        elevated = True  # unknown: do not risk an elevated child
+    if elevated:
+        # A setup page opened from the elevated owner's tray is elevated too, and its
+        # child would be. Normal stop cannot end an elevated Odicto, so start none here.
+        return True, "Admin mode is off. Start Odicto with start_dictation.bat."
+    try:
         import platforms
 
         platforms.spawn_detached([pythonw, main_py])

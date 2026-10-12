@@ -26,7 +26,9 @@ from pathlib import Path
 # "node not available" JS gate is never allowed anywhere (dead gate).
 # ---------------------------------------------------------------------------
 GATE = {
-    "floor": 518,  # prior portable floor 487 plus 31 portable administrator-launch regressions
+    # Prior floor 518, plus the setup page and release tests, the root launchers and the
+    # admin switch: 675 discovered on Windows minus 24 in Windows-only installer classes.
+    "floor": 651,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -34,6 +36,8 @@ GATE = {
         "other": [
             "tests.test_windows_admin.TestHelperDecisions.*",
             "tests.test_windows_admin.TestHelperParses.*",
+            "tests.test_windows_admin.TestQuitEventRoundTrip.*",
+            "tests.test_launchers.TestBatFilesRun.*",
             "tests.test_reliability.*.test_win32_input_union_size_and_partial_input_never_retried",
             "tests.test_process_lifecycle.TestWindowsStop.*",
             "tests.test_units.*.test_side_exclusive_scan_codes_right_ctrl",
