@@ -55,22 +55,28 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # (same states, same mechanism, new rendering).
 # Folder cleanup: recovery now uses the public odicto.py setup entry point.
 # Before rebasing, every old golden was verified with only that sentence reverted.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '1f28ca11776e28dc5b43c81697c0d9fd6cb8c0efa6eb578e9c028eb65d921a55',
- 'provider_meta': '689f51f78e3152f7f5f03aa76381f94af974928ab9a4b7a10371dc2f4d570e8a',
- 'provider_openrouter': 'caebc395e393ed78bf6e3e685a20813182e97775e1b8ca8f36a7f868c370ae50',
- 'provider_gemini': '45f1ac792cdb4ef292d900b3b88e8e1fbf4bc6c9ee9dc342787b711938e7eb06',
- 'provider_ollama': '52c6bc52680abfb154f1f04ca44b1af6bcfedd2f52799490c1eb96f03a301e9c',
- 'provider_none': '1f28ca11776e28dc5b43c81697c0d9fd6cb8c0efa6eb578e9c028eb65d921a55',
- 'provider_groq': '5e00b6f75a38469ab1b77cdac244aafc074c056bcbb13caf2f0e4a1c03bcd792',
- 'polish_enabled': '6ebcdfca7e51a1c3050bba61c433604e65f8ea53b2b082ac6c7a1ac33186dbc3',
- 'history_and_custom': 'b02e9f2e66319c4e0007345f53a7e5977037e65e0cc7cbb9bed04ea9c9c48c33',
- 'hotkey_short': '6a2c9d8b332093d50844fea040c7ed7fcce22b86ea0dce507a8567cd2d2826f8',
- 'stt_gemini': 'f4da2e55c4d0d408e235bf3295ca1d6e14bfbb4d4c29cc9a03087e286fe1b270',
- 'prompt_from_file': '8456e173bc2d17a095cb70411c5ec283f4508e3a5dd94e0e538d365f2393cf91',
- 'prompt_from_inline_env': 'fc8a1340d05f99ed41f94375886704ee5186a51d287554aa1effe08dcba6782b',
- 'msg_ok': '2ca4592f45e7e8f96583bb9073a3b25b282f289e583348fd95708db0e3ba8c53',
- 'msg_err': '08615fb07f5c663a94804ea7d4b078ca3d927d55f957a00ce4108d408b3b31a3',
- 'msg_neutral': '47a1ef3061642fe76f0a76a1554092758915a6eab44cec3f27593b005aabb6ac'}
+# Re-baselined for the redesigned setup page (desktop layout in the mobile app's design,
+# version chip, running-state card, admin-windows switch). The app version and the admin
+# switch state are now pinned; admin_on and admin_unavailable are new states. Every state
+# was checked for leftover __TOKENS__ and for the test API keys before capture.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7f28901e8f3bd25dbb48933dfbdc28c78f860b8046bcc4d6e0106f0104008cdd',
+ 'provider_meta': 'b209c875bf5f59236a88270a2f4c956fbeb958ba8a054d79cc7c734701e9ad31',
+ 'provider_openrouter': '2c545e96d18d87fc5e43271b1e5b0c930ba248aeb669f3c12e50b5bd1dafd7a9',
+ 'provider_gemini': 'b49012b735f9cbe09e889a1d5debbafa42d51d0020c588380cf967eb873f7f5a',
+ 'provider_ollama': 'bb36e952dd85d238ead0ae6b7f84800a72559cf006b1d9ae854a70bd44261783',
+ 'provider_none': '7f28901e8f3bd25dbb48933dfbdc28c78f860b8046bcc4d6e0106f0104008cdd',
+ 'provider_groq': 'ab831ae3a00b7271e142ec749a49cb2839ee3ba6c069ee55cc77f8b0e598bb29',
+ 'polish_enabled': '6483ac0171c8459590d1e004dcfd3d1ceeb5ced098a889b89923cbc179f3e8a8',
+ 'history_and_custom': '2174be1f879db7d71ddce33c1d744f5b875f59c74ef079eaf3b736761cb1edea',
+ 'hotkey_short': 'f51d92271cde8a112f7e6d1a3ae370a8df87ffe4e7b87b192207fa7b9214a4d8',
+ 'stt_gemini': 'da6dd6e762665afc31f3836af37ada4e3b8acd1a8a6ee3b557c34c5c4523178e',
+ 'prompt_from_file': '17fdc10832e6e6af0cce6e05e9f9ef35205d9f4b17b933ad40744adda032b731',
+ 'prompt_from_inline_env': '5015cb1869991d4254f1e1760398dbf8b1a234757f5b4937fd35744c3968eec1',
+ 'msg_ok': 'c5f24aa0dc73bc2edaed6d48220e4c0a16b3d7d0a31341f4dac31f7ddd842ed0',
+ 'msg_err': 'af806cdb4c5243529ebc0260ea12e2caa876533bcf311566fac9fe90c88c27bb',
+ 'msg_neutral': '498933f5b5cbacbaf9f509f32dd0f9cf4a3ba43dfd2267fae4e3d2072759d2b8',
+ 'admin_on': 'a45ab64c625aaeeb8048946929c963bc610334186b50c520176c6a8a203fd0da',
+ 'admin_unavailable': '72d9f4bcfb66acd8b921d88b769168ab385c892b9edd99c6d452d9e4d1d27c34'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {
@@ -133,6 +139,9 @@ _PAGE_STATES = {
     "msg_ok": {"env": {"LLM_PROVIDER": "none"}, "message": "Saved.", "message_kind": "ok"},
     "msg_err": {"env": {"LLM_PROVIDER": "none"}, "message": "Could not write.", "message_kind": "err"},
     "msg_neutral": {"env": {"LLM_PROVIDER": "none"}, "message": "Hello there", "message_kind": "neutral"},
+    # (available, enabled) of the Windows admin-windows switch; the default pin is (True, False).
+    "admin_on": {"env": {"LLM_PROVIDER": "none"}, "admin": (True, True)},
+    "admin_unavailable": {"env": {"LLM_PROVIDER": "none"}, "admin": (False, False)},
 }
 
 _PROVIDER_ATTRS = {
@@ -180,6 +189,10 @@ def _render_page(state: dict) -> str:
         )
         stack.enter_context(mock.patch.object(config.Config, "SYSTEM_PROMPT", state.get("system_prompt", "")))
         stack.enter_context(mock.patch.object(config.Config, "SYSTEM_PROMPT_FILE", ""))
+        # The VERSION file and the Windows admin marker differ per checkout and machine.
+        stack.enter_context(mock.patch.object(setup_web, "app_version", lambda: "9.9.9"))
+        admin = state.get("admin", (True, False))
+        stack.enter_context(mock.patch.object(setup_web, "_admin_mode_state", lambda: admin))
         sink = io.StringIO()
         stack.enter_context(contextlib.redirect_stdout(sink))
         stack.enter_context(contextlib.redirect_stderr(sink))

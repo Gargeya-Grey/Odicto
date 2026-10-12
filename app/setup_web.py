@@ -4,7 +4,9 @@ Serves a single self-contained HTML form on 127.0.0.1 so a user can pick an
 LLM provider, enter API keys/model ids, test the connection, and write the
 result back into ``.env``. Keys are masked on re-render and never logged.
 
-The server is stdlib-only and deliberately binds to loopback.
+The server is stdlib-only and deliberately binds to loopback. It lives only as
+long as the page: the page says goodbye when its tab closes, and an idle server
+stops by itself, so nothing keeps listening while Odicto runs.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from version import app_version
 from config import (
     OPENROUTER_FALLBACK_MODEL,
     DEFAULT_SYSTEM_PROMPT,
@@ -648,7 +651,11 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
             f"{html.escape(message)}</div>"
         )
 
+    admin_available, admin_enabled = _admin_mode_state()
     replacements = {
+        "__APP_VERSION__": html.escape(app_version()),
+        "__ADMIN_HIDDEN__": '' if admin_available else ' hidden',
+        "__ADMIN_CHECKED__": ' checked' if admin_enabled else '',
         "__HOTKEY_GEAR_CLASS__": 'long' if hotkey_toggle_on else 'short',
         "__HOTKEY_TOGGLE_TRUE__": 'true' if hotkey_toggle_on else 'false',
         "__HOTKEY_LONG_SELECTED__": ' selected' if hotkey_toggle_on else '',
@@ -656,7 +663,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__HOTKEY_SHORT_SELECTED__": '' if hotkey_toggle_on else ' selected',
         "__HOTKEY_SHORT_ARIA__": 'false' if hotkey_toggle_on else 'true',
         "__PROVIDER__": html.escape(provider),
-        "__META_KEY_SAVED_HINT__": ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if meta_key else '',
+        "__META_KEY_SAVED__": 'true' if meta_key else 'false',
         "__META_KEY__": html.escape(meta_key),
         "__META_MODEL_DEFAULT__": html.escape(ENV_DEFAULTS['META_MODEL']),
         "__META_MODEL_SEED__": html.escape(meta_model_seed),
@@ -664,14 +671,14 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__META_MODEL_DEFAULT_NOTE__": html.escape(ENV_DEFAULTS['META_MODEL']),
         "__META_SAVED_HINT__": ' · saved value shown' if already_meta else '',
         "__META_REASONING_SEED__": html.escape(meta_reasoning_seed),
-        "__OPENROUTER_KEY_SAVED_HINT__": ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if or_key else '',
+        "__OR_KEY_SAVED__": 'true' if or_key else 'false',
         "__OR_KEY__": html.escape(or_key),
         "__OR_MODEL_SEED__": html.escape(or_model_seed),
         "__OPENROUTER_HISTORY_CSV__": html.escape(','.join(or_hist)),
         "__OPENROUTER_SAVED_HINT__": ' · saved value shown' if already_or else '',
         "__OR_REASONING_SEED__": html.escape(or_reasoning_seed),
         "__OR_SORT_SEED__": html.escape(or_sort_seed),
-        "__GEMINI_KEY_SAVED_HINT__": ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if gemini_key else '',
+        "__GEMINI_KEY_SAVED__": 'true' if gemini_key else 'false',
         "__GEMINI_KEY__": html.escape(gemini_key),
         "__GEMINI_MODEL_SEED__": html.escape(gemini_model_seed),
         "__GEMINI_HISTORY_CSV__": html.escape(','.join(gemini_hist)),
@@ -690,7 +697,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__STT_OPENROUTER_SELECTED__": ' selected' if stt_provider == 'openrouter' else '',
         "__STT_AUTO_SELECTED__": ' selected' if stt_provider == 'auto' else '',
         "__STT_GEMINI_FIELDS_HIDDEN__": '' if stt_provider in ('gemini', 'auto') else ' hidden',
-        "__STT_GROQ_FIELDS_HIDDEN__": '' if stt_provider == 'groq' or provider == 'groq' else ' hidden',
+        "__STT_GROQ_FIELDS_HIDDEN__": '' if stt_provider == 'groq' else ' hidden',
         "__STT_OPENROUTER_FIELDS_HIDDEN__": '' if stt_provider == 'openrouter' else ' hidden',
         "__TRANSCRIBE_SMART_CHECKED__": 'checked' if transcribe_mode != 'verbatim' else '',
         "__TRANSCRIBE_MODE__": html.escape(transcribe_mode),
@@ -708,12 +715,14 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         ),
         "__STT_WHISPER_HIDDEN_SECOND__": ' hidden' if stt_provider == 'whisper' else '',
         "__GROQ_KEY__": html.escape(current.get("GROQ_API_KEY", "")),
-        "__GROQ_KEY_SAVED_HINT__": ' <span style="font-weight:400;color:var(--ok);">saved — type to replace</span>' if current.get("GROQ_API_KEY") else '',
+        "__GROQ_KEY_SAVED__": 'true' if current.get("GROQ_API_KEY") else 'false',
         "__GROQ_MODEL__": html.escape(env_or("GROQ_MODEL")),
         "__POLISH_MODEL__": html.escape(env_raw("POLISH_MODEL")),
         "__POLISH_ON__": " selected" if env_or("POLISH_DICTATION") == "true" else "",
+        "__POLISH_CHECKED__": " checked" if env_or("POLISH_DICTATION") == "true" else "",
         "__POLISH_OFF__": " selected" if env_or("POLISH_DICTATION") != "true" else "",
         "__IMAGE_ON__": " selected" if env_or("AI_CLIPBOARD_IMAGE") == "true" else "",
+        "__IMAGE_CHECKED__": " checked" if env_or("AI_CLIPBOARD_IMAGE") == "true" else "",
         "__IMAGE_OFF__": " selected" if env_or("AI_CLIPBOARD_IMAGE") != "true" else "",
         "__GROQ_STT_MODEL__": html.escape(env_or("GROQ_STT_MODEL")),
         "__OPENROUTER_STT_MODEL__": html.escape(env_or("OPENROUTER_STT_MODEL")),
@@ -757,24 +766,186 @@ i.type='hidden';i.name='_odicto_token';i.value=t;fm.appendChild(i);}});})();</sc
 """
 
 
+# The page's own font ships in assets/fonts, so the page makes no network request.
+_FONT_FILES = {"/assets/fonts/InstrumentSans-VF.ttf": "InstrumentSans-VF.ttf"}
+_HEALTH_FRESH_S = 30.0  # the owner rewrites dictation-health.json every few seconds
+_SERVICE_NAME = "odicto-setup"
+SETUP_IDLE_EXIT_S = 30 * 60  # no request at all for this long: the page is gone
+SETUP_BYE_GRACE_S = 8.0  # a reload or Save says goodbye, then asks again within this
+# Each open page polls /status with its own id: every few seconds when visible, once
+# a minute when hidden (browsers can stretch that). Goodbye from one tab must not stop
+# the server while another tab still polls.
+SETUP_CLIENT_LIVE_S = 150.0
+_CLIENT_FIELD = "_odicto_client"
+_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
+_MAX_CLIENTS = 32
+_CLIENTS_LOCK = threading.Lock()
+
+
+def _admin_mode_state() -> tuple:
+    """(available, enabled) for the Windows admin-windows switch; never raises."""
+    if sys.platform != "win32":
+        return (False, False)
+    try:
+        import windows_admin
+
+        probe = getattr(windows_admin, "admin_mode_enabled", None)
+        if probe is not None:
+            return (True, bool(probe(str(ROOT))))
+        return (True, os.path.isfile(windows_admin.marker_path(str(ROOT))))
+    except Exception:
+        return (True, False)
+
+
+def _pid_alive(pid) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        import psutil
+
+        return bool(psutil.pid_exists(pid))
+    except Exception:
+        return False
+
+
+def runtime_status() -> dict:
+    """What the page shows about the running Odicto, read from its health file.
+
+    Only lifecycle facts: running, ready, state and the microphone's name. A stale
+    file or a dead PID reads as not running.
+    """
+    _, admin_enabled = _admin_mode_state()
+    out = {
+        "service": _SERVICE_NAME,
+        "version": app_version(),
+        "running": False,
+        "ready": False,
+        "state": "",
+        "microphone": "",
+        "admin": admin_enabled,
+    }
+    try:
+        with open(os.path.join(str(ROOT), "dictation-health.json"), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return out
+    if not isinstance(data, dict):
+        return out
+    updated = data.get("updated_at")
+    fresh = (
+        isinstance(updated, (int, float))
+        and not isinstance(updated, bool)
+        and -5.0 <= time.time() - updated <= _HEALTH_FRESH_S
+    )
+    if not fresh or not _pid_alive(data.get("pid")):
+        return out
+    out["running"] = True
+    out["ready"] = data.get("ready") is True
+    state = data.get("state")
+    out["state"] = state[:24] if isinstance(state, str) else ""
+    microphone = data.get("microphone")
+    device = microphone.get("device") if isinstance(microphone, dict) else None
+    name = device.get("name") if isinstance(device, dict) else ""
+    out["microphone"] = name[:80] if isinstance(name, str) else ""
+    return out
+
+
+def set_admin_mode(enabled: bool) -> dict:
+    """Turn the Windows admin-windows mode on or off; the helper asks UAC once."""
+    available, current = _admin_mode_state()
+    if not available:
+        return {"ok": False, "enabled": False, "message": "Admin windows mode is only available on Windows."}
+    if bool(enabled) == current:
+        word = "on" if current else "off"
+        return {"ok": True, "enabled": current, "message": f"Admin windows mode is already {word}."}
+    try:
+        import windows_admin
+
+        setter = getattr(windows_admin, "set_admin_mode", None)
+        if setter is None:
+            return {"ok": False, "enabled": current, "message": "This Odicto version cannot change admin mode."}
+        ok, message = setter(str(ROOT), bool(enabled))
+    except Exception as error:  # the helper never raises; this is a last guard
+        ok, message = False, f"Admin windows mode did not change ({error})."
+    _, now = _admin_mode_state()
+    return {"ok": bool(ok), "enabled": now, "message": str(message)}
+
+
+def start_odicto() -> dict:
+    """Start Odicto from the page (the same stop-then-start as Save)."""
+    try:
+        message = restart_odicto()
+    except Exception as error:  # an elevated restart reports failure by raising
+        return {"ok": False, "message": f"Odicto did not start ({error})."}
+    ok = message.endswith("restarting with the new settings.")
+    if ok:
+        message = "Odicto is starting."
+    elif message.startswith("Settings saved, but "):
+        message = message[len("Settings saved, but "):]
+        message = message[:1].upper() + message[1:]
+    elif message.startswith("Settings saved. "):
+        message = message[len("Settings saved. "):]
+    return {"ok": ok, "message": message}
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "OdictoSetup/1.0"
     timeout = 15
 
+    def _touch(self, client: str = "") -> None:
+        """Any request but goodbye proves a page is still open; a client id says which."""
+        now = time.monotonic()
+        if hasattr(self.server, "odicto_last_request"):
+            self.server.odicto_last_request = now
+        clients = getattr(self.server, "odicto_clients", None)
+        if clients is None or not _CLIENT_ID_RE.match(client):
+            return
+        with _CLIENTS_LOCK:
+            if client not in clients and len(clients) >= _MAX_CLIENTS:
+                clients.pop(min(clients, key=clients.get), None)
+            clients[client] = now
+
     def do_GET(self) -> None:
-        if self.path == "/pull-status":
+        # Host and Origin are checked on reads too: a DNS-rebinding page must not
+        # read status or the masked form through a foreign host name.
+        if not self._validate_origin():
+            self.send_error(403, "Forbidden: unexpected Host")
+            return
+        path, _, query = self.path.partition("?")
+        self._touch((parse_qs(query).get("c") or [""])[0] if path == "/status" else "")
+        if path == "/pull-status":
             self._send_json(pull_status())
             return
-        if self.path == "/openrouter-models":
+        if path == "/status":
+            self._send_json(runtime_status(), no_store=True)
+            return
+        if path == "/openrouter-models":
             from openrouter_catalog import ensure_openrouter_catalog
 
             self._send_json(ensure_openrouter_catalog())
             return
-        if self.path != "/":
+        if path in _FONT_FILES:
+            self._send_font(_FONT_FILES[path])
+            return
+        if path != "/":
             self.send_error(404)
             return
         body = self._inject_token(_page())
         self._send(body)
+
+    def _send_font(self, name: str) -> None:
+        try:
+            with open(os.path.join(str(ROOT), "assets", "fonts", name), "rb") as handle:
+                body = handle.read()
+        except OSError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "font/ttf")
+        self.send_header("Cache-Control", "max-age=86400")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_error(self, code, message=None, explain=None) -> None:
         if code >= 400:
@@ -889,6 +1060,29 @@ class _Handler(BaseHTTPRequestHandler):
         form = parse_qs(raw)
         if not self._token_ok(form):
             self.send_error(403, "Forbidden: missing or invalid token")
+            return
+
+        if self.path == "/bye":
+            # A page is closing or reloading. Stop soon unless a page asks again.
+            clients = getattr(self.server, "odicto_clients", None)
+            if clients is not None:
+                with _CLIENTS_LOCK:
+                    clients.pop((form.get(_CLIENT_FIELD) or [""])[0], None)
+            if hasattr(self.server, "odicto_bye_at"):
+                self.server.odicto_bye_at = time.monotonic()
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self._touch()
+
+        if self.path == "/start":
+            self._send_json(start_odicto())
+            return
+
+        if self.path == "/admin-mode":
+            wanted = (form.get("enabled") or [""])[0].strip().lower() == "true"
+            self._send_json(set_admin_mode(wanted))
             return
 
         if self.path == "/pull-ollama":
@@ -1049,10 +1243,12 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, "message": "Settings reset to defaults."})
 
-    def _send_json(self, payload: dict) -> None:
+    def _send_json(self, payload: dict, no_store: bool = False) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1071,12 +1267,102 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
+class _SetupServer(ThreadingHTTPServer):
+    """Loopback server that owns its port outright.
+
+    Python's HTTPServer sets SO_REUSEADDR, which on Windows lets a second server bind
+    a port that is already in use. Exclusive use there makes a second setup launch
+    see the first one instead of silently sharing its port.
+    """
+
+    daemon_threads = True
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self) -> None:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if sys.platform == "win32" and exclusive is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        super().server_bind()
+
+
+def _existing_setup_url(port: int) -> str:
+    """The URL of a setup page already serving on ``port``, or ""."""
+    import http.client
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1.5)
+        try:
+            conn.request("GET", "/status", headers={"Host": f"127.0.0.1:{port}"})
+            response = conn.getresponse()
+            payload = json.loads(response.read(65536).decode("utf-8")) if response.status == 200 else {}
+        finally:
+            conn.close()
+    except (OSError, ValueError):
+        return ""
+    if isinstance(payload, dict) and payload.get("service") == _SERVICE_NAME:
+        return f"http://127.0.0.1:{port}"
+    return ""
+
+
+def _live_clients(server, now: float, live_s: float) -> int:
+    """How many pages polled within ``live_s`` and have not said goodbye."""
+    clients = getattr(server, "odicto_clients", None) or {}
+    with _CLIENTS_LOCK:
+        seen_times = list(clients.values())
+    return sum(1 for seen in seen_times if now - seen < live_s)
+
+
+def _watch_lifetime(
+    server,
+    stop: threading.Event,
+    idle_s: float,
+    grace_s: float,
+    live_s: float = SETUP_CLIENT_LIVE_S,
+    poll_s: float = 1.0,
+) -> None:
+    """Shut the server down after the last page says goodbye, or after a long silence."""
+    while not stop.wait(poll_s):
+        now = time.monotonic()
+        last = server.odicto_last_request
+        bye = server.odicto_bye_at
+        if bye is not None and last <= bye and now - bye >= grace_s and not _live_clients(server, now, live_s):
+            break
+        if now - last >= idle_s:
+            break
+    else:
+        return
+    server.shutdown()
+
+
 def run_server(port: int = 8765, open_browser: bool = True) -> None:
     port = int(os.getenv("SETUP_PORT", str(port)))
-    server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    server = None
+    for candidate in range(port, port + 10):
+        try:
+            server = _SetupServer(("127.0.0.1", candidate), _Handler)
+            break
+        except OSError:
+            existing = _existing_setup_url(candidate)
+            if existing:
+                # One setup page per computer: show the open one again.
+                print(f"Odicto setup page is already open: {existing}")
+                if open_browser:
+                    webbrowser.open(existing)
+                return
+    if server is None:
+        raise SystemExit(f"No free port for the setup page ({port}-{port + 9}).")
     server.odicto_token = secrets.token_urlsafe(32)
-    url = f"http://127.0.0.1:{port}"
-    print(f"Odicto setup page: {url} (Ctrl+C to stop)")
+    server.odicto_last_request = time.monotonic()
+    server.odicto_bye_at = None
+    server.odicto_clients = {}
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    print(f"Odicto setup page: {url}")
+    print("It stops by itself when you close the page.")
+    stop = threading.Event()
+    threading.Thread(
+        target=_watch_lifetime, args=(server, stop, SETUP_IDLE_EXIT_S, SETUP_BYE_GRACE_S),
+        daemon=True, name="odicto-setup-lifetime",
+    ).start()
     if open_browser:
         threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
     try:
@@ -1084,6 +1370,7 @@ def run_server(port: int = 8765, open_browser: bool = True) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         server.server_close()
 
 

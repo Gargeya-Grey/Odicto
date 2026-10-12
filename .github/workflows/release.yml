@@ -1,0 +1,107 @@
+# Publishes a GitHub Release of the desktop app: a zip of the commit plus its SHA-256.
+# Run it by hand from the Actions tab, on main. The tag is v<VERSION>, so bump VERSION
+# and add its section to CHANGELOG.md before each release.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the release as a pre-release (beta)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version and refuse an existing tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'VERSION must be MAJOR.MINOR.PATCH' }
+          $tag = "v$version"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Bump VERSION first." }
+          if (git ls-remote --tags origin "refs/tags/$tag") { throw "Tag $tag already exists without a release. Delete the tag or bump VERSION." }
+          $global:LASTEXITCODE = 0
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build the release notes from CHANGELOG.md
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match ('^## \[' + [regex]::Escape($version) + '\]')) { $start = $i; break }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $version." }
+          $section = @()
+          for ($i = $start + 1; $i -lt $lines.Count -and $lines[$i] -notmatch '^## '; $i++) { $section += $lines[$i] }
+          New-Item -ItemType Directory -Force out | Out-Null
+          $notes = (($section -join "`n").Trim()) + "`n`n" + (Get-Content tools/release/release-notes.md -Raw)
+          [IO.File]::WriteAllText("$PWD/out/notes.md", $notes)
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: requirements.txt
+
+      # The setup-page JS syntax gate needs node; the skip allow-list refuses a skip.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run the test gate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv venv --python 3.12 .venv
+          if ($LASTEXITCODE -ne 0) { throw 'uv venv failed' }
+          uv pip install --python .venv -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'dependency install failed' }
+          .venv\Scripts\python.exe tools/run_tests.py
+          if ($LASTEXITCODE -ne 0) { throw 'test gate failed' }
+
+      # git archive packs the committed tree only: no venv, .env, logs or model weights.
+      - name: Package the release files
+        id: package
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $name = "Odicto-$tag.zip"
+          git archive --format=zip --prefix=Odicto/ -o "out/$name" $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
+          $hash = (Get-FileHash "out/$name" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/out/$name.sha256", "$hash  $name`n")
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $name = '${{ steps.package.outputs.name }}'
+          $flags = @()
+          if ('${{ inputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
+          gh release create $tag "out/$name" "out/$name.sha256" `
+            --target $env:GITHUB_SHA --title "Odicto $tag" `
+            --notes-file out/notes.md --generate-notes @flags
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
