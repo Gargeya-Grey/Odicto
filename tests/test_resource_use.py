@@ -41,7 +41,11 @@ def _probe(body: str = "import main", extra: str = "None", **env) -> dict:
              if not k.startswith(("OPENBLAS", "LLM_", "STT_", "LIVE_STT", "GEMINI_", "GROQ_",
                                   "OPENROUTER_", "META_", "OLLAMA_"))}
     clean["QT_QPA_PLATFORM"] = "offscreen"
-    clean.update({k: v for k, v in env.items() if v is not None})
+    for key, value in env.items():  # None removes a key the runner's own environment holds
+        if value is None:
+            clean.pop(key, None)
+        else:
+            clean[key] = value
     code = _PROBE.format(app=str(APP_DIR), body=body, sdks=SDKS, extra=extra)
     result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=clean,
                             capture_output=True, text=True, timeout=120)
