@@ -15,6 +15,7 @@ import math
 import threading
 import os
 import sys
+import time
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -84,6 +85,93 @@ class _Theme:
 # Spacing scale (px) — keep all layout math on this rhythm
 _S = 8
 
+# Compact layout chrome: [ inset | glyph | gap | label | (gap + chip)? | inset ]
+_INSET_X = 14
+_GLYPH_SLOT = 20
+_GAP_TEXT_CHIP = 8
+_FIT_SLACK = 4.0           # absorbs paint-time metric rounding (HiDPI)
+_MIN_PILL_W = 96
+_COMPACT_H = 44
+_RECORDING_BARS = 20
+_RECORDING_BAR_W = 2.0
+_RECORDING_BAR_GAP = 1.85
+# The slot is the bars themselves, so Listening has no empty track beside them.
+_RECORDING_WAVE_W = (
+    _RECORDING_BARS * _RECORDING_BAR_W
+    + (_RECORDING_BARS - 1) * _RECORDING_BAR_GAP
+)
+_LIVE_MIN_W = 440
+_LIVE_H = 86
+
+# Motion, in seconds. Every move uses ease_in_out_cubic (slow start, slow end).
+_RISE_S = 0.28             # droplet rises from below bottom-center
+_SPREAD_AT_S = 0.22        # spread overlaps the end of the rise
+_SPREAD_S = 0.42           # droplet spreads left and right to the capsule
+_RESIZE_S = 0.38           # width/height change while the capsule is open
+# The capsule moves this long after the new words are fully in, so a shrink
+# cannot clip the longer label while that label is still on screen.
+_RESIZE_AFTER_TEXT_S = 0.0003
+_WORDS_OUT_S = 0.14        # exit: words fade first
+_COLLAPSE_AT_S = 0.10
+_COLLAPSE_S = 0.42         # exit: capsule contracts to the droplet
+_DROP_AT_S = _COLLAPSE_AT_S + _COLLAPSE_S - 0.06
+_DROP_S = 0.28             # exit: droplet drops and fades
+_ENTER_S = _SPREAD_AT_S + _SPREAD_S
+_LEAVE_S = _DROP_AT_S + _DROP_S
+_DROP_PX = 10.0
+_DROPLET_MIN = 0.6         # droplet diameter at the start of the rise / end of the drop
+_SUCCESS_HOLD_MS = 1200
+
+
+def ease_in_out_cubic(t: float) -> float:
+    """Cubic ease-in-out on 0..1: slow start, slow end."""
+    t = 0 if t < 0 else 1 if t > 1 else t
+    if t < 0.5:
+        return 4 * t * t * t
+    return 1 - ((-2 * t + 2) ** 3) / 2
+
+
+def fit_pill_width(text_w: float, chip_w: float = 0.0) -> int:
+    """Compact capsule width that shows ``text_w`` px of label (+ chip) unclipped."""
+    w = _INSET_X + _GLYPH_SLOT + _S + text_w + _INSET_X + _FIT_SLACK
+    if chip_w:
+        w += _GAP_TEXT_CHIP + chip_w
+    return max(_MIN_PILL_W, int(math.ceil(w)))
+
+
+def fit_recording_width(text_w: float, chip_w: float = 0.0) -> int:
+    """Recording capsule width: waveform, divider, label and chip. No reserved margin."""
+    w = _INSET_X + _RECORDING_WAVE_W + 18.0 + text_w + _INSET_X + _FIT_SLACK
+    if chip_w:
+        w += _GAP_TEXT_CHIP + chip_w
+    return max(_MIN_PILL_W, int(math.ceil(w)))
+
+
+class _Tween:
+    """One eased value; retargeting starts from wherever the value is now."""
+
+    __slots__ = ("a", "b", "t0", "dur")
+
+    def __init__(self, value: float) -> None:
+        self.a = self.b = float(value)
+        self.t0 = 0.0
+        self.dur = 0.0
+
+    def value(self, now: float) -> float:
+        if self.dur <= 0.0:
+            return self.b
+        return self.a + (self.b - self.a) * ease_in_out_cubic((now - self.t0) / self.dur)
+
+    def done(self, now: float) -> bool:
+        return self.dur <= 0.0 or now - self.t0 >= self.dur
+
+    def to(self, target: float, now: float, dur: float) -> None:
+        self.a, self.b, self.t0, self.dur = self.value(now), float(target), now, dur
+
+    def snap(self, value: float) -> None:
+        self.a = self.b = float(value)
+        self.dur = 0.0
+
 
 # Text was inserted, with a caveat the user should see.
 SUCCESS_NOTICE_LABELS = {
@@ -144,24 +232,6 @@ def _show_ai_chip(state: GuiState, use_llm: bool) -> bool:
     return use_llm and state in (GuiState.RECORDING, GuiState.PROCESSING)
 
 
-def _all_status_labels() -> list[str]:
-    """Every string the pill may show — used to size width to a perfect fit."""
-    return [
-        status_label(GuiState.BOOTING),
-        status_label(GuiState.RECORDING, use_llm=False),
-        status_label(GuiState.RECORDING, use_llm=True),
-        status_label(GuiState.PROCESSING, use_llm=False),
-        status_label(GuiState.PROCESSING, use_llm=True),
-        status_label(GuiState.SUCCESS),
-        status_label(GuiState.ERROR, last_status="empty"),
-        status_label(GuiState.ERROR, last_status="error"),
-        status_label(GuiState.RESET),
-        "Polishing", "Finalizing",
-        *SUCCESS_NOTICE_LABELS.values(), *ERROR_STATUS_LABELS.values(),
-        *INIT_REASON_LABELS.values(), _INIT_REASON_DEFAULT,
-    ]
-
-
 class DictationIndicator(QWidget):
     """Bottom-center always-on-top glass HUD for the dictation service."""
 
@@ -195,35 +265,46 @@ class DictationIndicator(QWidget):
         # Animation clock
         self._t: float = 0.0
         self._bars: list[float] = [0.16] * 5  # quiet equalizer; grows in live layout
-        self._appear: float = 0.0  # 0..1 opacity only (never scale)
+        self._appear: float = 0.0  # 0..1 shape opacity, derived from the phase timeline
         self._appear_target: float = 1.0
-        self._rise: float = 0.0    # 0..1 rise offset for the entrance (no scale)
+        # Droplet timeline: hidden -> entering -> open -> leaving -> hidden.
+        # The window never scales; the painted shape does (scaling blurs layered HWNDs).
+        self._phase: str = "hidden"
+        self._phase_t0: float = 0.0
         self._check_progress: float = 0.0
         self._content_fade: float = 1.0
         self._glyph_fade: float = 1.0  # 0..1 cross-fade between state glyphs
         self._last_glyph_state: GuiState = GuiState.BOOTING
+        self._shown_state: GuiState = GuiState.BOOTING  # painted while leaving
+        self._label_cache: str = ""
+        self._success_since: float = 0.0
+        self._resize_hold: Optional[tuple[float, float]] = None
+        self._text_in_at: Optional[float] = None
 
         # --- Geometry (8px rhythm) ---
         self._pad = 14                 # shadow bleed only (no glow halo)
-        self._pill_h = 44
+        self._pill_h = _COMPACT_H
         self._radius = 22              # capsule ends
-        self._inset_x = 14
-        self._glyph_slot = 20
+        self._paint_radius = 22.0
+        self._inset_x = _INSET_X
+        self._glyph_slot = _GLYPH_SLOT
         self._gap_glyph_text = _S
-        self._gap_text_chip = 8
+        self._gap_text_chip = _GAP_TEXT_CHIP
         self._chip_h = 20
         self._chip_pad_x = 7
         self._text_optical_y = -0.5
 
+        # _pill_w/_pill_h are the layout target; the tweens are what is painted.
         self._pill_w = 170
-        self._compact_w = 170
-        self._compact_h = 44
+        self._compact_h = _COMPACT_H
         self._canvas_w = self._pill_w + self._pad * 2
         self._canvas_h = self._pill_h + self._pad * 2
+        self._w_tw = _Tween(self._pill_w)
+        self._h_tw = _Tween(self._pill_h)
 
         self._setup_window()
         self._setup_font()
-        self._fit_pill_to_labels()
+        self._sync_geometry()
         self._setup_tray()
 
         self._wake.connect(self._sync_from_app, Qt.ConnectionType.QueuedConnection)
@@ -238,13 +319,9 @@ class DictationIndicator(QWidget):
         self._tick.start()
 
         self.last_app_state = getattr(app, "state", None)
-        self._appear_target = 1.0
-        self._appear = 0.0
-        # Always paint during the appear fade-in, then pause once hidden.
+        # Always paint during the entrance, then pause once hidden.
         self._tick_active = True
-        self.show()
-        self._apply_win32_exstyles()
-        self.raise_()
+        self._begin_show(time.monotonic())
 
     # ------------------------------------------------------------------ window
     def _setup_tray(self) -> None:
@@ -351,60 +428,193 @@ class DictationIndicator(QWidget):
         self._font_chip.setWeight(QFont.Weight.DemiBold)
         self._font_chip.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 106)
 
-    def _chip_width(self) -> float:
+    def _chip_width(self, label: str = "AI") -> float:
         fm = QFontMetrics(self._font_chip)
-        return float(fm.horizontalAdvance("AI") + self._chip_pad_x * 2)
+        return float(fm.horizontalAdvance(label) + self._chip_pad_x * 2)
 
-    def _fit_pill_to_labels(self) -> None:
-        """Size pill so longest label (+ optional AI chip) fits with consistent chrome."""
-        fm = QFontMetrics(self._font)
-        max_text = 0
-        for label in _all_status_labels():
-            max_text = max(max_text, fm.horizontalAdvance(label))
+    def _target_width(self, label: str, chip_label: str = "") -> int:
+        """Compact width that fits ``label`` (and an optional chip) unclipped."""
+        text_w = QFontMetrics(self._font).horizontalAdvance(label)
+        return fit_pill_width(text_w, self._chip_width(chip_label) if chip_label else 0.0)
 
-        # [ inset | glyph | gap | text | (gap+chip)? | inset ]
-        left = float(self._inset_x + self._glyph_slot + self._gap_glyph_text)
-        right = float(self._inset_x)
-        chip = self._gap_text_chip + self._chip_width()
-        # Always reserve chip width so AI ↔ raw doesn't resize the capsule mid-session.
-        # Shave 8% off the auto-fit width for a tighter, quieter capsule. The longest
-        # label still fits because the 4px padding + glyph gap absorb the difference.
-        self._pill_w = int(math.ceil((left + max_text + chip + right + 4.0) * 0.92))
-        self._compact_w = self._pill_w
-        self._compact_h = self._pill_h
-        self._canvas_w = self._pill_w + self._pad * 2
-        self._canvas_h = self._pill_h + self._pad * 2
-        self.setFixedSize(self._canvas_w, self._canvas_h)
-        self._reposition_bottom_center()
+    def _label_for(self, state: GuiState, use_llm: bool) -> str:
+        """The label painted now. While leaving, the last shown label stays."""
+        if self.gui_state == GuiState.HIDDEN:
+            return self._label_cache
+        label = status_label(state, use_llm, getattr(self.app, "last_status", None),
+                             getattr(self.app, "status_detail", None))
+        self._label_cache = label
+        return label
+
+    def _vis_state(self) -> GuiState:
+        """The state to draw: the last shown state while the exit plays."""
+        return self._shown_state if self.gui_state == GuiState.HIDDEN else self.gui_state
 
     def _is_live_layout(self) -> bool:
         return (getattr(self.app, "live_active", False) is True or
                 (self.gui_state == GuiState.PROCESSING and bool(getattr(self.app, "live_preview", ""))))
 
-    def _sync_geometry(self) -> None:
-        """Grow the capsule for the expanded recording waveform."""
-        recording = self.gui_state == GuiState.RECORDING
-        if recording:
-            pill_w, pill_h, n_bars, radius = max(self._compact_w, 252), 44, 20, 22
+    def _layout_target(self) -> tuple[int, int, int]:
+        """(width, height, bar count) that fits what the current state shows."""
+        state = self.gui_state
+        use_llm = bool(getattr(self.app, "use_llm", False))
+        label = self._label_for(state, use_llm)
+        if state == GuiState.RECORDING:
+            live_on = getattr(self.app, "live_active", False) is True
+            chip = "Live" if live_on else ("AI" if _show_ai_chip(state, use_llm) else "")
+            text_w = QFontMetrics(self._font).horizontalAdvance(label)
+            w = fit_recording_width(text_w, self._chip_width(chip) if chip else 0.0)
+            n_bars = _RECORDING_BARS
         else:
-            pill_w, pill_h, n_bars, radius = self._compact_w, self._compact_h, 7, 22
+            w = self._target_width(label, "AI" if _show_ai_chip(state, use_llm) else "")
+            n_bars = 7
+        h = self._compact_h
         if self._is_live_layout():
-            pill_w, pill_h = max(pill_w, 440), 86
-        if (
-            pill_w == self._pill_w
-            and pill_h == self._pill_h
-            and len(self._bars) == n_bars
-        ):
-            return
-        self._pill_w = pill_w
-        self._pill_h = pill_h
-        self._radius = radius
+            w, h = max(w, _LIVE_MIN_W), _LIVE_H
+        return w, h, n_bars
+
+    def _sync_geometry(self) -> None:
+        """Retarget the capsule to the current words.
+
+        From hidden, the droplet opens at the new size. While the capsule is
+        already open, the painted size waits until the new words are fully in,
+        then starts 0.3 ms later, so a shrink cannot clip the longer label.
+        """
+        if self.gui_state == GuiState.HIDDEN:
+            return  # keep the shown size while the exit plays
+        w, h, n_bars = self._layout_target()
         if len(self._bars) != n_bars:
             self._bars = [0.16] * n_bars
-        self._canvas_w = self._pill_w + self._pad * 2
-        self._canvas_h = self._pill_h + self._pad * 2
-        self.setFixedSize(self._canvas_w, self._canvas_h)
+        if w == self._pill_w and h == self._pill_h:
+            return
+        self._pill_w, self._pill_h = w, h
+        # Grow the canvas once, before a grow animation; shrink happens after.
+        self._fit_canvas(w, h)
+        if self._phase == "hidden":
+            self._w_tw.snap(w)
+            self._h_tw.snap(h)
+            self._resize_hold = None
+            self._text_in_at = None
+        else:
+            self._resize_hold = (float(w), float(h))
+            self._text_in_at = None
+
+    def _release_resize(self, now: float) -> None:
+        """Start a held size change 0.3 ms after the new words are fully in."""
+        if self._resize_hold is None:
+            return
+        if self._content_fade < 1.0:
+            self._text_in_at = None
+            return
+        if self._text_in_at is None:
+            self._text_in_at = now
+            return
+        if now < self._text_in_at + _RESIZE_AFTER_TEXT_S:
+            return
+        w, h = self._resize_hold
+        self._w_tw.to(w, now, _RESIZE_S)
+        self._h_tw.to(h, now, _RESIZE_S)
+        self._resize_hold = None
+        self._text_in_at = None
+
+    def _fit_canvas(self, w: float, h: float, shrink: bool = False) -> None:
+        """Resize the window to hold a ``w`` x ``h`` capsule (one resize, not per frame)."""
+        cw = int(math.ceil(w)) + self._pad * 2
+        cw += cw % 2  # even width keeps the painted center on a whole pixel
+        ch = int(math.ceil(h)) + self._pad * 2
+        if not shrink:
+            cw, ch = max(cw, self._canvas_w), max(ch, self._canvas_h)
+        if (cw, ch) == (self._canvas_w, self._canvas_h):
+            return
+        self._canvas_w, self._canvas_h = cw, ch
+        self.setFixedSize(cw, ch)
         self._reposition_bottom_center()
+
+    def _frame(self, now: float) -> tuple[float, float, float, float, float]:
+        """Painted capsule for this instant: (width, height, drop px, shape alpha, words alpha)."""
+        W = self._w_tw.value(now)
+        H = self._h_tw.value(now)
+        d = float(self._compact_h)
+        el = now - self._phase_t0
+        if self._phase == "entering":
+            rise = ease_in_out_cubic(el / _RISE_S)
+            spread_raw = max(0.0, min(1.0, (el - _SPREAD_AT_S) / _SPREAD_S))
+            spread = ease_in_out_cubic(spread_raw)
+            size = d * (_DROPLET_MIN + (1.0 - _DROPLET_MIN) * rise)
+            words = ease_in_out_cubic((spread_raw - 0.5) / 0.5)
+            return (size + (W - size) * spread, size + (H - size) * spread,
+                    (1.0 - rise) * _DROP_PX, rise, words)
+        if self._phase == "leaving":
+            words = 1.0 - ease_in_out_cubic(el / _WORDS_OUT_S)
+            collapse = ease_in_out_cubic((el - _COLLAPSE_AT_S) / _COLLAPSE_S)
+            drop = ease_in_out_cubic((el - _DROP_AT_S) / _DROP_S)
+            shrink = 1.0 - (1.0 - _DROPLET_MIN) * drop
+            return ((W + (d - W) * collapse) * shrink, (H + (d - H) * collapse) * shrink,
+                    drop * _DROP_PX, 1.0 - drop, words)
+        if self._phase == "open":
+            return W, H, 0.0, 1.0, 1.0
+        return W, H, 0.0, 0.0, 0.0
+
+    def _begin_show(self, now: float) -> None:
+        """Play the droplet entrance from hidden; reopen in place if the exit is early."""
+        if self._phase == "leaving" and now - self._phase_t0 < _DROP_AT_S:
+            # Not yet a droplet: ease back out from the painted size.
+            w, h, _, _, _ = self._frame(now)
+            self._w_tw.snap(w)
+            self._h_tw.snap(h)
+            self._w_tw.to(self._pill_w, now, _RESIZE_S)
+            self._h_tw.to(self._pill_h, now, _RESIZE_S)
+            self._phase, self._phase_t0 = "open", now
+            self._content_fade = 0.0
+        elif self._phase in ("hidden", "leaving"):
+            self._w_tw.snap(self._pill_w)
+            self._h_tw.snap(self._pill_h)
+            self._fit_canvas(self._pill_w, self._pill_h, shrink=True)
+            self._phase, self._phase_t0 = "entering", now
+            self._content_fade = 1.0
+            self._glyph_fade = 1.0  # nothing to cross-fade from
+        self._appear_target = 1.0
+        self._reposition_bottom_center()
+        self.setWindowOpacity(1.0)
+        self.show()
+        self._apply_win32_exstyles()
+        self.raise_()
+
+    def _begin_leave(self, now: float) -> None:
+        """Words fade, the capsule contracts to a droplet, the droplet drops and fades."""
+        if self._phase in ("hidden", "leaving"):
+            return
+        if self._phase == "entering":
+            w, h, _, _, _ = self._frame(now)
+            self._w_tw.snap(w)
+            self._h_tw.snap(h)
+        else:
+            self._w_tw.snap(self._w_tw.value(now))
+            self._h_tw.snap(self._h_tw.value(now))
+        self._phase, self._phase_t0 = "leaving", now
+
+    def _advance_phase(self, now: float) -> None:
+        el = now - self._phase_t0
+        if self._phase == "entering":
+            self._appear = ease_in_out_cubic(el / _RISE_S)
+            if el >= _ENTER_S:
+                self._phase = "open"
+        elif self._phase == "open":
+            self._appear = 1.0
+            # Shrink the canvas once, after a shrink animation has finished.
+            if (self._resize_hold is None
+                    and self._w_tw.done(now) and self._h_tw.done(now)):
+                self._fit_canvas(self._pill_w, self._pill_h, shrink=True)
+        elif self._phase == "leaving":
+            self._appear = 1.0 - ease_in_out_cubic((el - _DROP_AT_S) / _DROP_S)
+            if el >= _LEAVE_S:
+                self._phase = "hidden"
+                self._appear = 0.0
+                if self.isVisible() and self.gui_state == GuiState.HIDDEN:
+                    self.hide()
+                self._sync_tick()
+        else:
+            self._appear = 0.0
 
     def _reposition_bottom_center(self) -> None:
         screen = QGuiApplication.primaryScreen()
@@ -447,15 +657,12 @@ class DictationIndicator(QWidget):
         self._reset_flash.emit()
 
     def _do_flash_reset(self) -> None:
-        self.gui_state = GuiState.RESET
-        self._appear_target = 1.0
-        self._appear = max(self._appear, 0.9)
+        if self.gui_state != GuiState.RESET:
+            self._glyph_fade = 0.0
+        self.gui_state = self._shown_state = GuiState.RESET
+        self._sync_geometry()
         self._content_fade = 0.8
-        self._reposition_bottom_center()
-        self.setWindowOpacity(1.0)
-        self.show()
-        self._apply_win32_exstyles()
-        self.raise_()
+        self._begin_show(time.monotonic())
         self._hide_timer.start(1200)
         self._sync_tick()
         print("[HUD] Context cleared", flush=True)
@@ -463,6 +670,7 @@ class DictationIndicator(QWidget):
     def _do_hide(self) -> None:
         self._appear_target = 0.0
         self.gui_state = GuiState.HIDDEN
+        self._begin_leave(time.monotonic())
         self._sync_tick()
         try:
             from app_state import AppState
@@ -495,7 +703,10 @@ class DictationIndicator(QWidget):
         if app_state == AppState.RECORDING:
             target = GuiState.RECORDING
         elif app_state == AppState.PROCESSING:
-            target = GuiState.PROCESSING
+            # The text is in the target app; only the clipboard wait remains.
+            # `is True`: a MagicMock app attribute is truthy but never True.
+            delivered = getattr(self.app, "paste_delivered", False) is True
+            target = GuiState.SUCCESS if delivered else GuiState.PROCESSING
         elif app_state == AppState.IDLE:
             came_from_processing = prev_app_state == AppState.PROCESSING
             if not ready and last_status is None:
@@ -529,56 +740,55 @@ class DictationIndicator(QWidget):
 
     def _transition_to(self, new_state: GuiState) -> None:
         self._hide_timer.stop()
+        now = time.monotonic()
 
         if new_state == GuiState.HIDDEN:
             self._appear_target = 0.0
             self.gui_state = GuiState.HIDDEN
+            self._begin_leave(now)
             self._sync_tick()
             return
 
         prev = self.gui_state
-        self.gui_state = new_state
+        # Done shown at delivery stays put when the cycle reaches IDLE: no
+        # replayed check, only an eased width change if a notice replaces it.
+        kept_success = new_state == prev == GuiState.SUCCESS
+        shown_label = self._label_cache
+        self.gui_state = self._shown_state = new_state
         self._sync_geometry()
-        self._t = 0.0
-        if new_state in (GuiState.SUCCESS, GuiState.ERROR):
-            self._check_progress = 0.0
-        if new_state == GuiState.RESET:
-            self._hide_timer.start(1200)
-
-        # Cross-fade the glyph when the drawn state changes (not on same-state noise).
-        if new_state != prev:
-            self._glyph_fade = 0.0
-        self._rise = 0.0  # entrance rise runs on every transition in
-
-        if new_state in (GuiState.RECORDING, GuiState.PROCESSING):
-            self._appear = 1.0
-            self._appear_target = 1.0
-            self._content_fade = 0.7
-        elif new_state == GuiState.BOOTING:
-            self._appear = max(self._appear, 0.9)
-            self._appear_target = 1.0
+        if kept_success and self._label_cache != shown_label:
             self._content_fade = 0.8
-        elif prev == GuiState.HIDDEN or self._appear < 0.2:
-            self._appear = 0.9
-            self._appear_target = 1.0
-            self._content_fade = 0.75
-        else:
-            self._appear_target = 1.0
-            self._content_fade = 0.85
+        if not kept_success:
+            self._t = 0.0
+            if new_state in (GuiState.SUCCESS, GuiState.ERROR):
+                self._check_progress = 0.0
+            if new_state == GuiState.SUCCESS:
+                self._success_since = now
+            # Cross-fade the glyph when the drawn state changes (not on same-state noise).
+            if new_state != prev:
+                self._glyph_fade = 0.0
+            self._content_fade = 0.7 if new_state in (
+                GuiState.RECORDING, GuiState.PROCESSING) else 0.8
 
-        self._reposition_bottom_center()
-        self.setWindowOpacity(1.0)
-        self.show()
-        self._apply_win32_exstyles()
-        self.raise_()
+        # The droplet plays only from hidden; an open capsule stays one capsule.
+        self._begin_show(now)
 
         last_status = getattr(self.app, "last_status", None)
+        app_state = getattr(self.app, "state", None)
+        still_processing = getattr(app_state, "name", None) == "PROCESSING"
         if new_state == GuiState.ERROR and last_status == "init_error":
             pass  # not ready: stay visible until init succeeds (no auto-hide)
-        elif new_state in (GuiState.SUCCESS, GuiState.ERROR):
+        elif new_state == GuiState.SUCCESS:
+            # Done shows at delivery; hiding waits for IDLE (the clipboard wait
+            # still runs), then keeps Done up ~1.2 s in total.
+            if not still_processing:
+                hold_ms = _SUCCESS_HOLD_MS - (now - self._success_since) * 1000.0
+                if last_status != "success":
+                    hold_ms = _SUCCESS_HOLD_MS  # a notice that just replaced Done
+                self._hide_timer.start(max(0, int(hold_ms)))
+        elif new_state == GuiState.ERROR:
             # A preflight problem gets time to be read; it explains silent hotkeys.
-            hold_ms = 6000 if last_status == "preflight" else 1500
-            self._hide_timer.start(1200 if new_state == GuiState.SUCCESS else hold_ms)
+            self._hide_timer.start(6000 if last_status == "preflight" else 1500)
         elif new_state == GuiState.RESET:
             self._hide_timer.start(1200)
 
@@ -588,12 +798,12 @@ class DictationIndicator(QWidget):
     def _sync_tick(self) -> None:
         """Pause the 60 FPS paint timer while fully hidden; resume otherwise.
 
-        The timer also stays active during a fade-out (HIDDEN with appear > 0)
+        The timer also stays active during the exit (HIDDEN while leaving)
         so the last frames render, then it stops at the actual hide().
         """
         active = (
             self.gui_state != GuiState.HIDDEN
-            or self._appear > 0.02
+            or self._phase != "hidden"
             or self._appear_target > 0.0
         )
         if active and not self._tick.isActive():
@@ -612,16 +822,8 @@ class DictationIndicator(QWidget):
         except Exception:
             pass
 
-        self._appear += (self._appear_target - self._appear) * 0.35
-        if self._appear_target == 0.0 and self._appear < 0.02:
-            self._appear = 0.0
-            if self.isVisible() and self.gui_state == GuiState.HIDDEN:
-                self.hide()
-            if self.gui_state == GuiState.HIDDEN:
-                self._sync_tick()
+        self._advance_phase(time.monotonic())
 
-        # Entrance rise — quick settle, no scale (avoids blur on translucent windows).
-        self._rise = min(1.0, self._rise + 0.14)
         # Glyph cross-fade — ~150ms to full.
         self._glyph_fade = min(1.0, self._glyph_fade + 0.2)
 
@@ -631,6 +833,7 @@ class DictationIndicator(QWidget):
 
         if self._content_fade < 1.0:
             self._content_fade = min(1.0, self._content_fade + 0.16)
+        self._release_resize(time.monotonic())
 
         n = len(self._bars)
         recorder = getattr(self.app, "recorder", None)
@@ -655,21 +858,28 @@ class DictationIndicator(QWidget):
         if self.gui_state in (GuiState.SUCCESS, GuiState.ERROR):
             self._check_progress = min(1.0, self._check_progress + 0.08)
 
-        if self._appear > 0.01 or self._appear_target > 0:
+        if self._phase != "hidden" or self._appear_target > 0:
             self.update()
 
     # ----------------------------------------------------------------- paint
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
-        if self._appear <= 0.001:
+        now = time.monotonic()
+        w, h, dy, alpha, words = self._frame(now)
+        if alpha <= 0.001:
             return
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        p.setOpacity(max(0.0, min(1.0, self._appear)))
+        p.setOpacity(max(0.0, min(1.0, alpha)))
 
-        pill = QRectF(self._pad, self._pad, self._pill_w, self._pill_h)
+        # The painted shape animates inside a fixed canvas: centered, bottom-aligned
+        # (the window never scales, so nothing blurs).
+        cx = self._canvas_w * 0.5
+        bottom = float(self._canvas_h - self._pad)
+        pill = QRectF(cx - w * 0.5, bottom - h + dy, w, h)
+        self._paint_radius = min(float(self._radius), h * 0.5, w * 0.5)
         accent = self._accent_color()
         use_llm = bool(getattr(self.app, "use_llm", False))
 
@@ -678,13 +888,19 @@ class DictationIndicator(QWidget):
         self._paint_border(p, pill)
         self._paint_top_rim(p, pill)
 
-        # Entrance rise: translate the content up as it fades in (no scale → no blur).
-        rise_px = (1.0 - self._ease_out_cubic(self._rise)) * 4.0
-        p.save()
-        p.translate(0.0, rise_px)
-        p.setOpacity(max(0.0, min(1.0, self._appear * self._content_fade)))
-        self._paint_content(p, pill, accent, use_llm)
-        p.restore()
+        # Words are laid out at full size for the current width and revealed by
+        # the capsule clip; glyphs and text never stretch with the width.
+        content_alpha = alpha * self._content_fade * words
+        if content_alpha > 0.001:
+            W, H = self._w_tw.value(now), self._h_tw.value(now)
+            layout = QRectF(cx - W * 0.5, bottom - H + dy, W, H)
+            p.save()
+            clip = QPainterPath()
+            clip.addRoundedRect(pill, self._paint_radius, self._paint_radius)
+            p.setClipPath(clip)
+            p.setOpacity(max(0.0, min(1.0, content_alpha)))
+            self._paint_content(p, layout, accent, use_llm)
+            p.restore()
 
         p.end()
 
@@ -694,17 +910,18 @@ class DictationIndicator(QWidget):
 
     def _accent_color(self) -> QColor:
         use_llm = bool(getattr(self.app, "use_llm", False))
-        if self.gui_state == GuiState.BOOTING:
+        state = self._vis_state()
+        if state == GuiState.BOOTING:
             return _Theme.boot
-        if self.gui_state == GuiState.RECORDING:
+        if state == GuiState.RECORDING:
             return _Theme.ai if use_llm else _Theme.record
-        if self.gui_state == GuiState.PROCESSING:
+        if state == GuiState.PROCESSING:
             return _Theme.ai if use_llm else _Theme.process
-        if self.gui_state == GuiState.SUCCESS:
+        if state == GuiState.SUCCESS:
             return _Theme.success
-        if self.gui_state == GuiState.ERROR:
+        if state == GuiState.ERROR:
             return _Theme.error
-        if self.gui_state == GuiState.RESET:
+        if state == GuiState.RESET:
             return _Theme.ai
         return _Theme.process
 
@@ -713,12 +930,12 @@ class DictationIndicator(QWidget):
         for dy, expand, alpha in ((6, 3, 40), (3, 0, 52)):
             r = QRectF(pill).adjusted(-expand, dy * 0.35, expand, dy)
             path = QPainterPath()
-            path.addRoundedRect(r, self._radius + 1, self._radius + 1)
+            path.addRoundedRect(r, self._paint_radius + 1, self._paint_radius + 1)
             p.fillPath(path, QColor(0, 0, 0, alpha))
 
     def _paint_surface(self, p: QPainter, pill: QRectF) -> None:
         path = QPainterPath()
-        path.addRoundedRect(pill, self._radius, self._radius)
+        path.addRoundedRect(pill, self._paint_radius, self._paint_radius)
         grad = QLinearGradient(pill.topLeft(), pill.bottomLeft())
         grad.setColorAt(0.0, _Theme.surface_top)
         grad.setColorAt(1.0, _Theme.surface_bot)
@@ -727,7 +944,7 @@ class DictationIndicator(QWidget):
     def _paint_border(self, p: QPainter, pill: QRectF) -> None:
         path = QPainterPath()
         path.addRoundedRect(
-            pill.adjusted(0.5, 0.5, -0.5, -0.5), self._radius, self._radius
+            pill.adjusted(0.5, 0.5, -0.5, -0.5), self._paint_radius, self._paint_radius
         )
         pen = QPen(_Theme.border)
         pen.setWidthF(1.0)
@@ -739,9 +956,13 @@ class DictationIndicator(QWidget):
         """Faint top edge light — barely there."""
         p.save()
         clip = QPainterPath()
-        clip.addRoundedRect(pill, self._radius, self._radius)
-        p.setClipPath(clip)
-        rim = QRectF(pill.left() + 10, pill.top() + 1.0, pill.width() - 20, 1.0)
+        clip.addRoundedRect(pill, self._paint_radius, self._paint_radius)
+        p.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+        rim_w = pill.width() - 20
+        if rim_w <= 0:
+            p.restore()
+            return
+        rim = QRectF(pill.left() + 10, pill.top() + 1.0, rim_w, 1.0)
         g = QLinearGradient(rim.left(), rim.top(), rim.right(), rim.top())
         g.setColorAt(0.0, QColor(255, 255, 255, 0))
         g.setColorAt(0.25, _Theme.rim)
@@ -756,7 +977,7 @@ class DictationIndicator(QWidget):
         """Compact glyph+label or expanded recording waveform."""
         if self._is_live_layout():
             header = QRectF(pill.x(), pill.y(), pill.width(), 44)
-            if self.gui_state == GuiState.RECORDING:
+            if self._vis_state() == GuiState.RECORDING:
                 self._paint_recording_content(p, header, accent, use_llm)
             else:
                 self._paint_compact_content(p, header, accent, use_llm)
@@ -767,7 +988,7 @@ class DictationIndicator(QWidget):
             preview = p.fontMetrics().elidedText(preview, Qt.TextElideMode.ElideLeft, int(pill.width() - 28))
             p.drawText(QRectF(pill.x() + 14, pill.y() + 44, pill.width() - 28, 30), Qt.AlignmentFlag.AlignVCenter, preview)
             return
-        if self.gui_state == GuiState.RECORDING:
+        if self._vis_state() == GuiState.RECORDING:
             self._paint_recording_content(p, pill, accent, use_llm)
             return
         self._paint_compact_content(p, pill, accent, use_llm)
@@ -776,6 +997,7 @@ class DictationIndicator(QWidget):
         self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
     ) -> None:
         """[ inset | glyph | gap | label .............. | chip? | inset ]"""
+        state = self._vis_state()
         left = pill.x() + self._inset_x
         glyph_cx = left + self._glyph_slot * 0.5
         glyph_cy = pill.center().y() + self._text_optical_y
@@ -786,8 +1008,8 @@ class DictationIndicator(QWidget):
             p.setOpacity(max(0.0, 1.0 - self._glyph_fade))
             self._draw_glyph(p, self._last_glyph_state, glyph_cx, glyph_cy, accent)
             p.restore()
-        self._draw_glyph(p, self.gui_state, glyph_cx, glyph_cy, accent)
-        self._last_glyph_state = self.gui_state
+        self._draw_glyph(p, state, glyph_cx, glyph_cy, accent)
+        self._last_glyph_state = state
 
         # Hairline divider
         div_x = left + self._glyph_slot + self._gap_glyph_text * 0.4
@@ -797,11 +1019,9 @@ class DictationIndicator(QWidget):
         p.setPen(div_pen)
         p.drawLine(QPointF(div_x, mid - 8), QPointF(div_x, mid + 8))
 
-        last_status = getattr(self.app, "last_status", None)
-        label = status_label(self.gui_state, use_llm, last_status,
-                             getattr(self.app, "status_detail", None))
+        label = self._label_for(state, use_llm)
 
-        chip_on = _show_ai_chip(self.gui_state, use_llm)
+        chip_on = _show_ai_chip(state, use_llm)
         chip_w = self._chip_width() if chip_on else 0.0
         text_left = left + self._glyph_slot + self._gap_glyph_text
         text_right = pill.right() - self._inset_x
@@ -843,8 +1063,9 @@ class DictationIndicator(QWidget):
         self, p: QPainter, pill: QRectF, accent: QColor, use_llm: bool
     ) -> None:
         """Expanded waveform on the left, status text on the right."""
+        state = self._vis_state()
         left = pill.x() + self._inset_x
-        wave_w = 96.0
+        wave_w = _RECORDING_WAVE_W
         wave_cx = left + wave_w * 0.5
         wave_cy = pill.center().y()
         self._draw_eq_bars(p, wave_cx, wave_cy, accent, slot=wave_w, max_h=16.0, bar_w=2.0)
@@ -856,11 +1077,9 @@ class DictationIndicator(QWidget):
         p.setPen(div_pen)
         p.drawLine(QPointF(div_x, mid - 9), QPointF(div_x, mid + 9))
 
-        last_status = getattr(self.app, "last_status", None)
-        label = status_label(self.gui_state, use_llm, last_status,
-                             getattr(self.app, "status_detail", None))
+        label = self._label_for(state, use_llm)
         live_on = getattr(self.app, "live_active", False) is True
-        chip_on = _show_ai_chip(self.gui_state, use_llm)
+        chip_on = _show_ai_chip(state, use_llm)
         chip_label = "Live" if live_on else ("AI" if chip_on else "")
         chip_w = (
             float(QFontMetrics(self._font_chip).horizontalAdvance(chip_label) + self._chip_pad_x * 2)

@@ -73,8 +73,10 @@ Notes:
   session environment or Qt, audio and the clipboard break:
   `sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS .venv/bin/python main.py`
   (installing is different: never run `install.sh` with sudo).
-- **Python 3.10 to 3.12.** The installers pin Python 3.12 (uv) or pick
-  3.12/3.11/3.10 (pip). Python 3.13+ is refused because `numpy<2` has no wheels.
+- **Python 3.10 to 3.12.** The installers reuse an installed Python 3.12, 3.11 or 3.10
+  (highest first). uv fetches 3.12 only when none is installed. Python 3.13+ is refused
+  because `numpy<2` has no wheels. `.venv` is tied to the machine and Python that made it;
+  see [Moving machines or removing Python](#moving-machines-or-removing-python).
 - `odicto.py status` lists known environment problems (missing Linux
   packages, Wayland, root, macOS permissions) with the fix for each.
 
@@ -128,8 +130,8 @@ The installer will (when possible):
 
 | Step | What it does |
 |------|----------------|
-| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**; uv is pinned to 3.12) |
-| 2 | Create **`.venv`** |
+| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**) |
+| 2 | Reuse an installed Python 3.10-3.12 (`-Python` picks one), then create **`.venv`**, or repair a `.venv` that cannot run |
 | 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
 | 4 | Copy **`.env.example` → `.env`** |
 | 5 | Pre-download **Whisper** weights (`tiny.en` by default) |
@@ -147,10 +149,38 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
 bash install.sh -Ollama
 ```
 
+```powershell
+# Windows: use a specific installed Python (a path, or 3.10 / 3.11 / 3.12)
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Python 3.11
+# Other flags: -NoUv (use pip + venv instead of uv), -VenvOnly (create or repair .venv, then stop)
+```
+
+```bash
+bash install.sh -Python 3.11        # or a path; also -NoUv and -VenvOnly
+```
+
+An explicit `-Python` that is missing, will not run, or is outside 3.10-3.12 stops the
+installer. It never switches to another Python for you.
+
 Ollama and its model are **opt-in**: without the flag, nothing local-AI
 related is downloaded. If you pick Ollama on the setup page later, the page
 offers a **Download local model** button that pulls exactly the model you
 entered — and only then.
+
+### Moving machines or removing Python
+
+A `.venv` points at the Python that created it (`home` in `.venv/pyvenv.cfg`). It breaks when
+you copy the folder to another machine or uninstall that Python (for example Miniconda).
+`start_dictation.bat` then stops with a message instead of a config error. To repair:
+
+1. If an old Odicto is still running, right-click its tray icon and choose **Quit Odicto**.
+   (`stop_dictation.bat` needs the same `.venv`, so it cannot help here.)
+2. Run `install.ps1` (or `install.sh`) again. It runs the `.venv` to judge it. A `.venv` that
+   works is kept as it is, and no separate base Python is needed. A `.venv` that cannot run, or
+   is not Python 3.10-3.12, is renamed to `.venv-backup-<timestamp>` and rebuilt.
+3. Nothing is deleted, and `.env` and `prompt.txt` are never touched. Delete the backup yourself
+   when you no longer need it. The installer refuses to rename while Odicto holds
+   `dictation.lock` or another program runs from the `.venv`.
 
 ---
 
@@ -164,7 +194,7 @@ Pick your OS below, or use the one-command installers above.
 |------|-----|----------------|
 | **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
 | **uv** (recommended) | Fast, hash-verified dependency install | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) — the installers fetch it automatically when missing |
-| **Python 3.10 to 3.12** | Runtime (needed only for the pip fallback; uv fetches 3.12). 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Python 3.10 to 3.12** | Runtime. An installed one is reused; uv fetches 3.12 only if none exists. 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
 | **Microphone** | Capture speech | Working default input device in system sound settings |
 | **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
 | **(Optional) One API key per cloud backend** | AI replies — Meta, OpenRouter, or Gemini (Ollama needs none) | Use `odicto.py setup`, or paste each into its `*_API_KEY` in `.env` |
@@ -652,7 +682,7 @@ invariants not to break.
 | Ollama still using RAM on Meta/OpenRouter/Gemini | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
 | Slow first run | Whisper/Ollama downloading; later runs are faster |
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
-| Import errors | Recreate venv and reinstall `requirements.txt` (`uv venv .venv && uv pip install --python .venv -r requirements.txt`) |
+| Import errors, or the launcher says `.venv ... cannot run` | Run the installer again; it repairs `.venv` (see [Moving machines or removing Python](#moving-machines-or-removing-python)) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
 | Linux hotkey/paste doesn't work | Run as root with your session env preserved (the `input` group is not enough); on Wayland prefer X11; `odicto.py status` shows what is missing |
 | Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |

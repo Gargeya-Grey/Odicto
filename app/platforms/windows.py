@@ -87,7 +87,12 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
         # ownership metadata; a PID file alone never authorizes termination.
         try:
             process = psutil.Process(old_pid)
-            if base.is_odicto_command(process.cmdline(), process.cwd()):
+            # After reboot Windows can reuse the saved PID for an unrelated,
+            # protected service. Its name is readable even when cmdline/cwd
+            # are not. Apply the same interpreter filter as enumeration before
+            # asking for those privileged fields; unknown names stay fail-closed.
+            name = process.name().lower()
+            if (not name or name in ("python.exe", "pythonw.exe")) and base.is_odicto_command(process.cmdline(), process.cwd()):
                 pids_to_kill.add(old_pid)
         except psutil.NoSuchProcess:
             pass

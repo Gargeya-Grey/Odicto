@@ -3,13 +3,26 @@ setlocal EnableExtensions
 for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
 cd /d "%ODICTO_ROOT%"
 
-if not exist "%ODICTO_ROOT%\.venv\Scripts\pythonw.exe" (
-  echo ERROR: .venv\Scripts\pythonw.exe not found.
-  echo Create the venv and install requirements first.
-  if "%~1"=="/nostartup" exit /b 1
-  pause
-  exit /b 1
+REM Opt-in always-admin install (marker written by start_dictation_admin.ps1 -Action Configure):
+REM the elevated helper stops the old owner and starts the new one, so elevation comes BEFORE
+REM /restart's stop. An install without the marker skips this and behaves exactly as before.
+if not exist "%ODICTO_ROOT%\.odicto-admin-enabled" goto :unelevated_install
+if "%~1"=="" goto :admin_start
+if /I "%~1"=="/min" goto :admin_start
+if /I "%~1"=="/restart" goto :admin_start
+if /I "%~1"=="/nostartup" goto :admin_start
+:unelevated_install
+
+REM A .venv belongs to the machine and Python that made it. Judge it by running it,
+REM before anything else (config, .env, launch), so every start mode reports it.
+set "ODICTO_VENV_PROBLEM="
+if not exist "%ODICTO_ROOT%\.venv\Scripts\pythonw.exe" set "ODICTO_VENV_PROBLEM=.venv\Scripts\pythonw.exe not found."
+if not defined ODICTO_VENV_PROBLEM if not exist "%ODICTO_ROOT%\.venv\Scripts\python.exe" set "ODICTO_VENV_PROBLEM=.venv\Scripts\python.exe not found."
+if not defined ODICTO_VENV_PROBLEM (
+  "%ODICTO_ROOT%\.venv\Scripts\python.exe" -c "import sys" >nul 2>nul
+  if errorlevel 1 set "ODICTO_VENV_PROBLEM=.venv\Scripts\python.exe cannot run - it was made on another machine or its base Python was removed."
 )
+if defined ODICTO_VENV_PROBLEM goto :venv_problem
 
 if not exist "%ODICTO_ROOT%\.env" (
   echo ERROR: .env not found - copy .env.example to .env and set a provider API key.
@@ -62,3 +75,17 @@ start "" /MIN "%PYW%" "%ODICTO_ROOT%\main.py"
 REM Confirm a fresh owner heartbeat and microphone callbacks, not just a PID file.
 "%PY%" "%ODICTO_ROOT%\odicto.py" wait-ready --timeout 30
 exit /b %errorlevel%
+
+REM Kept outside any parenthesized block: inside one, "exit /b 1" can end the batch with code 0.
+:admin_start
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%ODICTO_ROOT%\scripts\windows\start_dictation_admin.ps1" -Action Start
+exit /b %errorlevel%
+
+:venv_problem
+echo ERROR: %ODICTO_VENV_PROBLEM%
+echo Run: powershell -ExecutionPolicy Bypass -File "%ODICTO_ROOT%\install.ps1"
+echo It keeps the old .venv as .venv-backup-* and keeps .env and prompt.txt.
+echo If an old Odicto is still running, Quit Odicto from its tray icon first.
+if "%~1"=="/nostartup" exit /b 1
+pause
+exit /b 1

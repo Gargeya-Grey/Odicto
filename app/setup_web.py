@@ -416,6 +416,16 @@ def restart_odicto() -> str:
     Setup itself is ``odicto.py setup`` and is not matched by the main.py killer,
     so this page stays up. Returns a short status line for the save banner.
     """
+    from windows_admin import run_if_needed
+
+    # An opted-in install restarts through the elevated helper; a Medium process
+    # must not try to kill the elevated owner itself.
+    elevated = run_if_needed(str(ROOT), "Start")
+    if elevated == 0:
+        return "Settings saved. Odicto is restarting with the new settings."
+    if elevated is not None:
+        raise RuntimeError(f"elevated Odicto restart failed (exit code {elevated})")
+
     import platforms
 
     root = str(ROOT)
@@ -1024,7 +1034,11 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._inject_token(_page(f"Saved, but {err_msg}", "err"))
             self._send(body)
             return
-        body = self._inject_token(_page(restart_odicto(), "ok"))
+        try:
+            restart_message, restart_kind = restart_odicto(), "ok"
+        except RuntimeError as e:
+            restart_message, restart_kind = f"Settings saved, but Odicto did not restart ({e}).", "err"
+        body = self._inject_token(_page(restart_message, restart_kind))
         self._send(body)
 
     def _handle_reset(self) -> None:

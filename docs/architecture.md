@@ -75,6 +75,19 @@ Process matching checks the executed Python script, rather than mentions of
 unverified process. An intentional restart remains an explicit stop followed by
 start; debug launchers and setup Save perform that explicit restart.
 
+A normal-integrity Odicto cannot hook keys typed into an elevated window, such as an
+Administrator Windows Terminal. An install can therefore opt in to always-admin by creating
+the gitignored, install-specific marker `.odicto-admin-enabled`; only
+`scripts/windows/start_dictation_admin.ps1 -Action Configure` writes it, after it has
+registered the user's own highest-privilege `Odicto` logon task and pointed the Startup
+shortcut at it. With the marker present and no elevation, `app/windows_admin.py`
+(`run_if_needed`) hands root `main.py`, `odicto.py start|stop|wait-ready`, setup Save and
+`start_dictation.bat` to that helper. The helper runs the whole lifecycle elevated, so
+elevation comes before the ownership-validated stop and a Medium process never tries to
+kill the elevated owner. It never approves UAC itself and never deletes files or tasks. Without the marker
+nothing changes, and no other machine is elevated. The single-instance gate in `app/main.py`
+is unchanged and still runs after elevation.
+
 The microphone reuses one persistent stream during healthy operation. Startup
 retains bounded retries for a device that is not ready at login. Windows logs
 confirmed a Yeti endpoint disappearing and returning while its old stream stayed
@@ -192,6 +205,7 @@ save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page
 | `app/app_state.py` | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
 | `app/platforms/` | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
 | `app/paths.py` | Canonical install root; keeps settings and runtime paths stable after moves | `ROOT` |
+| `app/windows_admin.py` | Opt-in always-admin: delegates lifecycle to the elevated PowerShell helper when the install marker exists and the process is not elevated; stdlib only | `run_if_needed` |
 
 ### 3.1 The platform layer
 
@@ -294,6 +308,8 @@ sequenceDiagram
     end
     Pipe->>Typ: paste_text(text)
     Typ-->>Cursor: paste, or type when the window is a terminal
+    Typ-->>App: on_delivered: paste_delivered, HUD shows Done
+    Note over Typ: clipboard wait and restore, still PROCESSING
     Pipe->>App: _finish_cycle to IDLE
 ```
 
@@ -367,7 +383,11 @@ stateDiagram-v2
 
 `AppState` (main) drives `GuiState` (indicator). The HUD polls the app on a 60 fps tick and
 maps state plus `last_status` into `BOOTING / RECORDING / PROCESSING / SUCCESS / ERROR /
-RESET / HIDDEN`. Auto-hide timers: 1.2 s on success, 1.5 s on error.
+RESET / HIDDEN`. The pill shows Done when the paste key is sent (PROCESSING with
+`paste_delivered is True` maps to SUCCESS), and the clipboard wait still blocks the next
+capture. Auto-hide starts only at IDLE: Done stays about 1.2 s in total, an error 1.5 s. The
+capsule width fits the words on screen; it enters and leaves as a droplet, and every move
+uses `ease_in_out_cubic`.
 
 ## 7. Single instance — the invariant that keeps typing sane
 

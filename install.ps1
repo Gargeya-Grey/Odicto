@@ -8,15 +8,25 @@
   Installs Python deps into .\.venv, prepares .env, optionally installs
   Ollama + pulls the default LLM, and warms the Whisper model.
 
+  A .venv is tied to the machine and Python that made it. A .venv that cannot
+  run (for example its base Python was uninstalled) is renamed to
+  .venv-backup-<timestamp> and rebuilt. Nothing is deleted; .env and prompt.txt
+  are never touched.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\install.ps1
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Python 3.11
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Python D:\Python311\python.exe
 #>
 param(
     [switch]$Ollama,
     [switch]$SkipOllama,  # deprecated no-op: Ollama is now skipped by default
     [string]$OllamaModel = "qwen2.5:1.5b-instruct",
-    [string]$WhisperModel = "tiny.en"
+    [string]$WhisperModel = "tiny.en",
+    [string]$Python,      # an installed Python to use: path to python.exe, or 3.10 / 3.11 / 3.12
+    [switch]$NoUv,        # use pip + venv instead of uv
+    [switch]$VenvOnly     # create or repair .venv, then stop (no packages, no Whisper)
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +41,7 @@ function Assert-Native($what) {
         throw "$what failed (exit code $LASTEXITCODE). Fix the error above and re-run install.ps1."
     }
 }
+. (Join-Path $PSScriptRoot "scripts\windows\install_helpers.ps1")
 
 Write-Host "========================================" -ForegroundColor White
 Write-Host "  Odicto - Installer" -ForegroundColor White
@@ -43,11 +54,29 @@ function Get-UvPath {
     if ($cmd) { return $cmd.Source }
     $links = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\uv.exe"
     if (Test-Path $links) { return $links }
+    $standalone = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+    if (Test-Path $standalone) { return $standalone }
     return $null
 }
 
-$uvPath = Get-UvPath
-if (-not $uvPath) {
+$venvDir = Join-Path $PSScriptRoot ".venv"
+$uvPath = $null
+if ($NoUv) {
+    Write-Ok "uv skipped (-NoUv); using pip"
+} else {
+    $uvPath = Get-UvPath
+}
+
+# --- An explicit -Python is checked first, before anything is installed.
+# A bad choice stops here; it never falls back to another interpreter.
+$chosen = $null
+if ($Python) {
+    Write-Step "Checking -Python $Python"
+    $chosen = Resolve-OdictoPythonChoice -Spec $Python -UvPath $uvPath -ExcludeUnder $venvDir
+    Write-Ok "Python $($chosen.Version): $($chosen.Path)"
+}
+
+if (-not $uvPath -and -not $NoUv) {
     Write-Warn "uv not found. Attempting winget install..."
     try {
         winget install -e --id astral-sh.uv --accept-package-agreements --accept-source-agreements
@@ -60,66 +89,62 @@ if (-not $uvPath) {
     } else {
         Write-Warn "Could not install uv. Falling back to pip (slower)."
     }
-} else {
+} elseif ($uvPath) {
     Write-Ok "uv found: $uvPath"
 }
 
-# --- Python (needed only for the pip fallback; uv can fetch its own) ---
-$py = $null
-if (-not $uvPath) {
-    # numpy<2 has no wheels for Python 3.13+, so only 3.10 to 3.12 are accepted.
-    Write-Step "Locating Python 3.10-3.12"
-    foreach ($candidate in @("py", "python", "python3")) {
-        try {
-            $ver = & $candidate --version 2>&1
-            if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10 -and [int]$Matches[1] -le 12) {
-                $py = $candidate
-                Write-Ok "$candidate -> $ver"
-                break
-            }
-        } catch { }
-    }
-    if (-not $py) {
+# --- venv: judged by running it, not by whether the file exists. A venv that works needs
+# no base Python found or installed, so this is checked before any Python discovery.
+$venvState = Get-OdictoVenvState -VenvDir $venvDir
+
+# --- Python: reuse one that is already installed (numpy<2 has no wheels for 3.13+,
+# so only 3.10 to 3.12 are accepted). Nothing is downloaded when one exists.
+if (-not $chosen -and $venvState.State -ne "Healthy") {
+    Write-Step "Locating an installed Python 3.10-3.12"
+    $chosen = Find-OdictoPython -UvPath $uvPath -ExcludeUnder $venvDir
+    if ($chosen) {
+        Write-Ok "Python $($chosen.Version): $($chosen.Path)"
+    } elseif ($uvPath) {
+        Write-Ok "None installed; uv will fetch Python 3.12"
+    } else {
         Write-Warn "Python 3.10-3.12 not found. Attempting winget install of Python 3.12..."
         winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
         Assert-Native "winget install Python 3.12"
-        $py = "py"
-        & $py -3.12 --version | Out-Host
-        Assert-Native "py -3.12 --version"
+        $chosen = Find-OdictoPython -UvPath $uvPath -ExcludeUnder $venvDir
+        if (-not $chosen) {
+            throw "No Python 3.10-3.12 found after the winget install. Open a new terminal and re-run, or pass -Python with the path to python.exe."
+        }
+        Write-Ok "Python $($chosen.Version): $($chosen.Path)"
     }
-} else {
-    Write-Ok "uv manages Python; no system Python needed"
 }
 
-# --- venv ---
-Write-Step "Creating virtual environment (.venv)"
-if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-    if ($uvPath) {
-        & $uvPath venv --python 3.12 .venv
-    } elseif ($py -eq "py") {
-        # Only 3.10-3.12 are allowed (numpy<2 has no 3.13+ wheels); never `py -3`.
-        $made = $false
-        foreach ($v in @("3.12", "3.11", "3.10")) {
-            & py "-$v" -c "import sys" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                & py "-$v" -m venv .venv
-                $made = $true
-                break
-            }
+Write-Step "Checking virtual environment (.venv)"
+switch ($venvState.State) {
+    "Healthy" {
+        Write-Ok ".venv works (Python $($venvState.Version)); keeping it"
+        if ($chosen -and $Python -and $venvState.Version -notlike "3.$($chosen.Minor).*") {
+            Write-Warn "-Python selects $($chosen.Version) but the existing .venv is $($venvState.Version). To switch, move .venv aside and re-run."
         }
-        if (-not $made) {
-            throw "No Python 3.10-3.12 found via the py launcher. Install Python 3.12 (winget install Python.Python.3.12) and re-run."
-        }
-    } else {
-        & $py -m venv .venv
     }
-    Assert-Native "Creating .venv"
-    Write-Ok "Created .venv"
-} else {
-    Write-Ok ".venv already exists"
+    "Missing" {
+        $null = New-OdictoVenv -VenvDir $venvDir -Python $chosen -UvPath $uvPath
+        Write-Ok "Created .venv"
+    }
+    default {
+        Write-Warn ".venv cannot be used: $($venvState.Reason)"
+        $backup = Move-OdictoVenvAside -Root $PSScriptRoot -VenvDir $venvDir
+        Write-Warn "Moved the old .venv to $backup (kept, not deleted; .env and prompt.txt were not touched)."
+        $null = New-OdictoVenv -VenvDir $venvDir -Python $chosen -UvPath $uvPath
+        Write-Ok "Rebuilt .venv"
+    }
 }
 
-$venvPy = ".\.venv\Scripts\python.exe"
+$venvPy = Join-Path $venvDir "Scripts\python.exe"
+
+if ($VenvOnly) {
+    Write-Ok "-VenvOnly: stopping after the virtual environment"
+    return
+}
 
 Write-Step "Installing Python requirements"
 if ($uvPath) {
@@ -140,12 +165,6 @@ if (-not (Test-Path ".\.env")) {
     Write-Ok "Copied .env.example -> .env"
 } else {
     Write-Ok ".env already present (left unchanged)"
-}
-
-# Ensure model names match installer choices when still on example defaults
-$envText = Get-Content ".\.env" -Raw
-if ($envText -match "WHISPER_MODEL_SIZE=") {
-    # only set if user hasn't customized heavily - leave as-is if file existed
 }
 
 # --- Optional: Ollama (opt-in with -Ollama) ---

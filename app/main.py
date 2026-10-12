@@ -137,6 +137,7 @@ from transcriber import (
 )
 from refiner import TextRefiner
 from typer import (
+    delivery_callback,
     flush_pending_restore,
     get_selected_text,
     paste_text,
@@ -354,6 +355,9 @@ class DictationApp:
         self._live_key_held: bool = False
         self._live_committed: str = ""
         self.live_preview: str = ""
+        # True from the frame the paste key is sent until the cycle ends; the HUD
+        # shows Done then while the clipboard restore wait still runs.
+        self.paste_delivered: bool = False
         self._speech_backends = {}
         self._live_epoch: int = 0
 
@@ -1155,6 +1159,7 @@ class DictationApp:
 
             self._record_started_at = now
             self.last_status = None
+            self.paste_delivered = False
             # Ordinary captures cannot inherit a previous F7 preview.
             self._live_committed = self.live_preview = ""
             self.live_active = False
@@ -1293,6 +1298,7 @@ class DictationApp:
                 self._keep_history = False
                 self._record_started_at = now
                 self.last_status = None
+                self.paste_delivered = False
                 self._live_committed = self.live_preview = ""
                 try:
                     if Config.effective_live_stt_provider() == "gemini":
@@ -1562,12 +1568,13 @@ class DictationApp:
                     if cycle.cancel.is_set() or self._cycle is not cycle:
                         raise _Abort("cancelled")
                     cycle.pasting = True
-                if live:
-                    # Keep the final payload for asynchronous paste consumers.
-                    paste_text(refined_text, restore_clipboard=False)
-                else:
-                    paste_text(refined_text)
-                    restore_lost = self._paste_restore_failed()
+                with delivery_callback(self._on_paste_delivered):
+                    if live:
+                        # Keep the final payload for asynchronous paste consumers.
+                        paste_text(refined_text, restore_clipboard=False)
+                    else:
+                        paste_text(refined_text)
+                        restore_lost = self._paste_restore_failed()
 
             elapsed: float = time.time() - start_time
             print(f">>> Text pasted successfully in {elapsed:.2f} seconds!")
@@ -1590,6 +1597,19 @@ class DictationApp:
             self.last_status = "error"
         finally:
             self._finish_cycle()
+
+    def _on_paste_delivered(self) -> None:
+        """Pipeline thread, inside paste_text: the text is in the target app.
+
+        The HUD shows Done now; PROCESSING and the clipboard wait continue until
+        paste_text returns, and the notice logic may then replace the label.
+        """
+        self.paste_delivered = True
+        from indicator import SUCCESS_STATUSES
+
+        if self.last_status not in SUCCESS_STATUSES:
+            self.last_status = "success"
+        self._notify_ui()
 
     # ------------------------------------------------------------ pipeline stages
     def _claim_cycle(self) -> _Cycle:
@@ -1733,8 +1753,12 @@ class DictationApp:
             self._live_committed = self.live_preview = ""
             self._cycle = None
             if self._closing.is_set():
+                self.paste_delivered = False
                 return
             self._set_state(AppState.IDLE)
+            # Cleared after IDLE: a HUD sync in between must not see PROCESSING
+            # without delivery and redraw the ring under Done.
+            self.paste_delivered = False
             print("System Idle. Ready.")
 
 if __name__ == "__main__":

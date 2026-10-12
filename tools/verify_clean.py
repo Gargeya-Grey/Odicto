@@ -21,10 +21,11 @@ def main():
     # configuration nor live runtime evidence is opened or copied.
     with tempfile.TemporaryDirectory(prefix="odicto-clean-") as directory:
         clean = Path(directory)
-        for folder in ("app", "tests", "assets", "tools", "docs"):
+        for folder in ("app", "tests", "assets", "tools", "docs", "scripts"):
             shutil.copytree(root / folder, clean / folder,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ("main.py", "odicto.py", ".env.example", "prompt.txt.example"):
+        for name in ("main.py", "odicto.py", ".env.example", "prompt.txt.example", "install.ps1", "install.sh",
+                     "start_dictation_admin.bat", ".gitignore"):
             shutil.copy2(root / name, clean / name)
         result = subprocess.run([sys.executable, "-B", "tools/run_tests.py"],
                                 cwd=clean, env=environment, timeout=290)

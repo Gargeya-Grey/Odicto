@@ -6,8 +6,9 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from config import Config
 from platforms import (
@@ -323,6 +324,35 @@ def _reset_restore_now_for_tests() -> None:
     _RESTORE_NOW.clear()
 
 
+_DELIVERY = threading.local()
+
+
+@contextmanager
+def delivery_callback(callback: Optional[Callable[[], None]]):
+    """Run ``callback`` when a paste_text call on this thread delivers its text.
+
+    The pipeline sets it around paste_text so its call arguments stay
+    unchanged; an explicit ``on_delivered`` argument wins.
+    """
+    previous = getattr(_DELIVERY, "callback", None)
+    _DELIVERY.callback = callback
+    try:
+        yield
+    finally:
+        _DELIVERY.callback = previous
+
+
+def _delivered(callback: Optional[Callable[[], None]]) -> None:
+    """Report a successful injection. A HUD fault must never skip the restore."""
+    callback = callback or getattr(_DELIVERY, "callback", None)
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception as e:
+        print(f"Warning: delivery callback failed: {e}", flush=True)
+
+
 def _wait_restore_window(timeout: float) -> None:
     if timeout > 0:
         _RESTORE_NOW.wait(timeout)
@@ -555,7 +585,8 @@ def _get_selected_text_legacy(
     return selected
 
 
-def paste_text(text: str, restore_clipboard: bool = True) -> None:
+def paste_text(text: str, restore_clipboard: bool = True,
+               on_delivered: Optional[Callable[[], None]] = None) -> None:
     """Inject text at the cursor, typing into terminals and pasting elsewhere.
 
     Terminals reject or reassign the paste chord, so there the text is typed
@@ -569,6 +600,11 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
 
     F7 passes ``restore_clipboard=False`` and leaves its final payload
     available for asynchronous paste consumers.
+
+    ``on_delivered`` (or the ``delivery_callback`` hook) runs on this thread
+    right after the text is injected and before the restore wait, so the HUD
+    can show Done while the clipboard lock is still held. It never runs when
+    injection failed.
     """
     global _LAST_PASTE_RESTORE_FAILED
     _LAST_PASTE_RESTORE_FAILED = False
@@ -580,6 +616,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             _wait_modifiers_up(0.08)
             if send_text_bulk(text):
                 print(">>> Terminal target: typed text (clipboard untouched)", flush=True)
+                _delivered(on_delivered)
                 return
             raise RuntimeError("Could not type into terminal; no paste chord was sent")
 
@@ -590,6 +627,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
             _wait_modifiers_up(0.08)
             time.sleep(0.008)
             send_paste()
+            _delivered(on_delivered)
             time.sleep(0.015)
             return
 
@@ -605,6 +643,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
                         ">>> Clipboard holds data Odicto cannot save: typed text instead",
                         flush=True,
                     )
+                    _delivered(on_delivered)
                     return
             print(
                 "Warning: clipboard holds data Odicto cannot save; pasting anyway "
@@ -627,6 +666,7 @@ def paste_text(text: str, restore_clipboard: bool = True) -> None:
         except BaseException:
             _note_restore(_guarded_restore(original, guard, "after failed paste"))
             raise
+        _delivered(on_delivered)
 
         # SendInput only queues the paste chord; Electron apps, busy browsers
         # and RDP sessions read the clipboard much later. The lock stays held,

@@ -45,13 +45,30 @@ def cmd_setup(_args) -> int:
     return 0
 
 
+def _elevated_exit(action: str, timeout=None):
+    """Exit code when an opted-in install must run this lifecycle step elevated, else None."""
+    import windows_admin
+
+    try:
+        return windows_admin.run_if_needed(_repo_root(), action, timeout)
+    except RuntimeError as error:
+        print(f"Odicto admin mode: {error}", file=sys.stderr)
+        return 1
+
+
 def cmd_start(_args) -> int:
+    elevated = _elevated_exit("Start")
+    if elevated is not None:
+        return elevated
     proc = platforms.spawn_detached([_venv_python(), _main_py()])
     print(f"Launch requested (PID {proc.pid}); use odicto.py status to check readiness.")
     return 0
 
 
 def cmd_stop(_args) -> int:
+    elevated = _elevated_exit("Stop")
+    if elevated is not None:
+        return elevated
     pid_file = os.path.join(_repo_root(), "dictation.pid")
     try:
         killed = platforms.kill_other_odicto_processes(pid_file)
@@ -68,6 +85,9 @@ def cmd_stop(_args) -> int:
 
 def cmd_wait_ready(args) -> int:
     """Wait for the actual owner and microphone, not just an early PID file."""
+    elevated = _elevated_exit("WaitReady", args.timeout)
+    if elevated is not None:
+        return elevated
     import psutil
     from platforms.base import is_odicto_command
 

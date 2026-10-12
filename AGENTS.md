@@ -8,6 +8,16 @@ This file is for coding agents (and power users) automating setup on a **fresh m
 > including refactorings that were deliberately rejected and the coupling that makes them unsafe.
 > Run `.\tools\verify.ps1` after any change; it is the whole safety net in one command.
 
+## Model candidates
+
+The task-graph philosophy stays: plan the units, Claude writes the code, and review findings go back to the Claude worker that owns them. This repo only replaces who sits in each seat.
+
+- **Research:** Grok 4.7 Extra High (`grok-4.7`, effort `xhigh`).
+- **Code:** a Claude model. The task-skill picks which Claude model and effort from the work.
+- **Review:** two parallel reviewers, GPT 6.1 Sol high (`gpt-6.1-sol`, effort `high`) and Grok 4.7 Extra High. Their findings return to the Claude workers the same way a review always returns.
+
+Every Claude brief names that pair for the review seat. The task-skill calls that seat Fable. Here the pair fills it.
+
 ## Goal
 
 Make the app runnable end-to-end: venv, Python deps, optional Ollama LLM,

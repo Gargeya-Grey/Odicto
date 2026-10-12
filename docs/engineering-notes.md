@@ -445,8 +445,8 @@ start and on every pipeline exit. Keep current F7 captions visible until finaliz
   (background) restore was built first and rejected: three review rounds each found races in its
   pending-restore state (a retry adopting a user copy, a probe settling a newer paste early, a
   lost original on a second failure). Holding `_CLIPBOARD_LOCK` through the wait removes that
-  state. The cost is that "Done" and the next AI probe or paste wait up to the delay; the text
-  itself appears just as fast. A restore that still fails after ~2 s of retries is dropped with
+  state. The pill shows "Done" when the paste key is sent (`paste_text`'s delivery callback),
+  but the clipboard wait still blocks the next capture, AI probe or paste for up to the delay. A restore that still fails after ~2 s of retries is dropped with
   a HUD notice; no state carries to the next paste. A carry-over record (retry the lost original
   before the next paste) was removed after three review rounds each found a fault in it (a stale
   original restored over a newer user copy, a fresh snapshot skipping the typing fallback).
