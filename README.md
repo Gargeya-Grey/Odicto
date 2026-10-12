@@ -90,9 +90,16 @@ Notes:
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 powershell -ExecutionPolicy Bypass -File .\install.ps1
-.\scripts\windows\setup.bat   # pick provider + paste key (or: python odicto.py setup)
+.\setup.bat              # pick provider + paste key (or: python odicto.py setup)
 .\start_dictation.bat
 ```
+
+Windows has three files at the root: `start_dictation.bat`, `setup.bat` and `stop_dictation.bat`.
+The installer also creates a **Start Menu** folder **Odicto** with the same three entries
+(**Odicto**, **Odicto Setup**, **Stop Odicto**), each with the Odicto logo. Running the
+installer again refreshes them; add `-NoShortcuts` to skip them. Odicto starts as a normal
+(not administrator) program. **Admin mode** is a switch on the setup page (see the
+Windows note under "Permissions" below).
 
 ### macOS
 
@@ -100,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh
-bash scripts/posix/setup.sh
+bash setup.sh
 bash scripts/posix/run_debug.sh
 # Grant Accessibility + Input Monitoring (System Settings > Privacy & Security)
 # to your terminal or Python, then restart the app. Check with:
@@ -113,7 +120,7 @@ bash scripts/posix/run_debug.sh
 git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh        # as your normal user; it prints the sudo apt/dnf/pacman/zypper command to run
-bash scripts/posix/setup.sh
+bash setup.sh
 # The keyboard backend needs root. Keep your session variables:
 sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS bash scripts/posix/run_debug.sh
 .venv/bin/python odicto.py status   # lists remaining problems
@@ -203,8 +210,13 @@ Pick your OS below, or use the one-command installers above.
 | **(Optional) Gemini API key** | Cloud LLM via Google Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 
 Permissions:
-- **Windows**: admin usually **not** required. If global hotkeys fail on a
-  locked-down PC, try running the terminal as Administrator once.
+- **Windows**: admin usually **not** required. Odicto cannot see keys typed into an
+  administrator window (for example an Administrator Windows Terminal). To dictate there,
+  turn on **Admin mode** on the setup page. It is off by default. Windows asks for approval
+  once for each change of the switch. While it is on, start, restart, stop and setup Save
+  show **no** approval prompt: Odicto starts from its own highest-privilege logon task and
+  quits through a per-install signal. Turning it off removes that task and starts Odicto
+  as a normal program. Only this install's own task and Startup shortcut are changed.
 - **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
   System Settings → Privacy & Security (add your terminal or Python). Without
   them the app starts but hotkeys do nothing; `odicto.py status` reports
@@ -457,10 +469,15 @@ Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-t
 
 | Action | Windows | macOS / Linux |
 |--------|---------|---------------|
-| Configure provider | `scripts/windows/setup.bat` or `.venv\Scripts\python.exe odicto.py setup` | `bash scripts/posix/setup.sh` or `.venv/bin/python odicto.py setup` |
-| Start (background) | `start_dictation.bat` | `./start_dictation.sh` |
+| Configure provider | `setup.bat` (Start Menu: **Odicto Setup**) or `.venv\Scripts\python.exe odicto.py setup` | `bash setup.sh` or `.venv/bin/python odicto.py setup` |
+| Start (background) | `start_dictation.bat` (Start Menu: **Odicto**) | `bash start_dictation.sh` |
 | Start (console logs) | `scripts/windows/run_debug.bat` | `bash scripts/posix/run_debug.sh` |
-| Stop | `scripts/windows/stop_dictation.bat` | `bash scripts/posix/stop_dictation.sh` |
+| Stop | `stop_dictation.bat` (Start Menu: **Stop Odicto**) | `bash stop_dictation.sh` |
+
+On Windows, `start_dictation.bat` shows the result and closes after about 3 seconds. It stays
+open when the start fails. A start leaves a running Odicto alone. `setup.bat` opens the setup
+page in your browser without a console window, and the page's server ends by itself when you
+close the page. `stop_dictation.bat` behaves like start: short on success, open on failure.
 
 ---
 
@@ -623,15 +640,16 @@ Behavior & UI:
 app/                Application modules and platforms/ OS backends
 assets/             Setup page HTML, CSS, and JavaScript
 tests/              Unit, reliability, equivalence, and layout tests
-scripts/windows/    Windows setup, debug, stop, and startup helpers
-scripts/posix/      macOS/Linux setup, debug, stop, and startup helpers
+scripts/windows/    Windows launcher implementations, debug, startup, install, and admin-mode helpers
+scripts/posix/      macOS/Linux launcher implementations, debug, and install helpers
 tools/              Verification and architecture tooling
 docs/               Architecture, engineering notes, and research
 ```
 
-The root keeps the README, dependency list, installers, settings templates, and small
-`main.py`, `odicto.py`, and `start_dictation.*` launchers. Existing startup shortcuts can
-continue to use those entry points. Private `.env` and `prompt.txt`, and ignored runtime
+The root keeps the README, dependency list, installers, settings templates, small
+`main.py` and `odicto.py` launchers, and three entry points per platform: `start_dictation`,
+`setup` and `stop_dictation` (`.bat` on Windows, `.sh` on macOS and Linux). They are thin
+wrappers over `scripts/`. Existing startup shortcuts can continue to use `main.py`. Private `.env` and `prompt.txt`, and ignored runtime
 logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
 root independently of the working directory.
 
@@ -658,7 +676,8 @@ invariants not to break.
 | `tools/verify.ps1` | Runs every gate used to prove behaviour is unchanged |
 | `tools/module_graph.py` | Regenerates the dependency diagram in `docs/architecture.md` |
 | `install.ps1` / `install.sh` | Zero-to-one installers (uv-first, pip fallback) |
-| `scripts/windows/setup.bat` / `scripts/posix/setup.sh` | Launchers for the setup page |
+| `start_dictation` / `setup` / `stop_dictation` (`.bat`, `.sh`) | Root entry points; wrappers over `scripts/windows/` and `scripts/posix/` |
+| `scripts/windows/admin_mode.ps1` + `app/windows_admin.py` | Admin mode switch (one prompt per change), task start, quit signal |
 | `AGENTS.md` | Agent-oriented install contract |
 
 ---

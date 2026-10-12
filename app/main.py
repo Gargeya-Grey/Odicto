@@ -1782,6 +1782,10 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Warning: Could not write PID file early: {e}", flush=True)
 
+    # The lock is held: listen for the per-install quit signal (admin-mode stop, no UAC).
+    import windows_admin
+    windows_admin.start_quit_listener(_install_root(), lambda: globals().get("app"))
+
     try:
         Config.validate()
     except Exception as e:

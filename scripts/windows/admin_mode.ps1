@@ -1,18 +1,28 @@
-# Elevated Odicto lifecycle for an install that opted in to always-admin.
+# Admin mode switch for one install: the only script that elevates, and the only one that
+# writes or deletes the .odicto-admin-enabled marker.
 #
 # Why: a Medium-integrity process cannot hook keys typed into an elevated window
-# (an Administrator Windows Terminal), so the owner has to run elevated too. Opt-in is
-# the gitignored marker file .odicto-admin-enabled in the install root. This script is the
-# only place that writes it, and only after the logon task and Startup shortcut succeed.
+# (an Administrator Windows Terminal), so the owner has to run elevated too. Admin mode is
+# off by default. app/windows_admin.py runs this helper once per switch change (one UAC prompt).
+# Daily start, restart and stop do not use it: they run the logon task and the quit event.
 #
-# Actions: Start (stop the owner, start a fresh elevated one, wait ready), Stop, WaitReady,
-# Configure (register startup, write the marker, nothing else; no restart).
+# Actions:
+#   Start      stop the owner, start a fresh elevated one, wait ready. With -InstallStartup it first
+#              registers the logon task and the Startup shortcut and writes the marker (admin mode on).
+#   Stop       stop the owner (the fallback when the quit event is unavailable).
+#   WaitReady  wait for the owner to be ready.
+#   Configure  register the task and Startup shortcut, write the marker, nothing else.
+#   Disable    admin mode off: stop the owner, unregister the logon task, point the Startup shortcut
+#              back at pythonw, delete the marker. The caller then starts a normal Odicto.
+#
 # A non-elevated run re-launches this same script through UAC (never auto-approved) and
 # returns the elevated exit code. Nothing is stopped or changed before elevation succeeds.
-# It never deletes files or tasks, and the receipt holds no secrets.
+# It touches only the task named Odicto when it has exactly this install's shape, the
+# Odicto.lnk Startup shortcut when it is one of this install's two shapes, and the marker.
+# Anything else is refused and left alone. The receipt holds no secrets.
 [CmdletBinding()]
 param(
-    [ValidateSet('Start', 'Stop', 'WaitReady', 'Configure')]
+    [ValidateSet('Start', 'Stop', 'WaitReady', 'Configure', 'Disable')]
     [string]$Action = 'Start',
     [switch]$InstallStartup,
     [string]$ReceiptPath,
@@ -215,6 +225,29 @@ function Test-OwnShortcut([string]$Path, [string]$Exe, [string]$ScriptPath, [str
     return ($direct -or $viaTask)
 }
 
+# The Startup shortcut. $ViaTask is the admin-mode shape (runs the highest-privilege logon
+# task). Otherwise it is the plain shape make_startup_shortcut.ps1 writes (direct pythonw).
+function Write-StartupShortcut([string]$Path, [bool]$ViaTask, [string]$Schtasks) {
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    $shell = New-Object -ComObject WScript.Shell
+    $link = $shell.CreateShortcut($Path)
+    if ($ViaTask) {
+        $link.TargetPath = $Schtasks
+        $link.Arguments = '/Run /TN "{0}"' -f $TaskName
+        $link.Description = 'Start Odicto (elevated logon task) at login'
+    } else {
+        $link.TargetPath = $Pyw
+        $link.Arguments = '"{0}"' -f $MainPy
+        $link.Description = 'Start Odicto dictation at login (direct pythonw)'
+    }
+    $link.WorkingDirectory = $Root
+    $link.WindowStyle = 7
+    $icon = Join-Path $Root 'assets\odicto.ico'
+    if (Test-Path -LiteralPath $icon) { $link.IconLocation = "$icon,0" }
+    $link.Save()
+}
+
 function Invoke-Configure {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $userName = $identity.Name
@@ -256,27 +289,51 @@ function Invoke-Configure {
         Add-Step 'logon task registered'
     }
 
-    if (-not (Test-Path -LiteralPath $startup)) { New-Item -ItemType Directory -Path $startup | Out-Null }
-    if ((Test-Path -LiteralPath $lnk) -and $ReceiptPath) {
-        $backupDir = Split-Path -Parent ([IO.Path]::GetFullPath($ReceiptPath))
-        if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }
-        $backup = Join-Path $backupDir ('Odicto.lnk.' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.bak')
-        Copy-Item -LiteralPath $lnk -Destination $backup
-        Add-Step "startup shortcut backed up to $backup"
-    }
-    $shell = New-Object -ComObject WScript.Shell
-    $link = $shell.CreateShortcut($lnk)
-    $link.TargetPath = $schtasks
-    $link.Arguments = '/Run /TN "{0}"' -f $TaskName
-    $link.WorkingDirectory = $Root
-    $link.WindowStyle = 7
-    $link.Description = 'Start Odicto (elevated logon task) at login'
-    $link.Save()
+    Write-StartupShortcut $lnk $true $schtasks
     Add-Step 'startup shortcut written'
 
     [IO.File]::WriteAllText($MarkerPath, "Odicto always-admin enabled $((Get-Date).ToUniversalTime().ToString('o'))`r`n",
         (New-Object Text.UTF8Encoding($false)))
     Add-Step 'marker written'
+}
+
+function Invoke-Disable {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $sid = $identity.User.Value
+    $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+    $lnk = Join-Path $startup 'Odicto.lnk'
+    $schtasks = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+
+    # Refuse before changing anything: only this install's own task and shortcut are touched.
+    $existing = Get-OdictoTask
+    if ($existing) {
+        $problems = @(Get-TaskMismatch $existing $sid $Pyw $MainPy $Root)
+        if ($problems.Count -gt 0) {
+            throw "Nothing was changed: a scheduled task named '$TaskName' exists but is not exactly this install's task ($($problems -join '; ')). Remove it in Task Scheduler yourself if you want admin mode off."
+        }
+    }
+    if ((Test-Path -LiteralPath $lnk) -and -not (Test-OwnShortcut $lnk $Pyw $MainPy $Root $schtasks $TaskName)) {
+        throw "Nothing was changed: $lnk does not belong to this install."
+    }
+
+    # Elevated stop (ownership-validated by odicto.py stop). A failed stop cancels the rest.
+    $code = Invoke-Native $Py @($OdictoPy, 'stop')
+    if ($code -ne 0) { throw "Nothing else was changed: odicto.py stop failed (exit $code)." }
+    Add-Step 'owner stopped'
+
+    if ($existing) {
+        Unregister-ScheduledTask -TaskName $TaskName -TaskPath '\' -Confirm:$false
+        if (Get-OdictoTask) { throw "Task '$TaskName' is still registered after removal; the marker was kept." }
+        Add-Step 'logon task removed'
+    } else {
+        Add-Step 'no logon task to remove'
+    }
+
+    Write-StartupShortcut $lnk $false $schtasks
+    Add-Step 'startup shortcut points at pythonw'
+
+    if (Test-Path -LiteralPath $MarkerPath) { Remove-Item -LiteralPath $MarkerPath -Force }
+    Add-Step 'marker deleted'
 }
 
 try {
@@ -308,6 +365,11 @@ try {
     Add-Step 'elevated'
     $needPythonw = $Action -in @('Start', 'Configure') -or $InstallStartup
     Assert-Runtime $needPythonw
+
+    if ($Action -eq 'Disable') {
+        Invoke-Disable
+        Finish 0
+    }
 
     if ($Action -eq 'Configure' -or $InstallStartup) {
         Invoke-Configure

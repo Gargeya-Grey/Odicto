@@ -248,6 +248,44 @@ function Get-OdictoVenvState {
     return $state
 }
 
+function New-OdictoStartMenuShortcuts {
+    # Creates or refreshes the Start Menu folder "Odicto" with three shortcuts that run the
+    # root launchers: "Odicto" (start_dictation.bat), "Odicto Setup" (setup.bat) and
+    # "Stop Odicto" (stop_dictation.bat). Each has the Odicto icon and the install folder as
+    # its working directory. Safe to run again: the same three files are rewritten, and nothing
+    # else in the folder is touched. -ProgramsDir overrides the current user's Start Menu
+    # Programs folder (tests use a scratch folder). Returns the folder path.
+    param([Parameter(Mandatory)][string]$Root, [string]$ProgramsDir)
+    $rootFull = ([IO.Path]::GetFullPath($Root)).TrimEnd('\')
+    if (-not $ProgramsDir) { $ProgramsDir = [Environment]::GetFolderPath('Programs') }
+    if (-not $ProgramsDir) { throw 'The Start Menu Programs folder of this user could not be found.' }
+    $folder = Join-Path $ProgramsDir 'Odicto'
+    $icon = Join-Path $rootFull 'assets\odicto.ico'
+    $entries = @(
+        @{ Name = 'Odicto';       Target = 'start_dictation.bat'; Style = 1; Text = 'Start Odicto dictation' },
+        @{ Name = 'Odicto Setup'; Target = 'setup.bat';           Style = 7; Text = 'Open the Odicto setup page' },
+        @{ Name = 'Stop Odicto';  Target = 'stop_dictation.bat';  Style = 1; Text = 'Stop Odicto' }
+    )
+    foreach ($entry in $entries) {
+        if (-not (Test-Path -LiteralPath (Join-Path $rootFull $entry.Target) -PathType Leaf)) {
+            throw "Missing $($entry.Target) in $rootFull."
+        }
+    }
+    if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder | Out-Null }
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($entry in $entries) {
+        $link = $shell.CreateShortcut((Join-Path $folder ($entry.Name + '.lnk')))
+        $link.TargetPath = Join-Path $rootFull $entry.Target
+        $link.Arguments = ''
+        $link.WorkingDirectory = $rootFull
+        $link.WindowStyle = $entry.Style
+        $link.Description = $entry.Text
+        if (Test-Path -LiteralPath $icon -PathType Leaf) { $link.IconLocation = "$icon,0" }
+        $link.Save()
+    }
+    return $folder
+}
+
 function Get-OdictoProcessSnapshot {
     # One process list. A failed query throws (the caller treats that as "in use").
     @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)

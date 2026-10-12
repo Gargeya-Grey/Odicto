@@ -25,6 +25,21 @@ class TestProjectLayout(unittest.TestCase):
         self.assertEqual(ROOT / "dictation.log", Path(main._session_log_path()))
         self.assertEqual(ROOT / "dictation.pid", Path(base.pid_file_path()))
 
+    def test_root_has_three_launchers_per_platform(self):
+        from windows_admin import HELPER_PARTS
+
+        root_files = {p.name for p in ROOT.iterdir() if p.is_file()}
+        self.assertEqual({"start_dictation.bat", "setup.bat", "stop_dictation.bat"},
+                         {n for n in root_files if n.endswith(".bat")})
+        self.assertEqual({"start_dictation.sh", "setup.sh", "stop_dictation.sh"},
+                         {n for n in root_files if n.endswith(".sh")} - {"install.sh"})
+        for name in ("start_dictation", "setup", "stop_dictation"):
+            self.assertTrue((ROOT / "scripts" / "windows" / (name + ".bat")).is_file(), name)
+            self.assertTrue((ROOT / "scripts" / "posix" / (name + ".sh")).is_file(), name)
+        # The admin-mode helper is internal: it lives under scripts, never at the root.
+        self.assertTrue(ROOT.joinpath(*HELPER_PARTS).is_file())
+        self.assertEqual("admin_mode.ps1", HELPER_PARTS[-1])
+
     def test_setup_asset_loads_outside_repo(self):
         import setup_web
 

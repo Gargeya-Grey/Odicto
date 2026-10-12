@@ -231,6 +231,6 @@ fi
 echo
 echo "Install complete."
 echo "Next:"
-echo "  1. Run:  bash scripts/posix/setup.sh   (pick provider + paste key)"
-echo "  2. Run:  bash scripts/posix/run_debug.sh                     (grant permissions if asked)"
-echo "  3. Stop:  .venv/bin/python odicto.py stop"
+echo "  1. Run:  bash setup.sh   (pick provider + paste key)"
+echo "  2. Run:  bash start_dictation.sh   (or scripts/posix/run_debug.sh for a console log; grant permissions if asked)"
+echo "  3. Stop:  bash stop_dictation.sh"
