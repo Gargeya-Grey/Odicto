@@ -31,7 +31,10 @@ def main():
             shutil.copy2(root / name, clean / name)
         result = subprocess.run([sys.executable, "-B", "tools/run_tests.py"],
                                 cwd=clean, env=environment, timeout=290)
-        return result.returncode
+        # Windows reports a crash status (0xC0000409) unsigned; sys.exit() needs it
+        # signed, or the parent sees 0xFFFFFFFF and the crash type is lost.
+        code = result.returncode
+        return code - (1 << 32) if code > 0x7FFFFFFF else code
 
 
 if __name__ == "__main__":

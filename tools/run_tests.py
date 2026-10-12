@@ -9,6 +9,7 @@ verbosely, then enforces:
 Stdlib only. Usage (from anywhere):  python tools/run_tests.py
 """
 import contextlib
+import faulthandler
 import fnmatch
 import os
 import sys
@@ -84,6 +85,12 @@ def main() -> int:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
+    # A native crash, also after GATE OK during most of interpreter teardown, prints every
+    # thread's stack. A crash in late DLL teardown prints nothing; the exit code still shows it.
+    try:
+        faulthandler.enable(all_threads=True)
+    except (AttributeError, ValueError, RuntimeError, OSError):
+        pass
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
     suite = unittest.defaultTestLoader.discover(
