@@ -68,7 +68,10 @@ class _InstallFolderCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="odicto-inst-test ")
         self.addCleanup(self._tmp.cleanup)
-        self.work = Path(self._tmp.name)
+        # The installers use the canonical spelling of the install folder (Windows PowerShell's
+        # GetFullPath expands 8.3 names; install.sh uses cd -P). CI temp folders have a second
+        # spelling (C:\Users\RUNNER~1, /var -> /private/var), so start from the canonical one.
+        self.work = Path(os.path.realpath(self._tmp.name))
         self.install = self.work / "install"
         self.install.mkdir()
         (self.install / ".env").write_bytes(SECRET_ENV)
