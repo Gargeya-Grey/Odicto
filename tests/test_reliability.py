@@ -562,21 +562,38 @@ class TestReliability(unittest.TestCase):
 
     def test_polish_deadline_and_no_overlapping_worker_or_late_overwrite(self):
         refiner = refiner_fixture()
-        release = threading.Event()
-        refiner.client.chat.completions.create.side_effect = lambda **kw: (release.wait(5), SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="late answer"), finish_reason="stop")]))[1]
-        started = time.monotonic()
+        entered, release = threading.Event(), threading.Event()
+        refiner.client.chat.completions.create.side_effect = lambda **kw: (entered.set(), release.wait(5), SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="late answer"), finish_reason="stop")]))[2]
+        deadlines, workers = [], []
+
+        class ExpiringEvent(threading.Event):
+            # A bounded wait records its timeout and expires at once: no wall clock decides the result.
+            def wait(self, timeout=None):
+                if timeout is None:
+                    return super().wait()
+                deadlines.append(timeout)
+                return False
+
         try:
-            self.assertEqual(refiner.polish("raw words"), "raw words")
-            self.assertLess(time.monotonic() - started, 2.6)
-            self.assertEqual(refiner.last_notice, "polish_fallback")
-            self.assertEqual(refiner.polish("next capture"), "next capture")
-            refiner.client.chat.completions.create.assert_called_once()
+            with patch.object(Config, "LLM_DEADLINE_SECONDS", 30.0), patch(
+                "refiner.threading.Event", ExpiringEvent
+            ):
+                self.assertEqual(refiner.polish("raw words"), "raw words")
+                self.assertEqual(deadlines, [2.0], "polish waits at most 2 s for short text")
+                self.assertEqual(refiner.last_notice, "polish_fallback")
+                self.assertTrue(entered.wait(5), "the request must be in flight")
+                workers.extend(t for t in threading.enumerate() if t.name == "odicto-polish")
+                self.assertTrue(workers, "the timed-out request stays in flight")
+                self.assertEqual(refiner.polish("next capture"), "next capture")
+                self.assertEqual(deadlines, [2.0], "an overlapping polish must not start or wait")
+                refiner.client.chat.completions.create.assert_called_once()
         finally:
             release.set()
-        deadline = time.monotonic() + 1
-        while refiner._polish_lock.locked() and time.monotonic() < deadline:
-            time.sleep(.005)
+        for worker in workers:
+            worker.join(5)
+        self.assertFalse(any(w.is_alive() for w in workers), "the late reply must have arrived")
+        self.assertFalse(refiner._polish_lock.locked())
         self.assertEqual(refiner.last_notice, "polish_fallback")
         self.assertEqual(refiner.conversation_history, [])
 
