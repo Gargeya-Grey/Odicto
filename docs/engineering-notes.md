@@ -560,7 +560,7 @@ The CPU differences between the first three rows are within the run-to-run noise
   0.42 %. Typing system-wide through the keyboard hook, or a dictation in progress, would
   explain a higher short sample.
 
-### Proposal, not applied: Whisper when a cloud speech engine is active
+### Applied (owner decision, 12 Oct): the backup Whisper is released after 10 idle minutes
 
 At this commit Whisper is already loaded lazily when a cloud engine is active:
 `CloudTranscriber` and `GeminiTranscriber` build `WhisperTranscriber` only inside
@@ -572,11 +572,28 @@ the local retry gets. It adds +100 MB RSS and **+741 MB private**, and the model
 process exits (a process that has also decoded a clip holds 1.46 GB private before the BLAS
 limit and 0.98 GB after it).
 
-Proposal: release the fallback model after a long idle period (for example 10 minutes), so a
-rare cloud failure does not leave 741 MB committed for the rest of the day. The price is one
-more 2 to 5 s load on the next failure. It needs a timer or a check at the next capture, and a
-test for the failure path, so it was not done here. Pre-loading Whisper at startup for a
+The proposal was to release the fallback model after a long idle period, so a rare cloud
+failure does not leave 741 MB committed for the rest of the day. The owner chose 10 minutes.
+The price is one more 2 to 5 s load on the next failure. Pre-loading Whisper at startup for a
 cloud install would be the opposite trade: +741 MB for a 2 s gain on a rare failure.
+
+How it works (`_LocalWhisperFallback` in `app/transcriber.py`): each backup use restarts a
+daemon `threading.Timer` (`WHISPER_FALLBACK_IDLE_SECONDS = 600`). The timer drops the model
+only when no backup decode runs and no newer use has restarted it (a generation number), then
+runs `gc.collect()`. The next failure loads the model again. The primary Whisper
+(`STT_PROVIDER=whisper`) and a live-only Whisper are separate objects and stay loaded.
+
+**MKL keeps memory per released model.** The first version released the model but kept
+about 124 MB per load-and-release cycle: committed memory after each release went 262, 386,
+511 MB (tiny.en, CPU int8). A load-only cycle did not grow (69, 66, 67, 68 MB); a decode did.
+The cause is the fast memory manager of the MKL inside ctranslate2: with
+`MKL_DISABLE_FAST_MM=1` the same decode cycles stay flat (104, 106, 104, 108 MB). Turning it
+off costs decode speed (5 s clip, two runs each: 0.29 s with the cache, 0.36 to 0.37 s
+without), so it is not set process-wide. `_backup_only_mkl_settings` sets it only for a
+backup load, only when neither the dictation nor the live engine is Whisper, and only before
+ctranslate2 loads (MKL reads it once); a value already in the environment wins. Measured
+through the real `local_fallback` path with a cloud engine: 819 to 822 MB loaded, 104 to
+108 MB after each of three releases.
 
 ### By eye
 

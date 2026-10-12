@@ -126,6 +126,173 @@ class TestStartupLogsVersion(unittest.TestCase):
         self.assertIn(f"Odicto {app_version()}", out.getvalue().splitlines())
 
 
+# --------------------------------------------------------------------------- backup Whisper
+class _FakeTimer:
+    """Stands in for threading.Timer: records the call, never sleeps, fires on demand."""
+
+    made: list = []
+
+    def __init__(self, interval, function, args=()):
+        self.interval, self.function, self.args = interval, function, tuple(args)
+        self.cancelled = False
+        self.daemon = False
+        self.name = ""
+        _FakeTimer.made.append(self)
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        self.cancelled = True
+
+    def fire(self):
+        with redirect_stdout(io.StringIO()):
+            self.function(*self.args)
+
+
+class TestBackupWhisperIsReleasedWhenIdle(unittest.TestCase):
+    """A cloud setup frees the backup Whisper (about 740 MB) 10 idle minutes after its last use."""
+
+    def setUp(self):
+        import numpy as np
+        import transcriber
+
+        self.transcriber = transcriber
+        self.audio = np.ones(10, dtype=np.float32)
+        _FakeTimer.made = []
+        for patcher in (patch.object(transcriber.threading, "Timer", _FakeTimer),
+                        patch.object(transcriber, "WhisperTranscriber")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.whisper = transcriber.WhisperTranscriber
+        self.whisper.return_value.transcribe.return_value = "local words"
+        self.backend = transcriber.CloudTranscriber("groq")
+
+    def test_a_use_starts_one_ten_minute_daemon_timer(self):
+        self.assertEqual(self.backend.local_fallback(self.audio), "local words")
+        self.whisper.assert_called_once_with(backup=True)
+        self.assertEqual(len(_FakeTimer.made), 1)
+        self.assertEqual(_FakeTimer.made[0].interval, 600.0)
+        self.assertTrue(_FakeTimer.made[0].daemon)
+
+    def test_the_timer_releases_the_model_and_the_next_failure_loads_it_again(self):
+        self.backend.local_fallback(self.audio)
+        _FakeTimer.made[-1].fire()
+        self.assertIsNone(self.backend._whisper)
+        self.whisper.return_value.release.assert_called_once_with()
+        self.assertEqual(self.backend.local_fallback(self.audio), "local words")
+        self.assertEqual(self.whisper.call_count, 2)
+
+    def test_a_newer_use_restarts_the_timer(self):
+        self.backend.local_fallback(self.audio)
+        first = _FakeTimer.made[0]
+        self.backend.local_fallback(self.audio)
+        self.assertTrue(first.cancelled)
+        first.fire()  # a stale timer that fired anyway must not release
+        self.assertIsNotNone(self.backend._whisper)
+        _FakeTimer.made[-1].fire()
+        self.assertIsNone(self.backend._whisper)
+        self.assertEqual(self.whisper.call_count, 1)
+
+    def test_a_running_decode_is_never_released(self):
+        import threading
+
+        entered, finish = threading.Event(), threading.Event()
+        calls = []
+
+        def transcribe(audio):
+            calls.append(audio)
+            if len(calls) == 2:
+                entered.set()
+                finish.wait(5)
+            return "w"
+
+        self.whisper.return_value.transcribe.side_effect = transcribe
+        self.backend.local_fallback(self.audio)
+        worker = threading.Thread(target=self.backend.local_fallback, args=(self.audio,), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(5))
+        _FakeTimer.made[0].fire()  # the first use's timer fires during the second decode
+        self.assertIsNotNone(self.backend._whisper)
+        finish.set()
+        worker.join(5)
+        _FakeTimer.made[-1].fire()
+        self.assertIsNone(self.backend._whisper)
+
+    def test_a_failed_decode_still_starts_the_timer(self):
+        self.whisper.return_value.transcribe.side_effect = RuntimeError("decode failed")
+        with self.assertRaises(RuntimeError):
+            self.backend.local_fallback(self.audio)
+        self.assertEqual(len(_FakeTimer.made), 1)
+        _FakeTimer.made[0].fire()
+        self.assertIsNone(self.backend._whisper)
+
+    def test_gemini_shares_the_same_release(self):
+        backend = self.transcriber.GeminiTranscriber.__new__(self.transcriber.GeminiTranscriber)
+        backend.local_fallback(self.audio)
+        _FakeTimer.made[-1].fire()
+        self.assertIsNone(backend._whisper)
+
+
+class TestBackupOnlyMklSetting(unittest.TestCase):
+    """MKL's buffer cache keeps ~120 MB per released model; only a backup-only Whisper turns it off."""
+
+    def _decide(self, stt="groq", live="groq", loaded=False, preset=None):
+        import sys as _sys
+
+        import transcriber
+
+        env = {} if preset is None else {"MKL_DISABLE_FAST_MM": preset}
+        with patch.dict(os.environ, env), patch.dict(_sys.modules), \
+                patch.object(transcriber.Config, "effective_stt_provider", return_value=stt), \
+                patch.object(transcriber.Config, "effective_live_stt_provider", return_value=live):
+            if preset is None:
+                os.environ.pop("MKL_DISABLE_FAST_MM", None)
+            if loaded:
+                _sys.modules["ctranslate2"] = object()
+            else:
+                _sys.modules.pop("ctranslate2", None)
+            transcriber._backup_only_mkl_settings()
+            return os.environ.get("MKL_DISABLE_FAST_MM")
+
+    def test_a_cloud_only_setup_turns_the_cache_off(self):
+        self.assertEqual(self._decide(), "1")
+
+    def test_a_primary_or_live_whisper_keeps_the_cache(self):
+        self.assertIsNone(self._decide(stt="whisper", live="whisper"))
+        self.assertIsNone(self._decide(stt="groq", live="whisper"))
+
+    def test_too_late_once_ctranslate2_is_loaded(self):
+        self.assertIsNone(self._decide(loaded=True))
+
+    def test_a_value_in_the_environment_wins(self):
+        self.assertEqual(self._decide(preset="0"), "0")
+
+
+class TestPrimaryWhisperStaysLoaded(unittest.TestCase):
+    """STT_PROVIDER=whisper keeps its model: releasing it would slow every dictation."""
+
+    def test_the_primary_whisper_never_starts_a_release_timer(self):
+        import transcriber
+
+        _FakeTimer.made = []
+        whisper = transcriber.WhisperTranscriber.__new__(transcriber.WhisperTranscriber)
+        whisper.model = object()
+        with patch.object(transcriber.threading, "Timer", _FakeTimer), \
+                patch.object(whisper, "transcribe", return_value="w"):
+            self.assertEqual(whisper.local_fallback("clip"), "w")
+        self.assertEqual(_FakeTimer.made, [])
+        self.assertIsNotNone(whisper.model)
+
+    def test_release_drops_the_model(self):
+        import transcriber
+
+        whisper = transcriber.WhisperTranscriber.__new__(transcriber.WhisperTranscriber)
+        whisper.model = object()
+        whisper.release()
+        self.assertIsNone(whisper.model)
+
+
 # --------------------------------------------------------------------------- tray icon
 def _qt_app():
     from PySide6.QtWidgets import QApplication
