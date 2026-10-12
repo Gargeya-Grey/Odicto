@@ -1,0 +1,321 @@
+"""Resting resource use: what the app loads, how many threads it starts, what the HUD repaints.
+
+Every test here pins a behaviour that keeps Odicto cheap while it waits in the
+background. None of them touches a hook, a microphone or the network.
+Fresh interpreters (subprocesses) are used wherever "already imported" would
+hide the answer.
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from paths import ROOT
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+SDKS = ("openai", "google", "pydantic", "httpx", "requests", "PySide6", "faster_whisper", "ctranslate2")
+
+_PROBE = r"""
+import json, os, sys
+sys.path.insert(0, {app!r})
+{body}
+loaded = sorted({{m.split('.')[0] for m in sys.modules}} & set({sdks!r}))
+print(json.dumps({{"loaded": loaded, "env": os.environ.get("OPENBLAS_NUM_THREADS"), "extra": {extra}}}))
+"""
+
+
+def _probe(body: str = "import main", extra: str = "None", **env) -> dict:
+    """Run ``body`` in a fresh interpreter and report which SDKs it loaded."""
+    clean = {k: v for k, v in os.environ.items()
+             if not k.startswith(("OPENBLAS", "LLM_", "STT_", "LIVE_STT", "GEMINI_", "GROQ_",
+                                  "OPENROUTER_", "META_", "OLLAMA_"))}
+    clean["QT_QPA_PLATFORM"] = "offscreen"
+    clean.update({k: v for k, v in env.items() if v is not None})
+    code = _PROBE.format(app=str(APP_DIR), body=body, sdks=SDKS, extra=extra)
+    result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=clean,
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise AssertionError(result.stderr[-2000:])
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+class TestBlasThreads(unittest.TestCase):
+    """numpy's OpenBLAS must not size itself to every CPU thread (about 480 MB committed)."""
+
+    def test_importing_main_limits_openblas_to_one_thread(self):
+        self.assertEqual(_probe("import main")["env"], "1")
+
+    def test_an_explicit_environment_value_wins(self):
+        self.assertEqual(_probe("import main", OPENBLAS_NUM_THREADS="3")["env"], "3")
+
+    def test_numpy_is_imported_after_the_limit_is_set(self):
+        # Reading the variable from a fresh interpreter proves ordering: numpy's own
+        # import is the first thing in main that could create the thread pool.
+        info = _probe("import main, numpy\n", extra="os.environ.get('OPENBLAS_NUM_THREADS')")
+        self.assertEqual(info["extra"], "1")
+
+    @unittest.skipUnless(sys.platform == "win32", "private bytes are a Windows measure")
+    def test_importing_main_commits_little_memory_on_windows(self):
+        info = _probe("import main, psutil", extra="round(psutil.Process().memory_info().private / 1048576)")
+        # Before the limit this was about 510 MB; after it, about 30.
+        self.assertLess(info["extra"], 150)
+
+
+class TestSdksLoadOnlyWhenConfigured(unittest.TestCase):
+    """A provider SDK is imported only when that provider is configured."""
+
+    BUILD = (
+        "import main\n"
+        "from config import Config\n"
+        "from recorder import AudioRecorder\n"
+        "from refiner import TextRefiner\n"
+        "from transcriber import CloudTranscriber, GeminiTranscriber, WhisperTranscriber\n"
+        "provider = Config.effective_stt_provider()\n"
+        "if provider == 'gemini': GeminiTranscriber()\n"
+        "elif provider in ('groq', 'openrouter'): CloudTranscriber(provider)\n"
+        "else: pass\n"
+        "TextRefiner()\n"
+    )
+
+    def test_importing_the_app_loads_no_provider_sdk_and_no_whisper(self):
+        self.assertEqual(_probe("import main")["loaded"], [])
+
+    def test_cloud_speech_does_not_load_whisper_until_it_is_needed(self):
+        loaded = _probe(self.BUILD, STT_PROVIDER="groq", GROQ_API_KEY="test-key", LLM_PROVIDER="none")["loaded"]
+        self.assertNotIn("faster_whisper", loaded)
+        self.assertNotIn("ctranslate2", loaded)
+        self.assertNotIn("openai", loaded)
+        self.assertNotIn("google", loaded)
+
+    def test_gemini_speech_loads_the_gemini_sdk_only(self):
+        loaded = _probe(self.BUILD, STT_PROVIDER="gemini", GEMINI_API_KEY="test-key", LLM_PROVIDER="none")["loaded"]
+        self.assertIn("google", loaded)
+        self.assertNotIn("openai", loaded)
+        self.assertNotIn("faster_whisper", loaded)
+
+    def test_an_openai_compatible_chat_provider_loads_openai_only(self):
+        loaded = _probe(self.BUILD, STT_PROVIDER="groq", LLM_PROVIDER="groq", GROQ_API_KEY="test-key")["loaded"]
+        self.assertIn("openai", loaded)
+        self.assertNotIn("google", loaded)
+        self.assertNotIn("faster_whisper", loaded)
+
+    def test_no_provider_configured_loads_no_sdk(self):
+        loaded = _probe(self.BUILD, STT_PROVIDER="groq", GROQ_API_KEY="test-key", LLM_PROVIDER="none")["loaded"]
+        self.assertEqual([m for m in loaded if m in ("openai", "google", "pydantic", "faster_whisper")], [])
+
+
+class TestStartupLogsVersion(unittest.TestCase):
+    def test_startup_logs_the_odicto_version(self):
+        from main import DictationApp
+        from version import app_version
+
+        out = io.StringIO()
+        with patch("main.Config.SHOW_VISUAL_INDICATOR", False), patch("threading.Thread"), redirect_stdout(out):
+            DictationApp()
+        self.assertIn(f"Odicto {app_version()}", out.getvalue().splitlines())
+
+
+# --------------------------------------------------------------------------- tray icon
+def _qt_app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+class TestTrayIcon(unittest.TestCase):
+    def setUp(self):
+        _qt_app()
+
+    def _copy_asset(self, root: Path, name: str) -> None:
+        (root / "assets").mkdir(parents=True, exist_ok=True)
+        (root / "assets" / name).write_bytes((ROOT / "assets" / name).read_bytes())
+
+    def test_the_shipped_logo_loads_and_is_the_graphite_square(self):
+        from indicator import logo_icon
+
+        icon = logo_icon()
+        self.assertFalse(icon.isNull())
+        image = icon.pixmap(64, 64).toImage()
+        centre = image.pixelColor(32, 8)  # inside the rounded square, above the jade mark
+        self.assertEqual((centre.red(), centre.green(), centre.blue()), (0x1B, 0x1D, 0x20))
+        self.assertEqual(image.pixelColor(0, 0).alpha(), 0)  # rounded corner stays transparent
+
+    def test_the_logo_is_found_from_the_install_root_not_the_working_directory(self):
+        from indicator import logo_icon
+
+        with tempfile.TemporaryDirectory() as elsewhere:
+            previous = os.getcwd()
+            os.chdir(elsewhere)
+            try:
+                self.assertFalse(logo_icon().isNull())
+            finally:
+                os.chdir(previous)
+
+    def test_the_root_comes_from_paths_root(self):
+        import indicator
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(indicator, "ROOT", Path(root)):
+                self.assertTrue(indicator.logo_icon().isNull())  # nothing under this root
+            self._copy_asset(Path(root), "odicto-icon.svg")
+            with patch.object(indicator, "ROOT", Path(root)):
+                self.assertFalse(indicator.logo_icon().isNull())
+
+    def test_png_is_used_when_the_svg_is_missing_or_damaged(self):
+        from indicator import logo_icon
+
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            self._copy_asset(base, "odicto-icon-256.png")
+            self.assertFalse(logo_icon(base).isNull())  # svg missing
+            (base / "assets" / "odicto-icon.svg").write_text("not an svg", encoding="utf-8")
+            icon = logo_icon(base)  # svg damaged
+            self.assertFalse(icon.isNull())
+            self.assertFalse(icon.pixmap(32, 32).isNull())
+
+    def test_a_damaged_logo_alone_is_a_null_icon_not_an_error(self):
+        from indicator import logo_icon
+
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "assets").mkdir()
+            (Path(root) / "assets" / "odicto-icon.svg").write_text("not an svg", encoding="utf-8")
+            (Path(root) / "assets" / "odicto-icon-256.png").write_bytes(b"not a png")
+            self.assertTrue(logo_icon(Path(root)).isNull())
+
+    def test_the_tray_icon_is_the_logo_and_falls_back_to_a_plain_icon(self):
+        import indicator
+
+        hud = _make_hud()
+        try:
+            icon = hud._make_tray_icon()
+            self.assertFalse(icon.isNull())
+            self.assertEqual(icon.pixmap(64, 64).toImage().pixelColor(32, 8).red(), 0x1B)
+            with tempfile.TemporaryDirectory() as empty, patch.object(indicator, "ROOT", Path(empty)):
+                fallback = hud._make_tray_icon()
+            self.assertFalse(fallback.isNull())  # the tray still gets an icon
+            self.assertNotEqual(fallback.pixmap(24, 24).toImage().pixelColor(12, 12).red(), 0x1B)
+        finally:
+            _close_hud(hud)
+
+
+# --------------------------------------------------------------------------- HUD idle
+def _make_hud(**attrs):
+    from unittest.mock import MagicMock
+
+    from app_state import AppState
+    from indicator import DictationIndicator
+
+    _qt_app()
+    app = MagicMock()
+    app.state = AppState.IDLE
+    app.last_status = None
+    app.use_llm = False
+    app.ready = True
+    app.recorder = None
+    app.live_active = False
+    app.live_preview = ""
+    app.status_detail = None
+    for name, value in attrs.items():
+        setattr(app, name, value)
+    return DictationIndicator(app)
+
+
+def _close_hud(hud) -> None:
+    hud._tick.stop()
+    hud._hide_timer.stop()
+    if getattr(hud, "_tray", None) is not None:
+        hud._tray.hide()
+    hud.close()
+
+
+def _settle(hud) -> None:
+    """Jump to the end of every animation the way real time would, then tick once."""
+    for tween in (hud._w_tw, hud._h_tw):
+        tween.snap(tween.b)
+    hud._phase = "open"
+    hud._phase_t0 = time.monotonic() - 10
+    hud._content_fade = hud._glyph_fade = hud._check_progress = 1.0
+    hud._resize_hold = None
+    hud._on_tick()
+
+
+class TestHudRestsWhenIdle(unittest.TestCase):
+    def test_the_paint_timer_stops_when_the_pill_is_hidden_and_resumes_when_shown(self):
+        from indicator import GuiState
+
+        hud = _make_hud()
+        try:
+            self.assertTrue(hud._tick.isActive())  # the boot entrance animates
+            hud._do_hide()
+            hud._phase_t0 -= 10  # the exit has long finished
+            hud._on_tick()
+            self.assertEqual(hud._phase, "hidden")
+            self.assertFalse(hud._tick.isActive())
+            hud._transition_to(GuiState.RECORDING)
+            self.assertTrue(hud._tick.isActive())
+            self.assertEqual(hud._tick.interval(), 16)
+        finally:
+            _close_hud(hud)
+
+    def test_a_standing_error_repaints_slowly_and_wakes_on_any_change(self):
+        from app_state import AppState
+        from indicator import GuiState
+
+        hud = _make_hud(ready=False, last_status="init_error", status_detail="mic")
+        try:
+            hud._sync_from_app()
+            self.assertEqual(hud.gui_state, GuiState.ERROR)
+            _settle(hud)
+            self.assertTrue(hud._tick.isActive())
+            self.assertEqual(hud._tick.interval(), 250)
+            hud.app.status_detail = "hotkeys"  # a retry reports a new reason
+            hud._sync_from_app()
+            self.assertEqual(hud._tick.interval(), 16)  # the width change animates at full speed
+            _settle(hud)
+            hud.app.state = AppState.RECORDING
+            hud._sync_from_app()
+            self.assertEqual(hud.gui_state, GuiState.RECORDING)
+            _settle(hud)
+            self.assertEqual(hud._tick.interval(), 16)  # recording is never slowed
+        finally:
+            _close_hud(hud)
+
+    def test_the_slow_frames_are_identical_to_the_fast_ones(self):
+        hud = _make_hud(ready=False, last_status="init_error", status_detail="mic")
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            self.assertEqual(hud._tick.interval(), 250)
+            first = hud.grab().toImage()
+            for _ in range(40):  # what the 60 FPS timer would have drawn meanwhile
+                hud._on_tick()
+            second = hud.grab().toImage()
+            self.assertEqual(first, second)
+        finally:
+            _close_hud(hud)
+
+    def test_a_pill_that_is_still_animating_keeps_the_fast_tick(self):
+        hud = _make_hud(ready=False, last_status="init_error", status_detail="mic")
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            hud._glyph_fade = 0.2  # a cross-fade in progress
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+        finally:
+            _close_hud(hud)
+
+
+if __name__ == "__main__":
+    unittest.main()

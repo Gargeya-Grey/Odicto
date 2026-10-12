@@ -17,6 +17,7 @@ import os
 import sys
 import time
 from enum import Enum, auto
+from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import (
@@ -45,6 +46,31 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from platforms import apply_window_exstyles
 from paths import ROOT
+
+
+# The Odicto logo, tried in order: the vector first, then the raster copy.
+_LOGO_FILES = ("odicto-icon.svg", "odicto-icon-256.png")
+
+
+def logo_icon(root: Optional[Path] = None) -> QIcon:
+    """The Odicto logo as a QIcon, read from ``<install root>/assets``.
+
+    The root is ``paths.ROOT`` (never the working directory). A file counts only
+    if it really renders: a missing Qt SVG plugin or a damaged file moves on to
+    the next one. Returns a null icon when none loads. Needs a QGuiApplication.
+    """
+    base = Path(ROOT if root is None else root) / "assets"
+    for name in _LOGO_FILES:
+        path = base / name
+        try:
+            if not path.is_file():
+                continue
+            icon = QIcon(str(path))
+            if not icon.isNull() and not icon.pixmap(32, 32).isNull():
+                return icon
+        except Exception:
+            continue
+    return QIcon()
 
 
 class GuiState(Enum):
@@ -121,6 +147,10 @@ _LEAVE_S = _DROP_AT_S + _DROP_S
 _DROP_PX = 10.0
 _DROPLET_MIN = 0.6         # droplet diameter at the start of the rise / end of the drop
 _SUCCESS_HOLD_MS = 1200
+# Paint interval while the pill animates, and while it only holds a finished,
+# unchanging frame (a standing error such as "Mic unavailable").
+_ANIM_TICK_MS = 16
+_STATIC_TICK_MS = 250
 
 
 def ease_in_out_cubic(t: float) -> float:
@@ -314,7 +344,7 @@ class DictationIndicator(QWidget):
         )
 
         self._tick = QTimer(self)
-        self._tick.setInterval(16)  # ~60 FPS
+        self._tick.setInterval(_ANIM_TICK_MS)  # ~60 FPS
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
 
@@ -333,11 +363,9 @@ class DictationIndicator(QWidget):
         self._tray = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        icon = QIcon()
-        pixmap = self._make_tray_icon()
-        if pixmap.isNull():
+        icon = self._make_tray_icon()
+        if icon.isNull():
             return
-        icon.addPixmap(pixmap)
         self._tray = QSystemTrayIcon(icon, self)
         menu = QMenu()
 
@@ -355,7 +383,11 @@ class DictationIndicator(QWidget):
         self._tray.setToolTip("Odicto")
         self._tray.show()
 
-    def _make_tray_icon(self):
+    def _make_tray_icon(self) -> QIcon:
+        """The Odicto logo; the old plain green square only if no logo file loads."""
+        icon = logo_icon()
+        if not icon.isNull():
+            return icon
         from PySide6.QtGui import QPixmap
 
         pm = QPixmap(24, 24)
@@ -366,7 +398,9 @@ class DictationIndicator(QWidget):
         painter.setBrush(QColor(108, 168, 128))
         painter.drawRoundedRect(QRectF(4, 4, 16, 16), 5, 5)
         painter.end()
-        return pm
+        fallback = QIcon()
+        fallback.addPixmap(pm)
+        return fallback
 
     def _open_setup_page(self) -> None:
         try:
@@ -693,6 +727,7 @@ class DictationIndicator(QWidget):
     def _sync_from_app(self) -> None:
         from app_state import AppState
 
+        self._wake_tick()  # the app changed something: animate at full speed again
         app_state = self.app.state
         last_status = getattr(self.app, "last_status", None)
         ready = bool(getattr(self.app, "ready", False))
@@ -810,6 +845,29 @@ class DictationIndicator(QWidget):
             self._tick.start()
         elif not active and self._tick.isActive():
             self._tick.stop()
+        if active:
+            self._wake_tick()
+
+    def _wake_tick(self) -> None:
+        if self._tick.interval() != _ANIM_TICK_MS:
+            self._tick.setInterval(_ANIM_TICK_MS)
+
+    def _is_static(self, now: float) -> bool:
+        """True when every following frame would be pixel-identical to this one.
+
+        Only a finished check, cross or notice qualifies: its glyph, words and
+        size have stopped moving and nothing in it is driven by the clock.
+        """
+        return (
+            self._phase == "open"
+            and self.gui_state in (GuiState.SUCCESS, GuiState.ERROR, GuiState.RESET)
+            and self._check_progress >= 1.0
+            and self._glyph_fade >= 1.0
+            and self._content_fade >= 1.0
+            and self._resize_hold is None
+            and self._w_tw.done(now)
+            and self._h_tw.done(now)
+        )
 
     # ----------------------------------------------------------------- tick
     def _on_tick(self) -> None:
@@ -860,6 +918,12 @@ class DictationIndicator(QWidget):
 
         if self._phase != "hidden" or self._appear_target > 0:
             self.update()
+
+        # A finished, unchanging pill (a standing "Mic unavailable") needs no
+        # 60 FPS repaint. Any app change or state change wakes the tick again.
+        interval = _STATIC_TICK_MS if self._is_static(time.monotonic()) else _ANIM_TICK_MS
+        if self._tick.interval() != interval:
+            self._tick.setInterval(interval)
 
     # ----------------------------------------------------------------- paint
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
