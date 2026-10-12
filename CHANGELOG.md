@@ -25,6 +25,9 @@ First versioned release.
 
 - Three launchers at the install root: `start_dictation`, `setup` and `stop_dictation` (`.bat` on Windows, `.sh` on macOS and Linux). A double-click on `start_dictation.bat` starts Odicto; it no longer restarts a running Odicto.
 - The setup page server stops when you close the last setup tab, or after 30 minutes with no request. It no longer runs as long as Odicto runs. A second launch opens the setup page that is already open.
+- Lighter at rest: Odicto commits about 480 MB less memory and runs about 15 fewer threads (numpy's math library now uses one thread). Speech recognition speed is the same.
+- A standing HUD message (for example "Mic unavailable") no longer redraws 60 times a second. It looks the same.
+- The tray icon is the Odicto logo.
 
 ### Removed
 
