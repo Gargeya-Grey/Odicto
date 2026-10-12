@@ -115,9 +115,14 @@ function Invoke-Python {
     Remove-Job $job -Force
     Start-Sleep -Milliseconds 200
     $text = if (Test-Path $outFile) { [string](Get-Content $outFile -Raw -ErrorAction SilentlyContinue) } else { '' }
-    $match = [regex]::Match($text, 'EXITCODE=(\d+)')
+    # Windows PowerShell reports a crash status such as 0xC0000409 as a negative number.
+    $match = [regex]::Match($text, 'EXITCODE=(-?\d+)')
     $code = if ($match.Success) { [int]$match.Groups[1].Value } else { 124 }
     return [pscustomobject]@{ Text = $text; Code = $code; TimedOut = $timedOut }
+}
+
+function Format-ExitCode([int]$Code) {
+    '{0} (0x{1:X8})' -f $Code, $Code
 }
 
 # ---------------------------------------------------------------- 1. test file frozen
@@ -138,7 +143,7 @@ if ($actualHash -ne $ExpectedTestUnitsHash) {
 Write-Step 'Gate 2: test suite (tools/run_tests.py: discovery, floor, skip allow-list)'
 $suite = Invoke-Python @('tools/run_tests.py') 600
 if ($suite.Code -ne 0 -or $suite.TimedOut -or $suite.Text -notmatch '(?m)^GATE OK\s*$') {
-    Add-Failure "test gate failed (exit $($suite.Code), timed out: $($suite.TimedOut)); last lines:`n$(($suite.Text -split "`n" | Select-Object -Last 25) -join "`n")"
+    Add-Failure "test gate failed (exit $(Format-ExitCode $suite.Code), timed out: $($suite.TimedOut)); last lines:`n$(($suite.Text -split "`n" | Select-Object -Last 25) -join "`n")"
 } else {
     Add-Pass ([regex]::Match($suite.Text, '(?m)^GATE: .*$').Value)
 }
@@ -176,7 +181,7 @@ if ($SkipCleanEnv) {
     Write-Step 'Gate 5: isolated clean-environment run (live configuration stays in place)'
     $cleanResult = Invoke-Python @('-B', 'tools/verify_clean.py') 600
     if ($cleanResult.Code -ne 0 -or $cleanResult.TimedOut -or $cleanResult.Text -notmatch '(?m)^GATE OK\s*$') {
-        Add-Failure "isolated clean-environment run failed; last lines:`n$(($cleanResult.Text -split "`n" | Select-Object -Last 25) -join "`n")"
+        Add-Failure "isolated clean-environment run failed (exit $(Format-ExitCode $cleanResult.Code), timed out: $($cleanResult.TimedOut)); last lines:`n$(($cleanResult.Text -split "`n" | Select-Object -Last 25) -join "`n")"
     } else {
         Add-Pass 'test gate passed in an isolated source copy; private files untouched'
     }
