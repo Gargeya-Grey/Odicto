@@ -29,6 +29,9 @@ SDKS = ("openai", "google", "pydantic", "httpx", "requests", "PySide6", "faster_
 _PROBE = r"""
 import json, os, sys
 sys.path.insert(0, {app!r})
+# Skip .env so the developer's real file cannot override the variables the probe sets.
+import dotenv
+dotenv.load_dotenv = lambda *a, **k: False
 {body}
 loaded = sorted({{m.split('.')[0] for m in sys.modules}} & set({sdks!r}))
 print(json.dumps({{"loaded": loaded, "env": os.environ.get("OPENBLAS_NUM_THREADS"), "extra": {extra}}}))
