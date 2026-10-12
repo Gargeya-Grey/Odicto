@@ -396,18 +396,30 @@ class TestRoundThreeFixes(ClipboardSafetyBase):
 
     def test_restore_now_is_sticky_for_later_pastes(self):
         # Quit's request must survive an insertion that starts afterwards.
-        typer.request_restore_now()
-        self.mocks["_wait_restore_window"].side_effect = _REAL_WAIT_RESTORE_WINDOW
-        sleeps = []
-        with patch.object(Config, "PASTE_DELAY_SECONDS", 10.0):
-            started = time.monotonic()
-            for text in ("one", "two"):
-                with patch("typer.time.sleep", side_effect=sleeps.append):
-                    typer.paste_text(text)
-            elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 2.0)
+        waits = []
+
+        class RecordingEvent(threading.Event):
+            def wait(self, timeout=None):
+                ended_by_flag = super().wait(timeout)
+                waits.append((timeout, ended_by_flag))
+                return ended_by_flag
+
+        restore_now = RecordingEvent()
+        restore_now.clear()
+        with patch.object(typer, "_RESTORE_NOW", restore_now):
+            typer.request_restore_now()
+            self.mocks["_wait_restore_window"].side_effect = _REAL_WAIT_RESTORE_WINDOW
+            sleeps = []
+            with patch.object(Config, "PASTE_DELAY_SECONDS", 10.0):
+                for text in ("one", "two"):
+                    with patch("typer.time.sleep", side_effect=sleeps.append):
+                        typer.paste_text(text)
+            # True means the flag ended each 9.85 s wait, not its timeout.
+            self.assertEqual([ended for _, ended in waits], [True, True])
+            for timeout, _ in waits:
+                self.assertAlmostEqual(timeout, 9.85)
+            self.assertTrue(typer._RESTORE_NOW.is_set())
         self.assertEqual(sleeps.count(0.15), 2)  # the floor still runs
-        self.assertTrue(typer._RESTORE_NOW.is_set())
         self.assertEqual(self.clip.text, "user clip")
 
 

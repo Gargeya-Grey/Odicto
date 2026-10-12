@@ -65,12 +65,31 @@ class TestStageDeadlines(_Base):
         self.addCleanup(release_local.set)
         app.transcriber.transcribe.side_effect = slow
         app.transcriber.local_fallback.side_effect = slow_local
-        started = time.monotonic()
+        deadlines = []
+        real_await, real_clock = app._await_stage, time.monotonic
+
+        def recording_await(stage, seconds, cycle):
+            # On this thread the clock jumps just past the deadline after the
+            # anchor read: the stage times out on its deadline, not on real time.
+            deadlines.append(seconds)
+            caller, reads = threading.get_ident(), iter([1000.0])
+
+            def clock():
+                if threading.get_ident() != caller:
+                    return real_clock()
+                return next(reads, 1000.0 + seconds + 0.001)
+
+            with patch.object(time, "monotonic", clock):
+                return real_await(stage, seconds, cycle)
+
+        app._await_stage = recording_await
+        # Both providers stay blocked until cleanup: a pipeline that waited for
+        # either would paste its late words instead of timing out.
         with patch.object(Config, "STT_DEADLINE_SECONDS", 0.1), patch.object(
             Config, "effective_stt_provider", return_value="gemini"
         ):
             app.process_and_paste(np.zeros(10), False)
-        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(deadlines, [0.1, 0.1], "cloud and local STT each wait STT_DEADLINE_SECONDS")
         self.paste.assert_not_called()
         self.assertEqual(app.last_status, "stt_timeout")
         self.assertEqual(app.state, AppState.IDLE)
@@ -610,15 +629,33 @@ class TestShutdownOrder(_Base):
             ("unhook", app._closing.is_set()))))
         self.stack.enter_context(patch("main.flush_pending_restore", side_effect=lambda: order.append("flush")))
         self.assertTrue(app._lifecycle_lock.acquire())  # an insertion is "typing"
+        lock, timeouts = app._lifecycle_lock, []
+
+        class RecordingLock:
+            def acquire(self, blocking=True, timeout=-1):
+                timeouts.append(timeout if blocking else 0)
+                return lock.acquire(blocking, timeout)
+
+            def release(self):
+                lock.release()
+
+            def __enter__(self):
+                return self.acquire()
+
+            def __exit__(self, *exc):
+                self.release()
+
+        app._lifecycle_lock = RecordingLock()
         try:
-            started = time.monotonic()
             worker = threading.Thread(target=app._shutdown)
             worker.start()
-            worker.join(2)
+            worker.join(10)
             self.assertFalse(worker.is_alive(), "Quit must not wait on a running insertion")
-            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertTrue(timeouts, "shutdown must try the lifecycle lock")
+            self.assertTrue(all(t == 0.2 for t in timeouts),
+                            f"every lock wait must be bounded by _SHUTDOWN_LOCK_TIMEOUT_S: {timeouts}")
         finally:
-            app._lifecycle_lock.release()
+            lock.release()
         self.assertEqual(order[0], ("unhook", True), "hooks go first, after _closing is set")
         self.assertIn("flush", order)
         self.assertGreaterEqual(unhook.call_count, 1)
