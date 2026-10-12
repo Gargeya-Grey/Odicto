@@ -27,9 +27,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 GATE = {
     # Prior floor 518, plus the setup page and release tests, the root launchers, the
-    # admin switch and resting resource use: 695 discovered on Windows minus 24 in
-    # Windows-only installer classes.
-    "floor": 671,
+    # admin switch, resting resource use and the final-review fixes: 704 discovered on
+    # Windows minus 24 in Windows-only installer classes.
+    "floor": 680,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

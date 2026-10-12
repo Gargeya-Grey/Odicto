@@ -428,6 +428,8 @@ def restart_odicto() -> str:
         return "Settings saved. Odicto is restarting with the new settings."
     if elevated is not None:
         raise RuntimeError(f"elevated Odicto restart failed (exit code {elevated})")
+    if _SPAWN_BLOCKED.is_set():
+        return "Settings saved. Start Odicto with start_dictation.bat to apply them."
 
     import platforms
 
@@ -780,6 +782,11 @@ _CLIENT_FIELD = "_odicto_client"
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
 _MAX_CLIENTS = 32
 _CLIENTS_LOCK = threading.Lock()
+# Set when this server runs as administrator and turned admin mode off (the tray opens
+# the page from the elevated owner). An Odicto it started now would run elevated with
+# no logon task and no quit event, and a normal stop could not end it.
+_SPAWN_BLOCKED = threading.Event()
+_SPAWN_BLOCKED_MESSAGE = "This setup page runs as administrator. Start Odicto with start_dictation.bat."
 
 
 def _admin_mode_state() -> tuple:
@@ -859,9 +866,14 @@ def set_admin_mode(enabled: bool) -> dict:
         import windows_admin
 
         ok, message = windows_admin.set_admin_mode(str(ROOT), bool(enabled))
+        elevated = windows_admin.caller_is_elevated()
     except Exception as error:  # the helper never raises; this is a last guard
-        ok, message = False, f"Admin windows mode did not change ({error})."
+        ok, message, elevated = False, f"Admin windows mode did not change ({error}).", True
     _, now = _admin_mode_state()
+    if now:
+        _SPAWN_BLOCKED.clear()
+    elif ok and elevated:
+        _SPAWN_BLOCKED.set()
     return {"ok": bool(ok), "enabled": now, "message": str(message)}
 
 
@@ -881,6 +893,8 @@ def start_odicto() -> dict:
         if elevated == 0:
             return {"ok": True, "message": "Odicto is starting."}
         return {"ok": False, "message": f"Odicto did not start (exit code {elevated})."}
+    if _SPAWN_BLOCKED.is_set():
+        return {"ok": False, "message": _SPAWN_BLOCKED_MESSAGE}
     try:
         message = restart_odicto()
     except Exception as error:  # an elevated restart reports failure by raising
@@ -1266,6 +1280,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
+        # No other site may frame this page: a framed page carries its own token, so a
+        # disguised click on Save, Reset, Start or the admin switch would be accepted.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

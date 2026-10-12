@@ -59,24 +59,25 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # version chip, running-state card, admin-windows switch). The app version and the admin
 # switch state are now pinned; admin_on and admin_unavailable are new states. Every state
 # was checked for leftover __TOKENS__ and for the test API keys before capture.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7f28901e8f3bd25dbb48933dfbdc28c78f860b8046bcc4d6e0106f0104008cdd',
- 'provider_meta': 'b209c875bf5f59236a88270a2f4c956fbeb958ba8a054d79cc7c734701e9ad31',
- 'provider_openrouter': '2c545e96d18d87fc5e43271b1e5b0c930ba248aeb669f3c12e50b5bd1dafd7a9',
- 'provider_gemini': 'b49012b735f9cbe09e889a1d5debbafa42d51d0020c588380cf967eb873f7f5a',
- 'provider_ollama': 'bb36e952dd85d238ead0ae6b7f84800a72559cf006b1d9ae854a70bd44261783',
- 'provider_none': '7f28901e8f3bd25dbb48933dfbdc28c78f860b8046bcc4d6e0106f0104008cdd',
- 'provider_groq': 'ab831ae3a00b7271e142ec749a49cb2839ee3ba6c069ee55cc77f8b0e598bb29',
- 'polish_enabled': '6483ac0171c8459590d1e004dcfd3d1ceeb5ced098a889b89923cbc179f3e8a8',
- 'history_and_custom': '2174be1f879db7d71ddce33c1d744f5b875f59c74ef079eaf3b736761cb1edea',
- 'hotkey_short': 'f51d92271cde8a112f7e6d1a3ae370a8df87ffe4e7b87b192207fa7b9214a4d8',
- 'stt_gemini': 'da6dd6e762665afc31f3836af37ada4e3b8acd1a8a6ee3b557c34c5c4523178e',
- 'prompt_from_file': '17fdc10832e6e6af0cce6e05e9f9ef35205d9f4b17b933ad40744adda032b731',
- 'prompt_from_inline_env': '5015cb1869991d4254f1e1760398dbf8b1a234757f5b4937fd35744c3968eec1',
- 'msg_ok': 'c5f24aa0dc73bc2edaed6d48220e4c0a16b3d7d0a31341f4dac31f7ddd842ed0',
- 'msg_err': 'af806cdb4c5243529ebc0260ea12e2caa876533bcf311566fac9fe90c88c27bb',
- 'msg_neutral': '498933f5b5cbacbaf9f509f32dd0f9cf4a3ba43dfd2267fae4e3d2072759d2b8',
- 'admin_on': 'a45ab64c625aaeeb8048946929c963bc610334186b50c520176c6a8a203fd0da',
- 'admin_unavailable': '72d9f4bcfb66acd8b921d88b769168ab385c892b9edd99c6d452d9e4d1d27c34'}
+# Review fixes: one status poll loop, and the select search box no longer marks the page dirty.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'b48f385c47d336d5c41418ce43f159c49342a62b53346e0c1d293450092962bf',
+ 'provider_meta': '44e49c9be2e601a878b55f43fb0e99f32487443c64c8f2504c9ff94d07a62c46',
+ 'provider_openrouter': 'dc63dad2d86b51c39267efa5222f402e889fec4a43cb232a9433b54dc17bbc72',
+ 'provider_gemini': '119f6afd707b0870aa18825919a39b31a3ba8fabbf23b90e1303c10cc74a793a',
+ 'provider_ollama': 'a1a85ec93442dc5387b6621fd402a5a8002ae8c6d5fbd493a6d10f27649e75bb',
+ 'provider_none': 'b48f385c47d336d5c41418ce43f159c49342a62b53346e0c1d293450092962bf',
+ 'provider_groq': '694ea0ac35cf8dd521879e6eb89bceff5efb81e4409f70d5bb68f168c9ddafa6',
+ 'polish_enabled': '6d0929a6c135ffe729d78ea1b6520149332008d13448db422dc43babf787157c',
+ 'history_and_custom': '866a25298f399fda7f8319d61e598bfcedb092d243976351e2f67ec0b3d3edbd',
+ 'hotkey_short': '021c11de00631dea34e5c4e0f40b8c376815a83fb0ff8c12cad611ee921b32fa',
+ 'stt_gemini': '3f484da7f20894eb012458bf502b64717d64281c5e368d14a49d36e1952fba52',
+ 'prompt_from_file': '14b283c658e791703df67b5d167fee12d2c31a0f7001f43ef135ddc47ef9d5a0',
+ 'prompt_from_inline_env': '903210be1f58189e4b405edb606f6dad1a88fb40611e3c2b6f77d80d700cf93f',
+ 'msg_ok': '073772e8fec8250d872bbac897e64e204d64d1384bc2b374bd84c77496e9c691',
+ 'msg_err': 'acd2121f6b8d2ad8db59b8404f19a6d2007e51dc08d33b42ae39244efd616b5a',
+ 'msg_neutral': '0333fb47479cce35cbf593b7ecdc6d7987e5b78cbaca516ad9b62d6c707ad2d9',
+ 'admin_on': '3a115cfbadd1b8168f575c76a81e4c40a1429a737b71956d6227fefd67c05e93',
+ 'admin_unavailable': '3b01237d558ca08ee6d94fa3b749ad1159eae7f26465faf7d0fa23703549f14f'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

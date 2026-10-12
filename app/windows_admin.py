@@ -68,6 +68,20 @@ def _is_user_an_admin() -> bool:
     return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
+def caller_is_elevated() -> bool:
+    """Whether this process runs as administrator. Never raises; unknown counts as yes.
+
+    A child that this process starts inherits its token, so callers use this to avoid
+    starting an elevated Odicto that admin mode does not manage.
+    """
+    if not _is_windows():
+        return False
+    try:
+        return bool(_is_user_an_admin())
+    except Exception:
+        return True
+
+
 def _say(text: str) -> None:
     """Print one line. A missing or broken console (pythonw) must never raise."""
     try:
@@ -282,6 +296,12 @@ def graceful_quit(get_app: Callable[[], object], poll: float = 0.25) -> None:
         app._shutdown()
     except Exception:
         pass
+    try:  # os._exit skips main()'s finally, which releases the hooks and the lock
+        import platforms
+
+        platforms.release_lock()
+    except Exception:
+        pass
     os._exit(0)
 
 
@@ -322,7 +342,23 @@ def _owner_pid(root) -> Optional[int]:
             pid = int(f.read().strip())
     except (OSError, ValueError):
         return None
-    return pid if pid > 0 and _pid_alive(pid) else None
+    return pid if pid > 0 and _pid_alive(pid) and _may_be_python(pid) else None
+
+
+def _may_be_python(pid: int) -> bool:
+    """False only when ``pid`` clearly runs another program.
+
+    A crash leaves dictation.pid behind and Windows reuses PIDs. Treating that program
+    as the owner would send stop and restart to the administrator prompt for nothing.
+    An unreadable process keeps the old answer (an elevated owner may hide details).
+    """
+    try:
+        import psutil
+
+        name = psutil.Process(pid).name().lower()
+    except Exception:
+        return True
+    return name.startswith("python") or name.startswith("pypy")
 
 
 def _open_process_for_wait(pid: int):
@@ -613,6 +649,10 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
         return False, "The administrator prompt was cancelled; nothing changed."
     if completed.returncode != 0:
         reason = receipt.get("error") or "the helper exited with code %d" % completed.returncode
+        if enabled and os.path.isfile(marker_path(root)):
+            # The helper registers the task and writes the marker before it starts
+            # Odicto, so the switch did change; only the start did not finish cleanly.
+            return True, "Admin mode is on, but Odicto did not start cleanly: %s" % _short(reason)
         return False, "Admin mode was not changed: %s" % _short(reason)
     if enabled:
         if not os.path.isfile(marker_path(root)):
@@ -628,11 +668,7 @@ def _start_normal_odicto(root: str) -> Tuple[bool, str]:
     main_py = os.path.join(root, "main.py")
     if not os.path.isfile(pythonw):
         return True, "Admin mode is off. Start Odicto from the Start Menu; .venv is missing."
-    try:
-        elevated = _is_user_an_admin()
-    except Exception:
-        elevated = True  # unknown: do not risk an elevated child
-    if elevated:
+    if caller_is_elevated():
         # A setup page opened from the elevated owner's tray is elevated too, and its
         # child would be. Normal stop cannot end an elevated Odicto, so start none here.
         return True, "Admin mode is off. Start Odicto with start_dictation.bat."

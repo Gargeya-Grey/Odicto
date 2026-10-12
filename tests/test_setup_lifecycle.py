@@ -115,6 +115,13 @@ class StatusRouteTests(_ServerCase):
             status, _, _ = self._req("GET", path)
             self.assertEqual(status, 404, path)
 
+    def test_page_refuses_to_be_framed(self) -> None:
+        """A framed page carries its own token, so a disguised click would be accepted."""
+        status, headers, _ = self._req("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+        self.assertIn("frame-ancestors 'none'", headers.get("Content-Security-Policy", ""))
+
     def test_page_has_no_leftover_template_tokens(self) -> None:
         status, _, body = self._req("GET", "/")
         self.assertEqual(status, 200)
@@ -211,6 +218,9 @@ class StartOdictoTests(unittest.TestCase):
 
 
 class AdminModeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.addCleanup(setup_web._SPAWN_BLOCKED.clear)
+
     def test_unavailable_off_windows(self) -> None:
         with mock.patch.object(setup_web, "_admin_mode_state", lambda: (False, False)):
             result = setup_web.set_admin_mode(True)
@@ -226,7 +236,10 @@ class AdminModeTests(unittest.TestCase):
         helper.set_admin_mode.assert_not_called()
 
     def test_change_calls_the_helper_and_reports_the_new_state(self) -> None:
-        helper = types.SimpleNamespace(set_admin_mode=mock.Mock(return_value=(True, "Admin windows mode is on.")))
+        helper = types.SimpleNamespace(
+            set_admin_mode=mock.Mock(return_value=(True, "Admin windows mode is on.")),
+            caller_is_elevated=lambda: True,
+        )
         states = iter([(True, False), (True, True)])
         with mock.patch.object(setup_web, "_admin_mode_state", lambda: next(states)), mock.patch.dict(
             "sys.modules", {"windows_admin": helper}
@@ -234,6 +247,40 @@ class AdminModeTests(unittest.TestCase):
             result = setup_web.set_admin_mode(True)
         self.assertEqual((result["ok"], result["enabled"]), (True, True))
         helper.set_admin_mode.assert_called_once_with(str(setup_web.ROOT), True)
+        self.assertFalse(setup_web._SPAWN_BLOCKED.is_set())
+
+    def _turn_off(self, elevated: bool) -> dict:
+        helper = types.SimpleNamespace(
+            set_admin_mode=mock.Mock(return_value=(True, "Admin mode is off.")),
+            caller_is_elevated=lambda: elevated,
+        )
+        states = iter([(True, True), (True, False)])
+        with mock.patch.object(setup_web, "_admin_mode_state", lambda: next(states)), mock.patch.dict(
+            "sys.modules", {"windows_admin": helper}
+        ):
+            return setup_web.set_admin_mode(False)
+
+    def test_an_elevated_page_that_turned_admin_off_starts_no_odicto(self) -> None:
+        """The tray opens this page from the elevated owner; its children are elevated."""
+        self.assertTrue(self._turn_off(elevated=True)["ok"])
+        self.assertTrue(setup_web._SPAWN_BLOCKED.is_set())
+        import platforms
+        import windows_admin
+
+        with mock.patch.object(windows_admin, "run_if_needed", return_value=None), mock.patch.object(
+            platforms, "spawn_detached"
+        ) as spawn, mock.patch.object(platforms, "kill_other_odicto_processes") as kill:
+            started = setup_web.start_odicto()
+            saved = setup_web.restart_odicto()
+        self.assertFalse(started["ok"])
+        self.assertIn("start_dictation.bat", started["message"])
+        self.assertIn("start_dictation.bat", saved)
+        spawn.assert_not_called()
+        kill.assert_not_called()
+
+    def test_a_normal_page_that_turned_admin_off_still_starts_odicto(self) -> None:
+        self.assertTrue(self._turn_off(elevated=False)["ok"])
+        self.assertFalse(setup_web._SPAWN_BLOCKED.is_set())
 
 
 class RuntimeStatusTests(unittest.TestCase):

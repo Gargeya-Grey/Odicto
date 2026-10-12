@@ -1539,6 +1539,7 @@ function openCustomSelect(entry) {
     input.type = 'text';
     input.placeholder = 'Search';
     input.setAttribute('aria-label', 'Search options');
+    input.setAttribute('data-nodirty', 'true'); // filtering a list changes no setting
     search.appendChild(input);
     entry.menu.appendChild(search);
     entry.filterInput = input;
@@ -2643,8 +2644,13 @@ function renderStatus(s) {
   var startBtn = el('start_button');
   if (startBtn) startBtn.hidden = tone !== 'stopped';
 }
+// One poll loop only: a call while a request is out asks for one more poll after it.
+var STATUS_BUSY = false;
+var STATUS_AGAIN = false;
 function pollStatus() {
   clearTimeout(STATUS_TIMER);
+  if (STATUS_BUSY) { STATUS_AGAIN = true; return; }
+  STATUS_BUSY = true;
   fetch('/status?c=' + CLIENT_ID, { cache: 'no-store' }).then(function (r) {
     if (!r.ok) throw new Error('status ' + r.status);
     return r.json();
@@ -2656,6 +2662,9 @@ function pollStatus() {
     STATUS_FAILS += 1;
     if (STATUS_FAILS >= 2) el('offline_banner').hidden = false;
   }).then(function () {
+    STATUS_BUSY = false;
+    clearTimeout(STATUS_TIMER);
+    if (STATUS_AGAIN) { STATUS_AGAIN = false; pollStatus(); return; }
     STATUS_TIMER = setTimeout(pollStatus, document.hidden ? 60000 : 4000);
   });
 }

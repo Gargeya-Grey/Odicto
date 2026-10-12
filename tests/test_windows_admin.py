@@ -405,6 +405,22 @@ class TestSetAdminMode(_AdminRootCase):
         self.spawn.assert_called_once_with([pythonw, os.path.join(self.root, "main.py")])
         self.assertIn("off", message)
 
+    def test_turning_on_reports_on_when_only_the_start_failed(self):
+        """The helper writes the marker and the task before it starts Odicto."""
+        self.receipt = {"ok": False, "steps": ["elevated", "started"],
+                        "error": "started, but readiness not confirmed (exit 1)"}
+        self.effect = self.write_marker
+        ok, message = windows_admin.set_admin_mode(self.root, True)
+        self.assertTrue(ok, message)
+        self.assertIn("Admin mode is on", message)
+        self.assertIn("readiness not confirmed", message)
+
+    def test_turning_on_without_the_marker_still_reports_no_change(self):
+        self.receipt = {"ok": False, "steps": ["elevated"], "error": "task registration failed"}
+        ok, message = windows_admin.set_admin_mode(self.root, True)
+        self.assertFalse(ok)
+        self.assertIn("not changed", message)
+
     def test_turning_off_from_an_elevated_caller_starts_nothing(self):
         """A setup page opened from the elevated owner's tray would start Odicto elevated."""
         self.write_marker()
@@ -796,6 +812,38 @@ class TestWaitReadyForAnElevatedOwner(unittest.TestCase):
 
     def test_other_script_is_not_ready(self):
         self.assertEqual(self.check(["pythonw.exe", os.path.join("{root}", "other.py")]), 1)
+
+
+class TestOwnerPidAndElevationProbe(unittest.TestCase):
+    """A reused PID must not look like the owner; the public probe never raises."""
+
+    def _owner(self, process):
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "dictation.pid"), "w", encoding="ascii") as handle:
+                handle.write("4242")
+            with patch.object(windows_admin, "_pid_alive", return_value=True), \
+                    patch("psutil.Process", **process):
+                return windows_admin._owner_pid(folder)
+
+    def test_a_python_process_is_the_owner(self):
+        self.assertEqual(self._owner({"return_value": MagicMock(**{"name.return_value": "pythonw.exe"})}), 4242)
+
+    def test_another_program_on_a_reused_pid_is_not(self):
+        self.assertIsNone(self._owner({"return_value": MagicMock(**{"name.return_value": "chrome.exe"})}))
+
+    def test_an_unreadable_process_keeps_the_old_answer(self):
+        import psutil
+        self.assertEqual(self._owner({"side_effect": psutil.AccessDenied(4242)}), 4242)
+
+    def test_caller_is_elevated_never_raises(self):
+        with patch.object(windows_admin, "_is_windows", return_value=False):
+            self.assertFalse(windows_admin.caller_is_elevated())
+        with patch.object(windows_admin, "_is_windows", return_value=True), \
+                patch.object(windows_admin, "_is_user_an_admin", side_effect=OSError("no shell32")):
+            self.assertTrue(windows_admin.caller_is_elevated())
+        with patch.object(windows_admin, "_is_windows", return_value=True), \
+                patch.object(windows_admin, "_is_user_an_admin", return_value=False):
+            self.assertFalse(windows_admin.caller_is_elevated())
 
 
 class TestSetupRestart(unittest.TestCase):
