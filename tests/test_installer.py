@@ -861,9 +861,12 @@ else:
             os.unlink(venv / "bin" / "python")
             shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
             (self.install / "main.py").write_text("import time\ntime.sleep(60)\n")
+            # The rule reads the program name, the first word of the command. A Python whose own
+            # path holds a space is an accepted miss, so start it under a space-free name.
+            os.symlink(os.path.realpath(sys.executable), str(self.install / "python3"))
             cases = [
                 (".venv program", [".venv/bin/odicto-fake-app", "60"]),
-                ("python main.py", [sys.executable, "main.py"]),
+                ("python main.py", ["./python3", "main.py"]),
             ]
             for label, args in cases:
                 with self.subTest(label):
