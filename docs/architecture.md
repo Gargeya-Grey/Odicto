@@ -413,8 +413,9 @@ maps state plus `last_status` into `BOOTING / RECORDING / PROCESSING / SUCCESS /
 RESET / HIDDEN`. The pill shows Done when the paste key is sent (PROCESSING with
 `paste_delivered is True` maps to SUCCESS), and the clipboard wait still blocks the next
 capture. Auto-hide starts only at IDLE: Done stays about 1.2 s in total, an error 1.5 s. The
-capsule width fits the words on screen; it enters and leaves as a droplet, and every move
-uses `ease_in_out_cubic`.
+capsule width fits the words on screen; it enters and leaves as a droplet (entry on
+`ease_standard`, cubic-bezier(0.2, 0, 0, 1); exit on `ease_accelerate`, and shorter), and a size
+change follows the critically damped `_Spring`. Every animation rate is per second.
 
 ## 7. Single instance — the invariant that keeps typing sane
 

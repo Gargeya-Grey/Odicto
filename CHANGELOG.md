@@ -12,7 +12,7 @@ section as the release notes and refuses a version that has no section.
   - A status disc at the left end, the same as the phone's voice bubble: green with a microphone while listening (a soft halo grows with your voice), a turning jade arc while starting or working, pale jade with a check for Done, amber for Done with a notice, soft red with a cross for an error.
   - The waveform is jade and stronger in the middle. It rises fast with your voice and falls slowly; in a pause it shows a row of dots that breathe.
   - The AI and Live chips are jade.
-- Smoother motion. A size change follows a spring that never overshoots. The pill opens in about 0.38 s and closes in about 0.34 s (before: 0.64 s and 0.74 s). The disc pops a little when it changes. All animation runs on real time, so it looks the same when the computer is busy.
+- Smoother motion. A size change follows a smooth spring with no bounce, and a change in mid-move carries on from the current speed. The pill opens in about 0.38 s and closes in about 0.34 s (before: 0.64 s and 0.74 s). The disc pops a little when it changes. All animation runs on real time, so it looks the same when the computer is busy.
 - A softer shadow that reads well on light windows.
 
 ## [1.0.1] - 2026-10-12

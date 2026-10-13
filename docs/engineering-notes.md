@@ -150,15 +150,15 @@ difference is a condition, they are different behaviours that happen to look ali
 
 ### 3.5 HUD paint: one design, checked by eye — no pixel gate
 
-The pill follows the Odicto Mobile voice bubble (`apps/mobile/src/voice.css`,
-`VoiceControlView.kt`): one status disc (`orb_kind`), one content painter, one spinner. The
+The pill follows the Odicto Mobile voice bubble (in the Odicto-Mobile repository:
+`apps/mobile/src/voice.css`, `VoiceControlView.kt`): one status disc (`orb_kind`), one content painter, one spinner. The
 colours in `_Theme` must equal the setup page's CSS tokens; `TestBrandLook` checks that, so the
 desktop pill, the setup page and the phone cannot drift apart silently.
 
 **No test paints pixels.** A pixel-hash gate is not a viable substitute — Qt renders differently
 per platform, so the gate would fail on CI for reasons unrelated to the change. The tests pin
-what can be pinned without pixels: widths, the size spring (frame-rate independent, never
-overshoots, settles exactly), the easing curves, the disc map, the waveform smoothing, and that a
+what can be pinned without pixels: widths, the size spring (frame-rate independent, no
+overshoot from rest, settles exactly), the easing curves, the disc map, the waveform smoothing, and that a
 finished frame goes static. Check a look change by rendering the widget offscreen
 (`QT_QPA_PLATFORM=offscreen`, `hud.render(QImage)`) and looking at each state.
 

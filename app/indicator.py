@@ -8,7 +8,7 @@ Design language (shared with Odicto Mobile and the setup page):
     listening, a raised disc with a jade arc while working, pale jade / amber / soft
     red with a dark glyph for done / done-with-notice / error
   - Instrument Sans (shipped in assets/fonts), Segoe UI Variable as fallback
-  - Motion: sizes follow a critically damped spring (never overshoot); entries use
+  - Motion: sizes follow a critically damped spring (no bounce); entries use
     cubic-bezier(0.2, 0, 0, 1), exits accelerate and finish sooner than entries;
     every rate is per second, so the look is the same at any frame interval
   - Click-through, no focus steal, always on top, bottom-center
@@ -131,7 +131,10 @@ class GuiState(Enum):
 
 # --------------------------------------------------------------------------- theme
 class _Theme:
-    """Odicto Mobile tokens (apps/mobile/src/voice.css, VoiceControlView.kt)."""
+    """Odicto Mobile tokens (Odicto-Mobile repo: apps/mobile/src/voice.css, VoiceControlView.kt).
+
+    The setup page carries the same values; TestBrandLook keeps the two equal.
+    """
 
     # Capsule: the phone bubble (#212326) split into a faint top-to-bottom fall.
     surface_top = QColor(0x26, 0x29, 0x2C, 247)
@@ -186,7 +189,7 @@ _LIVE_H = 88
 _PAD = 16                  # shadow bleed around the capsule (a multiple of 4)
 # (grow px, drop px, alpha): ten faint layers falling off, then a tight contact shadow.
 _SHADOW_LAYERS = tuple(
-    (i * 1.1, 1.5 + i * 0.6, int(16 * (1.0 - (i - 1) / 10.0) ** 1.6)) for i in range(10, 0, -1)
+    (i * 1.1, 1.5 + i * 0.6, int(16 * (1.0 - (i - 1) / 11.0) ** 1.6)) for i in range(10, 0, -1)
 ) + ((0.0, 0.75, 34),)
 
 # Motion, in seconds. Entries ease with cubic-bezier(0.2, 0, 0, 1); exits accelerate.
@@ -655,9 +658,19 @@ class DictationIndicator(QWidget):
         return self._shown_state if self.gui_state == GuiState.HIDDEN else self.gui_state
 
     def _orb_now(self) -> str:
-        """The disc to draw; it stays the last shown disc while the exit plays."""
+        """The disc to draw; it stays the last shown disc while the exit plays.
+
+        Any change of disc starts the cross-fade and pop here, whatever caused it: a
+        state change, the reset flash, or a notice status set while still processing.
+        From fully hidden, _begin_show cancels it: the droplet entrance is enough.
+        """
         if self.gui_state != GuiState.HIDDEN:
-            self._shown_orb = orb_kind(self.gui_state, getattr(self.app, "last_status", None))
+            kind = orb_kind(self.gui_state, getattr(self.app, "last_status", None))
+            if kind != self._shown_orb:
+                self._last_orb = self._shown_orb
+                self._shown_orb = kind
+                self._glyph_fade = 0.0
+                self._wake_tick()
         return self._shown_orb
 
     def _chip_label(self, state: GuiState, use_llm: bool) -> str:
@@ -874,9 +887,9 @@ class DictationIndicator(QWidget):
 
     def _do_flash_reset(self) -> None:
         if self.gui_state != GuiState.RESET:
-            self._glyph_fade = 0.0
             self._check_progress = 0.0
         self.gui_state = self._shown_state = GuiState.RESET
+        self._orb_now()  # cross-fades from the disc on screen, not a stale one
         self._sync_geometry()
         self._content_fade = 0.8
         self._begin_show(time.monotonic())
@@ -968,14 +981,13 @@ class DictationIndicator(QWidget):
             return
 
         prev = self.gui_state
-        prev_orb = self._shown_orb
         # Done shown at delivery stays put when the cycle reaches IDLE: no
         # replayed check, only an eased width change if a notice replaces it.
         kept_success = new_state == prev == GuiState.SUCCESS
         shown_label = self._label_cache
         self.gui_state = self._shown_state = new_state
         self._sync_geometry()
-        new_orb = self._orb_now()
+        self._orb_now()
         if kept_success and self._label_cache != shown_label:
             self._content_fade = 0.8
         if not kept_success:
@@ -986,13 +998,6 @@ class DictationIndicator(QWidget):
                 self._success_since = now
             self._content_fade = 0.7 if new_state in (
                 GuiState.RECORDING, GuiState.PROCESSING) else 0.8
-        # Cross-fade and pop the disc when what it shows changes (not on same-state noise).
-        # A notice that replaces Done turns the disc amber without redrawing the check.
-        # From fully hidden, _begin_show cancels this: the droplet entrance is enough.
-        if new_orb != prev_orb:
-            self._last_orb = prev_orb
-            self._glyph_fade = 0.0
-
         # The droplet plays only from hidden; an open capsule stays one capsule.
         self._begin_show(now)
 
@@ -1040,6 +1045,7 @@ class DictationIndicator(QWidget):
     def _wake_tick(self) -> None:
         if self._tick.interval() != _ANIM_TICK_MS:
             self._tick.setInterval(_ANIM_TICK_MS)
+            self._last_tick = None  # the wait at the slow interval is not animation time
 
     def _is_static(self, now: float) -> bool:
         """True when every following frame would be pixel-identical to this one.
@@ -1180,7 +1186,7 @@ class DictationIndicator(QWidget):
     def _paint_shadow(self, p: QPainter, pill: QRectF) -> None:
         """Soft neutral drop: many faint layers stand in for a blur (few strong ones band).
 
-        The widest layer stays inside ``_PAD``: 11 px to the sides, 14.5 px below.
+        The widest layer stays inside ``_PAD``: 11 px to the sides, 13 px below.
         """
         for grow, dy, alpha in _SHADOW_LAYERS:
             r = QRectF(pill).adjusted(-grow, dy - grow * 0.5, grow, dy + grow * 0.5)

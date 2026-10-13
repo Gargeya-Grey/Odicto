@@ -488,5 +488,48 @@ class TestWaveform(unittest.TestCase):
             _close(hud)
 
 
+class TestDiscCrossFade(unittest.TestCase):
+    """The disc cross-fades from the disc on screen, whatever changed it."""
+
+    def _open_done(self):
+        app, hud = _hud(state=AppState.PROCESSING, paste_delivered=True, last_status="success")
+        hud._sync_from_app()
+        hud._phase = "open"
+        hud._glyph_fade = 1.0
+        self.assertEqual(hud._orb_now(), "done")
+        return app, hud
+
+    def test_reset_flash_fades_from_done_not_a_stale_disc(self):
+        _, hud = self._open_done()
+        try:
+            hud._do_flash_reset()
+            self.assertEqual(hud._orb_now(), "reset")
+            self.assertEqual(hud._last_orb, "done")
+            self.assertEqual(hud._glyph_fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_a_notice_set_while_processing_still_cross_fades(self):
+        app, hud = self._open_done()
+        try:
+            app.last_status = "ai_fallback"  # main sets it before IDLE, with no notify
+            self.assertEqual(hud._orb_now(), "notice")
+            self.assertEqual(hud._last_orb, "done")
+            self.assertEqual(hud._glyph_fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_waking_from_the_slow_tick_does_not_count_the_wait(self):
+        _, hud = _hud()
+        try:
+            hud._tick.setInterval(250)
+            hud._last_tick = 0.0
+            hud._wake_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+            self.assertIsNone(hud._last_tick)  # the next tick steps one nominal frame
+        finally:
+            _close(hud)
+
+
 if __name__ == "__main__":
     unittest.main()
