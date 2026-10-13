@@ -148,16 +148,28 @@ back to `IDLE` — a real double-finish bug. Separately, `_live_cleanup_done.set
 **Rule adopted: two code blocks are duplicates only if their *difference* is a parameter. If the
 difference is a condition, they are different behaviours that happen to look alike.**
 
-### 3.5 Merging the indicator ring painters — rejected
+### 3.5 HUD paint: one design, checked by eye — no pixel gate
 
-`_draw_fill_ring` and `_draw_dual_ring` look mergeable. They use **different clocks and sweeps**
-(`self._proc_fill` from −90° for `−360°×sweep`, versus `self._t × speed` at a fixed −100°). Same
-for `_paint_compact_content` / `_paint_recording_content`, which use **different divider geometry**
-(`left + glyph_slot + gap*0.4, ±8` versus `left + 96 + 8.0, ±9`).
+The pill follows the Odicto Mobile voice bubble (in the Odicto-Mobile repository:
+`apps/mobile/src/voice.css`, `VoiceControlView.kt`): one status disc (`orb_kind`), one content painter, one spinner. The
+colours in `_Theme` must equal the setup page's CSS tokens; `TestBrandLook` checks that, so the
+desktop pill, the setup page and the phone cannot drift apart silently.
 
-And crucially: **no test paints anything.** Only the genuinely byte-identical `_draw_ai_chip` was
-collapsed. A pixel-hash gate is not a viable substitute — Qt renders differently per platform, so
-the gate would fail on CI for reasons unrelated to the change.
+**No test paints pixels.** A pixel-hash gate is not a viable substitute — Qt renders differently
+per platform, so the gate would fail on CI for reasons unrelated to the change. The tests pin
+what can be pinned without pixels: widths, the size spring (frame-rate independent, no
+overshoot from rest, settles exactly), the easing curves, the disc map, the waveform smoothing, and that a
+finished frame goes static. Check a look change by rendering the widget offscreen
+(`QT_QPA_PLATFORM=offscreen`, `hud.render(QImage)`) and looking at each state.
+
+Every animation rate is per second (`_on_tick` measures `dt`, capped at `_DT_MAX`). A rate per
+tick would run slower whenever the timer is late. Each animated value must still reach its end
+value **exactly** (`min(1.0, …)`, the spring's snap, `pop_scale(1.0) == 1.0`): `_is_static`
+drops a finished pill to the 250 ms tick only when nothing moves.
+
+The shadow layers cost about 40 % of a frame. A settled capsule (open, no drop, both springs
+done) draws them once into `_shadow_cache` and blits the pixmap; a capsule that changes size
+draws them live, because each frame would miss the cache anyway.
 
 ### 3.6 Consolidating the `apply_window_exstyles` no-ops — rejected
 

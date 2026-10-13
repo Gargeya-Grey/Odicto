@@ -413,8 +413,9 @@ maps state plus `last_status` into `BOOTING / RECORDING / PROCESSING / SUCCESS /
 RESET / HIDDEN`. The pill shows Done when the paste key is sent (PROCESSING with
 `paste_delivered is True` maps to SUCCESS), and the clipboard wait still blocks the next
 capture. Auto-hide starts only at IDLE: Done stays about 1.2 s in total, an error 1.5 s. The
-capsule width fits the words on screen; it enters and leaves as a droplet, and every move
-uses `ease_in_out_cubic`.
+capsule width fits the words on screen; it enters and leaves as a droplet (entry on
+`ease_standard`, cubic-bezier(0.2, 0, 0, 1); exit on `ease_accelerate`, and shorter), and a size
+change follows the critically damped `_Spring`. Every animation rate is per second.
 
 ## 7. Single instance — the invariant that keeps typing sane
 
@@ -561,7 +562,7 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 | add an LLM provider | `app/config.py` (`ENV_DEFAULTS` + one row in `_MODEL_ATTR`), `app/refiner.py` (`TextRefiner.__init__` + `refine` + `test_provider`), `app/setup_web.py` (`EDITABLE_KEYS`, the page, `validate_provider_requirements`), `.env.example` |
 | add a speech provider | `app/config.py` (`ENV_DEFAULTS`, `normalize_stt_provider`, `effective_stt_provider`), `app/transcriber.py`, `main.initialize_app`, `app/setup_web.py`, `assets/setup_template.html`, `.env.example` |
 | add a hotkey | `ENV_DEFAULTS`, `config.validate_hotkey_pair`, `main._match_active_chord` and `_bind_hotkeys` |
-| change the HUD look | `app/indicator.py` (glyph and chip drawing) — no test covers pixels, so check it by eye |
+| change the HUD look | `app/indicator.py` (`_Theme`, the status disc, chips, waveform). `_Theme` colours must equal the setup page tokens (`TestBrandLook`). No test covers pixels: render each state offscreen and check it by eye (engineering notes §3.5) |
 | change the setup page | `assets/setup_template.html` for markup/CSS/JS; `app/setup_web.py` only for tokens and handlers |
 | change what the AI is told | `prompt.txt` (private, gitignored); the shipped default is `prompt.txt.example` **and** `DEFAULT_SYSTEM_PROMPT` — keep both in sync |
 | change paste behaviour | `typer.paste_text` and the clipboard helpers |
