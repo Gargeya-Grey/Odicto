@@ -34,9 +34,10 @@ GATE = {
     # that start a process through another spelling of the install folder (3 Windows-only,
     # 3 macOS/Linux-only): 701. Plus 14 HUD tests for the Odicto Mobile look and the
     # per-second motion (brand font and tokens, easing, size spring, waveform), and 3 for
-    # the disc cross-fade and the wake from the slow tick: 718.
-    # Windows discovers 739 (27 Windows-only), macOS/Linux 725.
-    "floor": 718,
+    # the disc cross-fade and the wake from the slow tick: 718. Plus 1 for the cached
+    # shadow of a settled pill: 719.
+    # Windows discovers 740 (27 Windows-only), macOS/Linux 726.
+    "floor": 719,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

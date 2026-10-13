@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -30,7 +31,7 @@ from indicator import (
     _ORB_INSET,
     _RECORDING_WAVE_W,
     _RESIZE_AFTER_TEXT_S,
-    ease_in_out_cubic,
+    cubic_bezier,
     fit_pill_width,
     fit_recording_width,
 )
@@ -68,19 +69,24 @@ def _close(hud) -> None:
     hud.close()
 
 
-class TestEaseCurve(unittest.TestCase):
-    def test_end_points_and_midpoint(self):
-        self.assertEqual(ease_in_out_cubic(0), 0)
-        self.assertEqual(ease_in_out_cubic(1), 1)
-        self.assertEqual(ease_in_out_cubic(0.5), 0.5)
+class TestCubicBezier(unittest.TestCase):
+    """The one easing primitive: CSS cubic-bezier(x1, y1, x2, y2)."""
 
-    def test_slow_start_and_slow_end(self):
-        self.assertLess(ease_in_out_cubic(0.25), 0.25)
-        self.assertGreater(ease_in_out_cubic(0.75), 0.75)
+    def test_the_linear_curve_is_the_identity(self):
+        linear = cubic_bezier(0.0, 0.0, 1.0, 1.0)
+        for i in range(11):
+            self.assertAlmostEqual(linear(i / 10), i / 10, places=6)
+
+    def test_a_symmetric_curve_is_slow_at_both_ends(self):
+        ease_in_out = cubic_bezier(0.42, 0.0, 0.58, 1.0)
+        self.assertAlmostEqual(ease_in_out(0.5), 0.5, places=6)
+        self.assertLess(ease_in_out(0.25), 0.25)
+        self.assertGreater(ease_in_out(0.75), 0.75)
 
     def test_clamps_outside_the_unit_range(self):
-        self.assertEqual(ease_in_out_cubic(-0.5), 0)
-        self.assertEqual(ease_in_out_cubic(1.5), 1)
+        curve = cubic_bezier(0.2, 0.0, 0.0, 1.0)
+        self.assertEqual(curve(-0.5), 0.0)
+        self.assertEqual(curve(1.5), 1.0)
 
 
 class TestPillWidth(unittest.TestCase):
@@ -527,6 +533,26 @@ class TestDiscCrossFade(unittest.TestCase):
             hud._wake_tick()
             self.assertEqual(hud._tick.interval(), 16)
             self.assertIsNone(hud._last_tick)  # the next tick steps one nominal frame
+        finally:
+            _close(hud)
+
+
+class TestShadowCache(unittest.TestCase):
+    def test_a_settled_pill_draws_its_shadow_once_and_a_moving_one_never_caches(self):
+        app, hud = _hud(state=AppState.IDLE, last_status="empty")
+        try:
+            hud._sync_from_app()
+            hud._w_tw.to(hud._pill_w + 60, time.monotonic())  # a size change in progress
+            hud._phase = "open"
+            hud._resize_hold = None
+            hud.grab()
+            self.assertIsNone(hud._shadow_cache)
+            hud._w_tw.snap(hud._pill_w)
+            hud._h_tw.snap(hud._pill_h)
+            hud.grab()
+            first = hud._shadow_cache[1]
+            hud.grab()
+            self.assertIs(hud._shadow_cache[1], first)  # reused, not redrawn
         finally:
             _close(hud)
 

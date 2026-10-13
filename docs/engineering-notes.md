@@ -167,6 +167,10 @@ tick would run slower whenever the timer is late. Each animated value must still
 value **exactly** (`min(1.0, …)`, the spring's snap, `pop_scale(1.0) == 1.0`): `_is_static`
 drops a finished pill to the 250 ms tick only when nothing moves.
 
+The shadow layers cost about 40 % of a frame. A settled capsule (open, no drop, both springs
+done) draws them once into `_shadow_cache` and blits the pixmap; a capsule that changes size
+draws them live, because each frame would miss the cache anyway.
+
 ### 3.6 Consolidating the `apply_window_exstyles` no-ops — rejected
 
 Two identical 3-line no-ops in `linux.py` and `macos.py`. But `indicator.py` does

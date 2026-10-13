@@ -47,6 +47,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QFontMetrics,
     QFontMetricsF,
+    QPixmap,
     QRadialGradient,
 )
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
@@ -158,9 +159,6 @@ class _Theme:
     disc_track = QColor(0xE7, 0xE5, 0xDF, 26)
 
 
-# Spacing scale (px) — keep all layout math on this rhythm
-_S = 8
-
 # Compact layout: [ inset | disc | gap | (waveform | gap)? | label | (gap + chip)? | inset ]
 _COMPACT_H = 44
 _ORB = 30                                  # status disc diameter
@@ -226,14 +224,6 @@ _SUCCESS_HOLD_MS = 1200
 # unchanging frame (a standing error such as "Mic unavailable").
 _ANIM_TICK_MS = 16
 _STATIC_TICK_MS = 250
-
-
-def ease_in_out_cubic(t: float) -> float:
-    """Cubic ease-in-out on 0..1: slow start, slow end."""
-    t = 0 if t < 0 else 1 if t > 1 else t
-    if t < 0.5:
-        return 4 * t * t * t
-    return 1 - ((-2 * t + 2) ** 3) / 2
 
 
 def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> Callable[[float], float]:
@@ -489,6 +479,9 @@ class DictationIndicator(QWidget):
         self._shown_orb: str = "wait"
         self._shown_state: GuiState = GuiState.BOOTING  # painted while leaving
         self._label_cache: str = ""
+        self._dpr: float = 1.0          # device pixel ratio, read once per paint
+        # The shadow of a settled capsule, drawn once: (size key, pixmap).
+        self._shadow_cache: Optional[tuple[tuple[float, ...], QPixmap]] = None
         self._success_since: float = 0.0
         self._resize_hold: Optional[tuple[float, float]] = None
         self._text_in_at: Optional[float] = None
@@ -525,7 +518,6 @@ class DictationIndicator(QWidget):
 
         self.last_app_state = getattr(app, "state", None)
         # Always paint during the entrance, then pause once hidden.
-        self._tick_active = True
         self._begin_show(time.monotonic())
 
     # ------------------------------------------------------------------ window
@@ -563,8 +555,6 @@ class DictationIndicator(QWidget):
         icon = logo_icon()
         if not icon.isNull():
             return icon
-        from PySide6.QtGui import QPixmap
-
         pm = QPixmap(24, 24)
         pm.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pm)
@@ -615,8 +605,6 @@ class DictationIndicator(QWidget):
             families = set(QFontDatabase.families())
             family = next((name for name in _FALLBACK_FAMILIES if name in families),
                           self.font().family())
-        self._font_family = family
-
         # Pixel sizes: the label is 14 px on every DPI, like the setup page's body text.
         self._font = QFont(family)
         self._font.setPixelSize(14)
@@ -635,14 +623,24 @@ class DictationIndicator(QWidget):
         self._font_chip.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self._font_chip.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 104)
 
-    def _chip_width(self, label: str = "AI") -> float:
-        fm = QFontMetrics(self._font_chip)
-        return float(fm.horizontalAdvance(label) + _CHIP_PAD_X * 2)
+        # Metrics are fixed per font: build them once, not on every frame.
+        self._fm = QFontMetrics(self._font)
+        self._fm_chip = QFontMetrics(self._font_chip)
+        self._fm_caption = QFontMetrics(self._font_caption)
+        self._fmf_chip = QFontMetricsF(self._font_chip)
+        self._half_cap = {
+            id(f): QFontMetricsF(f).capHeight() * 0.5
+            for f in (self._font, self._font_chip, self._font_caption)
+        }
 
-    def _target_width(self, label: str, chip_label: str = "") -> int:
-        """Compact width that fits ``label`` (and an optional chip) unclipped."""
-        text_w = QFontMetrics(self._font).horizontalAdvance(label)
-        return fit_pill_width(text_w, self._chip_width(chip_label) if chip_label else 0.0)
+    def _chip_width(self, label: str = "AI") -> float:
+        return float(self._fm_chip.horizontalAdvance(label) + _CHIP_PAD_X * 2)
+
+    def _target_width(self, label: str, chip_label: str = "", recording: bool = False) -> int:
+        """Width that fits ``label``, an optional chip and, when recording, the waveform."""
+        text_w = self._fm.horizontalAdvance(label)
+        chip_w = self._chip_width(chip_label) if chip_label else 0.0
+        return (fit_recording_width if recording else fit_pill_width)(text_w, chip_w)
 
     def _label_for(self, state: GuiState, use_llm: bool) -> str:
         """The label painted now. While leaving, the last shown label stays."""
@@ -688,12 +686,7 @@ class DictationIndicator(QWidget):
         use_llm = bool(getattr(self.app, "use_llm", False))
         label = self._label_for(state, use_llm)
         chip = self._chip_label(state, use_llm)
-        chip_w = self._chip_width(chip) if chip else 0.0
-        text_w = QFontMetrics(self._font).horizontalAdvance(label)
-        if state == GuiState.RECORDING:
-            w = fit_recording_width(text_w, chip_w)
-        else:
-            w = fit_pill_width(text_w, chip_w)
+        w = self._target_width(label, chip, recording=state == GuiState.RECORDING)
         h = self._compact_h
         if self._is_live_layout():
             w, h = max(w, _LIVE_MIN_W), _LIVE_H
@@ -1135,8 +1128,7 @@ class DictationIndicator(QWidget):
     # ----------------------------------------------------------------- paint
     def _snap(self, v: float) -> float:
         """Round to a whole device pixel (crisp edges and baselines at any scale)."""
-        dpr = self.devicePixelRatioF() or 1.0
-        return round(v * dpr) / dpr
+        return round(v * self._dpr) / self._dpr
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         now = time.monotonic()
@@ -1144,6 +1136,7 @@ class DictationIndicator(QWidget):
         if alpha <= 0.001:
             return
 
+        self._dpr = self.devicePixelRatioF() or 1.0
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -1157,17 +1150,19 @@ class DictationIndicator(QWidget):
         pill = QRectF(cx - w * 0.5, bottom - h + dy, w, h)
         self._paint_radius = min(float(self._radius), h * 0.5, w * 0.5)
 
-        self._paint_shadow(p, pill)
-        self._paint_surface(p, pill)
+        shape = QPainterPath()  # one capsule path per frame: fill, rim clip, content clip
+        shape.addRoundedRect(pill, self._paint_radius, self._paint_radius)
+        settled = (self._phase == "open" and dy == 0.0
+                   and self._w_tw.done(now) and self._h_tw.done(now))
+        self._paint_shadow(p, pill, settled)
+        self._paint_surface(p, pill, shape)
         self._paint_border(p, pill)
-        self._paint_top_rim(p, pill)
+        self._paint_top_rim(p, pill, shape)
 
         # Content rides the painted capsule: the disc sits in its left end and the
         # words follow it, revealed by the capsule clip. Nothing stretches.
         p.save()
-        clip = QPainterPath()
-        clip.addRoundedRect(pill, self._paint_radius, self._paint_radius)
-        p.setClipPath(clip)
+        p.setClipPath(shape)
         self._paint_orb(p, pill, alpha)
         content_alpha = alpha * ease_standard(self._content_fade) * words
         if content_alpha > 0.001:
@@ -1183,24 +1178,44 @@ class DictationIndicator(QWidget):
         row_h = min(pill.height(), float(self._compact_h))
         return row_h, pill.top() + row_h * 0.5
 
-    def _paint_shadow(self, p: QPainter, pill: QRectF) -> None:
+    def _paint_shadow(self, p: QPainter, pill: QRectF, settled: bool) -> None:
         """Soft neutral drop: many faint layers stand in for a blur (few strong ones band).
 
         The widest layer stays inside ``_PAD``: 11 px to the sides, 13 px below.
+        The layers are 40 % of a frame, so a settled capsule draws them once into a
+        pixmap and then only blits it; a capsule that changes size draws them live.
         """
+        if not settled:
+            self._shadow_layers(p, pill)
+            return
+        m = float(self._pad)
+        ox, oy = math.floor(pill.left()), math.floor(pill.top())
+        local = QRectF(m + pill.left() - ox, m + pill.top() - oy, pill.width(), pill.height())
+        key = (local.x(), local.y(), local.width(), local.height(), self._paint_radius, self._dpr)
+        if self._shadow_cache is None or self._shadow_cache[0] != key:
+            pm = QPixmap(int(math.ceil((local.right() + m) * self._dpr)),
+                         int(math.ceil((local.bottom() + m) * self._dpr)))
+            pm.setDevicePixelRatio(self._dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            sp = QPainter(pm)
+            sp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            self._shadow_layers(sp, local)
+            sp.end()
+            self._shadow_cache = (key, pm)
+        p.drawPixmap(QPointF(ox - m, oy - m), self._shadow_cache[1])
+
+    def _shadow_layers(self, p: QPainter, pill: QRectF) -> None:
         for grow, dy, alpha in _SHADOW_LAYERS:
             r = QRectF(pill).adjusted(-grow, dy - grow * 0.5, grow, dy + grow * 0.5)
             path = QPainterPath()
             path.addRoundedRect(r, self._paint_radius + grow, self._paint_radius + grow)
             p.fillPath(path, QColor(0, 0, 0, alpha))
 
-    def _paint_surface(self, p: QPainter, pill: QRectF) -> None:
-        path = QPainterPath()
-        path.addRoundedRect(pill, self._paint_radius, self._paint_radius)
+    def _paint_surface(self, p: QPainter, pill: QRectF, shape: QPainterPath) -> None:
         grad = QLinearGradient(pill.topLeft(), pill.bottomLeft())
         grad.setColorAt(0.0, _Theme.surface_top)
         grad.setColorAt(1.0, _Theme.surface_bot)
-        p.fillPath(path, QBrush(grad))
+        p.fillPath(shape, QBrush(grad))
 
     def _paint_border(self, p: QPainter, pill: QRectF) -> None:
         path = QPainterPath()
@@ -1213,17 +1228,14 @@ class DictationIndicator(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-    def _paint_top_rim(self, p: QPainter, pill: QRectF) -> None:
+    def _paint_top_rim(self, p: QPainter, pill: QRectF, shape: QPainterPath) -> None:
         """Faint light along the top edge, faded at both ends."""
-        p.save()
-        clip = QPainterPath()
-        clip.addRoundedRect(pill, self._paint_radius, self._paint_radius)
-        p.setClipPath(clip, Qt.ClipOperation.IntersectClip)
         inset = self._paint_radius * 0.6
         rim_w = pill.width() - inset * 2
         if rim_w <= 0:
-            p.restore()
             return
+        p.save()
+        p.setClipPath(shape, Qt.ClipOperation.IntersectClip)
         rim = QRectF(pill.left() + inset, pill.top() + 1.0, rim_w, 1.0)
         g = QLinearGradient(rim.left(), rim.top(), rim.right(), rim.top())
         g.setColorAt(0.0, QColor(255, 255, 255, 0))
@@ -1400,7 +1412,7 @@ class DictationIndicator(QWidget):
             said = " ".join((getattr(self.app, "live_preview", "") or "").split())[-250:]
             text = said or "Speak, then tap F7 to insert"
             room = int(pill.width() - 32)
-            text = QFontMetrics(self._font_caption).elidedText(text, Qt.TextElideMode.ElideLeft, room)
+            text = self._fm_caption.elidedText(text, Qt.TextElideMode.ElideLeft, room)
             p.setPen(_Theme.text if said else _Theme.muted)
             caption_cy = pill.top() + self._compact_h + (pill.height() - self._compact_h) * 0.5 - 4 + rise
             p.drawText(QPointF(self._snap(pill.left() + 16), self._baseline(self._font_caption, caption_cy)),
@@ -1408,7 +1420,7 @@ class DictationIndicator(QWidget):
 
     def _baseline(self, font: QFont, cy: float) -> float:
         """Baseline that centres capital letters on ``cy`` (the font box is not symmetric)."""
-        return self._snap(cy + QFontMetricsF(font).capHeight() * 0.5)
+        return self._snap(cy + self._half_cap[id(font)])
 
     def _draw_named_chip(self, p: QPainter, x: float, cy: float, w: float, label: str) -> None:
         """Jade tint chip, the setup page's selected-option look."""
@@ -1423,7 +1435,7 @@ class DictationIndicator(QWidget):
         p.drawPath(path)
         p.setFont(self._font_chip)
         p.setPen(_Theme.accent)
-        advance = QFontMetricsF(self._font_chip).horizontalAdvance(label)
+        advance = self._fmf_chip.horizontalAdvance(label)
         p.drawText(QPointF(self._snap(rect.center().x() - advance * 0.5),
                            self._baseline(self._font_chip, cy)), label)
 

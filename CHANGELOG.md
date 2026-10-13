@@ -14,6 +14,7 @@ section as the release notes and refuses a version that has no section.
   - The AI and Live chips are jade.
 - Smoother motion. A size change follows a smooth spring with no bounce, and a change in mid-move carries on from the current speed. The pill opens in about 0.38 s and closes in about 0.34 s (before: 0.64 s and 0.74 s). The disc pops a little when it changes. All animation runs on real time, so it looks the same when the computer is busy.
 - A softer shadow that reads well on light windows.
+- Lighter to draw: a pill that holds still draws its shadow once and reuses it, so each frame costs about 40 % less.
 
 ## [1.0.1] - 2026-10-12
 
