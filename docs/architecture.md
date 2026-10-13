@@ -561,7 +561,7 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 | add an LLM provider | `app/config.py` (`ENV_DEFAULTS` + one row in `_MODEL_ATTR`), `app/refiner.py` (`TextRefiner.__init__` + `refine` + `test_provider`), `app/setup_web.py` (`EDITABLE_KEYS`, the page, `validate_provider_requirements`), `.env.example` |
 | add a speech provider | `app/config.py` (`ENV_DEFAULTS`, `normalize_stt_provider`, `effective_stt_provider`), `app/transcriber.py`, `main.initialize_app`, `app/setup_web.py`, `assets/setup_template.html`, `.env.example` |
 | add a hotkey | `ENV_DEFAULTS`, `config.validate_hotkey_pair`, `main._match_active_chord` and `_bind_hotkeys` |
-| change the HUD look | `app/indicator.py` (glyph and chip drawing) — no test covers pixels, so check it by eye |
+| change the HUD look | `app/indicator.py` (`_Theme`, the status disc, chips, waveform). `_Theme` colours must equal the setup page tokens (`TestBrandLook`). No test covers pixels: render each state offscreen and check it by eye (engineering notes §3.5) |
 | change the setup page | `assets/setup_template.html` for markup/CSS/JS; `app/setup_web.py` only for tokens and handlers |
 | change what the AI is told | `prompt.txt` (private, gitignored); the shipped default is `prompt.txt.example` **and** `DEFAULT_SYSTEM_PROMPT` — keep both in sync |
 | change paste behaviour | `typer.paste_text` and the clipboard helpers |

@@ -22,12 +22,14 @@ from config import Config
 from indicator import (
     GuiState,
     _FIT_SLACK,
+    _GAP_ORB_TEXT,
     _GAP_TEXT_CHIP,
-    _GLYPH_SLOT,
-    _INSET_X,
+    _GAP_WAVE_TEXT,
+    _INSET_R,
+    _ORB,
+    _ORB_INSET,
     _RECORDING_WAVE_W,
     _RESIZE_AFTER_TEXT_S,
-    _S,
     ease_in_out_cubic,
     fit_pill_width,
     fit_recording_width,
@@ -85,7 +87,7 @@ class TestPillWidth(unittest.TestCase):
     def test_pure_fit_grows_with_text_and_chip(self):
         self.assertLess(fit_pill_width(40), fit_pill_width(160))
         self.assertLess(fit_pill_width(160), fit_pill_width(160, chip_w=24))
-        chrome = _INSET_X + _GLYPH_SLOT + _S + _INSET_X
+        chrome = _ORB_INSET + _ORB + _GAP_ORB_TEXT + _INSET_R
         self.assertGreaterEqual(fit_pill_width(160), chrome + 160)
         self.assertGreaterEqual(fit_pill_width(160, 24), chrome + 160 + _GAP_TEXT_CHIP + 24)
 
@@ -99,7 +101,7 @@ class TestPillWidth(unittest.TestCase):
             long_w = hud._target_width(long_label)
             self.assertLess(done, long_w)
             text_w = QFontMetrics(hud._font).horizontalAdvance(long_label)
-            text_room = long_w - (_INSET_X + _GLYPH_SLOT + _S) - _INSET_X
+            text_room = long_w - (_ORB_INSET + _ORB + _GAP_ORB_TEXT) - _INSET_R
             self.assertGreaterEqual(text_room, text_w)
             # The AI chip is reserved only when it is shown.
             self.assertGreater(hud._target_width("Transcribing", "AI"),
@@ -115,8 +117,9 @@ class TestPillWidth(unittest.TestCase):
             hud._sync_from_app()
             text_w = QFontMetrics(hud._font).horizontalAdvance("Listening")
             fit = fit_recording_width(text_w)
-            chrome = _INSET_X + _RECORDING_WAVE_W + 18.0 + _INSET_X + _FIT_SLACK
-            # No reserved width: the capsule is the waveform, the word, and the insets.
+            chrome = (_ORB_INSET + _ORB + _GAP_ORB_TEXT + _RECORDING_WAVE_W + _GAP_WAVE_TEXT
+                      + _INSET_R + _FIT_SLACK)
+            # No reserved width: the capsule is the disc, the waveform, the word, and the insets.
             self.assertEqual(fit, int(math.ceil(chrome + text_w)))
             narrow = fit_recording_width(1.0)
             self.assertLess(narrow, 252)
@@ -305,6 +308,182 @@ class TestHudDeliverySync(unittest.TestCase):
             hud._advance_phase(hud._phase_t0 + 10.0)
             self.assertEqual(hud._phase, "hidden")
             self.assertEqual(hud._appear, 0.0)
+        finally:
+            _close(hud)
+
+
+class TestBrandLook(unittest.TestCase):
+    """The pill shares the Odicto Mobile / setup page tokens and font."""
+
+    def test_brand_font_loads_from_the_install_root(self):
+        import tempfile
+        from pathlib import Path
+
+        from indicator import BRAND_FONT_FAMILY, load_brand_font
+
+        _qt_app()
+        self.assertEqual(load_brand_font(), BRAND_FONT_FAMILY)
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertIsNone(load_brand_font(Path(empty)))  # missing file: system face
+
+    def test_the_pill_paints_with_the_brand_font(self):
+        from indicator import BRAND_FONT_FAMILY
+
+        _, hud = _hud()
+        try:
+            self.assertEqual(hud._font.family(), BRAND_FONT_FAMILY)
+            self.assertEqual(hud._font_chip.family(), BRAND_FONT_FAMILY)
+        finally:
+            _close(hud)
+
+    def test_theme_colours_match_the_setup_page_tokens(self):
+        import re
+        from pathlib import Path
+
+        from indicator import _Theme
+        from paths import ROOT
+
+        css = (Path(ROOT) / "assets" / "setup_template.html").read_text(encoding="utf-8")
+        tokens = dict(re.findall(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6});", css))
+        pairs = {"accent": _Theme.accent, "action": _Theme.action, "action-hi": _Theme.action_hi,
+                 "on-action": _Theme.on_action, "text": _Theme.text, "muted": _Theme.muted,
+                 "raised-2": _Theme.raised, "danger": _Theme.danger, "warn": _Theme.warn,
+                 "canvas": _Theme.ink}
+        for token, colour in pairs.items():
+            self.assertEqual(colour.name(), tokens[token].lower(), token)
+
+    def test_each_state_has_the_phone_disc(self):
+        from indicator import orb_kind
+
+        self.assertEqual(orb_kind(GuiState.RECORDING), "listen")
+        self.assertEqual(orb_kind(GuiState.BOOTING), "wait")
+        self.assertEqual(orb_kind(GuiState.PROCESSING), "wait")
+        self.assertEqual(orb_kind(GuiState.SUCCESS, "success"), "done")
+        self.assertEqual(orb_kind(GuiState.SUCCESS, "clipboard_not_restored"), "notice")
+        self.assertEqual(orb_kind(GuiState.ERROR, "empty"), "error")
+        self.assertEqual(orb_kind(GuiState.RESET), "reset")
+
+
+class TestMotionCurves(unittest.TestCase):
+    def test_brand_easing_decelerates_and_exit_easing_accelerates(self):
+        from indicator import ease_accelerate, ease_standard
+
+        for curve in (ease_standard, ease_accelerate):
+            self.assertEqual(curve(0.0), 0.0)
+            self.assertEqual(curve(1.0), 1.0)
+            self.assertEqual(curve(-1.0), 0.0)
+            self.assertEqual(curve(2.0), 1.0)
+            samples = [curve(i / 50) for i in range(51)]
+            self.assertEqual(samples, sorted(samples))  # never runs backwards
+        self.assertGreater(ease_standard(0.25), 0.5)    # most of the move happens early
+        self.assertLess(ease_accelerate(0.25), 0.2)     # an exit starts gently, ends fast
+
+    def test_exit_is_shorter_than_entry_and_both_are_brief(self):
+        from indicator import _ENTER_S, _LEAVE_S
+
+        self.assertLess(_LEAVE_S, _ENTER_S)
+        self.assertLessEqual(_ENTER_S, 0.4)
+
+    def test_disc_pop_overshoots_once_and_ends_exactly_at_rest(self):
+        from indicator import _POP_FROM, pop_scale
+
+        self.assertAlmostEqual(pop_scale(0.0), _POP_FROM)
+        peak = max(pop_scale(i / 200) for i in range(201))
+        self.assertGreater(peak, 1.0)
+        self.assertLess(peak, 1.03)  # a soft overshoot, not a bounce
+        self.assertEqual(pop_scale(1.0), 1.0)
+
+
+class TestSizeSpring(unittest.TestCase):
+    def _spring(self):
+        from indicator import _Spring
+
+        s = _Spring(100.0)
+        s.value(0.0)
+        s.to(300.0, 0.0)
+        return s
+
+    def test_the_result_does_not_depend_on_the_frame_interval(self):
+        a, b, c = self._spring(), self._spring(), self._spring()
+        for i in range(1, 16):
+            a.value(i * 0.016)
+        b.value(0.24)
+        for t in (0.03, 0.05, 0.11, 0.17, 0.24):
+            c.value(t)
+        self.assertAlmostEqual(a.value(0.24), b.value(0.24), places=6)
+        self.assertAlmostEqual(c.value(0.24), b.value(0.24), places=6)
+
+    def test_size_never_overshoots_and_settles_exactly(self):
+        s = self._spring()
+        values = [s.value(i * 0.01) for i in range(1, 120)]
+        self.assertTrue(all(v <= 300.0 for v in values))
+        self.assertEqual(values, sorted(values))
+        self.assertGreater(s.value(0.33), 297.0)  # within 1 % in about a third of a second
+        self.assertTrue(s.done(1.5))
+        self.assertEqual(s.value(1.5), 300.0)     # exact, so the frame can go static
+
+    def test_retarget_keeps_the_motion_continuous(self):
+        s = self._spring()
+        before = s.value(0.1)
+        s.to(50.0, 0.1)
+        self.assertEqual(s.value(0.1), before)               # no jump at the retarget
+        self.assertGreater(s.value(0.116), before)           # momentum carries on briefly
+        self.assertFalse(s.done(0.1))
+
+
+class TestWaveform(unittest.TestCase):
+    def _recording_hud(self, level):
+        recorder = MagicMock()
+        recorder.get_waveform.side_effect = lambda n: [level] * n
+        app, hud = _hud(state=AppState.RECORDING, recorder=recorder)
+        hud._sync_from_app()
+        return app, hud
+
+    def test_voice_rises_fast_and_falls_slowly(self):
+        app, hud = self._recording_hud(0.5)
+        try:
+            hud._advance_wave(0.05)
+            rise = hud._level
+            self.assertGreater(rise, 0.8 * min(1.0, 0.75 ** 0.7))  # most of the way in 50 ms
+            app.recorder.get_waveform.side_effect = lambda n: [0.0] * n
+            hud._advance_wave(0.05)
+            self.assertGreater(hud._level, 0.5 * rise)  # release is slower than attack
+        finally:
+            _close(hud)
+
+    def test_smoothing_is_the_same_at_any_frame_interval(self):
+        _, one = self._recording_hud(0.4)
+        _, three = self._recording_hud(0.4)
+        try:
+            one._advance_wave(0.048)
+            for _ in range(3):
+                three._advance_wave(0.016)
+            self.assertAlmostEqual(one._level, three._level, places=9)
+            for a, b in zip(one._bars, three._bars):
+                self.assertAlmostEqual(a, b, places=9)
+        finally:
+            _close(one)
+            _close(three)
+
+    def test_centre_bars_move_more_than_end_bars(self):
+        _, hud = self._recording_hud(0.6)
+        try:
+            for _ in range(20):
+                hud._advance_wave(0.016)
+            mid = len(hud._bars) // 2
+            self.assertGreater(hud._bars[mid], 2 * hud._bars[0])
+            self.assertAlmostEqual(hud._bars[0], hud._bars[-1])
+        finally:
+            _close(hud)
+
+    def test_a_broken_recorder_reads_as_silence(self):
+        recorder = MagicMock()
+        recorder.get_waveform.side_effect = RuntimeError("stream gone")
+        _, hud = _hud(state=AppState.RECORDING, recorder=recorder)
+        try:
+            hud._sync_from_app()
+            hud._advance_wave(0.1)
+            self.assertEqual(hud._level, 0.0)
         finally:
             _close(hud)
 

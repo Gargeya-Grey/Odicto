@@ -32,8 +32,10 @@ GATE = {
     # admin switch, resting resource use, the final-review fixes and the idle release of
     # the backup Whisper: 695, the tests that every platform discovers. Plus 6 installer tests
     # that start a process through another spelling of the install folder (3 Windows-only,
-    # 3 macOS/Linux-only): 701. Windows discovers 722 (27 Windows-only), macOS/Linux 708.
-    "floor": 701,
+    # 3 macOS/Linux-only): 701. Plus 14 HUD tests for the Odicto Mobile look and the
+    # per-second motion (brand font and tokens, easing, size spring, waveform): 715.
+    # Windows discovers 736 (27 Windows-only), macOS/Linux 722.
+    "floor": 715,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
