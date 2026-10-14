@@ -59,6 +59,10 @@ GATE = {
             "tests.test_units.*.test_side_exclusive_scan_codes_right_ctrl",
             "tests.test_units.*.test_is_pressed_exclusive_right_ctrl",
             "tests.test_clipboard_safety.*Win*",
+            # GetAsyncKeyState modifiers and the owner's Win32 process settings.
+            "tests.test_responsiveness.TestModifierTruth.*",
+            "tests.test_responsiveness.TestStaleShiftKeepsRawChordRaw.*",
+            "tests.test_responsiveness.TestKeepResponsive.*",
             # macOS forces CPU under WHISPER_DEVICE=auto, so the CUDA->CPU fallback
             # path does not exist there (runs on Windows and Linux).
             "tests.test_units.*.test_whisper_transcriber_loading_fallback",
