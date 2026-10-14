@@ -219,3 +219,8 @@ def terminate_process_tree(proc) -> None:
         kill_process_tree(proc.pid)
     except Exception as e:
         print(f"Warning: Failed to terminate process tree: {e}")
+
+
+def keep_responsive(resident_mb: int = 0) -> list:
+    """Windows-only process settings (see platforms.windows); nothing to do here."""
+    return []

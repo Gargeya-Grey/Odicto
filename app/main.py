@@ -285,6 +285,10 @@ def claim_install(pid_file: str) -> bool:
     if not acquire_single_instance_lock():
         return False
     platforms.kill_other_odicto_processes(pid_file)
+    # Owner only: stay resident and off efficiency cores so a hotkey after hours idle is instant.
+    notes = platforms.keep_responsive()
+    if notes:
+        print("Responsiveness: " + "; ".join(notes) + ".", flush=True)
     return True
 
 

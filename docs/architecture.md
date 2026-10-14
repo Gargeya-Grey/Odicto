@@ -433,11 +433,16 @@ graph TD
     Flock --> Held
     Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
     Held --> Kill["platforms.kill_other_odicto_processes<br/>reap verified orphan script processes"]
-    Kill --> Bind["_bind_hotkeys()"]
+    Kill --> Keep["platforms.keep_responsive()<br/>Windows: above-normal priority, normal memory and I/O priority,<br/>no EcoQoS, 192 MB hard minimum working set"]
+    Keep --> Bind["_bind_hotkeys()"]
     Bind --> Gate{"ensure_can_bind_hotkeys()<br/>lock held AND platforms.lock_is_held()"}
     Gate -->|no| NoHooks["raise, refuse to install hooks"]
     Gate -->|yes| Hooks["platforms.hook_key"]
 ```
+
+**Modifiers come from the OS on Windows.** `platforms.windows.is_pressed` answers `ctrl`, `shift`,
+`alt` and `cmd` from `GetAsyncKeyState`, not from the `keyboard` library's table: a late hook loses
+key-ups, and a stuck Shift turned the raw chord into the AI chord.
 
 **Never install hooks without the lock.** On Windows the same install-scoped name is used,
 so a second copy in the same folder collides while a second *different* install does not.

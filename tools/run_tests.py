@@ -35,9 +35,10 @@ GATE = {
     # 3 macOS/Linux-only): 701. Plus 14 HUD tests for the Odicto Mobile look and the
     # per-second motion (brand font and tokens, easing, size spring, waveform), and 3 for
     # the disc cross-fade and the wake from the slow tick: 718. Plus 1 for the cached
-    # shadow of a settled pill: 719.
-    # Windows discovers 740 (27 Windows-only), macOS/Linux 726.
-    "floor": 719,
+    # shadow of a settled pill: 719. Plus 2 for the owner's process settings at lock time: 721.
+    # Windows discovers 752 (37 Windows-only: 10 more for OS modifier state and the
+    # process settings), macOS/Linux 728.
+    "floor": 721,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -58,6 +59,10 @@ GATE = {
             "tests.test_units.*.test_side_exclusive_scan_codes_right_ctrl",
             "tests.test_units.*.test_is_pressed_exclusive_right_ctrl",
             "tests.test_clipboard_safety.*Win*",
+            # GetAsyncKeyState modifiers and the owner's Win32 process settings.
+            "tests.test_responsiveness.TestModifierTruth.*",
+            "tests.test_responsiveness.TestStaleShiftKeepsRawChordRaw.*",
+            "tests.test_responsiveness.TestKeepResponsive.*",
             # macOS forces CPU under WHISPER_DEVICE=auto, so the CUDA->CPU fallback
             # path does not exist there (runs on Windows and Linux).
             "tests.test_units.*.test_whisper_transcriber_loading_fallback",

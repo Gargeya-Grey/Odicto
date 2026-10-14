@@ -4,6 +4,13 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.1.1] - 2026-10-14
+
+### Fixed
+
+- The hotkey answers at once again after Odicto sat idle while other apps used the memory. Windows had moved almost all of Odicto out of memory (14 MB of 94 MB stayed) and ran it on the slow cores, so the first tap waited seconds for the pill, the microphone dropped audio and speech-to-text took up to 7 s. The admin-mode logon task also started Odicto at below-normal priority. On Windows, Odicto now keeps 192 MB in memory, runs at above-normal priority with normal memory and disk priority, and opts out of power throttling. The log shows a `Responsiveness:` line at start.
+- The raw chord no longer starts AI mode. A late keyboard hook could lose a Shift release, and Odicto then counted Shift as held. On Windows, Ctrl, Shift, Alt and Win now come from Windows' own key state.
+
 ## [1.1.0] - 2026-10-13
 
 ### Changed
