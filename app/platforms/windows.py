@@ -341,3 +341,139 @@ def apply_window_exstyles(widget) -> None:
 
 def hotkey_backend_name() -> str:
     return "keyboard"
+
+
+# Generic modifier names -> virtual keys. Side-specific names keep the keyboard
+# library's scan-code logic (is_pressed_exclusive).
+_MODIFIER_VKS = {
+    "ctrl": (0x11,), "control": (0x11,),
+    "shift": (0x10,),
+    "alt": (0x12,),
+    "cmd": (0x5B, 0x5C), "windows": (0x5B, 0x5C), "win": (0x5B, 0x5C),
+}
+_keyboard_is_pressed = is_pressed  # noqa: F405 - the table-based one from _keyboard
+_user32 = None
+
+
+def _async_key_state():
+    global _user32
+    if _user32 is None:
+        import ctypes
+
+        dll = ctypes.WinDLL("user32")
+        dll.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        dll.GetAsyncKeyState.restype = ctypes.c_short
+        _user32 = dll
+    return _user32.GetAsyncKeyState
+
+
+def is_pressed(key) -> bool:
+    """Modifiers come from the OS key state; other keys from the keyboard library.
+
+    The keyboard library learns key state only from its own hook. When that hook
+    runs late (the process was paged out or starved), Windows skips it for that
+    event, a key-up is lost, and the library reports Shift held until the next
+    Shift press. A stuck Shift turned the raw chord into the AI chord.
+    """
+    vks = _MODIFIER_VKS.get(key.strip().lower()) if isinstance(key, str) else None
+    if vks:
+        try:
+            state = _async_key_state()
+            return any(state(vk) & 0x8000 for vk in vks)
+        except Exception:
+            pass
+    return _keyboard_is_pressed(key)
+
+
+# Process settings for a hotkey app that must answer at once after hours idle.
+_ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+_PROCESS_POWER_THROTTLING = 4  # PROCESS_INFORMATION_CLASS.ProcessPowerThrottling
+_THROTTLE_EXECUTION_SPEED = 0x1
+_THROTTLE_IGNORE_TIMER_RESOLUTION = 0x4
+_PROCESS_MEMORY_PRIORITY = 0  # PROCESS_INFORMATION_CLASS.ProcessMemoryPriority
+_MEMORY_PRIORITY_NORMAL = 5
+_PROCESS_IO_PRIORITY = 33  # PROCESSINFOCLASS.ProcessIoPriority (ntdll)
+_IO_PRIORITY_NORMAL = 2
+_HARDWS_MIN_ENABLE = 0x1
+_HARDWS_MAX_DISABLE = 0x8
+RESIDENT_MIN_MB = 192  # above the owner's peak working set (~140 MB), so nothing hot is trimmed
+
+
+def _kernel32():
+    import ctypes
+
+    return ctypes.WinDLL("kernel32", use_last_error=True)
+
+
+def keep_responsive(resident_mb: int = RESIDENT_MIN_MB) -> list:
+    """Keep the owner fast under memory and CPU pressure. Never raises.
+
+    Without this, Windows pages an idle Odicto out (a 14 MB working set of
+    94 MB private was measured) and runs a windowless background process on
+    efficiency cores. The next hotkey then waits seconds on page-ins, the hook
+    misses key-ups and the mic callback overflows. Call once, as the lock owner.
+    Returns one short note per setting for the log.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    notes = []
+    try:
+        k32 = _kernel32()
+        proc = wintypes.HANDLE(-1)  # GetCurrentProcess() pseudo-handle
+    except Exception as e:
+        return [f"process settings unavailable ({e})"]
+
+    try:
+        k32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k32.SetPriorityClass.restype = wintypes.BOOL
+        ok = k32.SetPriorityClass(proc, _ABOVE_NORMAL_PRIORITY_CLASS)
+        notes.append("priority above normal" if ok else f"priority unchanged (error {ctypes.get_last_error()})")
+    except Exception as e:
+        notes.append(f"priority unchanged ({e})")
+
+    try:
+        class _Throttle(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                        ("StateMask", wintypes.ULONG)]
+
+        # ControlMask names the policies we decide; StateMask 0 turns them off.
+        k32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.SetProcessInformation.restype = wintypes.BOOL
+        ok = False
+        # Windows 10 does not know the timer-resolution flag and refuses the whole call.
+        for mask in (_THROTTLE_EXECUTION_SPEED | _THROTTLE_IGNORE_TIMER_RESOLUTION, _THROTTLE_EXECUTION_SPEED):
+            state = _Throttle(1, mask, 0)
+            if k32.SetProcessInformation(proc, _PROCESS_POWER_THROTTLING, ctypes.byref(state), ctypes.sizeof(state)):
+                ok = True
+                break
+        notes.append("power throttling off" if ok else f"power throttling unchanged (error {ctypes.get_last_error()})")
+    except Exception as e:
+        notes.append(f"power throttling unchanged ({e})")
+
+    # The admin-mode logon task starts Odicto at Task Scheduler priority 7: below-normal
+    # CPU, and low memory and I/O priority, so its pages are trimmed and read back first
+    # and last. Put both back to normal.
+    try:
+        mem = wintypes.ULONG(_MEMORY_PRIORITY_NORMAL)
+        ok = k32.SetProcessInformation(proc, _PROCESS_MEMORY_PRIORITY, ctypes.byref(mem), ctypes.sizeof(mem))
+        io = wintypes.ULONG(_IO_PRIORITY_NORMAL)
+        nt = ctypes.WinDLL("ntdll")
+        nt.NtSetInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG]
+        nt.NtSetInformationProcess.restype = ctypes.c_long
+        io_ok = nt.NtSetInformationProcess(proc, _PROCESS_IO_PRIORITY, ctypes.byref(io), ctypes.sizeof(io)) == 0
+        notes.append("memory and I/O priority normal" if ok and io_ok
+                     else f"memory priority {'normal' if ok else 'unchanged'}, I/O priority {'normal' if io_ok else 'unchanged'}")
+    except Exception as e:
+        notes.append(f"memory and I/O priority unchanged ({e})")
+
+    try:
+        k32.SetProcessWorkingSetSizeEx.argtypes = [wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t, wintypes.DWORD]
+        k32.SetProcessWorkingSetSizeEx.restype = wintypes.BOOL
+        low = int(resident_mb) * 1024 * 1024
+        ok = k32.SetProcessWorkingSetSizeEx(proc, low, low * 4, _HARDWS_MIN_ENABLE | _HARDWS_MAX_DISABLE)
+        notes.append(f"{int(resident_mb)} MB kept resident" if ok
+                     else f"working set unchanged (error {ctypes.get_last_error()})")
+    except Exception as e:
+        notes.append(f"working set unchanged ({e})")
+    return notes

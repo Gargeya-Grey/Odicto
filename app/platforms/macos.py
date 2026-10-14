@@ -20,6 +20,7 @@ from platforms._posix import (  # noqa: F401,F403
     acquire_lock,
     enumerate_odicto_pids,
     kill_other_odicto_processes,
+    keep_responsive,
     kill_process_tree,
     lock_is_held,
     release_lock,

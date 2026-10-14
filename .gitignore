@@ -39,6 +39,7 @@ test_ollama.txt
 # Agent / editor bookkeeping
 .commandcode/
 work/gc-artifacts/
+work/verify/
 
 # Build
 dist/
