@@ -106,6 +106,7 @@ class TestOdicto(unittest.TestCase):
         )
 
     @skipUnless(sys.platform == "win32", "Windows scan-code disambiguation")
+    @patch("platforms.windows._async_key_state", new=MagicMock(side_effect=OSError("no user32")))
     @patch("platforms._keyboard.is_pressed")
     def test_is_pressed_exclusive_right_ctrl(
         self, mock_is_pressed: MagicMock

@@ -37,8 +37,9 @@ GATE = {
     # the disc cross-fade and the wake from the slow tick: 718. Plus 1 for the cached
     # shadow of a settled pill: 719. Plus 2 for the owner's process settings at lock time: 721.
     # Windows discovers 752 (37 Windows-only: 10 more for OS modifier state and the
-    # process settings), macOS/Linux 728.
-    "floor": 721,
+    # process settings), macOS/Linux 728. Plus 12 for OS state of side modifiers, F keys,
+    # AltGr and is_pressed_exclusive: 733. Windows discovers 764, macOS/Linux 740.
+    "floor": 733,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -62,6 +63,8 @@ GATE = {
             # GetAsyncKeyState modifiers and the owner's Win32 process settings.
             "tests.test_responsiveness.TestModifierTruth.*",
             "tests.test_responsiveness.TestStaleShiftKeepsRawChordRaw.*",
+            "tests.test_responsiveness.TestExclusiveSideTruth.*",
+            "tests.test_responsiveness.TestPasteWaitIgnoresStaleSides.*",
             "tests.test_responsiveness.TestKeepResponsive.*",
             # macOS forces CPU under WHISPER_DEVICE=auto, so the CUDA->CPU fallback
             # path does not exist there (runs on Windows and Linux).

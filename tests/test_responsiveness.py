@@ -19,7 +19,9 @@ from config import Config
 
 WINDOWS = sys.platform == "win32"
 APP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app")
-VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "lwin": 0x5B, "rwin": 0x5C}
+VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "lwin": 0x5B, "rwin": 0x5C,
+      "lshift": 0xA0, "rshift": 0xA1, "lctrl": 0xA2, "rctrl": 0xA3, "lalt": 0xA4, "ralt": 0xA5,
+      "f1": 0x70, "f6": 0x75, "f24": 0x87}
 
 
 def fake_os_state(*down):
@@ -51,8 +53,56 @@ class TestModifierTruth(unittest.TestCase):
 
     def test_other_keys_still_use_the_keyboard_library(self):
         self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state()))
-        self.assertTrue(self.win.is_pressed("f6"))
+        self.table.add("a")
+        self.assertTrue(self.win.is_pressed("a"))
         self.assertFalse(self.win.is_pressed("grave"))
+
+    def test_function_keys_follow_the_os_not_a_stale_table(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state()))
+        self.assertFalse(self.win.is_pressed("f6"), "a lost F6 key-up must not keep AI memory")
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("f1", "f24")))
+        self.assertTrue(self.win.is_pressed("F1"))
+        self.assertTrue(self.win.is_pressed("f24"))
+        self.assertFalse(self.win.is_pressed("f6"))
+
+    def test_side_names_follow_the_os_not_a_stale_table(self):
+        self.table.update({"left shift", "right shift", "left alt", "left windows"})
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("rshift", "rwin")))
+        self.assertTrue(self.win.is_pressed("right shift"))
+        self.assertFalse(self.win.is_pressed("left shift"))
+        self.assertFalse(self.win.is_pressed("left alt"))
+        self.assertFalse(self.win.is_pressed("left windows"))
+        self.assertTrue(self.win.is_pressed("right windows"))
+
+    def test_left_and_right_ctrl_are_told_apart(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("ctrl", "rctrl")))
+        self.assertTrue(self.win.is_pressed("right ctrl"))
+        self.assertTrue(self.win.is_pressed("right control"))
+        self.assertFalse(self.win.is_pressed("left ctrl"))
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("ctrl", "lctrl")))
+        self.assertTrue(self.win.is_pressed("left ctrl"))
+        self.assertFalse(self.win.is_pressed("right ctrl"))
+
+    def test_altgr_injected_left_ctrl_defers_to_the_table(self):
+        # AltGr: Windows reports Right Alt and an injected left Ctrl; the library calls it "alt gr".
+        self.stack.enter_context(patch.object(self.win, "_async_key_state",
+                                              fake_os_state("ralt", "alt", "lctrl", "ctrl")))
+        self.assertFalse(self.win.is_pressed("ctrl"), "AltGr alone is not Ctrl")
+        self.assertFalse(self.win.is_pressed("left ctrl"))
+        self.assertTrue(self.win.is_pressed("right alt"))
+        self.table.add("left ctrl")  # a real left Ctrl held with Right Alt
+        self.assertTrue(self.win.is_pressed("left ctrl"))
+
+    def test_a_real_right_ctrl_with_altgr_is_still_ctrl(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state",
+                                              fake_os_state("ralt", "lctrl", "rctrl", "ctrl")))
+        self.assertTrue(self.win.is_pressed("ctrl"))
+        self.assertTrue(self.win.is_pressed("right ctrl"))
+
+    def test_a_failing_os_call_falls_back_for_side_and_function_keys(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", side_effect=OSError("no user32")))
+        self.assertTrue(self.win.is_pressed("f6"))
+        self.assertFalse(self.win.is_pressed("left shift"))
 
     def test_a_failing_os_call_falls_back_to_the_table(self):
         self.stack.enter_context(patch.object(self.win, "_async_key_state", side_effect=OSError("no user32")))
@@ -63,6 +113,58 @@ class TestModifierTruth(unittest.TestCase):
         # Nothing is held while the suite runs headless; the call must work and return a bool.
         self.stack.close()
         self.assertIsInstance(self.win.is_pressed("ctrl"), bool)
+
+
+@unittest.skipUnless(WINDOWS, "Windows backend")
+class TestExclusiveSideTruth(unittest.TestCase):
+    """The legacy AI_MODIFIER path (is_pressed_exclusive) reads the OS state too."""
+
+    def setUp(self):
+        import platforms.windows as win
+        self.win = win
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        # The library's scan-code answer is stale: it still says the key is down.
+        self.library = self.stack.enter_context(
+            patch.object(win, "_keyboard_is_pressed_exclusive", return_value=True))
+
+    def test_a_stale_right_ctrl_does_not_count(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("ctrl", "lctrl")))
+        self.assertFalse(self.win.is_pressed_exclusive("right ctrl"), "left Ctrl alone is not right Ctrl")
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state("ctrl", "rctrl")))
+        self.assertTrue(self.win.is_pressed_exclusive("right ctrl"))
+        self.library.assert_not_called()
+
+    def test_main_reads_the_windows_override(self):
+        import main
+        import platforms
+        self.assertIs(platforms.is_pressed_exclusive, self.win.is_pressed_exclusive)
+        self.assertIs(main.is_pressed_exclusive, self.win.is_pressed_exclusive)
+
+    def test_unmapped_or_failing_keys_use_the_library(self):
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", fake_os_state()))
+        self.assertTrue(self.win.is_pressed_exclusive("alt gr"))
+        self.library.assert_called_once_with("alt gr")
+        self.stack.enter_context(patch.object(self.win, "_async_key_state", side_effect=OSError("no user32")))
+        self.assertTrue(self.win.is_pressed_exclusive("right ctrl"))
+
+
+@unittest.skipUnless(WINDOWS, "Windows backend")
+class TestPasteWaitIgnoresStaleSides(unittest.TestCase):
+    def test_a_stale_side_modifier_does_not_hold_the_paste(self):
+        import platforms.windows as win
+        import typer
+        with patch.object(win, "_keyboard_is_pressed", side_effect=lambda k: k in ("left shift", "right alt")), \
+                patch.object(win, "_async_key_state", fake_os_state()), \
+                patch.object(typer, "force_release_modifiers"), \
+                patch.object(typer.time, "sleep") as sleep:
+            typer._wait_modifiers_up(0.08)
+        sleep.assert_not_called()
+
+    def test_typer_reads_the_windows_is_pressed(self):
+        import platforms.windows as win
+        import typer
+        self.assertIs(typer.is_pressed, win.is_pressed)
 
 
 @unittest.skipUnless(WINDOWS, "Windows backend")
@@ -93,7 +195,7 @@ class TestStaleShiftKeepsRawChordRaw(unittest.TestCase):
         self.stack.enter_context(patch("main.platforms.unhook_all"))
         self.stack.enter_context(patch("main.platforms.lock_is_held", return_value=False))
         # The real Windows is_pressed, over a stale library table and a fake OS state.
-        self.stack.enter_context(patch.object(win, "_keyboard_is_pressed", side_effect=lambda k: k == "shift"))
+        self.stack.enter_context(patch.object(win, "_keyboard_is_pressed", side_effect=lambda k: k in ("shift", "f6")))
         self.stack.enter_context(patch.object(win, "_async_key_state", fake_os_state("ctrl")))
         self.stack.enter_context(patch("main.platforms.is_pressed", win.is_pressed))
         self.app._start_hotkey_worker()
@@ -109,6 +211,13 @@ class TestStaleShiftKeepsRawChordRaw(unittest.TestCase):
         self.assertFalse(self.hooks["grave"](SimpleNamespace(event_type="down")), "the chord is suppressed")
         self.assertTrue(done.wait(1))
         self.assertEqual(chosen, [False], "Ctrl+key with a lost Shift key-up must stay raw dictation")
+
+    def test_a_stale_f6_does_not_keep_ai_memory(self):
+        done = threading.Event()
+        self.app.on_press = lambda use_llm: done.set()
+        self.hooks["grave"](SimpleNamespace(event_type="down"))
+        self.assertTrue(done.wait(1))
+        self.assertEqual(self.app._pressed_mods_at_press, ("ctrl",), "a lost F6 key-up must not join the chord")
 
 
 @unittest.skipUnless(WINDOWS, "Windows backend")

@@ -44,7 +44,10 @@ Set-Location $RepoRoot
 #     or loosened; still 153 tests. test_whisper_transcriber_loading_fallback skips on macOS
 #     only: macOS forces CPU under auto, so its CUDA->CPU path cannot run there (it failed
 #     on macOS CI since 4d8302d). It still runs on Windows and Linux.
-$ExpectedTestUnitsHash = '776D6B6E71F7899EE3B9553F270487AC57DF276F309D68B44703A1CCC9B12D3B'
+# (10) Windows is_pressed_exclusive reads the OS key state first. One patch decorator added
+#     to test_is_pressed_exclusive_right_ctrl makes that OS call fail, so the test still
+#     proves the keyboard-library scan-code fallback. No assertion changed; still 153 tests.
+$ExpectedTestUnitsHash = '5C04DE1DA2204276CCD0C1F5E1368D72C555F358CFB18E0D8A431129E63AF541'
 
 $Script:Failures = @()
 
