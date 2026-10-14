@@ -343,15 +343,24 @@ def hotkey_backend_name() -> str:
     return "keyboard"
 
 
-# Generic modifier names -> virtual keys. Side-specific names keep the keyboard
-# library's scan-code logic (is_pressed_exclusive).
+# Key names -> virtual keys read from the OS key state: modifiers (generic and
+# side-specific) and F1-F24 (CTRL_KEEP_CONTEXT_KEYS). Other names use the keyboard
+# library's table.
+_VK_CONTROL, _VK_LCONTROL, _VK_RCONTROL, _VK_RMENU = 0x11, 0xA2, 0xA3, 0xA5
 _MODIFIER_VKS = {
-    "ctrl": (0x11,), "control": (0x11,),
+    "ctrl": (_VK_CONTROL,), "control": (_VK_CONTROL,),
     "shift": (0x10,),
     "alt": (0x12,),
     "cmd": (0x5B, 0x5C), "windows": (0x5B, 0x5C), "win": (0x5B, 0x5C),
+    "left ctrl": (_VK_LCONTROL,), "left control": (_VK_LCONTROL,),
+    "right ctrl": (_VK_RCONTROL,), "right control": (_VK_RCONTROL,),
+    "left shift": (0xA0,), "right shift": (0xA1,),
+    "left alt": (0xA4,), "right alt": (_VK_RMENU,),
+    "left windows": (0x5B,), "right windows": (0x5C,),
 }
+_MODIFIER_VKS.update({f"f{n}": (0x6F + n,) for n in range(1, 25)})  # VK_F1 0x70 .. VK_F24 0x87
 _keyboard_is_pressed = is_pressed  # noqa: F405 - the table-based one from _keyboard
+_keyboard_is_pressed_exclusive = is_pressed_exclusive  # noqa: F405 - scan-code one from _keyboard
 _user32 = None
 
 
@@ -367,22 +376,51 @@ def _async_key_state():
     return _user32.GetAsyncKeyState
 
 
+def _os_is_pressed(key):
+    """True or False from the OS key state, or None when only the library can tell.
+
+    None for an unmapped name, a failing OS call, and a Ctrl that AltGr may have
+    made: on AltGr layouts Windows injects a left Ctrl down while Right Alt is held,
+    and the OS state cannot tell it from a real one. The library names that
+    injected event "alt gr" and keeps it out of Ctrl.
+    """
+    vks = _MODIFIER_VKS.get(key.strip().lower()) if isinstance(key, str) else None
+    if not vks:
+        return None
+    try:
+        state = _async_key_state()
+
+        def held(vk):
+            return bool(state(vk) & 0x8000)
+
+        if any(held(vk) for vk in vks if vk not in (_VK_CONTROL, _VK_LCONTROL)):
+            return True
+        if not any(held(vk) for vk in vks if vk in (_VK_CONTROL, _VK_LCONTROL)):
+            return False
+        if _VK_CONTROL in vks and held(_VK_RCONTROL):
+            return True
+        return None if held(_VK_RMENU) else True
+    except Exception:
+        return None
+
+
 def is_pressed(key) -> bool:
-    """Modifiers come from the OS key state; other keys from the keyboard library.
+    """Mapped keys come from the OS key state; other keys from the keyboard library.
 
     The keyboard library learns key state only from its own hook. When that hook
     runs late (the process was paged out or starved), Windows skips it for that
-    event, a key-up is lost, and the library reports Shift held until the next
-    Shift press. A stuck Shift turned the raw chord into the AI chord.
+    event, a key-up is lost, and the library reports the key held until its next
+    press. A stuck Shift turned the raw chord into the AI chord; a stuck F6 would
+    keep AI memory on every capture.
     """
-    vks = _MODIFIER_VKS.get(key.strip().lower()) if isinstance(key, str) else None
-    if vks:
-        try:
-            state = _async_key_state()
-            return any(state(vk) & 0x8000 for vk in vks)
-        except Exception:
-            pass
-    return _keyboard_is_pressed(key)
+    pressed = _os_is_pressed(key)
+    return _keyboard_is_pressed(key) if pressed is None else pressed
+
+
+def is_pressed_exclusive(key) -> bool:
+    """The OS state of a side-specific key is already exclusive to that side."""
+    pressed = _os_is_pressed(key)
+    return _keyboard_is_pressed_exclusive(key) if pressed is None else pressed
 
 
 # Process settings for a hotkey app that must answer at once after hours idle.

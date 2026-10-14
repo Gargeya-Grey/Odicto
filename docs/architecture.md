@@ -440,9 +440,11 @@ graph TD
     Gate -->|yes| Hooks["platforms.hook_key"]
 ```
 
-**Modifiers come from the OS on Windows.** `platforms.windows.is_pressed` answers `ctrl`, `shift`,
-`alt` and `cmd` from `GetAsyncKeyState`, not from the `keyboard` library's table: a late hook loses
-key-ups, and a stuck Shift turned the raw chord into the AI chord.
+**Modifiers come from the OS on Windows.** `platforms.windows.is_pressed` and `is_pressed_exclusive`
+answer `ctrl`, `shift`, `alt`, `cmd`, their `left`/`right` names and F1-F24 (the F6 keep key) from
+`GetAsyncKeyState`, not from the `keyboard` library's table: a late hook loses key-ups, and a stuck
+Shift turned the raw chord into the AI chord. Other names, a failing OS call, and a left Ctrl held
+with Right Alt (AltGr injects one) use the library, which names the injected event `alt gr`.
 
 **Never install hooks without the lock.** On Windows the same install-scoped name is used,
 so a second copy in the same folder collides while a second *different* install does not.
