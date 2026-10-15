@@ -39,7 +39,9 @@ GATE = {
     # Windows discovers 752 (37 Windows-only: 10 more for OS modifier state and the
     # process settings), macOS/Linux 728. Plus 12 for OS state of side modifiers, F keys,
     # AltGr and is_pressed_exclusive: 733. Windows discovers 764, macOS/Linux 740.
-    "floor": 733,
+    # Plus 4 for the setup page keeping every API key on Save whatever the AI provider
+    # is: 737.
+    "floor": 737,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
