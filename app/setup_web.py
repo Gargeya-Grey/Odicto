@@ -1206,10 +1206,6 @@ class _Handler(BaseHTTPRequestHandler):
         for key in EDITABLE_KEYS:
             if key in form:
                 updates[key] = form[key][0]
-        if updates.get("LLM_PROVIDER") == "none":
-            updates.pop("META_API_KEY", None)
-            updates.pop("OPENROUTER_API_KEY", None)
-            updates.pop("GEMINI_API_KEY", None)
 
         # prompt.txt is the only live prompt. Matching the shipped default
         # deletes it; any other textarea content writes the private file.
