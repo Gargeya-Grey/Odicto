@@ -120,9 +120,12 @@ retains bounded retries for a device that is not ready at login. Windows logs
 confirmed a Yeti endpoint disappearing and returning while its old stream stayed
 stalled. If callbacks are more than three seconds stale at the next capture,
 start closes the old stream before reopening the same device, then waits at most
-one second for fresh callbacks. Native stream operations are serialized against
-shutdown; an unsuccessful close cannot authorize a second stream. There is no
-background reopening or signal-volume trigger. Status reads never alter input.
+one second for fresh callbacks. The same reconnect runs when the ring holds at least one
+second of input whose peak stays below `AudioRecorder.DEAD_PEAK` (1e-3, about 33 steps of
+16-bit audio): a Yeti stream was seen calling back for 12 hours at 1 to 15 steps while a
+fresh stream on the same device read normally. Native stream operations are serialized
+against shutdown; an unsuccessful close cannot authorize a second stream. There is no
+background reopening: both checks run only at the next hotkey. Status reads never alter input.
 Healthy hotkeys reuse the stream and pre-roll without opening a device.
 Input overflow or a callback gap keeps the captured audio and flags the capture; Stop
 processes it and the HUD shows "Mic gap · check text". Only a dead stream with no audio
@@ -142,8 +145,8 @@ Published readiness is false when callbacks are stale or input is closed; the
 internal initialized state still permits the next hotkey to reconnect input.
 Device name, host API and input peak/RMS are included; last completed capture
 duration and RMS survive ordinary pipeline cleanup. These are magnitude
-statistics, not recorded audio or a speech-quality verdict. Low volume or silence
-never changes the stream. The obsolete status-command-local lock flag is
+statistics, not recorded audio or a speech-quality verdict. Status reads never change
+the stream; only a hotkey press can reconnect a dead-quiet one. The obsolete status-command-local lock flag is
 omitted because it did not describe ownership in the running app. A
 PID mismatch or heartbeat older than ten seconds is reported as stale. This
 proves monitor liveness, not Qt/hook/provider responsiveness. It contains no

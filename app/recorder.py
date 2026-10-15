@@ -29,6 +29,9 @@ class AudioRecorder:
     PRE_ROLL_SECONDS: float = 0.4
     # Callback silence (seconds) that counts as a gap in, or death of, the stream.
     GAP_SECONDS: float = 3.0
+    # Peak (full scale 1.0) below which a whole second of input is a dead endpoint.
+    # About 33 steps of 16-bit audio; room noise on any real mic is higher.
+    DEAD_PEAK: float = 1e-3
 
     def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0) -> None:
         """Initializes the audio recorder and opens the persistent input stream.
@@ -82,6 +85,8 @@ class AudioRecorder:
         self._input_peak = 0.0
         self._device_info = {}
         self._last_capture_signal = None
+        # Set when a dead-quiet reconnect ran; cleared by the next real signal.
+        self._dead_reopened = False
         # Each opened stream gets a generation; only the current one may write.
         # A stream that survived a failed close can never feed the ring/session.
         self._generation = 0
@@ -281,6 +286,8 @@ class AudioRecorder:
             if self.recording and getattr(status, "input_overflow", False):
                 self._session_gap = True
             self._last_callback = now
+            if peak >= self.DEAD_PEAK:
+                self._dead_reopened = False  # signal is back: a later dead spell may reconnect again
             self._callback_count += 1
             self._input_peak = peak
             if status:
@@ -389,9 +396,15 @@ class AudioRecorder:
         with self._stream_lock:
             if self._closed.is_set():
                 raise RuntimeError("Microphone closed; restart Odicto")
-            if not self.recording and time.monotonic() - self._last_callback > self.GAP_SECONDS:
-                # A USB endpoint can return while its old stream stays dead.
-                # Reconnect only on demand, after closing the previous stream.
+            dead_quiet = not self.recording and self._ring_is_dead_quiet()
+            if not self.recording and (
+                time.monotonic() - self._last_callback > self.GAP_SECONDS or dead_quiet
+            ):
+                # A USB endpoint can return while its old stream stays dead,
+                # or keeps calling back with near-zero samples. Reconnect only
+                # on demand, after closing the previous stream.
+                if dead_quiet:
+                    self._dead_reopened = True
                 if self._stream is not None:
                     stream = self._stream
                     # Retire the old stream's generation first: if the driver
@@ -427,6 +440,24 @@ class AudioRecorder:
                 if not self._callback_ready.wait(1.0):
                     raise RuntimeError("Microphone unavailable; reconnect it and try again")
             self._start_capture()
+
+    def _ring_is_dead_quiet(self) -> bool:
+        """True when the last second or more of input is below any live mic's noise floor.
+
+        A stream can stay open and keep its callbacks coming while the endpoint
+        behind it delivers near-zero samples (a fresh stream on the same device
+        then hears normally). A working microphone, even in a silent room, sits
+        well above ``DEAD_PEAK``; quiet speech is far above it. Checked only at
+        hotkey time, on the existing ring, so it never opens a device by itself.
+        """
+        with self._lock:
+            # One reconnect per quiet spell: a muted or noise-gated mic is also
+            # silent after a reopen, and must not reopen on every press.
+            if self._dead_reopened or self._ring_frames < self.sample_rate:
+                return False
+            parts = list(self._ring)  # chunks are never mutated after they are queued
+        peak = max((float(np.max(np.abs(part))) for part in parts if part.size), default=0.0)
+        return peak < self.DEAD_PEAK
 
     def _start_capture(self) -> None:
         with self._lock:
