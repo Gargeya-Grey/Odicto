@@ -750,7 +750,12 @@ bash scripts/posix/run_debug.sh
 
 ## License
 
-Use and modify freely for personal or commercial projects. Attribution appreciated but not required.
+Odicto is open source under the [Apache License 2.0](LICENSE). You can use, change and share it, including commercially, as long as you:
+
+- keep the [LICENSE](LICENSE) and the [NOTICE](NOTICE) file, which credits Gargeya Sharma as the author, with any copy or derivative work you distribute;
+- say clearly which files you changed.
+
+The licence does not give you the right to use the name "Odicto" for your own product. Releases before this licence was added (up to v1.0.1) were published under the earlier note "use and modify freely, attribution appreciated"; this licence applies to the code from this commit on.
 
 ---
 
