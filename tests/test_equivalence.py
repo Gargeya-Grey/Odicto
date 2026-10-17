@@ -60,24 +60,25 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # switch state are now pinned; admin_on and admin_unavailable are new states. Every state
 # was checked for leftover __TOKENS__ and for the test API keys before capture.
 # Review fixes: one status poll loop, and the select search box no longer marks the page dirty.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'b48f385c47d336d5c41418ce43f159c49342a62b53346e0c1d293450092962bf',
- 'provider_meta': '44e49c9be2e601a878b55f43fb0e99f32487443c64c8f2504c9ff94d07a62c46',
- 'provider_openrouter': 'dc63dad2d86b51c39267efa5222f402e889fec4a43cb232a9433b54dc17bbc72',
- 'provider_gemini': '119f6afd707b0870aa18825919a39b31a3ba8fabbf23b90e1303c10cc74a793a',
- 'provider_ollama': 'a1a85ec93442dc5387b6621fd402a5a8002ae8c6d5fbd493a6d10f27649e75bb',
- 'provider_none': 'b48f385c47d336d5c41418ce43f159c49342a62b53346e0c1d293450092962bf',
- 'provider_groq': '694ea0ac35cf8dd521879e6eb89bceff5efb81e4409f70d5bb68f168c9ddafa6',
- 'polish_enabled': '6d0929a6c135ffe729d78ea1b6520149332008d13448db422dc43babf787157c',
- 'history_and_custom': '866a25298f399fda7f8319d61e598bfcedb092d243976351e2f67ec0b3d3edbd',
- 'hotkey_short': '021c11de00631dea34e5c4e0f40b8c376815a83fb0ff8c12cad611ee921b32fa',
- 'stt_gemini': '3f484da7f20894eb012458bf502b64717d64281c5e368d14a49d36e1952fba52',
- 'prompt_from_file': '14b283c658e791703df67b5d167fee12d2c31a0f7001f43ef135ddc47ef9d5a0',
- 'prompt_from_inline_env': '903210be1f58189e4b405edb606f6dad1a88fb40611e3c2b6f77d80d700cf93f',
- 'msg_ok': '073772e8fec8250d872bbac897e64e204d64d1384bc2b374bd84c77496e9c691',
- 'msg_err': 'acd2121f6b8d2ad8db59b8404f19a6d2007e51dc08d33b42ae39244efd616b5a',
- 'msg_neutral': '0333fb47479cce35cbf593b7ecdc6d7987e5b78cbaca516ad9b62d6c707ad2d9',
- 'admin_on': '3a115cfbadd1b8168f575c76a81e4c40a1429a737b71956d6227fefd67c05e93',
- 'admin_unavailable': '3b01237d558ca08ee6d94fa3b749ad1159eae7f26465faf7d0fa23703549f14f'}
+# Select menus render as a fixed layer on <body> so cards and the save bar cannot clip or cover them.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '186f3f3a08b5976076ecc4ef5d3c207708aad8b2579d74994f16332c9d4b4fbe',
+ 'provider_meta': '88763b12b557db2b4ae00264865e624053e64ccd455bdb9b0829ea8ba1bb3c00',
+ 'provider_openrouter': 'a6e0226d38133dedefa084a650040387834d2b43f1c5976478e96c4980a953c4',
+ 'provider_gemini': 'a1e7833276c7a32e15024579e08406e8a53db6972937678f5660f95a417082ae',
+ 'provider_ollama': '1b0f3e8065962e2a33a07637912cc6be9db8dc548269c90ab44ee537c4b3fe2a',
+ 'provider_none': '186f3f3a08b5976076ecc4ef5d3c207708aad8b2579d74994f16332c9d4b4fbe',
+ 'provider_groq': 'fa7602e555208863fc7893d9380746c02f1cf0e255c5663f8b439bee1a4f2883',
+ 'polish_enabled': '68bf6e936120b67a40333b1c308069f77cd9a3e5dc3604ae968ec34fa8212f7f',
+ 'history_and_custom': 'e0148f9596266cf4f7ced91298c17af4f9b015d1bce7c1f8c5ee16349b3f5c1e',
+ 'hotkey_short': '44c03a07a2eeebc8c43164b5df900b5c2215ae41d8d1752209066f7e945aabde',
+ 'stt_gemini': '45761b0d619fa7b8c43afab43334d1d8ed2657494fad18a7394b5e313d141126',
+ 'prompt_from_file': 'eb7e4814dc87ebb544049ad73c8c366e6ee4bbbb78dc5a2229307aa186cb7798',
+ 'prompt_from_inline_env': '6b3f6e76629c0e116bc61f9519e0e6499b941433296d0d74e00a2923ab7cc6f3',
+ 'msg_ok': 'abaf141f4ae135ff0f42e7d9201e4d820196fb6c22bf771f6ace0b9e3ae17a2a',
+ 'msg_err': '4bcebcfb5cb1ef4b424712f017cfc6bfb5886b898a6b653f21d51f96c5c690b9',
+ 'msg_neutral': '83472b8e6e4cf4244e00f6f432f54276688391f3f5e7abaffd86ccb2f14c34e0',
+ 'admin_on': '80607c4d31001addefc5ad6f9bd9057b598a96abeadf6d14a8d80d3e59f2ab00',
+ 'admin_unavailable': 'b1bc3f4d7df0597cf21d534509863b63bd68f5ae8bb6b17a2a5d61c8fb3c7a45'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

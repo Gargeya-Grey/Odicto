@@ -355,13 +355,13 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
 .cselect-trigger .chevron { position: absolute; right: 14px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--muted); transition: transform var(--t-med) var(--ease); }
 .cselect.open .chevron { transform: rotate(180deg); }
 .cselect-menu {
-  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
+  position: fixed; left: 0; top: 0; z-index: 200;
   display: flex; flex-direction: column; padding: 6px; max-height: 320px;
   border: 1px solid var(--line); border-radius: var(--r-control); background: var(--paper);
   box-shadow: var(--shadow);
   animation: menu-in var(--t-fast) var(--ease) backwards;
 }
-.cselect-menu.drop-up { top: auto; bottom: calc(100% + 6px); animation-name: menu-in-up; }
+.cselect-menu.drop-up { animation-name: menu-in-up; }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes menu-in-up { from { opacity: 0; transform: translateY(4px); } }
 .cselect-search { flex: none; padding-bottom: 6px; }
@@ -1486,40 +1486,30 @@ function renderCustomOptions(entry, keepActive) {
   var active = list.querySelector('.cselect-option.active');
   if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
 }
-function menuSpaceBelow(entry) {
-  var rect = entry.trigger.getBoundingClientRect();
-  var space = window.innerHeight - rect.bottom - 12;
-  var bar = el('savebar');
-  if (bar && !bar.hidden) {
-    var bRect = bar.getBoundingClientRect();
-    space = Math.min(space, bRect.top - rect.bottom - 8);
-  }
-  return space;
-}
+// The menu lives on <body> as a fixed layer so no card, row or the save bar can clip or cover it.
 function placeCustomMenu(entry) {
   var menu = entry.menu;
-  menu.classList.remove('drop-up');
-  menu.style.maxHeight = '';
-  var want = 320;
-  var spaceBelow = menuSpaceBelow(entry);
-  if (spaceBelow < want) {
-    var doc = document.documentElement;
-    var canScroll = doc.scrollHeight - window.innerHeight - window.scrollY;
-    var need = Math.min(Math.max(0, want - spaceBelow), Math.max(0, canScroll));
-    if (need > 0) {
-      window.scrollBy(0, need);
-      spaceBelow = menuSpaceBelow(entry);
-    }
-  }
   var rect = entry.trigger.getBoundingClientRect();
-  var spaceAbove = rect.top - 12;
-  if (spaceBelow >= 140) {
-    menu.style.maxHeight = Math.min(want, spaceBelow) + 'px';
-  } else if (spaceAbove >= 260) {
-    menu.classList.add('drop-up');
-    menu.style.maxHeight = Math.min(want, spaceAbove) + 'px';
+  var want = 320;
+  var spaceBelow = window.innerHeight - rect.bottom - 14;
+  var spaceAbove = rect.top - 14;
+  var up = spaceBelow < Math.min(want, 220) && spaceAbove > spaceBelow;
+  var room = Math.max(120, up ? spaceAbove : spaceBelow);
+  menu.classList.toggle('drop-up', up);
+  menu.style.maxHeight = Math.min(want, room) + 'px';
+  menu.style.width = rect.width + 'px';
+  menu.style.left = rect.left + 'px';
+  if (up) {
+    menu.style.top = 'auto';
+    menu.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
   } else {
-    menu.style.maxHeight = Math.max(120, Math.min(want, spaceBelow)) + 'px';
+    menu.style.bottom = 'auto';
+    menu.style.top = (rect.bottom + 6) + 'px';
+  }
+}
+function repositionOpenMenus() {
+  for (var i = 0; i < CUSTOM_SELECTS.length; i++) {
+    if (CUSTOM_SELECTS[i].wrap.classList.contains('open')) placeCustomMenu(CUSTOM_SELECTS[i]);
   }
 }
 function openCustomSelect(entry) {
@@ -1529,6 +1519,7 @@ function openCustomSelect(entry) {
   entry.activeValue = entry.sel.value;
   entry.wrap.classList.add('open');
   entry.trigger.setAttribute('aria-expanded', 'true');
+  if (entry.menu.parentNode !== document.body) document.body.appendChild(entry.menu);
   entry.menu.hidden = false;
   entry.menu.innerHTML = '';
   entry.filterInput = null;
@@ -1620,7 +1611,6 @@ function initCustomSelect() {
       menu.hidden = true;
       menu.addEventListener('click', function (e) { e.stopPropagation(); });
       wrap.appendChild(trigger);
-      wrap.appendChild(menu);
       if (label) label.addEventListener('click', function (e) { e.preventDefault(); trigger.focus(); });
       var entry = { wrap: wrap, sel: sel, trigger: trigger, valueEl: valueEl, menu: menu, activeValue: '', filterInput: null, list: null, visible: [] };
       CUSTOM_SELECTS.push(entry);
@@ -1653,6 +1643,8 @@ function initCustomSelect() {
   document.addEventListener('click', function () {
     for (var i = 0; i < CUSTOM_SELECTS.length; i++) closeCustomSelect(CUSTOM_SELECTS[i], false);
   });
+  window.addEventListener('scroll', repositionOpenMenus, true);
+  window.addEventListener('resize', repositionOpenMenus);
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       for (var i = 0; i < CUSTOM_SELECTS.length; i++) closeCustomSelect(CUSTOM_SELECTS[i], true);
