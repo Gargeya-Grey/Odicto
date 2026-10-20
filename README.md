@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
-  <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
-  <img src="https://img.shields.io/badge/Linux-X11%3B%20Wayland%20limited-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
+  <img src="https://img.shields.io/badge/Windows%2010%2F11-tested-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10/11, tested" />
+  <img src="https://img.shields.io/badge/macOS-untested-808080?style=for-the-badge&logo=apple&logoColor=white" alt="macOS, not yet tested" />
+  <img src="https://img.shields.io/badge/Linux-untested-808080?style=for-the-badge&logo=linux&logoColor=white" alt="Linux, not yet tested" />
   <img src="https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-Whisper%20%7C%20Gemini%203.5%20Transcribe-00C853?style=for-the-badge" alt="Whisper" />
   <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter%20%7C%20Gemini-FF6F00?style=for-the-badge" alt="LLM" />
@@ -11,13 +11,15 @@
 <h1 align="center">Odicto</h1>
 
 <p align="center">
-  <b>Hold a hotkey. Speak. Text appears where your cursor is.</b><br/>
+  <b>Tap a hotkey. Speak. Tap again. Text appears where your cursor is.</b><br/>
   Local Whisper or Gemini 3.5 Transcribe — optional AI replies — quiet glass HUD — private by default.
 </p>
 
 <p align="center">
-  <i>Push-to-talk dictation for any app. Private by default. Fast on GPU.</i>
+  <i>Push-to-talk dictation for the app you are using. Private by default.</i>
 </p>
+
+**Odicto is free, open-source voice typing and dictation for Windows.** Tap a hotkey, speak, tap again, and your words are pasted into the app you are using, such as browsers, editors, chat and terminals. Speech-to-text runs on your own PC with local OpenAI Whisper (via faster-whisper), so your voice is not uploaded. Odicto itself has no telemetry, and the Whisper model is downloaded from Hugging Face. Cloud engines and AI replies are optional and off by default. The default model is English-only. Licensed under Apache-2.0. Tested on Windows 10/11 only; macOS and Linux code exists but is untested (see [Supported platforms](#supported-platforms)).
 
 ---
 
@@ -494,9 +496,9 @@ close the page. `stop_dictation.bat` behaves like start: short on success, open 
 ### Dictate into any app
 
 1. Click into a text field (browser, Notion, VS Code, Discord, ...)  
-2. **Press and hold** the hotkey (default: **Ctrl+\`**)  
+2. **Tap** the hotkey (default: **Ctrl+\`**; hold it instead if `HOTKEY_TOGGLE=false`)  
 3. Speak  
-4. **Release** the key  
+4. **Tap** the key again to stop  
 5. Watch the HUD: **Listening -> Transcribing -> Done**  
 6. Text is pasted at the cursor  
 
