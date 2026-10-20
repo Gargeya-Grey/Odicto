@@ -53,9 +53,11 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 
 | OS | Status |
 |----|--------|
-| **Windows 10 / 11** | Supported |
-| **macOS 12+** | Supported (Accessibility + Input Monitoring permissions required) |
-| **Linux (X11)** | Supported on X11 only when run as **root** (the `keyboard` backend needs euid 0; `input` group membership is not enough). Wayland is limited. |
+| **Windows 10 / 11** | Supported and tested |
+| **macOS 12+** | Implemented, not yet tested by the author (Accessibility + Input Monitoring permissions required) |
+| **Linux (X11)** | Implemented, not yet tested by the author. Works on X11 only when run as **root** (the `keyboard` backend needs euid 0; `input` group membership is not enough). Wayland is limited. |
+
+Odicto has been tested on Windows only. If you try it on macOS or Linux, please open an issue with what worked and what did not.
 
 Notes:
 - **macOS** runs Whisper on CPU. `faster-whisper` does not currently
