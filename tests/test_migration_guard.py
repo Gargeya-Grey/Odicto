@@ -52,6 +52,27 @@ class TestMigrationGuard(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     migration_guard.forward(self.root, ["start"])
 
+    def test_windows_forwarding_rejects_missing_or_modified_powershell_entry(self):
+        self.complete()
+        command = self.fixture.manager.home / "bin/odicto.cmd"
+        command.write_bytes(b"synthetic stable command")
+        marker = self.fixture.manager._read_json(self.fixture.manager.marker)
+        import hashlib
+        marker["launchers"]["bin/odicto.cmd"] = hashlib.sha256(command.read_bytes()).hexdigest()
+        dist.atomic_json(self.fixture.manager.marker, marker)
+        powershell = command.with_suffix(".ps1")
+        for contents in (None, b"unknown owner"):
+            with self.subTest(contents=contents):
+                if contents is not None:
+                    powershell.write_bytes(contents)
+                elif powershell.exists():
+                    powershell.unlink()
+                with patch.object(migration, "sys", SimpleNamespace(platform="win32"), create=True), patch.object(
+                    migration_guard, "sys", SimpleNamespace(platform="win32")
+                ), patch.object(migration_guard.subprocess, "run", side_effect=AssertionError("unowned launcher executed")):
+                    with self.assertRaisesRegex(RuntimeError, "ownership"):
+                        migration_guard.forward(self.root, ["start"])
+
     def test_managed_environment_never_redirects_to_source_receipt(self):
         (self.root / migration.SOURCE_RECEIPT).write_bytes(b'unknown')
         with patch.dict(os.environ, {"ODICTO_MANAGED_HOME": "synthetic-home"}):

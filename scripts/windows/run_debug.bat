@@ -31,7 +31,9 @@ echo Python: %ODICTO_ROOT%\.venv\Scripts\python.exe
 echo Expected hotkeys: Ctrl+` (dictation), Ctrl+Shift+` (AI)
 echo.
 "%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\main.py"
+set "ODICTO_EXIT=%ERRORLEVEL%"
 pause
+exit /b %ODICTO_EXIT%
 
 :managed_forward
 if not exist "%ODICTO_ROOT%\.venv\Scripts\python.exe" (

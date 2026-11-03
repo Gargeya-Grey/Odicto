@@ -129,6 +129,9 @@ without displaying keys. A configured destination or unknown startup entry block
 the operation instead of being overwritten. Windows admin/startup changes may
 require an owner-approved UAC prompt.
 
+If the check reports a legacy custom prompt-file reference, save the prompt in
+the source Setup first. This normalizes it to `prompt.txt` before migration.
+
 On macOS/Linux, retire the source installation's existing login-startup entry
 before migrating. The check reports it when present. Enable the managed entry
 afterward with `odicto autostart`.

@@ -691,7 +691,18 @@ runpy.run_path(str(script), run_name='__main__')
                 atomic_json(request, value)
                 reservation["supervisor_pid"] = os.getpid()
                 atomic_json(self.home / "launch-intent.json", reservation)
-            result = self._launch(directory, self._python(directory), "start", reservation=reservation)
+            if self._ready(directory, self._python(directory)):
+                with file_lock(self.home / "launch-intent.lock"):
+                    current = self._read_json(request)
+                    if (current.get("token") != token or current.get("state") != "claimed"
+                            or not self._pid_alive(current.get("launcher_pid"))):
+                        raise DistributionError("Administrator startup was cancelled")
+                    current["state"] = "released"
+                    atomic_json(request, current)
+                    (self.home / "launch-intent.json").unlink()
+                result = 0
+            else:
+                result = self._launch(directory, self._python(directory), "start", reservation=reservation)
             atomic_json(self.home / ("admin-result-" + token + ".json"), {"token": token, "code": result})
             return result
 
@@ -877,6 +888,23 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     manager = Manager(args.home)
     try:
+        if args.command in {"migrate", "admin"}:
+            current = manager.active()
+            if current is None:
+                raise DistributionError("Install a verified managed release first")
+            directory = manager.release_path(current)
+            python = manager._python(directory)
+            if os.path.normcase(os.path.abspath(sys.executable)) != os.path.normcase(str(python)):
+                forwarded = ["--home", str(manager.home), args.command]
+                if args.command == "migrate":
+                    forwarded += ["--source", str(args.source.expanduser().absolute())]
+                    if args.check:
+                        forwarded.append("--check")
+                else:
+                    forwarded.append(args.setting)
+                return subprocess.run([str(python), str(directory / "tools/distribution/manager.py"), *forwarded],
+                                      cwd=directory, env=manager.environment(),
+                                      **({"creationflags": 0x08000000} if os.name == "nt" else {})).returncode
         if args.command == "check":
             print(latest_release().tag)
             return 0

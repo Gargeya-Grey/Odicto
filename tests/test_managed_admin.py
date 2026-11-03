@@ -79,6 +79,32 @@ class TestManagedAdmin(unittest.TestCase):
             self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
         self.support.start_task.assert_not_called()
 
+    def test_elevated_task_recognizes_owner_hidden_from_medium_readiness_probe(self):
+        import odicto
+        import psutil
+        import time
+        directory = self.directory
+        (self.manager.data / "dictation.pid").write_text("12345")
+        dist.atomic_json(self.manager.data / "dictation-health.json", {"pid": 12345,
+            "updated_at": time.time(), "ready": True, "code_root": str(directory),
+            "launch_token": "b" * 32,
+            "microphone": {"closed": False, "callback_age_s": 0, "callback_count": 1}})
+        owner = MagicMock()
+        owner.create_time.return_value = time.time() - 20
+        owner.cmdline.side_effect = [psutil.AccessDenied(12345), ["python", str(directory / "main.py")]]
+        def readiness(*args):
+            return odicto.cmd_wait_ready(SimpleNamespace(timeout=0, expected_root=str(directory))) == 0
+        def task(home, directory):
+            with patch.object(self.support, "elevated", return_value=True):
+                self.assertEqual(self.manager.admin_task(), 0)
+        self.support.start_task.side_effect = task
+        with patch.object(self.manager, "_ready", side_effect=readiness), patch.object(
+            odicto, "_data_root", return_value=str(self.manager.data)
+        ), patch.object(psutil, "Process", return_value=owner), patch("platforms.base.is_odicto_command", return_value=True):
+            self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+        self.assertEqual(self.manager._read_json(self.manager.home / "admin-request.json")["state"], "released")
+
     def test_stop_uses_stable_quit_identity_without_child_or_task(self):
         self.assertEqual(self.manager.run(["stop"], automatic_updates=False), 0)
         self.support.stop.assert_called_once_with(self.manager, self.directory)
@@ -138,7 +164,7 @@ class TestManagedAdmin(unittest.TestCase):
         child = Child()
         child.stdin = MagicMock(spec=io.BytesIO)
         child.stdin.closed = False
-        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(self.manager, "_ready", return_value=True):
+        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(self.manager, "_ready", side_effect=[False, True]):
             self.assertEqual(self.manager.admin_task(), 0)
         self.assertEqual([call.args[0] for call in child.stdin.write.call_args_list], [b"S", b"R"])
         result = self.manager._read_json(self.manager.home / ("admin-result-" + token + ".json"))
@@ -170,7 +196,7 @@ class TestManagedAdmin(unittest.TestCase):
         child = Child()
         child.stdin = MagicMock(spec=io.BytesIO)
         child.stdin.closed = False
-        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(self.manager, "_pid_alive", side_effect=[True, False]):
+        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(self.manager, "_ready", return_value=False), patch.object(self.manager, "_pid_alive", side_effect=[True, False]):
             self.assertEqual(self.manager.admin_task(), 1)
         self.assertEqual([call.args[0] for call in child.stdin.write.call_args_list], [b"S"])
         child.stdin.close.assert_called_once()

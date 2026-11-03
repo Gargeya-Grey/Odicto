@@ -73,7 +73,7 @@ class TestManagedMigration(unittest.TestCase):
         self.record = {"version": "v1.3.0", "directory": self.release.name, "archive_sha256": "a" * 64}
         dist.atomic_json(self.release / ".odicto-ready.json", self.record)
         dist.atomic_json(self.manager.pointer, self.record)
-        self.launcher = self.manager.home / "bin" / ("odicto.cmd" if os.name == "nt" else "odicto")
+        self.launcher = self.manager.home / "bin" / ("odicto.ps1" if os.name == "nt" else "odicto")
         self.launcher.parent.mkdir()
         self.launcher.write_bytes(b"synthetic stable launcher")
         marker = self.manager._read_json(self.manager.marker)
@@ -150,6 +150,31 @@ class TestManagedMigration(unittest.TestCase):
         self.assertFalse((self.manager.home / "migration.json").exists())
         self.assertFalse((self.source / migration.SOURCE_RECEIPT).exists())
         self.assertEqual((self.manager.data / ".env").read_bytes(), b"SYNTHETIC=owner configured\n")
+
+    def test_missing_source_prompt_does_not_accept_custom_destination_prompt(self):
+        (self.source / "prompt.txt").unlink()
+        target = self.manager.data / "prompt.txt"
+        target.write_bytes(b"destination custom prompt")
+        before = self.inventory()
+        with self.assertRaisesRegex(migration.MigrationError, "already configured"):
+            self.migrate(check=True)
+        self.assertEqual(self.inventory(), before)
+
+    def test_legacy_prompt_reference_blocks_before_any_receipt_or_settings_change(self):
+        (self.source / "prompt.txt").unlink()
+        for value in (b"custom.txt", b"'prompts/private.txt'", b'"C:/other/private.txt"'):
+            with self.subTest(value=value):
+                (self.source / ".env").write_bytes(b"SYSTEM_PROMPT_FILE=" + value + b"\n")
+                before = self.inventory()
+                with self.assertRaisesRegex(migration.MigrationError, "Save.*source Setup"):
+                    self.migrate(check=True)
+                self.assertEqual(self.inventory(), before)
+
+    def test_canonical_prompt_reference_stays_opaque_and_migrates(self):
+        (self.source / ".env").write_bytes(b'SYSTEM_PROMPT_FILE="prompt.txt"\nSYNTHETIC=opaque\xff\n')
+        result = self.migrate()
+        self.assertEqual(result["state"], "complete")
+        self.assertEqual((self.manager.data / ".env").read_bytes(), (self.source / ".env").read_bytes())
 
     def test_configured_prompt_conflict_is_detected_before_any_setting_is_copied(self):
         (self.manager.data / "prompt.txt").write_bytes(b"owner's synthetic prompt")

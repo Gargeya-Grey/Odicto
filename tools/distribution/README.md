@@ -49,6 +49,11 @@ dictation. Keep the printed recovery path and repeat the same command to resume
 an interrupted transaction. Use the managed command afterward. Two installations
 must never run together.
 
+Legacy `SYSTEM_PROMPT_FILE` references must first be normalized by saving the
+prompt in source Setup. Migration checks that reference without displaying
+configuration values and refuses a transfer that could silently select a different
+prompt. A custom destination prompt blocks migration even when the source has none.
+
 macOS/Linux source login-startup entries require owner retirement before
 migration; they are not automatically rewritten. After migration, use
 `odicto autostart` to enable the managed entry.

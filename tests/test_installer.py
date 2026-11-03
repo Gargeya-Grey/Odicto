@@ -105,6 +105,23 @@ if sys.platform == "win32":
         return json.loads(text.splitlines()[-1])
 
     class TestWindowsInstaller(_InstallFolderCase):
+        def test_managed_installer_selects_first_uv_when_path_contains_multiple_executables(self):
+            script = r'''
+function Get-Command {
+    param($Name, $CommandType, $ErrorAction)
+    @([pscustomobject]@{Source='Invoke-FirstUv'}, [pscustomobject]@{Source='Invoke-SecondUv'})
+}
+function Invoke-FirstUv {
+    @{chosen='first';arguments=@($args | ForEach-Object { [string]$_ })} | ConvertTo-Json -Compress
+    $global:LASTEXITCODE=0
+}
+function Invoke-SecondUv { throw 'Wrong PATH executable selected' }
+& $env:ODICTO_MANAGED_INSTALL -HomePath 'synthetic-managed-home'
+'''
+            result = _ps_json(script, ODICTO_MANAGED_INSTALL=str(ROOT / "install-managed.ps1"))
+            self.assertEqual(result, {"chosen": "first", "arguments": ["run", "--python", "3.12",
+                "--no-project", "--no-config", "python", "-", "--home", "synthetic-managed-home"]})
+
         @classmethod
         def setUpClass(cls):
             cls._shared = tempfile.TemporaryDirectory(prefix="odicto-venv-template ")

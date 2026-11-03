@@ -216,6 +216,18 @@ class TestBatFilesRun(unittest.TestCase):
         self.assertEqual(1, code, text)
         self.assertIn("pythonw.exe not found", text)
 
+    def test_normal_debug_exit_never_falls_through_to_background_restart(self):
+        shutil.copy(WINDOWS / "run_debug.bat", self.install / "scripts/windows/run_debug.bat")
+        (self.install / "scripts/windows/stop_dictation.bat").write_text("@exit /b 0\n")
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(self.install / ".venv")],
+                       check=True, capture_output=True, timeout=60)
+        (self.install / "main.py").write_text("from pathlib import Path\nPath('debug-ran').write_text('once')\n")
+        (self.install / "odicto.py").write_text("from pathlib import Path\nPath('unwanted-restart').write_text('restart')\n")
+        code, text = self.run_bat("scripts/windows/run_debug.bat")
+        self.assertEqual(code, 0, text)
+        self.assertEqual((self.install / "debug-ran").read_text(), "once")
+        self.assertFalse((self.install / "unwanted-restart").exists())
+
 
 class TestInstallerShortcuts(unittest.TestCase):
     def test_no_shortcuts_switch_exists_and_the_function_runs_after_the_venv_only_exit(self):

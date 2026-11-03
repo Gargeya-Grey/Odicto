@@ -29,8 +29,11 @@ def inspect(home: Path):
         raise RuntimeError("Startup ownership metadata is a symlink")
     owned = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
     if target.exists() or target.is_symlink():
+        accepted = {owned.get("sha256")}
+        if owned.get("pending") is True:
+            accepted.add(owned.get("previous_sha256"))
         if (target.is_symlink() or owned.get("path") != str(target)
-                or hashlib.sha256(target.read_bytes()).hexdigest() != owned.get("sha256")):
+                or hashlib.sha256(target.read_bytes()).hexdigest() not in accepted):
             raise RuntimeError("The existing startup entry has unknown ownership and was preserved")
     return target, receipt, target.exists()
 
@@ -56,9 +59,15 @@ def configure(home: Path, enabled: bool):
         command = str(launcher).replace("%", "%%")
         contents = f'@echo off\r\nsetlocal DisableDelayedExpansion\r\ncall "{command}" start\r\n'.encode("utf-8")
     target.parent.mkdir(parents=True, exist_ok=True)
+    previous = hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else None
+    ownership = {"path": str(target), "sha256": hashlib.sha256(contents).hexdigest()}
+    pending = ownership | {"pending": True, "previous_sha256": previous}
+    marker = receipt.with_name(receipt.name + ".new-" + uuid.uuid4().hex)
+    marker.write_text(json.dumps(pending), encoding="utf-8")
+    os.replace(marker, receipt)
     temporary = target.with_name(target.name + ".new-" + uuid.uuid4().hex)
     temporary.write_bytes(contents)
     os.replace(temporary, target)
     marker = receipt.with_name(receipt.name + ".new-" + uuid.uuid4().hex)
-    marker.write_text(json.dumps({"path": str(target), "sha256": hashlib.sha256(contents).hexdigest()}), encoding="utf-8")
+    marker.write_text(json.dumps(ownership), encoding="utf-8")
     os.replace(marker, receipt)

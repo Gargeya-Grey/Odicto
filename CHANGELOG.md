@@ -17,6 +17,12 @@ section as the release notes and refuses a version that has no section.
 - The README now focuses on installation, Setup and daily use. Source setup, manual dependencies and advanced configuration moved to `docs/development.md`.
 - Migration guards protect against accidentally launching a retired source checkout alongside the installed application. Unknown files and startup entries remain preserved.
 
+### Fixed
+
+- Windows installation selects the first `uv` executable on PATH even when several are installed.
+- Migration/admin commands use the installed release's dependencies. Startup receipt recovery, legacy prompt checks and launcher ownership checks prevent incomplete or misleading transfers.
+- The elevated task recognizes an existing owner before spawning a child. Closing a normal source debug session no longer falls through into a background restart.
+
 ## [1.2.0] - 2026-11-03
 
 ### Added

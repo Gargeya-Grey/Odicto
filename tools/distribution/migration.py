@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import sys
 from typing import Protocol
 import uuid
 
@@ -189,6 +190,20 @@ def _files(value) -> tuple[MigrationFile, ...]:
 def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> MigrationPlan:
     """Read-only snapshot. Only execution can reserve the required owner leases."""
     source, home = _identity(manager, source)
+    settings = source / ".env"
+    _plain(settings)
+    if settings.exists():
+        with settings.open("rb") as stream:
+            for line in stream:
+                match = re.match(rb"\s*(?:export\s+)?SYSTEM_PROMPT_FILE\s*=\s*(.*?)\s*$", line)
+                if match is None:
+                    continue
+                value = match[1].strip()
+                if value.startswith(b"#") or not value:
+                    continue
+                canonical = rb"(?:(?:['\"])(?:\.[/\\])?prompt\.txt(?:['\"])|(?:\.[/\\])?prompt\.txt|['\"]{2})\s*(?:#.*)?"
+                if re.fullmatch(canonical, value) is None:
+                    raise MigrationError("Save the prompt in source Setup before migration; legacy prompt-file references must be normalized to prompt.txt")
     previous = _record_for(source, home)
     adapter.assert_inactive(source, manager)
     if previous:
@@ -201,10 +216,12 @@ def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> Migra
     files = []
     for name in KNOWN_FILES:
         source_hash = _digest(source / name)
-        if source_hash is None:
-            continue
         destination_hash = _digest(manager.data / name)
         default_hash = _digest(release / (".env.example" if name == ".env" else "prompt.txt.example"))
+        if source_hash is None:
+            if destination_hash is not None and destination_hash != default_hash:
+                raise MigrationError(f"Destination {name} is already configured; no settings were overwritten")
+            continue
         if destination_hash is not None and destination_hash not in {default_hash, source_hash}:
             raise MigrationError(f"Destination {name} is already configured; no settings were overwritten")
         files.append(MigrationFile(name, source_hash, destination_hash))
@@ -325,7 +342,7 @@ def validated_forward(source: Path) -> Path | None:
     managed = _json(home / ".odicto-managed.json")
     if managed.get("schema") != 1 or managed.get("home") != str(home):
         raise MigrationError("The migration destination is no longer an owned managed installation")
-    relative = "bin/odicto.cmd" if os.name == "nt" else "bin/odicto"
+    relative = "bin/odicto.ps1" if sys.platform == "win32" else "bin/odicto"
     launcher = home / relative
     _plain(launcher)
     launchers = managed.get("launchers")

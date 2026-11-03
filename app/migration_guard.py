@@ -32,7 +32,7 @@ def forward(root, arguments):
         raise RuntimeError("Migration receipt could not be validated")
     if sys.platform == "win32":
         command = [os.path.join(os.environ["SystemRoot"], "System32/WindowsPowerShell/v1.0/powershell.exe"),
-                   "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher.with_suffix(".ps1")), *arguments]
+                   "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher), *arguments]
     else:
         command = [str(launcher), *arguments]
     return subprocess.run(command, check=False).returncode

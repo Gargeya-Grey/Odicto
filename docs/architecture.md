@@ -75,6 +75,10 @@ the stable `bin/odicto.ps1 admin-task` command. A private reservation and startu
 pipe bind elevated readiness to the initiating launch. The task has no login
 trigger; `app/managed_autostart.py` owns the single stable login entry. Enabling
 admin mode requires compatible release capabilities during update and rollback.
+The elevated task rechecks readiness before spawning, since a medium-integrity
+caller can be denied access to an existing elevated owner's command line.
+Dependency-bearing migration/admin commands hand off from the bootstrap Python to
+the active release's verified environment before inspecting native ownership.
 
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.

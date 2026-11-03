@@ -73,6 +73,62 @@ class TestManagedAutostart(unittest.TestCase):
         self.assertFalse(self.target.exists())
         self.assertEqual(unknown.read_bytes(), b"keep me")
 
+    def test_interrupted_enable_resumes_before_or_after_entry_replacement(self):
+        self.platform("linux")
+        replace = os.replace
+        for after_replace in (False, True):
+            with self.subTest(after_replace=after_replace):
+                self.receipt.unlink(missing_ok=True)
+                def interrupt(source, target):
+                    if target == self.target:
+                        if after_replace:
+                            replace(source, target)
+                        raise OSError("synthetic startup interruption")
+                    replace(source, target)
+                with patch.object(managed_autostart.os, "replace", side_effect=interrupt):
+                    with self.assertRaisesRegex(OSError, "startup interruption"):
+                        managed_autostart.configure(self.home, True)
+                managed_autostart.configure(self.home, True)
+                expected = self.target.read_bytes()
+                self.assertEqual(json.loads(self.receipt.read_text()), {"path": str(self.target),
+                    "sha256": hashlib.sha256(expected).hexdigest()})
+                managed_autostart.configure(self.home, False)
+
+    def test_pending_receipt_never_authorizes_an_unrelated_entry(self):
+        self.platform("linux")
+        replace = os.replace
+        def interrupt(source, target):
+            if target == self.target:
+                raise OSError("synthetic startup interruption")
+            replace(source, target)
+        with patch.object(managed_autostart.os, "replace", side_effect=interrupt):
+            with self.assertRaises(OSError):
+                managed_autostart.configure(self.home, True)
+        self.target.write_bytes(b"unrelated entry")
+        with self.assertRaisesRegex(RuntimeError, "unknown ownership"):
+            managed_autostart.configure(self.home, True)
+        self.assertEqual(self.target.read_bytes(), b"unrelated entry")
+
+    def test_interrupted_owned_entry_update_can_resume_from_previous_hash(self):
+        self.platform("linux")
+        self.target.parent.mkdir()
+        previous = b"owned earlier startup format"
+        self.target.write_bytes(previous)
+        self.receipt.write_text(json.dumps({"path": str(self.target),
+            "sha256": hashlib.sha256(previous).hexdigest()}))
+        replace = os.replace
+        def interrupt(source, target):
+            if target == self.target:
+                raise OSError("synthetic update interruption")
+            replace(source, target)
+        with patch.object(managed_autostart.os, "replace", side_effect=interrupt):
+            with self.assertRaises(OSError):
+                managed_autostart.configure(self.home, True)
+        self.assertEqual(self.target.read_bytes(), previous)
+        managed_autostart.configure(self.home, True)
+        self.assertNotEqual(self.target.read_bytes(), previous)
+        self.assertNotIn("pending", json.loads(self.receipt.read_text()))
+
     def test_disable_without_existing_entry_is_a_no_op(self):
         managed_autostart.configure(self.home, False)
         self.assertFalse(self.target.exists())

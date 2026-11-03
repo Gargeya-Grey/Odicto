@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 param([string]$HomePath)
 $ErrorActionPreference = 'Stop'
-$uvCommand = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
+$uvCommand = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($uvCommand) {
     $uv = $uvCommand.Source
 } else {
