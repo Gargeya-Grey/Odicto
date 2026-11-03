@@ -25,6 +25,9 @@ def error_summary(error: BaseException) -> str:
             return str(error) or type(error).__name__
     except Exception:
         pass
+    summary = getattr(error, "log_summary", None)  # already safe for the log (LocalFallbackDisabled)
+    if isinstance(summary, str) and summary:
+        return summary
     status = getattr(error, "status_code", None)
     if not isinstance(status, int):
         status = getattr(getattr(error, "response", None), "status_code", None)

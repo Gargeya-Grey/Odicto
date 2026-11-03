@@ -406,6 +406,69 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         self.assertIn('os.environ.pop("ODICTO_LAUNCH_TOKEN", None)', source)
         self.assertNotIn("ODICTO_LAUNCH_TOKEN", os.environ)
 
+    def test_disabled_local_fallback_logs_the_cause_status_not_the_words(self):
+        import http_clients
+        import transcriber
+        from config import Config
+        from types import SimpleNamespace
+        cause = RuntimeError("HTTP 429 my secret words")
+        for cls, owner in ((transcriber.CloudTranscriber, SimpleNamespace(kind="groq")),
+                           (transcriber.GeminiTranscriber, SimpleNamespace())):
+            with self.assertRaises(transcriber.LocalFallbackDisabled) as caught:
+                cls._whisper_fallback(owner, None, str(cause), False, error=cause)
+            self.assertIn("secret words", str(caught.exception))  # the caller keeps the full reason
+            with patch.object(Config, "LOG_TRANSCRIPTS", False):
+                self.assertEqual(http_clients.error_summary(caught.exception), "RuntimeError (HTTP 429)")
+        with self.assertRaises(transcriber.LocalFallbackDisabled) as caught:
+            transcriber.CloudTranscriber._whisper_fallback(SimpleNamespace(kind="groq"), None,
+                                                          "timed out", False)
+        with patch.object(Config, "LOG_TRANSCRIPTS", False):
+            self.assertEqual(http_clients.error_summary(caught.exception), "timed out")
+
+    def test_trim_waits_for_another_process_that_holds_the_log_lock(self):
+        import main as main_mod
+        import session_log
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "dictation.log")
+            Path(path).write_text("OLD-HEAD\n" + "n" * 200 + "\nKEEP\n", encoding="utf-8")
+            program = (
+                "import sys, time; sys.path.insert(0, sys.argv[1]); import session_log\n"
+                "path = sys.argv[2]\n"
+                "with session_log.LogLock(path):\n"
+                "    print('locked', flush=True); time.sleep(0.8)\n"
+                "    open(path, 'a', encoding='utf-8').write('LATE-PEER-LINE\\n')\n"
+            )
+            peer = subprocess.Popen([sys.executable, "-c", program, str(Path(main_mod.__file__).parent), path],
+                                    stdout=subprocess.PIPE)
+            try:
+                self.assertEqual(peer.stdout.readline().strip(), b"locked")
+                started = time.monotonic()
+                with patch.object(main_mod, "_LOG_LOCK", session_log.LogLock(path)), patch.object(
+                    main_mod, "_LOG_MAX_BYTES", 40), patch.object(main_mod, "_LOG_KEEP_BYTES", 30):
+                    main_mod._trim_log(path)
+                waited = time.monotonic() - started
+            finally:
+                peer.wait(timeout=30)
+            text = Path(path).read_text(encoding="utf-8")
+        self.assertGreater(waited, 0.3)
+        self.assertIn("LATE-PEER-LINE", text)
+        self.assertNotIn("OLD-HEAD", text)
+
+    def test_managed_failure_before_main_is_logged(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"ODICTO_MANAGED_HOME": temporary, "ODICTO_LAUNCH_TOKEN": "a" * 32}
+        ), patch.object(odicto, "_data_root", return_value=temporary), patch.object(
+            odicto, "_managed_startup_guard", return_value=None
+        ), patch.object(odicto, "_managed_receipt", side_effect=PermissionError("access denied")), patch(
+            "runpy.run_path"
+        ) as run:
+            with self.assertRaises(PermissionError):
+                odicto.cmd_managed_owner(None)
+            text = Path(temporary, "dictation.log").read_text(encoding="utf-8")
+        run.assert_not_called()
+        self.assertIn("Managed startup failed before main", text)
+        self.assertIn("PermissionError: access denied", text)
+
     def test_only_the_lock_holder_trims_the_shared_log(self):
         import main as main_mod
         trims = []
@@ -420,6 +483,16 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
 
 
 class TestManagedChildProtocol(unittest.TestCase):
+    def setUp(self):
+        # Children inherit this environment. A guard that ends early logs one line to the data
+        # root, so each test points that at its own folder, never at the checkout's real log.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = Path(temporary.name)
+        environment = patch.dict(os.environ, {"ODICTO_DATA_ROOT": temporary.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_guard_does_not_block_normal_interpreter_shutdown(self):
         bootstrap = "import sys;sys.path.insert(0,sys.argv[1]);import odicto;odicto._managed_startup_guard()"
         process = subprocess.Popen([sys.executable, "-c", bootstrap, str(Path(odicto.__file__).parent)],
@@ -483,6 +556,8 @@ class TestManagedChildProtocol(unittest.TestCase):
                              "startup stalled on stdin while the guard waited")
             process.stdin.close()
             self.assertEqual(process.wait(timeout=10), 2, "launcher EOF must still cancel the child")
+            self.assertIn("the launcher ended before readiness",
+                          (self.data_root / "dictation.log").read_text(encoding="utf-8"))
         finally:
             if not process.stdin.closed:
                 process.stdin.close()

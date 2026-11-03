@@ -27,6 +27,8 @@ import time
 from datetime import datetime
 from typing import Optional, TextIO
 
+from session_log import LogLock
+
 
 _LOG_MAX_BYTES = 1_000_000
 _LOG_KEEP_BYTES = 256_000
@@ -35,9 +37,10 @@ _LOG_KEEP_BYTES = 256_000
 class _TimestampWriter:
     """Prefix each log line with a local timestamp (pythonw has no console)."""
 
-    def __init__(self, raw: TextIO) -> None:
+    def __init__(self, raw: TextIO, lock: Optional[LogLock] = None) -> None:
         self._raw = raw
         self._at_bol = True
+        self._lock = lock if lock is not None else contextlib.nullcontext()
 
     def write(self, s: str) -> int:
         if not s:
@@ -50,12 +53,14 @@ class _TimestampWriter:
             else:
                 out.append(line)
             self._at_bol = line.endswith("\n")
-        self._raw.write("".join(out))
+        with self._lock:
+            self._raw.write("".join(out))
         return len(s)
 
     def flush(self) -> None:
         try:
-            self._raw.flush()
+            with self._lock:
+                self._raw.flush()
         except Exception:
             pass
 
@@ -72,19 +77,27 @@ def _session_log_path() -> str:
     return os.path.join(str(DATA_ROOT), "dictation.log")
 
 
+_LOG_LOCK: Optional[LogLock] = None  # set when this process attaches dictation.log
+
+
 def _trim_log(path: str) -> None:
-    """Keep dictation.log from growing without bound across logins."""
+    """Keep dictation.log from growing without bound across logins.
+
+    Runs under the log lock that every writer holds, so no other process can append between
+    the read of the tail and the rewrite (session_log.LogLock).
+    """
     try:
-        if not os.path.exists(path) or os.path.getsize(path) <= _LOG_MAX_BYTES:
-            return
-        with open(path, "rb") as f:
-            f.seek(max(0, os.path.getsize(path) - _LOG_KEEP_BYTES))
-            tail = f.read()
-        nl = tail.find(b"\n")
-        if nl >= 0:
-            tail = tail[nl + 1 :]
-        with open(path, "wb") as f:
-            f.write(tail)
+        with _LOG_LOCK if _LOG_LOCK is not None else contextlib.nullcontext():
+            if not os.path.exists(path) or os.path.getsize(path) <= _LOG_MAX_BYTES:
+                return
+            with open(path, "rb") as f:
+                f.seek(max(0, os.path.getsize(path) - _LOG_KEEP_BYTES))
+                tail = f.read()
+            nl = tail.find(b"\n")
+            if nl >= 0:
+                tail = tail[nl + 1 :]
+            with open(path, "wb") as f:
+                f.write(tail)
     except Exception:
         pass
 
@@ -130,18 +143,21 @@ def attach_pythonw_log() -> None:
     """
     if not (_stdout_is_discarded() or _is_managed_owner()):
         return
-    global _LOG_ATTACHED
+    global _LOG_ATTACHED, _LOG_LOCK
     try:
         path = _session_log_path()
         # No trim here: a second start reaches this before the instance lock and must not
         # rewrite the running owner's log. The lock holder trims (acquire_single_instance_lock).
+        lock = LogLock(path)
         raw = open(path, "a", encoding="utf-8", buffering=1)
-        raw.write(
-            f"----- session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"pid={os.getpid()} -----\n"
-        )
-        raw.flush()
-        wrapped = _TimestampWriter(raw)
+        with lock:
+            raw.write(
+                f"----- session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"pid={os.getpid()} -----\n"
+            )
+            raw.flush()
+        _LOG_LOCK = lock
+        wrapped = _TimestampWriter(raw, lock)
         sys.stdout = wrapped  # type: ignore[assignment]
         sys.stderr = wrapped  # type: ignore[assignment]
         _LOG_ATTACHED = True

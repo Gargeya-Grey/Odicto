@@ -4,6 +4,14 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.4] - 2026-11-04
+
+### Fixed
+
+- Starts that overlap no longer lose log lines. Every process writes `dictation.log` under one lock, and the running app trims the log only while it holds that lock.
+- A managed start that fails before the app loads now writes one line to `dictation.log`, so the launcher's pointer to the log has a record.
+- When a cloud transcription fails and local fallback is off, the log keeps the HTTP status of the cause.
+
 ## [1.2.3] - 2026-11-04
 
 ### Fixed

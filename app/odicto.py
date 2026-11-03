@@ -88,10 +88,17 @@ def _wait_for_pipe_data(descriptor: int) -> None:
     available = wintypes.DWORD()
     while True:
         if not peek(handle, None, 0, None, ctypes.byref(available), None):
-            os._exit(2)  # The launcher closed the pipe or exited.
+            # The launcher closed the pipe or exited; the caller logs and ends the child.
+            raise OSError("the launcher pipe closed")
         if available.value:
             return
         time.sleep(0.05)
+
+
+def _log_early(text: str) -> None:
+    """One line in dictation.log for a managed failure that happens before main attaches it."""
+    from session_log import append_line
+    append_line(os.path.join(_data_root(), "dictation.log"), text)
 
 
 def _managed_startup_guard() -> None:
@@ -110,6 +117,8 @@ def _managed_startup_guard() -> None:
         except BaseException:
             confirmed = False  # Without supervision an unconfirmed child must not keep running.
         if not confirmed:
+            _log_early(f"Managed startup stopped (pid={os.getpid()}): the launcher ended before "
+                       "readiness; exit 2.")
             os._exit(2)
 
     threading.Thread(target=supervise, daemon=True, name="odicto-startup-lease").start()
@@ -120,8 +129,13 @@ def cmd_managed_owner(_args) -> int:
     import runpy
     if not os.environ.get("ODICTO_MANAGED_HOME") or not os.environ.get("ODICTO_LAUNCH_TOKEN"):
         raise RuntimeError("The managed owner command requires its supervising launcher")
-    _managed_startup_guard()
-    _managed_receipt("owner-starting")
+    try:
+        _managed_startup_guard()
+        _managed_receipt("owner-starting")
+    except BaseException as error:
+        _log_early(f"Managed startup failed before main (pid={os.getpid()}): "
+                   f"{type(error).__name__}: {str(error)[:200]}")
+        raise
     runpy.run_path(_main_py(), run_name="__main__")
     return 0
 

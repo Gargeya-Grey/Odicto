@@ -283,6 +283,7 @@ save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page
 | `app/app_state.py` | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
 | `app/platforms/` | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
 | `app/paths.py` | Code root and stable private-data root | `ROOT`, `DATA_ROOT` |
+| `app/session_log.py` | Cross-process lock for `dictation.log` writes and the owner's trim; one-line append for managed failures before `main`; stdlib only | `LogLock`, `append_line` |
 | `app/windows_admin.py` | Admin mode: the switch (`set_admin_mode`), task start and quit-event stop with no UAC, helper fallback; stdlib only at import | `run_if_needed`, `set_admin_mode`, `admin_mode_enabled`, `request_quit`, `start_quit_listener` |
 
 ### 3.1 The platform layer

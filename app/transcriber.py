@@ -685,7 +685,10 @@ class CloudTranscriber(_LocalWhisperFallback):
     ) -> str:
         # `reason` is returned to the caller; the log line names only `error`'s type and status.
         if not allow:
-            raise LocalFallbackDisabled(reason)
+            disabled = LocalFallbackDisabled(reason)
+            # The log line for this failure: the cause's type and status, or our own reason text.
+            disabled.log_summary = error_summary(error) if error is not None else reason
+            raise disabled
         label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
             self.kind, self.kind or "Cloud"
         )
@@ -834,7 +837,10 @@ class GeminiTranscriber(_LocalWhisperFallback):
     ) -> str:
         # `reason` is returned to the caller; the log line names only `error`'s type and status.
         if not allow:
-            raise LocalFallbackDisabled(reason)
+            disabled = LocalFallbackDisabled(reason)
+            # The log line for this failure: the cause's type and status, or our own reason text.
+            disabled.log_summary = error_summary(error) if error is not None else reason
+            raise disabled
         print(f"Gemini STT fallback to Whisper ({error_summary(error) if error is not None else reason})", flush=True)
         return self.local_fallback(audio)
 
