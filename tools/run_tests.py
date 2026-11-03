@@ -43,7 +43,7 @@ GATE = {
     # is: 737.
     # Vocabulary, explicit polish, upgrade safety, rootless X11 and managed updates
     # add coverage on every platform; platform-specific definitions still differ.
-    "floor": 1000,
+    "floor": 1030,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -104,6 +104,23 @@ def _elevation_probe_boundary():
         yield
 
 
+@contextlib.contextmanager
+def _source_migration_boundary():
+    """A migrated checkout must never forward a test into the real installed owner."""
+    import migration_guard
+    original_forward = migration_guard.forward
+    original_check = migration_guard.check_source
+    def bounded(operation):
+        def invoke(root, *args, **kwargs):
+            if Path(root).resolve() == ROOT.resolve():
+                raise AssertionError("Test reached the real source migration boundary; isolate the fixture's routing")
+            return operation(root, *args, **kwargs)
+        return invoke
+    with unittest.mock.patch.object(migration_guard, "forward", side_effect=bounded(original_forward)), \
+            unittest.mock.patch.object(migration_guard, "check_source", side_effect=bounded(original_check)):
+        yield
+
+
 def main() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     for stream in (sys.stdout, sys.stderr):
@@ -122,7 +139,7 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         str(ROOT / "tests"), pattern="test_*.py", top_level_dir=str(ROOT))
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
-    with _elevation_probe_boundary():
+    with _elevation_probe_boundary(), _source_migration_boundary():
         result = runner.run(suite)
 
     problems = []

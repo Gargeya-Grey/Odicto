@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,8 +57,12 @@ class TestProjectLayout(unittest.TestCase):
 
     def test_cli_help_runs_outside_repo_without_starting_app(self):
         with tempfile.TemporaryDirectory() as outside:
+            source = Path(outside) / "source"
+            source.mkdir()
+            shutil.copytree(ROOT / "app", source / "app", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copy2(ROOT / "odicto.py", source / "odicto.py")
             result = subprocess.run(
-                [sys.executable, str(ROOT / "odicto.py"), "--help"],
+                [sys.executable, str(source / "odicto.py"), "--help"],
                 cwd=outside, capture_output=True, text=True, timeout=15,
             )
         self.assertEqual(0, result.returncode, result.stderr)
@@ -67,7 +72,7 @@ class TestProjectLayout(unittest.TestCase):
         original_path = sys.path[:]
         run_launcher = runpy.run_path
         try:
-            with patch("runpy.run_path") as execute, patch("windows_admin.run_if_needed", return_value=None):
+            with patch("migration_guard.forward", return_value=None), patch("runpy.run_path") as execute, patch("windows_admin.run_if_needed", return_value=None):
                 # Invoke the real wrapper while intercepting only application execution.
                 run_launcher(str(ROOT / "main.py"), run_name="__main__")
                 execute.assert_called_once_with(str(ROOT / "app" / "main.py"), run_name="__main__")

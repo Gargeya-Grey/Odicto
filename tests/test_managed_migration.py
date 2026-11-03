@@ -191,6 +191,26 @@ class TestManagedMigration(unittest.TestCase):
                 with self.assertRaisesRegex(migration.MigrationError, "Save.*source Setup"):
                     self.migrate(check=True)
 
+    def test_prompt_validation_is_bound_to_the_exact_recorded_settings_bytes(self):
+        settings = self.source / ".env"
+        (self.source / "prompt.txt").unlink()
+        original_digest = migration._digest
+        for check in (True, False):
+            with self.subTest(check=check):
+                settings.write_bytes(b"SYSTEM_PROMPT_FILE=prompt.txt\n")
+                changed = [False]
+                def concurrent_edit(path):
+                    if path == settings and not changed[0]:
+                        changed[0] = True
+                        settings.write_bytes(b"SYSTEM_PROMPT_FILE=custom-legacy.txt\n")
+                    return original_digest(path)
+                with patch.object(migration, "_digest", side_effect=concurrent_edit):
+                    with self.assertRaisesRegex(migration.MigrationError, "changed|source Setup"):
+                        self.migrate(check=check)
+                self.assertFalse((self.manager.home / "migration.json").exists())
+                self.assertFalse((self.source / migration.SOURCE_RECEIPT).exists())
+                self.assertFalse((self.manager.data / ".env").exists())
+
     def test_legacy_prompt_reference_blocks_before_any_receipt_or_settings_change(self):
         (self.source / "prompt.txt").unlink()
         for value in (b"custom.txt", b"'prompts/private.txt'", b'"C:/other/private.txt"'):

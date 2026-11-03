@@ -887,6 +887,9 @@ class TestRootBootstrap(unittest.TestCase):
     """Root main.py decides on elevation after the path insert and before the app runs."""
 
     def setUp(self):
+        migration = patch("migration_guard.forward", return_value=None)
+        migration.start()
+        self.addCleanup(migration.stop)
         saved = list(sys.path)
         self.addCleanup(lambda: sys.path.__setitem__(slice(None), saved))
         self.real_run_path = runpy.run_path

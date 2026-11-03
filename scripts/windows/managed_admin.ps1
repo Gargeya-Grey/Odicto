@@ -158,7 +158,7 @@ function Inspect-Source {
     if ($task) {
         $problems = @(Get-TaskMismatch $task $sid (Join-Path $SourceRoot '.venv\Scripts\pythonw.exe') (Join-Path $SourceRoot 'main.py') $SourceRoot)
         if ($problems.Count -eq 0) { $result.source_task=$true; $result.autostart=$true }
-        elseif ($result.admin) { throw 'Source administrator task ownership cannot be established; it was preserved' }
+        else { throw "Source startup task 'Odicto' ownership or settings cannot be established; it was preserved. Inspect and retire it in Task Scheduler before migrating, then enable managed autostart if wanted." }
     }
     $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Odicto.lnk'
     if (Test-Path -LiteralPath $lnk) {

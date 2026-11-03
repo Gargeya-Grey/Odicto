@@ -282,7 +282,8 @@ class TestKeepResponsive(unittest.TestCase):
 class TestOwnerAppliesSettings(unittest.TestCase):
     def test_claim_install_applies_and_logs_once_the_lock_is_held(self):
         import main
-        with patch.object(main, "acquire_single_instance_lock", return_value=True), \
+        with patch("migration_guard.check_source", return_value=None), \
+                patch.object(main, "acquire_single_instance_lock", return_value=True), \
                 patch.object(main.platforms, "kill_other_odicto_processes"), \
                 patch.object(main.platforms, "keep_responsive", return_value=["a", "b"]) as keep, \
                 patch("builtins.print") as out:

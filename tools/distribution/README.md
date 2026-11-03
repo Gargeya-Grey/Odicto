@@ -49,6 +49,11 @@ dictation. Keep the printed recovery path and repeat the same command to resume
 an interrupted transaction. Use the managed command afterward. Two installations
 must never run together.
 
+Only the verified source task shape can be retired automatically. Older limited
+login tasks and changed task settings block preflight, including when no source
+shortcut exists. The owner must inspect and retire that task, then enable managed
+autostart if desired.
+
 Legacy `SYSTEM_PROMPT_FILE` references must first be normalized by saving the
 prompt in source Setup. Migration checks that reference without displaying
 configuration values and refuses a transfer that could silently select a different

@@ -30,6 +30,9 @@ def forward(root, arguments):
     launcher = validated_forward(root)
     if launcher is None:
         raise RuntimeError("Migration receipt could not be validated")
+    if not arguments:
+        raise RuntimeError("This source install was migrated. Use the installed odicto command with an explicit action")
+    arguments = ["run", *arguments]
     if sys.platform == "win32":
         command = [os.path.join(os.environ["SystemRoot"], "System32/WindowsPowerShell/v1.0/powershell.exe"),
                    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher), *arguments]

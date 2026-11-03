@@ -8,6 +8,10 @@ Installed releases live outside the checkout. Once a source checkout has been
 migrated, use the installed `odicto` command for daily operation. A development
 runtime and an installed runtime must not run together.
 
+The migrated checkout's lifecycle commands forward to the installed app. Use it
+for edits and tests. For a deliberate source runtime, use a separate unmigrated
+checkout and stop the installed owner first. Retain the migration receipts.
+
 Agents on a machine with an existing Odicto installation must follow
 [AGENTS.md](../AGENTS.md) and the project's verification skill. The owner controls
 live starts, stops, migration, UAC and Setup Save on that machine.

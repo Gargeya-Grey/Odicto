@@ -285,7 +285,7 @@ class TestReliability(unittest.TestCase):
     def test_orphan_sweep_only_runs_after_exclusive_ownership(self):
         import main
         calls = []
-        with patch.object(main, "acquire_single_instance_lock", side_effect=lambda: calls.append("lock") or True), patch.object(
+        with patch("migration_guard.check_source", return_value=None), patch.object(main, "acquire_single_instance_lock", side_effect=lambda: calls.append("lock") or True), patch.object(
             main.platforms, "kill_other_odicto_processes", side_effect=lambda path: calls.append("sweep")
         ):
             self.assertTrue(main.claim_install("unused.pid"))

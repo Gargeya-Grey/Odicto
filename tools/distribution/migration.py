@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -213,8 +214,10 @@ def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> Migra
     _plain(settings)
     if settings.exists():
         from dotenv.parser import parse_stream
+        snapshot = settings.read_bytes()
+        validated_settings_hash = hashlib.sha256(snapshot).hexdigest()
         reference = ""
-        with settings.open("r", encoding="utf-8", errors="surrogateescape") as stream:
+        with io.StringIO(snapshot.decode("utf-8", errors="surrogateescape")) as stream:
             for binding in parse_stream(stream):
                 if binding.error:
                     raise MigrationError("Save settings in source Setup before migration; the configuration syntax could not be verified")
@@ -222,6 +225,8 @@ def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> Migra
                     reference = (binding.value or "").strip()
         if reference and reference not in {"prompt.txt", "./prompt.txt", ".\\prompt.txt"}:
             raise MigrationError("Save the prompt in source Setup before migration; legacy prompt-file references must be normalized to prompt.txt")
+    else:
+        validated_settings_hash = None
     preference = adapter.inspect(source, manager)
     if not isinstance(preference, StartupPreference):
         raise MigrationError("The startup adapter did not return a typed preference")
@@ -229,6 +234,8 @@ def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> Migra
     files = []
     for name in KNOWN_FILES:
         source_hash = _digest(source / name)
+        if name == ".env" and source_hash != validated_settings_hash:
+            raise MigrationError("Source settings changed during validation; close the editor and retry migration")
         destination_hash = _digest(manager.data / name)
         default_hash = _digest(release / (".env.example" if name == ".env" else "prompt.txt.example"))
         if source_hash is None:

@@ -44,6 +44,18 @@ class TestMigrationGuard(unittest.TestCase):
             self.assertTrue(any(str(self.fixture.manager.home / "bin") in part for part in launched))
             self.assertFalse(any(str(self.root) in part for part in launched))
 
+    def test_source_status_keeps_application_runtime_diagnostics(self):
+        self.complete()
+        with patch.object(migration_guard.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(migration_guard.forward(self.root, ["status"]), 0)
+        self.assertEqual(run.call_args.args[0][-2:], ["run", "status"])
+
+    def test_empty_legacy_arguments_never_become_an_implicit_start(self):
+        self.complete()
+        with patch.object(migration_guard.subprocess, "run", side_effect=AssertionError("implicit start")):
+            with self.assertRaisesRegex(RuntimeError, "installed"):
+                migration_guard.forward(self.root, [])
+
     def test_unknown_or_pending_receipt_never_launches(self):
         marker = self.root / migration.SOURCE_RECEIPT
         for contents in (b'{}', b'{"schema":1,"state":"pending"}', b'not-json'):
@@ -99,6 +111,35 @@ class TestMigrationGuard(unittest.TestCase):
         self.assertLess(text.index(".odicto-migration.json"), text.index(".env"))
         self.assertIn("goto :managed_forward", text)
         self.assertIn("odicto.py\" %ODICTO_FORWARD%", text)
+
+
+class TestLifecycleFixtureIsolation(unittest.TestCase):
+    def test_gate_blocks_real_source_routing_without_opening_receipts(self):
+        from tools import run_tests
+        with run_tests._source_migration_boundary():
+            for operation, arguments in ((migration_guard.forward, (run_tests.ROOT, ["start"])),
+                                         (migration_guard.check_source, (run_tests.ROOT,))):
+                with self.assertRaisesRegex(AssertionError, "real source migration boundary"):
+                    operation(*arguments)
+
+    def test_lifecycle_fixtures_stay_inside_their_mocked_owner_boundaries(self):
+        from tools import run_tests
+        from tests.test_reliability import TestReliability
+        from tests.test_responsiveness import TestOwnerAppliesSettings
+        from tests.test_setup_lifecycle import OneServerPerComputerTests
+        from tests.test_layout import TestProjectLayout
+        from tests.test_windows_admin import TestRootBootstrap
+        cases = [TestReliability("test_orphan_sweep_only_runs_after_exclusive_ownership"),
+                 TestOwnerAppliesSettings("test_claim_install_applies_and_logs_once_the_lock_is_held"),
+                 OneServerPerComputerTests("test_a_second_launch_shows_the_open_page"),
+                 TestProjectLayout("test_main_launcher_resolves_code_without_binding_hooks"),
+                 TestRootBootstrap("test_unconfigured_start_runs_the_app_after_the_admin_check")]
+        result = unittest.TestResult()
+        with run_tests._source_migration_boundary():
+            for case in cases:
+                case.run(result)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.failures, [])
 
 
 if __name__ == "__main__":

@@ -438,7 +438,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:ODICTO_MANAGED_HELPER,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw ($errors | Out-String) }
-$wanted=@('Assert-ManagedTask','ConvertTo-UserSid','Test-EnumIs','Test-ZeroTime','Get-TaskMismatch')
+$wanted=@('Assert-ManagedTask','ConvertTo-UserSid','Test-EnumIs','Test-ZeroTime','Get-TaskMismatch','Inspect-Source')
 $defs=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $n.Name},$true))
 if($defs.Count -ne $wanted.Count) { throw 'Missing pure ownership policy' }
 foreach($definition in $defs) { Invoke-Expression $definition.Extent.Text }
@@ -482,6 +482,27 @@ $source.Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MS
 if(@(Get-TaskMismatch $source $sid 'C:\Source\.venv\Scripts\pythonw.exe' 'C:\Source\main.py' 'C:\Source').Count) { throw 'Owned source task rejected' }
 $source.Actions[0].WorkingDirectory='C:\Other'
 if(-not @(Get-TaskMismatch $source $sid 'C:\Source\.venv\Scripts\pythonw.exe' 'C:\Source\main.py' 'C:\Source').Count) { throw 'Unrelated source task accepted' }
+$source.Actions[0].WorkingDirectory='C:\Source'
+$source.Principal.RunLevel='Limited'
+$source.Triggers[0].Delay='PT15S'
+$script:SourceRoot='C:\Source'
+$script:FakeSourceTask=$source
+function Read-Task { return $script:FakeSourceTask }
+function Test-Path {
+    param($LiteralPath,$PathType)
+    if($LiteralPath -like '*.lnk') { return $script:FakeShortcutPresent }
+    return $false
+}
+function Test-OwnShortcut { return $true }
+foreach($present in @($false,$true)) {
+    $script:FakeShortcutPresent=$present
+    $refused=$false
+    try { $null=Inspect-Source } catch {
+        if($_.Exception.Message -notmatch 'Source.*task.*preserved') { throw }
+        $refused=$true
+    }
+    if(-not $refused) { throw 'Unsupported limited source login task was ignored' }
+}
 'FAKE OWNERSHIP PASS'
 '''
         environment = dict(os.environ, ODICTO_MANAGED_HELPER=str(ROOT / "scripts/windows/managed_admin.ps1"))

@@ -129,6 +129,10 @@ without displaying keys. A configured destination or unknown startup entry block
 the operation instead of being overwritten. Windows admin/startup changes may
 require an owner-approved UAC prompt.
 
+An older or unrecognized Windows login task blocks migration. Inspect its action
+in Task Scheduler before retiring it, then use `odicto autostart` to enable the
+managed startup entry if wanted.
+
 If the check reports a legacy custom prompt-file reference, save the prompt in
 the source Setup first. This normalizes it to `prompt.txt` before migration.
 
@@ -142,6 +146,10 @@ migration command again to resume the recorded transaction.
 After migration, use the same `odicto setup`, `odicto start` and `odicto update`
 commands as a new installation. Keep the source checkout for development. Run one
 installation at a time.
+
+The old checkout's supported launch commands now forward to the installed app.
+You can edit code and run tests there. A deliberate source runtime needs a separate
+unmigrated checkout, after stopping the installed app.
 
 ## Supported platforms
 

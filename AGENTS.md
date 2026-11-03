@@ -8,6 +8,12 @@ below is for development and disposable CI. See `docs/development.md` for manual
 dependencies and advanced source configuration. On an owner's machine, the project
 verification skill governs live migration, UAC and application lifecycle actions.
 
+The test gate rejects routing through the real checkout's migration boundary.
+Lifecycle fixtures must use isolated roots or mock routing when they test another
+component. `tests/test_migration_guard.py` exercises the real guards on owned
+fixtures and checks fixture containment. A migrated checkout must never make a
+test forward into the installed runtime.
+
 > **Before changing code, read [`docs/architecture.md`](docs/architecture.md)** — the canonical
 > module map, diagram set, "where do I change X?" cookbook, and the invariants not to break.
 > [`docs/engineering-notes.md`](docs/engineering-notes.md) records why the code is shaped this way,

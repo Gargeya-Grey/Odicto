@@ -446,7 +446,9 @@ class OneServerPerComputerTests(unittest.TestCase):
 
     def test_a_second_launch_shows_the_open_page(self) -> None:
         opened = mock.Mock()
-        with mock.patch.dict(os.environ, {"SETUP_PORT": str(self.port)}), mock.patch.object(
+        with tempfile.TemporaryDirectory() as isolated, mock.patch.object(setup_web, "ROOT", Path(isolated)), mock.patch.object(
+            setup_web, "DATA_ROOT", Path(isolated)
+        ), mock.patch.dict(os.environ, {"SETUP_PORT": str(self.port)}), mock.patch.object(
             setup_web.webbrowser, "open", opened
         ), redirect_stdout(io.StringIO()):
             setup_web.run_server(port=self.port, open_browser=True)
