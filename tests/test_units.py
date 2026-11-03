@@ -3355,7 +3355,7 @@ class TestCrossPlatform(unittest.TestCase):
             "platforms.spawn_detached"
         ) as mock_spawn, patch("os.path.isfile", return_value=True), patch(
             "windows_admin.run_if_needed", return_value=None
-        ):
+        ), patch.dict(os.environ, {"ODICTO_MANAGED_HOME": ""}):
             msg = setup_web.restart_odicto()
         mock_kill.assert_called_once()
         mock_spawn.assert_called_once()

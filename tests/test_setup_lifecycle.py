@@ -211,6 +211,13 @@ class StartOdictoTests(unittest.TestCase):
             with mock.patch.object(setup_web, "restart_odicto", return_value=message):
                 self.assertEqual(setup_web.start_odicto()["ok"], started)
 
+    def test_legacy_source_restart_fixture_cannot_use_an_inherited_managed_launcher(self) -> None:
+        from tests.test_units import TestCrossPlatform
+        with mock.patch.dict(os.environ, {"ODICTO_MANAGED_HOME": "/synthetic-managed-home"}), \
+             mock.patch.object(setup_web.subprocess, "run", side_effect=AssertionError("A test reached a real launcher")) as run:
+            TestCrossPlatform("test_restart_odicto_stops_then_starts").test_restart_odicto_stops_then_starts()
+        run.assert_not_called()
+
     def test_admin_mode_ensures_through_the_task_and_never_restarts(self) -> None:
         restart = mock.Mock()
         with mock.patch.object(setup_web, "restart_odicto", restart):

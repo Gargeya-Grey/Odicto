@@ -869,8 +869,11 @@ class DictationApp:
 
         ensure_can_bind_hotkeys()
 
-        def hook(key, handler, suppress, modifier_sets=((),)):
-            options = {"modifier_sets": modifier_sets} if platforms.hotkey_backend_name() == "x11" else {}
+        def hook(key, handler, suppress, modifier_sets=((),), can_decline=False):
+            backend = platforms.hotkey_backend_name()
+            options = {"modifier_sets": modifier_sets} if backend == "x11" else {}
+            if backend == "pynput":
+                options["can_decline"] = can_decline
             platforms.hook_key(key, handler, suppress=suppress, **options)
 
         def primary_handler(event: object) -> bool:
@@ -916,7 +919,7 @@ class DictationApp:
             modifier = Config.AI_MODIFIER.removeprefix("left ").removeprefix("right ")
             if modifier in ("ctrl", "control", "shift", "alt", "cmd", "win", "windows"):
                 primary_modifiers.append((*dict_mods, Config.AI_MODIFIER))
-        hook(primary, primary_handler, True, tuple(primary_modifiers))
+        hook(primary, primary_handler, True, tuple(primary_modifiers), can_decline=True)
 
         polish_key = Config.effective_polish_hotkey()
         if polish_key:
@@ -947,7 +950,7 @@ class DictationApp:
                     held[0] = False
                     return False
                 return True
-            hook(polish_primary, polish_handler, True, (polish_mods,))
+            hook(polish_primary, polish_handler, True, (polish_mods,), can_decline=True)
             print(f"Selection polish hotkey bound: '{polish_key}'", flush=True)
 
         # Persistent reset: a direct key hook (not add_hotkey) that clears the AI

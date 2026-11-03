@@ -232,14 +232,17 @@ class TestMacModifierSides(unittest.TestCase):
         stack.enter_context(patch.object(macos, "_modifier_key_state", return_value=None))
 
     def translated_chord(self, chord, sides, accepted, character="π", virtual_key=35,
-                         released_character="p", action="polish"):
+                         released_character="p", action="polish", dictation="ctrl+grave",
+                         cancel="esc", reset=""):
         mac, app = self.mac, app_fixture()
         with ExitStack() as stack:
-            stack.enter_context(patch.multiple(Config, HOTKEY="ctrl+grave", AI_HOTKEY="ctrl+shift+grave",
-                POLISH_HOTKEY=chord, RESET_CONTEXT_HOTKEY="", LIVE_HOTKEY="f7", CANCEL_HOTKEY="esc",
+            stack.enter_context(patch.multiple(Config, HOTKEY=dictation, AI_HOTKEY="ctrl+shift+" + dictation.split("+")[-1],
+                POLISH_HOTKEY=chord, RESET_CONTEXT_HOTKEY=reset, LIVE_HOTKEY="f7", CANCEL_HOTKEY=cancel,
                 CTRL_KEEP_CONTEXT_KEYS=("f6",)))
             stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
-            stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: mac.hook_key(key, fn, kw["suppress"])))
+            stack.enter_context(patch("main.platforms.hotkey_backend_name", return_value="pynput"))
+            stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: mac.hook_key(
+                key, fn, kw["suppress"], **({"can_decline": kw["can_decline"]} if "can_decline" in kw else {}))))
             stack.enter_context(patch("main.platforms.is_pressed", side_effect=mac.is_pressed))
             stack.enter_context(patch("main.platforms.is_pressed_exclusive", side_effect=mac.is_pressed_exclusive))
             stack.enter_context(patch.object(mac, "_listener", object()))
@@ -276,6 +279,14 @@ class TestMacModifierSides(unittest.TestCase):
 
     def test_ai_chord_still_works_when_shifted_symbol_has_a_polish_binding(self):
         self.translated_chord("shift+~", (59, 56), True, "~", 50, "`", "primary")
+
+    def test_polish_symbol_does_not_also_dispatch_passthrough_cancel(self):
+        self.translated_chord("shift+~", (56,), True, "~", 50, "`",
+                              dictation="ctrl+p", cancel="grave")
+
+    def test_polish_symbol_release_does_not_dispatch_passthrough_reset(self):
+        self.translated_chord("shift+~", (56,), True, "~", 50, "`",
+                              dictation="ctrl+p", reset="grave")
 
     def test_side_specific_option_translated_character_dispatches_once(self):
         self.translated_chord("right option+p", (61,), True)

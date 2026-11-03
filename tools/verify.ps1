@@ -53,7 +53,9 @@ Set-Location $RepoRoot
 #      Real macOS PID 333 can exist; all kill/return assertions remain unchanged.
 # (13) The source restart test mocks the admin boundary even outside the gate runner.
 #      A broad isfile mock must never enable the real admin launcher. Assertions unchanged.
-$ExpectedTestUnitsHash = '2541843840CB3BC042FA30895F7AB3CB98B7FF78228411EED40AAE4445A969A1'
+# (14) The same source fixture clears inherited managed-home routing. Its source kill,
+#      spawn, argument and status assertions are unchanged; a subprocess tripwire covers it.
+$ExpectedTestUnitsHash = 'FE3734BA63382BD46067BC852B9463F7D137E66B2AB8AF75376FC9E75285472C'
 
 $Script:Failures = @()
 

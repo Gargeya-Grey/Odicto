@@ -180,7 +180,10 @@ def _on_press(key) -> None:
         virtual_key = getattr(key, "vk", None)
         character = _canonical_token(key.char or "")
         if character != token and character in _hooks:
-            candidates.append(character)
+            if _hooks.get(token, {}).get("can_decline", False):
+                candidates.append(character)
+            else:
+                candidates.insert(0, character)
     for candidate in candidates:
         hook = _hooks.get(candidate)
         if hook is None:
@@ -189,13 +192,14 @@ def _on_press(key) -> None:
             result = hook["handler"](_Event(KEY_DOWN, candidate))
         except Exception as e:
             print(f"Error in hotkey press handler: {e}", flush=True)
-            result = True
-        if result is False:
+            _pending_suppress = False
+            return
+        if result is False or not hook["can_decline"]:
             _pressed_tokens.discard(token)
             _pressed_tokens.add(candidate)
             if virtual_key is not None:
                 hook["pressed_virtual_key"] = virtual_key
-            _pending_suppress = bool(hook["suppress"])
+            _pending_suppress = bool(hook["suppress"]) and result is False
             return
     _pending_suppress = False
 
@@ -232,7 +236,8 @@ def _intercept(event_type, event):
     return event
 
 
-def hook_key(key: str, handler, suppress: bool) -> None:
+def hook_key(key: str, handler, suppress: bool, *, can_decline: bool = False) -> None:
+    """Only opt in when True guarantees the handler performed no action."""
     global _listener
 
     pynput = _require_pynput()
@@ -240,7 +245,7 @@ def hook_key(key: str, handler, suppress: bool) -> None:
 
     with _listener_lock:
         _hooks[token] = {"handler": handler, "suppress": bool(suppress),
-                         "virtual_key": _primary_virtual_key(token)}
+                         "virtual_key": _primary_virtual_key(token), "can_decline": can_decline}
         if _listener is None:
             _listener = pynput.Listener(
                 on_press=_on_press,
