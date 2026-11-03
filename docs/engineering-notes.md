@@ -637,17 +637,28 @@ an existing folder the grant is added in canonical order; a reader that is still
 reports "access denied" with the folder to check. Revisit only if a real install shows a deny
 entry on an Odicto folder; then use Windows `AccessCheck` on a probe file, not SDDL parsing.
 
-## Managed owner log (November, v1.2.3)
+## Managed owner log (November, v1.2.3 and v1.2.4)
 
 The managed owner always appends to `data/dictation.log`, also when its stdout is a hidden
-console (admin mode). With `LOG_TRANSCRIPTS=false`, provider error text goes through
-`http_clients.error_summary` (type and HTTP status only), and Meta incomplete details log only
-the reason code.
+console (admin mode). Three review rounds found the same two fault classes again and again
+(provider text in the log, and races on the shared log), so v1.2.4 changes the premises
+instead of patching lines:
 
-- Every process that writes the log holds `session_log.LogLock` (a sidecar `dictation.log.lock`)
-  for each write, and only the instance-lock holder trims, under the same lock. A second start
-  can no longer append between the trim's read and rewrite. A peer that holds the lock longer
-  than 2 s is not waited for; logging never hangs.
-- A managed child that fails before `main` loads (startup guard, launch receipt) appends one
-  line to the log under the lock, so the launcher's "see dictation.log" has a record.
-
+- **Provider strings never reach the log** with `LOG_TRANSCRIPTS=false`. Errors go through
+  `http_clients.error_summary` (type, plus an HTTP status found on the error or the exceptions
+  it was raised from). Meta response lines print only allow-listed status, item type, role and
+  reason values and integer token counts. A new log line about a provider call must follow the
+  same rule: never interpolate provider text or an exception message from a provider call.
+- **Only the owner process attaches the managed log.** `odicto.cmd_managed_owner` sets an
+  in-memory mark (`session_log.mark_managed_owner`) around running main. The launcher's
+  environment variables alone are not enough, so no child, test runner or other process that
+  inherits them can write to the real data-root log.
+- **One lock for every write and the trim** (`session_log.LogLock`, sidecar
+  `dictation.log.lock`). The instance-lock holder trims only while it holds that lock, and skips
+  the trim if it cannot get it within 1 s. Writers wait at most 0.25 s, then only 20 ms per write
+  for 30 s, so a stuck peer cannot stall a hotkey path. Known limit: a writer in that short-wait
+  window may write unlocked; if the owner trims in the same milliseconds, that writer's line can
+  be lost. Both conditions together need a peer that held the lock over 0.25 s.
+- **A managed start that ends early writes one line**: failures in the startup guard and
+  launch receipt, a closed launcher pipe, and an exception or nonzero exit from main. OS errors
+  keep their message; other exception types are named only (`session_log.failure_text`).

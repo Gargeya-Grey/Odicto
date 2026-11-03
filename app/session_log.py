@@ -1,16 +1,39 @@
-"""Cross-process lock for the shared dictation.log, plus a one-line append for early failures.
+"""Shared dictation.log rules: who may attach it, the cross-process write lock, early failures.
 
-Every process that writes the log (the owner, a refused second start, the managed launcher
-child before main loads) holds this lock for each write, and the owner holds it while it trims.
-So a trim can never erase lines another process wrote between the trim's read and its rewrite.
-Stdlib only: the managed child imports it before any heavy module.
+Every process that writes the log (the owner, a refused second start, a managed child before
+main loads) holds LogLock for each write. Only the instance-lock holder trims, and it trims only
+while it holds the same lock; if it cannot get the lock it skips the trim. So a trim never
+rewrites lines that another process appended after the trim's read.
+
+Writers never wait long: a peer that holds the lock too long (suspended, debugger) costs one
+short wait, then a few milliseconds per write for a while, so a hotkey path that logs cannot
+stall. Stdlib only: the managed child imports this before any heavy module.
 """
 import os
 import threading
 import time
 from datetime import datetime
 
-_WAIT_SECONDS = 2.0  # never hang logging on a stuck peer; write unlocked after this
+_WRITE_WAIT_SECONDS = 0.25   # normal wait for a writer
+_DEGRADED_WAIT_SECONDS = 0.02  # after a writer timed out, for _DEGRADED_SECONDS
+_DEGRADED_SECONDS = 30.0
+TRIM_WAIT_SECONDS = 1.0
+
+_managed_owner = False
+
+
+def mark_managed_owner(active: bool) -> None:
+    """Set by odicto.cmd_managed_owner around running main in this same process.
+
+    It is process memory, not the environment, so no child, test runner or other process
+    that inherits the launcher's variables can attach the real data-root log.
+    """
+    global _managed_owner
+    _managed_owner = bool(active)
+
+
+def is_managed_owner() -> bool:
+    return _managed_owner
 
 
 class LogLock:
@@ -22,15 +45,37 @@ class LogLock:
         self._depth = 0
         self._fd = None
         self._held = False
+        self._degraded_until = 0.0
+
+    @property
+    def held(self) -> bool:
+        """True while this process holds the cross-process lock."""
+        return self._held
+
+    def hold(self, wait: float) -> "_Hold":
+        """Context manager that waits up to ``wait`` seconds for the cross-process lock."""
+        return _Hold(self, wait)
 
     def __enter__(self) -> "LogLock":
-        self._thread_lock.acquire()
-        self._depth += 1
-        if self._depth == 1:
-            self._held = self._lock_os()
+        if time.monotonic() < self._degraded_until:
+            wait = _DEGRADED_WAIT_SECONDS
+        else:
+            wait = _WRITE_WAIT_SECONDS
+        self._acquire(wait)
+        if self._depth == 1 and not self._held:
+            self._degraded_until = time.monotonic() + _DEGRADED_SECONDS
         return self
 
     def __exit__(self, *_exc) -> None:
+        self._release()
+
+    def _acquire(self, wait: float) -> None:
+        self._thread_lock.acquire()
+        self._depth += 1
+        if self._depth == 1:
+            self._held = self._lock_os(wait)
+
+    def _release(self) -> None:
         try:
             if self._depth == 1 and self._held:
                 self._unlock_os()
@@ -39,10 +84,10 @@ class LogLock:
             self._depth -= 1
             self._thread_lock.release()
 
-    def _lock_os(self) -> bool:
+    def _lock_os(self, wait: float) -> bool:
         try:
             self._fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
-            deadline = time.monotonic() + _WAIT_SECONDS
+            deadline = time.monotonic() + wait
             while True:
                 try:
                     if os.name == "nt":
@@ -57,7 +102,7 @@ class LogLock:
                     if time.monotonic() >= deadline:
                         self._close()
                         return False
-                    time.sleep(0.01)
+                    time.sleep(0.005)
         except OSError:
             self._close()
             return False
@@ -84,6 +129,29 @@ class LogLock:
             except OSError:
                 pass
             self._fd = None
+
+
+class _Hold:
+    def __init__(self, lock: LogLock, wait: float) -> None:
+        self._lock, self._wait = lock, wait
+
+    def __enter__(self) -> LogLock:
+        self._lock._acquire(self._wait)
+        return self._lock
+
+    def __exit__(self, *_exc) -> None:
+        self._lock._release()
+
+
+def failure_text(error: BaseException) -> str:
+    """Log text for an exception that ends a managed start: OS errors keep their message
+    (paths and error codes); any other type is named only, since its text is not ours."""
+    if isinstance(error, SystemExit):
+        code = error.code
+        return f"SystemExit (code {code})" if code is None or isinstance(code, int) else "SystemExit"
+    if isinstance(error, OSError):
+        return f"{type(error).__name__}: {str(error)[:200]}"
+    return type(error).__name__
 
 
 def append_line(log_path: str, text: str) -> None:

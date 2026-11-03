@@ -27,6 +27,7 @@ import time
 from datetime import datetime
 from typing import Optional, TextIO
 
+import session_log
 from session_log import LogLock
 
 
@@ -84,10 +85,15 @@ def _trim_log(path: str) -> None:
     """Keep dictation.log from growing without bound across logins.
 
     Runs under the log lock that every writer holds, so no other process can append between
-    the read of the tail and the rewrite (session_log.LogLock).
+    the read of the tail and the rewrite (session_log.LogLock). Without that lock it skips;
+    a later start trims.
     """
     try:
-        with _LOG_LOCK if _LOG_LOCK is not None else contextlib.nullcontext():
+        held = (_LOG_LOCK.hold(session_log.TRIM_WAIT_SECONDS) if _LOG_LOCK is not None
+                else contextlib.nullcontext())
+        with held as lock:
+            if lock is not None and not lock.held:
+                return
             if not os.path.exists(path) or os.path.getsize(path) <= _LOG_MAX_BYTES:
                 return
             with open(path, "rb") as f:
@@ -130,7 +136,10 @@ def _is_managed_owner() -> bool:
     then python.exe. Without this the owner kept no log at all, and a startup stall
     left no trace.
     """
-    return bool(os.environ.get("ODICTO_MANAGED_HOME") and os.environ.get("ODICTO_LAUNCH_TOKEN"))
+    # The launcher's variables alone are not enough: any child or test process inherits them.
+    # Only the process odicto.cmd_managed_owner runs main in sets the in-memory mark.
+    return bool(session_log.is_managed_owner() and os.environ.get("ODICTO_MANAGED_HOME")
+                and os.environ.get("ODICTO_LAUNCH_TOKEN"))
 
 
 def attach_pythonw_log() -> None:
@@ -514,7 +523,8 @@ class DictationApp:
             try:
                 self._execute_hotkey_action(*action)
             except Exception as error:
-                print(f"Hotkey action failed: {error}", file=sys.stderr)
+                from http_clients import error_summary
+                print(f"Hotkey action failed: {error_summary(error)}", file=sys.stderr)
 
     def _dispatch_hotkey(self, kind, snapshot=(), use_llm=None) -> None:
         if getattr(self, "_closing", None) is not None and self._closing.is_set():

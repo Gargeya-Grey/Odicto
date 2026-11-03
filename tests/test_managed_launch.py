@@ -307,14 +307,15 @@ class TestManagedOwnerLog(unittest.TestCase):
     Each case imports main in a child interpreter with a synthetic data root, so no live log,
     stream or faulthandler state of this process is touched."""
 
-    def run_child(self, managed):
+    def run_child(self, managed, marked=True):
         with tempfile.TemporaryDirectory() as temporary:
             environment = {key: value for key, value in os.environ.items()
                            if key not in {"ODICTO_MANAGED_HOME", "ODICTO_LAUNCH_TOKEN", "ODICTO_DATA_ROOT"}}
             environment.update(ODICTO_DATA_ROOT=temporary, QT_QPA_PLATFORM="offscreen")
             if managed:
                 environment.update(ODICTO_MANAGED_HOME=temporary, ODICTO_LAUNCH_TOKEN="a" * 32)
-            program = ("import sys; sys.path.insert(0, sys.argv[1]); import main; "
+            mark = "import session_log; session_log.mark_managed_owner(True); " if marked else ""
+            program = ("import sys; sys.path.insert(0, sys.argv[1]); " + mark + "import main; "
                        "print('Application ready!'); sys.stdout.flush()")
             result = subprocess.run([sys.executable, "-c", program, str(Path(odicto.__file__).parent)],
                                     env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -329,6 +330,13 @@ class TestManagedOwnerLog(unittest.TestCase):
         self.assertIn("----- session ", text)
         self.assertIn("Application ready!", text)
         self.assertNotIn(b"Application ready!", result.stdout)
+
+    def test_inherited_launcher_variables_alone_do_not_attach_the_log(self):
+        # A test runner or child process inherits the launcher's variables, not the in-memory mark.
+        result, text = self.run_child(managed=True, marked=False)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        self.assertEqual(text, "")
+        self.assertIn(b"Application ready!", result.stdout)
 
     def test_console_run_outside_a_managed_launch_keeps_its_console(self):
         result, text = self.run_child(managed=False)
@@ -390,15 +398,42 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         import refiner
         output = io.StringIO()
         data = {"status": "incomplete",
-                "incomplete_details": {"reason": "max_output_tokens", "text": "my secret sentence"}}
+                "incomplete_details": {"reason": "max_output_tokens", "text": "my secret sentence"},
+                "output": [{"type": "message", "role": "assistant"}, {"type": "secret", "role": "secret"}],
+                "usage": {"input_tokens": 12, "output_tokens": 64, "note": "my secret sentence",
+                          "output_tokens_details": {"reasoning_tokens": 40, "x": "secret"}}}
         with patch.object(sys, "stdout", output):
             refiner._log_meta_response(data, 64)
+            refiner._log_meta_response({"status": "secretstatus",
+                                        "incomplete_details": {"reason": "secretword"}}, 64)
             refiner._log_meta_response({"status": "incomplete",
                                         "incomplete_details": "my secret sentence"}, 64)
         text = output.getvalue()
         self.assertIn("reason=max_output_tokens", text)
-        self.assertIn("reason=?", text)
+        self.assertIn("output=[message/assistant, ?/?]", text)
+        self.assertIn("usage=input_tokens=12 output_tokens=64 reasoning_tokens=40", text)
+        self.assertIn("status=?", text)
+        self.assertEqual(text.count("reason=?"), 2)
         self.assertNotIn("secret", text)
+
+    def test_wrapped_provider_error_keeps_its_http_status(self):
+        import http_clients
+        from config import Config
+
+        class Response:
+            status_code = 429
+
+        class HTTPError(Exception):
+            response = Response()
+
+        try:
+            try:
+                raise HTTPError("429 Too Many Requests: my secret words")
+            except HTTPError as cause:
+                raise RuntimeError("Meta API error: my secret words") from cause
+        except RuntimeError as wrapped:
+            with patch.object(Config, "LOG_TRANSCRIPTS", False):
+                self.assertEqual(http_clients.error_summary(wrapped), "RuntimeError (HTTP 429)")
 
     def test_test_package_drops_an_inherited_launch_token(self):
         import tests
@@ -453,6 +488,71 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         self.assertGreater(waited, 0.3)
         self.assertIn("LATE-PEER-LINE", text)
         self.assertNotIn("OLD-HEAD", text)
+
+    def test_trim_skips_when_another_process_holds_the_lock_too_long(self):
+        import main as main_mod
+        import session_log
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "dictation.log")
+            original = "OLD-HEAD\n" + "n" * 200 + "\nKEEP\n"
+            Path(path).write_text(original, encoding="utf-8")
+            program = ("import sys, time; sys.path.insert(0, sys.argv[1]); import session_log\n"
+                       "with session_log.LogLock(sys.argv[2]):\n"
+                       "    print('locked', flush=True); time.sleep(3)\n")
+            peer = subprocess.Popen([sys.executable, "-c", program, str(Path(main_mod.__file__).parent), path],
+                                    stdout=subprocess.PIPE)
+            try:
+                self.assertEqual(peer.stdout.readline().strip(), b"locked")
+                with patch.object(main_mod, "_LOG_LOCK", session_log.LogLock(path)), patch.object(
+                    main_mod, "_LOG_MAX_BYTES", 40), patch.object(main_mod, "_LOG_KEEP_BYTES", 30):
+                    main_mod._trim_log(path)
+                self.assertEqual(Path(path).read_text(encoding="utf-8"), original)
+            finally:
+                peer.wait(timeout=30)
+                peer.stdout.close()
+
+    def test_writers_wait_briefly_then_barely_while_a_peer_holds_the_lock(self):
+        import session_log
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "dictation.log")
+            program = ("import sys, time; sys.path.insert(0, sys.argv[1]); import session_log\n"
+                       "with session_log.LogLock(sys.argv[2]):\n"
+                       "    print('locked', flush=True); time.sleep(3)\n")
+            peer = subprocess.Popen([sys.executable, "-c", program, str(Path(session_log.__file__).parent),
+                                     path], stdout=subprocess.PIPE)
+            try:
+                self.assertEqual(peer.stdout.readline().strip(), b"locked")
+                lock = session_log.LogLock(path)
+                started = time.monotonic()
+                with lock:
+                    self.assertFalse(lock.held)
+                first = time.monotonic() - started
+                started = time.monotonic()
+                for _ in range(10):
+                    with lock:
+                        pass
+                later = time.monotonic() - started
+            finally:
+                peer.wait(timeout=30)
+                peer.stdout.close()
+        self.assertLess(first, 1.0)
+        self.assertLess(later, 1.0)  # ten writes in degraded mode, not ten full waits
+
+    def test_main_failing_in_a_managed_start_is_logged_and_unmarks_the_owner(self):
+        import session_log
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"ODICTO_MANAGED_HOME": temporary, "ODICTO_LAUNCH_TOKEN": "a" * 32}
+        ), patch.object(odicto, "_data_root", return_value=temporary), patch.object(
+            odicto, "_managed_startup_guard", return_value=None
+        ), patch.object(odicto, "_managed_receipt", return_value=None), patch(
+            "runpy.run_path", side_effect=FileNotFoundError(2, "No such file", "main.py")
+        ):
+            with self.assertRaises(FileNotFoundError):
+                odicto.cmd_managed_owner(None)
+            text = Path(temporary, "dictation.log").read_text(encoding="utf-8")
+        self.assertIn("Managed owner failed", text)
+        self.assertIn("FileNotFoundError", text)
+        self.assertFalse(session_log.is_managed_owner())
 
     def test_managed_failure_before_main_is_logged(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(

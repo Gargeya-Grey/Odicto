@@ -28,16 +28,24 @@ def error_summary(error: BaseException) -> str:
     summary = getattr(error, "log_summary", None)  # already safe for the log (LocalFallbackDisabled)
     if isinstance(summary, str) and summary:
         return summary
-    status = getattr(error, "status_code", None)
-    if not isinstance(status, int):
-        status = getattr(getattr(error, "response", None), "status_code", None)
-    if not isinstance(status, int):
-        status = getattr(error, "code", None)
-    if not isinstance(status, int) or not 100 <= status <= 599:
-        match = re.match(r"\s*HTTP (\d{3})\b", str(error))
-        status = int(match.group(1)) if match else None
+    status, link = None, error
+    for _ in range(4):  # the error, then the exceptions it was raised from
+        if link is None or status is not None:
+            break
+        status = _http_status(link)
+        link = link.__cause__
     name = type(error).__name__
     return f"{name} (HTTP {status})" if status else name
+
+
+def _http_status(error: BaseException) -> Optional[int]:
+    for status in (getattr(error, "status_code", None),
+                   getattr(getattr(error, "response", None), "status_code", None),
+                   getattr(error, "code", None)):
+        if type(status) is int and 100 <= status <= 599:
+            return status
+    match = re.match(r"\s*HTTP (\d{3})\b", str(error))
+    return int(match.group(1)) if match else None
 
 # Idle connections stay open this long. Providers usually close an idle
 # socket after 60-350 s; a stale socket costs one transparent reconnect.

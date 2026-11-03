@@ -129,14 +129,26 @@ def cmd_managed_owner(_args) -> int:
     import runpy
     if not os.environ.get("ODICTO_MANAGED_HOME") or not os.environ.get("ODICTO_LAUNCH_TOKEN"):
         raise RuntimeError("The managed owner command requires its supervising launcher")
+    import session_log
     try:
         _managed_startup_guard()
         _managed_receipt("owner-starting")
     except BaseException as error:
         _log_early(f"Managed startup failed before main (pid={os.getpid()}): "
-                   f"{type(error).__name__}: {str(error)[:200]}")
+                   f"{session_log.failure_text(error)}")
         raise
-    runpy.run_path(_main_py(), run_name="__main__")
+    session_log.mark_managed_owner(True)
+    try:
+        runpy.run_path(_main_py(), run_name="__main__")
+    except SystemExit as error:
+        if error.code not in (None, 0):
+            _log_early(f"Managed owner exited (pid={os.getpid()}): {session_log.failure_text(error)}")
+        raise
+    except BaseException as error:
+        _log_early(f"Managed owner failed (pid={os.getpid()}): {session_log.failure_text(error)}")
+        raise
+    finally:
+        session_log.mark_managed_owner(False)
     return 0
 
 

@@ -318,22 +318,45 @@ def _choice_finish_reason(response: object) -> str:
         return ""
 
 
+# Provider strings never reach dictation.log: a response can echo the request (dictated
+# text) in any field. Only these known values and integer token counts are printed.
+_META_STATUSES = frozenset({"completed", "incomplete", "in_progress", "failed", "cancelled", "queued"})
+_META_ITEM_TYPES = frozenset({"message", "reasoning", "function_call", "output_text", "refusal",
+                              "web_search_call"})
+_META_ROLES = frozenset({"assistant", "user", "system", "developer"})
+_META_REASONS = frozenset({"max_output_tokens", "content_filter"})
+_META_USAGE = (("input_tokens", None), ("output_tokens", None), ("total_tokens", None),
+               ("output_tokens_details", "reasoning_tokens"), ("input_tokens_details", "cached_tokens"))
+
+
+def _known(value: object, allowed: frozenset) -> str:
+    return value if isinstance(value, str) and value in allowed else "?"
+
+
 def _describe_meta_response(data: dict) -> str:
-    """One-line summary of a Responses payload for dictation.log."""
+    """One-line summary of a Responses payload for dictation.log (allow-listed values only)."""
     try:
-        status = data.get("status", "?")
+        status = _known(data.get("status"), _META_STATUSES)
         output = data.get("output", [])
         kinds: list[str] = []
         if isinstance(output, list):
             for item in output:
                 if not isinstance(item, dict):
-                    kinds.append("str")
+                    kinds.append("?")
                     continue
-                t = str(item.get("type", "?"))
-                r = str(item.get("role", ""))
+                t = _known(item.get("type"), _META_ITEM_TYPES)
+                r = _known(item.get("role"), _META_ROLES) if item.get("role") else ""
                 kinds.append(f"{t}/{r}" if r else t)
-        usage = data.get("usage", {})
-        tok = f" usage={usage}" if isinstance(usage, dict) and usage else ""
+        usage = data.get("usage")
+        counts = []
+        if isinstance(usage, dict):
+            for key, inner in _META_USAGE:
+                value = usage.get(key)
+                if inner is not None:
+                    value = value.get(inner) if isinstance(value, dict) else None
+                if type(value) is int:
+                    counts.append(f"{inner or key}={value}")
+        tok = f" usage={' '.join(counts)}" if counts else ""
         return f"status={status} output=[{', '.join(kinds)}]{tok}"
     except Exception:
         return "status=? (unparseable)"
@@ -345,8 +368,7 @@ def _log_meta_response(data: dict, budget: object) -> None:
     if data.get("status") not in (None, "completed"):
         # Only the reason code: other fields can echo the request (dictated text).
         details = data.get("incomplete_details")
-        reason = details.get("reason") if isinstance(details, dict) else None
-        reason = str(reason)[:60] if isinstance(reason, str) and reason.isidentifier() else "?"
+        reason = _known(details.get("reason") if isinstance(details, dict) else None, _META_REASONS)
         print(f"Meta incomplete details: reason={reason}", flush=True)
 
 
