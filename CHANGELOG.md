@@ -10,6 +10,7 @@ section as the release notes and refuses a version that has no section.
 
 - The installed Windows app no longer stalls at startup. The startup lease waited on the launcher's pipe in a way that blocked other reads of standard input, so loading the audio libraries hung until the 60-second startup timeout and the app exited without a log.
 - Private installation folders stay readable when an elevated helper writes into them. Migration and admin mode no longer fail with "access denied" on files the administrator step created.
+- Setup and admin mode name an "access denied" error and the folder to check, instead of a generic failure or a false success.
 
 ## [1.2.1] - 2026-11-03
 
