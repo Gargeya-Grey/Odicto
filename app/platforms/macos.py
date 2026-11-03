@@ -5,8 +5,8 @@ suppression uses pynput's ``darwin_intercept`` hook: callbacks fire first,
 then the interceptor returns ``None`` to drop an event. We record the handler
 verdict per event so the interceptor suppresses exactly the keys the app owns.
 
-Left/right modifier disambiguation (``side_exclusive_scan_codes``) is not
-available through pynput's public API and degrades to ``is_pressed(key)``.
+Modifier sides use native virtual keys and Quartz state. Character hotkeys
+bind the unmodified keyboard layout so Option-generated symbols keep their primary.
 """
 
 from __future__ import annotations
@@ -104,12 +104,28 @@ def _key_token(key) -> str:
     if key is None:
         return ""
     if isinstance(key, _pynput.KeyCode):
+        virtual_key = getattr(key, "vk", None)
+        if virtual_key is not None:
+            for token, hook in _hooks.items():
+                if hook.get("virtual_key") == virtual_key:
+                    return token
         ch = key.char
         if not ch:
             return ""
         return _canonical_token(ch)
     name = getattr(key, "name", "")
     return _canonical_token(name)
+
+
+def _primary_virtual_key(token: str):
+    character = "`" if token == "grave" else token
+    if len(character) != 1:
+        return None
+    try:
+        from pynput._util.darwin import get_unicode_to_keycode_map
+        return get_unicode_to_keycode_map().get(character)
+    except Exception:
+        return None
 
 
 _MODIFIER_VIRTUAL_KEYS = {"ctrl": (59, 62), "shift": (56, 60), "alt": (58, 61), "cmd": (55, 54)}
@@ -205,7 +221,8 @@ def hook_key(key: str, handler, suppress: bool) -> None:
     token = _canonical_token(key)
 
     with _listener_lock:
-        _hooks[token] = {"handler": handler, "suppress": bool(suppress)}
+        _hooks[token] = {"handler": handler, "suppress": bool(suppress),
+                         "virtual_key": _primary_virtual_key(token)}
         if _listener is None:
             _listener = pynput.Listener(
                 on_press=_on_press,

@@ -187,6 +187,30 @@ class StartOdictoTests(unittest.TestCase):
         self.admin = patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_managed_supervisor_success_is_a_successful_start(self) -> None:
+        with mock.patch.dict(os.environ, {"ODICTO_MANAGED_HOME": "/fake-managed"}), \
+             mock.patch.object(setup_web.os.path, "isfile", return_value=True), \
+             mock.patch.object(setup_web.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)) as run, \
+             mock.patch("platforms.preflight.environment_problems", return_value=[]):
+            result = setup_web.start_odicto()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(run.call_args.args[0][-3:], ["run", "--no-auto-updates", "restart"])
+
+    def test_managed_supervisor_failure_still_reports_failure(self) -> None:
+        with mock.patch.dict(os.environ, {"ODICTO_MANAGED_HOME": "/fake-managed"}), \
+             mock.patch.object(setup_web.os.path, "isfile", return_value=True), \
+             mock.patch.object(setup_web.subprocess, "run", return_value=types.SimpleNamespace(returncode=3)), \
+             mock.patch("platforms.preflight.environment_problems", return_value=[]):
+            result = setup_web.start_odicto()
+        self.assertFalse(result["ok"])
+        self.assertIn("exit code 3", result["message"])
+
+    def test_start_result_does_not_depend_on_banner_wording(self) -> None:
+        for started in (True, False):
+            message = setup_web.RestartMessage("A changed banner.", started=started)
+            with mock.patch.object(setup_web, "restart_odicto", return_value=message):
+                self.assertEqual(setup_web.start_odicto()["ok"], started)
+
     def test_admin_mode_ensures_through_the_task_and_never_restarts(self) -> None:
         restart = mock.Mock()
         with mock.patch.object(setup_web, "restart_odicto", restart):

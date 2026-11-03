@@ -414,7 +414,14 @@ def delete_live_prompt() -> str:
     return ""
 
 
-def restart_odicto() -> str:
+class RestartMessage(str):
+    def __new__(cls, message: str, *, started: bool):
+        result = super().__new__(cls, message)
+        result.started = started
+        return result
+
+
+def restart_odicto() -> RestartMessage:
     """Stop any running Odicto for this install, then start a fresh instance.
 
     Setup itself is ``odicto.py setup`` and is not matched by the main.py killer,
@@ -437,18 +444,18 @@ def restart_odicto() -> str:
             raise RuntimeError("Settings saved, but managed restart could not be confirmed; run odicto status.") from error
         if result.returncode:
             raise RuntimeError(f"Settings saved, but managed restart failed (exit code {result.returncode}); run odicto status.")
-        return "Settings saved. Odicto is ready with the new settings."
+        return RestartMessage("Settings saved. Odicto is ready with the new settings.", started=True)
     from windows_admin import run_if_needed
 
     # An opted-in install restarts through the elevated helper; a Medium process
     # must not try to kill the elevated owner itself.
     elevated = run_if_needed(str(ROOT), "Start")
     if elevated == 0:
-        return "Settings saved. Odicto is restarting with the new settings."
+        return RestartMessage("Settings saved. Odicto is restarting with the new settings.", started=True)
     if elevated is not None:
         raise RuntimeError(f"elevated Odicto restart failed (exit code {elevated})")
     if _SPAWN_BLOCKED.is_set():
-        return "Settings saved. Start Odicto with start_dictation.bat to apply them."
+        return RestartMessage("Settings saved. Start Odicto with start_dictation.bat to apply them.", started=False)
 
     import platforms
 
@@ -462,7 +469,7 @@ def restart_odicto() -> str:
                 f"Could not stop the existing Odicto owner ({e}). Quit that instance using "
                 "its tray menu or the privileges that started it, then start Odicto again."
             ) from e
-        return f"Settings saved, but could not stop Odicto ({e}). Start it yourself."
+        return RestartMessage(f"Settings saved, but could not stop Odicto ({e}). Start it yourself.", started=False)
 
     if sys.platform == "win32":
         pyw = os.path.join(root, ".venv", "Scripts", "pythonw.exe")
@@ -472,12 +479,12 @@ def restart_odicto() -> str:
         exe = os.path.join(root, ".venv", "bin", "python")
     main_py = os.path.join(root, "main.py")
     if not os.path.isfile(exe) or not os.path.isfile(main_py):
-        return "Settings saved. Start Odicto yourself to apply them."
+        return RestartMessage("Settings saved. Start Odicto yourself to apply them.", started=False)
     try:
         platforms.spawn_detached([exe, main_py])
     except Exception as e:
-        return f"Settings saved, but Odicto did not start ({e})."
-    return "Settings saved. Odicto is restarting with the new settings."
+        return RestartMessage(f"Settings saved, but Odicto did not start ({e}).", started=False)
+    return RestartMessage("Settings saved. Odicto is restarting with the new settings.", started=True)
 
 
 def apply_prompt_save(text: str) -> str:
@@ -943,7 +950,7 @@ def start_odicto() -> dict:
         message = restart_odicto()
     except Exception as error:  # an elevated restart reports failure by raising
         return {"ok": False, "message": f"Odicto did not start ({error})."}
-    ok = message.endswith("restarting with the new settings.")
+    ok = message.started if isinstance(message, RestartMessage) else message.endswith("restarting with the new settings.")
     if ok:
         message = "Odicto is starting."
     elif message.startswith("Settings saved, but "):

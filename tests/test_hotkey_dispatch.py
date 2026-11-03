@@ -231,6 +231,50 @@ class TestMacModifierSides(unittest.TestCase):
         stack.enter_context(patch.object(macos, "_hooks", {}))
         stack.enter_context(patch.object(macos, "_modifier_key_state", return_value=None))
 
+    def translated_chord(self, chord, sides, accepted):
+        mac, app = self.mac, app_fixture()
+        with ExitStack() as stack:
+            stack.enter_context(patch.multiple(Config, HOTKEY="ctrl+grave", AI_HOTKEY="ctrl+shift+grave",
+                POLISH_HOTKEY=chord, RESET_CONTEXT_HOTKEY="", LIVE_HOTKEY="f7", CANCEL_HOTKEY="esc",
+                CTRL_KEEP_CONTEXT_KEYS=("f6",)))
+            stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
+            stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: mac.hook_key(key, fn, kw["suppress"])))
+            stack.enter_context(patch("main.platforms.is_pressed", side_effect=mac.is_pressed))
+            stack.enter_context(patch("main.platforms.is_pressed_exclusive", side_effect=mac.is_pressed_exclusive))
+            stack.enter_context(patch.object(mac, "_listener", object()))
+            stack.enter_context(patch.object(mac, "_primary_virtual_key", side_effect=lambda token: 35 if token == "p" else None, create=True))
+            dispatch = stack.enter_context(patch.object(app, "_dispatch_hotkey"))
+            app._bind_hotkeys()
+            modifiers = [SimpleNamespace(name="alt", value=SimpleNamespace(vk=code)) for code in sides]
+            for modifier in modifiers:
+                mac._on_press(modifier)
+            key = mac._pynput.KeyCode()
+            key.char, key.vk = "π", 35
+            event = object()
+            for _ in range(2):
+                mac._on_press(key)
+                self.assertIs(mac._intercept(None, event), None if accepted else event)
+            for modifier in modifiers:
+                mac._on_release(modifier)
+            key.char = "p"
+            mac._on_release(key)
+            self.assertIs(mac._intercept(None, event), None if accepted else event)
+            self.assertEqual(dispatch.call_count, int(accepted))
+            if accepted:
+                dispatch.assert_called_once_with("polish")
+            self.assertFalse(mac.is_pressed("p"))
+
+    def test_option_translated_character_keeps_physical_primary_and_release(self):
+        self.translated_chord("option+p", (58,), True)
+
+    def test_side_specific_option_translated_character_dispatches_once(self):
+        self.translated_chord("right option+p", (61,), True)
+
+    def test_side_specific_option_rejects_opposite_and_both_sides(self):
+        for sides in ((58,), (58, 61)):
+            with self.subTest(sides=sides):
+                self.translated_chord("right option+p", sides, False)
+
     def test_physical_codes_preserve_generic_and_side_specific_state(self):
         for family, left, right in (("ctrl", 59, 62), ("shift", 56, 60), ("alt", 58, 61), ("cmd", 55, 54)):
             with self.subTest(family=family):

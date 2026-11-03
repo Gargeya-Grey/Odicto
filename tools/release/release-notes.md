@@ -1,6 +1,41 @@
 ## Install
 
-### Windows 10 / 11
+Download the release ZIP below and extract it. The managed installer supplies
+Python and creates an `odicto` command. No system Python, Git, Node or npm is required.
+
+### Windows
+
+Open PowerShell in the extracted `Odicto` directory and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\distribution\bootstrap.ps1
+```
+
+### macOS / Ubuntu / Debian
+
+Open a terminal in the extracted `Odicto` directory and run:
+
+```bash
+bash tools/distribution/bootstrap.sh
+```
+
+Use the command path printed by the installer to run `odicto setup`, then
+`odicto start`. On macOS, grant Accessibility and Input Monitoring when requested.
+Linux requires an X11 desktop. Wayland is unsupported.
+
+### Updates and rollback
+
+The managed command checks for updates before launch. It stages verified versions
+separately and activates them after Odicto and Setup release their locks. Settings
+stay in a stable data directory. Run `odicto update` to check immediately, or
+`odicto rollback` to restore the previous ready version. Automatic checks can be
+disabled with `odicto auto-updates off`.
+
+Quit an existing source installation and disable its startup entry before using
+the managed install. Their settings are separate. Never run both together. See
+`tools/distribution/README.md` for the complete command and permissions guide.
+
+### Source installation on Windows
 
 1. Download the `.zip` file below. Unzip it to a folder you keep, for example `Documents\Odicto`.
 2. In that folder, right-click `install.ps1` and select **Run with PowerShell**. Or run `powershell -ExecutionPolicy Bypass -File .\install.ps1`. The installer sets up Python packages and the speech model.
@@ -9,19 +44,9 @@
 
 Stop Odicto with `stop_dictation.bat`. The setup page stops by itself when you close it.
 
-### macOS / Linux
+### Source installation on macOS / Linux
 
 Run `bash install.sh`, then `bash setup.sh` and `bash start_dictation.sh`. Stop with `bash stop_dictation.sh`. macOS asks for Accessibility and Input Monitoring permissions. Linux needs an X11 desktop session and runs as your normal user. Wayland is unsupported.
-
-### Managed updates
-
-For a new managed install, run `tools/distribution/bootstrap.ps1` on Windows or
-`bash tools/distribution/bootstrap.sh` on macOS/Ubuntu/Debian from the extracted ZIP.
-It supplies Python and creates an `odicto` command. Settings stay in a stable data
-directory. Updates are checked before launch, staged and verified separately, and
-activated when Odicto and Setup have released their locks. `odicto rollback`
-restores the previous ready version. See the bundled managed installation guide
-for commands, permissions and current limits. Existing source installs are separate.
 
 ### Your data
 

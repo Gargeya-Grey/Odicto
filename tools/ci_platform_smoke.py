@@ -145,6 +145,17 @@ def installed(root: Path, evidence: Path, sha: str) -> int:
         report["checks"]["native_onnx_inference"] = "pass"
         report["speech_fixture"] = speech_decode()
         report["checks"]["local_speech_decode"] = "pass"
+        if sys.platform == "darwin":
+            from platforms import macos
+            from unittest.mock import patch
+            virtual_key = macos._primary_virtual_key("p")
+            if virtual_key is None:
+                raise RuntimeError("Native macOS keyboard layout did not resolve the P key")
+            with patch.dict(macos._hooks, {"p": {"virtual_key": virtual_key}}, clear=True):
+                translated = macos._pynput.KeyCode.from_char("π", vk=virtual_key)
+                if macos._key_token(translated) != "p":
+                    raise RuntimeError("Translated macOS character lost its registered physical primary")
+            report["checks"]["native_keyboard_layout_mapping"] = "pass"
         if sys.platform.startswith("linux"):
             import sounddevice as sd
             with sd.InputStream(samplerate=16000, channels=1, dtype="float32") as stream:
