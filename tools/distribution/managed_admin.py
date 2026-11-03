@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 from pathlib import Path
 import subprocess
@@ -84,6 +85,18 @@ def helper(manager, action: str, *, source: Path | None = None, transaction: Pat
     return value.get("result", {})
 
 
+def _path_identity(path: str) -> str:
+    resolved = os.path.realpath(path)
+    if sys.platform != "win32":
+        return os.path.normcase(resolved)
+    resolved = ntpath.normcase(resolved)
+    if resolved.startswith("\\\\?\\unc\\"):
+        return "\\\\" + resolved[8:]
+    if resolved.startswith("\\\\?\\") and ntpath.splitdrive(resolved[4:])[0].endswith(":"):
+        return resolved[4:]
+    return resolved
+
+
 def assert_inactive(data: Path, code: Path, *, allow_setup: bool = False) -> None:
     """Do not trust stale PID files or unavailable elevated process metadata."""
     import psutil
@@ -109,7 +122,7 @@ def assert_inactive(data: Path, code: Path, *, allow_setup: bool = False) -> Non
                 raise RuntimeError("Runtime PID ownership is unreadable; migration is blocked") from None
             if owner_name.startswith(("python", "pypy")):
                 raise RuntimeError("An owner PID is live or uncertain; stop Odicto yourself before migrating")
-    expected = {os.path.normcase(str((code / part).resolve())) for part in ("main.py", "app/main.py", "odicto.py", "app/odicto.py", "app/setup_web.py")}
+    expected = {_path_identity(str((code / part).resolve())) for part in ("main.py", "app/main.py", "odicto.py", "app/odicto.py", "app/setup_web.py")}
     for process in psutil.process_iter(["pid", "name"]):
         if process.pid == os.getpid():
             continue
@@ -119,15 +132,22 @@ def assert_inactive(data: Path, code: Path, *, allow_setup: bool = False) -> Non
                 continue
             command = process.cmdline()
             def script_path(argument):
-                if not argument.lower().endswith(".py"):
+                candidate = argument.rstrip(" .") if sys.platform == "win32" else argument
+                if not candidate.lower().endswith(".py"):
                     return None
-                if not os.path.isabs(argument):
+                if sys.platform == "win32":
+                    drive, tail = ntpath.splitdrive(argument)
+                    if drive and not tail.startswith(("\\", "/")):
+                        raise RuntimeError("Python drive-relative script ownership is uncertain; migration is blocked")
+                    if not drive:
+                        argument = ntpath.join(process.cwd(), argument)
+                elif not os.path.isabs(argument):
                     argument = os.path.join(process.cwd(), argument)
                 try:
-                    return os.path.normcase(os.path.realpath(argument))
+                    return _path_identity(argument)
                 except (OSError, ValueError):
                     raise RuntimeError("Python script ownership could not be resolved; migration is blocked") from None
-            setup_scripts = {os.path.normcase(str((code / name).resolve())) for name in ("odicto.py", "app/odicto.py")}
+            setup_scripts = {_path_identity(str((code / name).resolve())) for name in ("odicto.py", "app/odicto.py")}
             if (allow_setup and len(command) >= 3
                     and script_path(command[1]) in setup_scripts
                     and command[2] in {"setup", "_managed-setup"}):

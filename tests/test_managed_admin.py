@@ -3,6 +3,7 @@ from contextlib import ExitStack
 import hashlib
 import io
 import json
+import ntpath
 import os
 from pathlib import Path
 import subprocess
@@ -376,6 +377,48 @@ class TestManagedWindowsIdentity(unittest.TestCase):
 
 
 class TestManagedNativeBoundary(unittest.TestCase):
+    def test_native_script_aliases_keep_lifecycle_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code = Path(temporary).resolve()
+            for script in ("main.py", "odicto.py"):
+                path = code / script
+                path.write_text("# fixture")
+                aliases = [str(path)]
+                if sys.platform == "win32":
+                    aliases += ["\\\\?\\" + str(path), str(path) + ".", ntpath.splitdrive(str(path))[1]]
+                for alias in aliases:
+                    for allow_setup in (False, True):
+                        for command in ("status", "_managed-setup"):
+                            with self.subTest(script=script, alias=alias, allow_setup=allow_setup, command=command):
+                                process = SimpleNamespace(pid=12345, info={"name": "python.exe"},
+                                    cwd=lambda: str(code), cmdline=lambda: ["python", alias, command])
+                                with patch("psutil.process_iter", return_value=[process]):
+                                    if script == "odicto.py" and allow_setup and command == "_managed-setup":
+                                        admin.assert_inactive(code, code, allow_setup=allow_setup)
+                                    else:
+                                        with self.assertRaisesRegex(RuntimeError, "lifecycle process"):
+                                            admin.assert_inactive(code, code, allow_setup=allow_setup)
+
+    def test_windows_extended_path_identity_matches_drive_and_unc_spelling(self):
+        paths = [(r"\\?\C:\Example\main.py", r"c:\example\main.py"),
+                 (r"\\?\UNC\Server\Share\main.py", r"\\server\share\main.py")]
+        with patch.object(admin, "sys", SimpleNamespace(platform="win32")), patch(
+            "os.path.realpath", side_effect=lambda value: value
+        ):
+            for extended, ordinary in paths:
+                with self.subTest(path=extended):
+                    self.assertEqual(admin._path_identity(extended), ordinary)
+
+    def test_drive_relative_script_ownership_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code = Path(temporary).resolve()
+            process = SimpleNamespace(pid=12345, info={"name": "python.exe"},
+                cwd=lambda: r"C:\other", cmdline=lambda: ["python", "W:main.py"])
+            with patch.object(admin, "sys", SimpleNamespace(platform="win32")), patch(
+                "psutil.process_iter", return_value=[process]
+            ), self.assertRaisesRegex(RuntimeError, "drive-relative"):
+                admin.assert_inactive(code, code)
+
     def test_process_identity_resolves_script_path_aliases(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
