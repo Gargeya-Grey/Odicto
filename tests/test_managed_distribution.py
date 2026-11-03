@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import shutil
 import sys
+import re
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -569,7 +570,34 @@ def _windows_dacls(*paths):
     lines = output.split()
     if len(lines) != len(paths) + 1:
         raise AssertionError(output + error)
-    return lines
+    user = lines[0]
+    # SDDL may name the token user by an alias: the built-in Administrator (RID 500, as on GitHub's
+    # Windows runners) is "LA". The product canonicalizes aliases; write them as the full SID here too.
+    return [user] + [re.sub(r";([A-Z]{2})\)", lambda match: ";%s)" % user
+                            if _full_sid(match.group(1)) == user else match.group(0), dacl) for dacl in lines[1:]]
+
+
+def _full_sid(alias):
+    """The S-1-... form of an SDDL SID alias such as LA or BA, or the alias when Windows has none."""
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    binary, text = ctypes.c_void_p(), ctypes.c_void_p()
+    if not advapi.ConvertStringSidToSidW(alias, ctypes.byref(binary)):
+        return alias
+    try:
+        if not advapi.ConvertSidToStringSidW(binary, ctypes.byref(text)):
+            return alias
+        try:
+            return ctypes.wstring_at(text.value)
+        finally:
+            kernel.LocalFree(text)
+    finally:
+        kernel.LocalFree(binary)
 
 
 class TestPrivateDirectoryPolicy(unittest.TestCase):
