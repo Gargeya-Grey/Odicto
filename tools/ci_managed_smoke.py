@@ -5,8 +5,58 @@ import io
 import json
 import os
 from pathlib import Path
+import socket
+import subprocess
 import sys
+import time
+import urllib.request
+from unittest.mock import patch
 import zipfile
+
+
+def setup_handoff(manager, update, BusyError):
+    children = []
+    real_popen = subprocess.Popen
+    adapter = ("import runpy,sys,webbrowser;webbrowser.open=lambda *a,**k:False;"
+               "sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')")
+
+    def spawn(command, *args, **kwargs):
+        if isinstance(command, list) and command[-1] == "_managed-setup":
+            command = [command[0], "-u", "-c", adapter, *command[1:]]
+            child = real_popen(command, *args, **kwargs)
+            children.append(child)
+            return child
+        return real_popen(command, *args, **kwargs)
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    try:
+        with patch.dict(os.environ, SETUP_PORT=str(port)), patch.object(subprocess, "Popen", side_effect=spawn):
+            assert manager.run(["setup"], automatic_updates=False) == 0
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=2) as response:
+                        status = json.load(response)
+                    assert status["service"] == "odicto-setup"
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Managed Setup did not serve HTTP after its lease handoff")
+                    time.sleep(0.1)
+            assert manager.run(["setup"], automatic_updates=False) == 0
+            try:
+                manager.activate(update)
+            except BusyError:
+                pass
+            else:
+                raise AssertionError("An actual open managed Setup did not block activation")
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=10)
 
 
 def main():
@@ -59,6 +109,7 @@ def main():
         (manager.data / name).write_bytes(contents)
     assert manager.run(["version"], automatic_updates=False) == 0
     update = manager.stage(releases[1])
+    setup_handoff(manager, update, BusyError)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
     from state_lock import StateLease
     for name in ("dictation.lock", "setup.lock"):
@@ -81,7 +132,8 @@ def main():
     (args.evidence / "managed-update.json").write_text(json.dumps({"pass": True,
         "source_sha": os.environ.get("GITHUB_SHA"), "actual_dependency_install": True,
         "versioned_venv_locations": [original["directory"], update["directory"]],
-        "checks": ["initial activation", "installed version CLI", "runtime lease blocks update",
+        "checks": ["initial activation", "installed version CLI", "managed Setup HTTP after launch handoff",
+                   "second managed Setup reuses existing server", "actual Setup blocks update", "runtime lease blocks update",
                    "Setup lease blocks update", "activation", "rollback", "settings and unknown-file preservation"],
         "limits": ["Future-version fixture changes VERSION only in the committed archive",
                    "No physical microphone, permissions or global-hook start"]}, indent=2), encoding="utf-8")

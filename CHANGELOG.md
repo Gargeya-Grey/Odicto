@@ -19,6 +19,8 @@ section as the release notes and refuses a version that has no section.
 - Raw and live transcription no longer run an automatic polish call, including installations with the legacy `POLISH_DICTATION=true` setting. Polish runs only when explicitly requested.
 - Selection polish leaves the original document untouched and shows the original and polished text in a review window with explicit Copy and Dismiss controls. Cancellation and failed requests never insert text. Terminal targets are skipped.
 - Linux X11 hotkeys use a rootless server-grab backend. Unusable desktop sessions are rejected before claiming the instance lock.
+- X11 grabs only the configured modifier combinations, leaving desktop window shortcuts available. Terminal text is sent through a private pipe; text that cannot be typed safely is offered for explicit copying before any input is sent.
+- Managed startup confirms the exact child is ready before releasing its launch lease. Failed or uncertain starts cannot silently activate a broken update.
 
 ### Verification limits
 

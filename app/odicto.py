@@ -19,6 +19,8 @@ import json
 import time
 import subprocess
 import sys
+import threading
+from pathlib import Path
 
 import platforms
 
@@ -49,6 +51,73 @@ def cmd_setup(_args) -> int:
 
     setup_web.run_server()
     return 0
+
+
+def _managed_receipt(state: str) -> None:
+    from state_lock import StateLease
+    path = Path(os.environ["ODICTO_LAUNCH_RECEIPT"])
+    value = {"token": os.environ["ODICTO_LAUNCH_TOKEN"], "pid": os.getpid(), "state": state}
+    home = Path(os.environ["ODICTO_MANAGED_HOME"])
+    with StateLease(home / "launch-intent.lock"):
+        intent = json.loads((home / "launch-intent.json").read_text(encoding="utf-8"))
+        if intent.get("token") != value["token"] or intent.get("receipt") != path.name:
+            raise RuntimeError("The managed startup reservation is no longer valid")
+        temporary = path.with_suffix(".new")
+        temporary.write_text(json.dumps(value), encoding="utf-8")
+        os.replace(temporary, path)
+
+
+def _managed_startup_guard() -> None:
+    """An unconfirmed startup must die if its supervising launcher disappears."""
+    descriptor = sys.stdin.fileno()
+    if os.read(descriptor, 1) != b"S":
+        raise SystemExit(2)
+    ready = threading.Event()
+
+    def supervise():
+        ready.set()
+        if os.read(descriptor, 1) != b"R":
+            os._exit(2)
+
+    threading.Thread(target=supervise, daemon=True, name="odicto-startup-lease").start()
+    ready.wait()
+
+
+def cmd_managed_owner(_args) -> int:
+    import runpy
+    if not os.environ.get("ODICTO_MANAGED_HOME") or not os.environ.get("ODICTO_LAUNCH_TOKEN"):
+        raise RuntimeError("The managed owner command requires its supervising launcher")
+    _managed_startup_guard()
+    _managed_receipt("owner-starting")
+    runpy.run_path(_main_py(), run_name="__main__")
+    return 0
+
+
+def cmd_managed_setup(_args) -> int:
+    import setup_web
+    import webbrowser
+    from state_lock import StateLease
+    if not os.environ.get("ODICTO_MANAGED_HOME") or not os.environ.get("ODICTO_LAUNCH_TOKEN"):
+        raise RuntimeError("The managed setup command requires its supervising launcher")
+    _managed_startup_guard()
+    lease = StateLease(Path(_data_root()) / "setup.lock")
+    try:
+        lease.__enter__()
+    except OSError:
+        first = int(os.getenv("SETUP_PORT", "8765"))
+        for port in range(first, first + 10):
+            url = setup_web._existing_setup_url(port)
+            if url:
+                webbrowser.open(url)
+                return 0
+        print("This installation's Setup is busy; its existing page is not ready yet.", file=sys.stderr)
+        return 1
+    try:
+        _managed_receipt("setup-owned")
+        setup_web._run_server()
+        return 0
+    finally:
+        lease.__exit__(None, None, None)
 
 
 def _elevated_exit(action: str, timeout=None):
@@ -132,7 +201,12 @@ def cmd_wait_ready(args) -> int:
                 health = json.load(f)
             mic = health.get("microphone") or {}
             age = time.time() - health["updated_at"]
+            expected_token = getattr(args, "launch_token", None)
+            expected_root = getattr(args, "expected_root", None)
             if (health["pid"] == pid and 0 <= age < 10 and health["ready"]
+                    and (not expected_token or health.get("launch_token") == expected_token)
+                    and (not expected_root or os.path.normcase(os.path.realpath(health.get("code_root", "")))
+                         == os.path.normcase(os.path.realpath(expected_root)))
                     and mic and not mic.get("closed", True)
                     and mic.get("callback_count", 0) > 0
                     and 0 <= mic.get("callback_age_s", 10) + age < 3):
@@ -328,6 +402,9 @@ def cmd_remove_autostart(_args) -> int:
 
 
 def main() -> int:
+    internal = {"_managed-owner": cmd_managed_owner, "_managed-setup": cmd_managed_setup}
+    if len(sys.argv) == 2 and sys.argv[1] in internal:
+        return internal[sys.argv[1]](None)
     parser = argparse.ArgumentParser(prog="odicto")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("setup", help="Open the local setup web page")
@@ -337,6 +414,8 @@ def main() -> int:
     sub.add_parser("status", help="Show runtime status")
     wait_ready = sub.add_parser("wait-ready", help="Wait for app and microphone readiness")
     wait_ready.add_argument("--timeout", type=float, default=30.0)
+    wait_ready.add_argument("--launch-token", help=argparse.SUPPRESS)
+    wait_ready.add_argument("--expected-root", help=argparse.SUPPRESS)
     sub.add_parser("config", help="Show resolved configuration and where each value came from")
     sub.add_parser("version", help="Show the Odicto version (the VERSION file)")
     sub.add_parser("autostart", help="Install autostart entry")

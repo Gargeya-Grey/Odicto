@@ -48,6 +48,7 @@ else
   if [ ! -x "$UV" ]; then UV="$HOME/.cargo/bin/uv"; fi
 fi
 
+export PATH="$(dirname "$UV"):$PATH"
 "$UV" run --python 3.12 --no-project --no-config python - "$@" <<'PY'
 import hashlib, io, json, stat, sys, urllib.parse, urllib.request, zipfile
 repo = 'Gargeya-Grey/Odicto'

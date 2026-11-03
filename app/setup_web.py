@@ -444,6 +444,11 @@ def restart_odicto() -> str:
     try:
         platforms.kill_other_odicto_processes(pid_file)
     except Exception as e:
+        if sys.platform.startswith("linux") or sys.platform == "darwin":
+            raise RuntimeError(
+                f"Could not stop the existing Odicto owner ({e}). Quit that instance using "
+                "its tray menu or the privileges that started it, then start Odicto again."
+            ) from e
         return f"Settings saved, but could not stop Odicto ({e}). Start it yourself."
 
     if sys.platform == "win32":

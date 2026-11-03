@@ -66,5 +66,6 @@ raise SystemExit(namespace['main']([*sys.argv[1:], 'install']))
 '@
 $managerArgs = @()
 if ($HomePath) { $managerArgs = @('--home', $HomePath) }
+$env:PATH = (Split-Path -Parent $uv) + [IO.Path]::PathSeparator + $env:PATH
 $bootstrap | & $uv run --python 3.12 --no-project --no-config python - @managerArgs
 if ($LASTEXITCODE -ne 0) { throw 'Odicto managed installation failed' }

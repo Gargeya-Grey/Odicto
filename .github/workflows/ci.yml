@@ -35,7 +35,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libportaudio2 xclip xdotool xvfb xauth x11-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          sudo apt-get install -y libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=odicto_ci
+          pactl set-default-source odicto_ci.monitor
       - name: Install macOS audio dependency
         if: runner.os == 'macOS'
         run: brew list portaudio >/dev/null 2>&1 || brew install portaudio

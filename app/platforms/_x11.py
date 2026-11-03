@@ -63,6 +63,7 @@ class _Backend:
         self.root = display.screen().root
         self.lock = threading.RLock()
         self.handlers = {}
+        self.modifier_masks = {}
         self.pressed = {}
         self.suppressed = set()
         self.closing = threading.Event()
@@ -80,18 +81,47 @@ class _Backend:
                 found.append(code)
         return tuple(found)
 
-    def bind(self, key, callback, suppress):
+    def masks(self, modifier_sets):
+        named = {"ctrl": self.X.ControlMask, "control": self.X.ControlMask,
+                 "shift": self.X.ShiftMask, "alt": self.X.Mod1Mask,
+                 "cmd": self.X.Mod4Mask, "win": self.X.Mod4Mask, "windows": self.X.Mod4Mask}
+        ignored = {self.X.LockMask}
+        mapping = self.display.get_modifier_mapping()
+        for name in ("Num_Lock", "Scroll_Lock"):
+            symbol = self.XK.string_to_keysym(name)
+            code = self.display.keysym_to_keycode(symbol) if symbol else 0
+            if code:
+                ignored.update(1 << index for index, codes in enumerate(mapping) if code in codes)
+        lock_variants = {0}
+        for mask in ignored:
+            lock_variants |= {value | mask for value in lock_variants}
+        result = set()
+        for modifiers in modifier_sets:
+            mask = 0
+            for modifier in modifiers:
+                name = str(modifier).lower().removeprefix("left ").removeprefix("right ")
+                if name not in named:
+                    raise ValueError(f"Unknown X11 shortcut modifier: {modifier!r}")
+                mask |= named[name]
+            result.update(mask | locks for locks in lock_variants)
+        if not result:
+            raise ValueError("At least one X11 shortcut modifier combination is required")
+        return result
+
+    def bind(self, key, callback, suppress, modifier_sets=((),)):
         with self.lock:
             codes = self.codes(key)
             if not codes:
                 raise ValueError(f"Unknown X11 shortcut key: {key!r}")
             if any(code in self.handlers for code in codes):
                 raise ValueError(f"X11 shortcut key is already registered: {key!r}")
+            masks = self.masks(modifier_sets)
             errors = []
             for code in codes:
-                self.root.grab_key(code, self.X.AnyModifier, False,
-                                   self.X.GrabModeAsync, self.X.GrabModeSync,
-                                   onerror=lambda error, request: errors.append(error))
+                for mask in sorted(masks):
+                    self.root.grab_key(code, mask, False,
+                                       self.X.GrabModeAsync, self.X.GrabModeSync,
+                                       onerror=lambda error, request: errors.append(error))
             self.display.sync()
             if errors:
                 for code in codes:
@@ -100,6 +130,7 @@ class _Backend:
                 raise RuntimeError(f"Another application owns X11 shortcut {key!r}; choose another shortcut.")
             for code in codes:
                 self.handlers[code] = (callback, suppress, str(key))
+                self.modifier_masks[code] = masks
             if self.thread is None:
                 self.thread = threading.Thread(target=self.run, daemon=True, name="odicto-x11-hotkeys")
                 self.thread.start()
@@ -142,6 +173,10 @@ class _Backend:
             return
         code = event.detail
         kind = KEY_DOWN if event.type == self.X.KeyPress else KEY_UP
+        if (kind == KEY_DOWN and code not in self.suppressed and code in self.modifier_masks
+                and event.state & 0xff not in self.modifier_masks[code]):
+            self._replay(event.time)
+            return
         if kind == KEY_UP and code in self.pressed and _down(self.display.query_keymap(), code):
             self.display.allow_events(self.X.SyncKeyboard, event.time)
             self.display.flush()
@@ -233,8 +268,8 @@ def _get_backend():
         return _backend
 
 
-def hook_key(key, handler, suppress=False):
-    _get_backend().bind(key, handler, suppress)
+def hook_key(key, handler, suppress=False, modifier_sets=((),)):
+    _get_backend().bind(key, handler, suppress, modifier_sets)
 
 
 def unhook_all():
@@ -268,14 +303,14 @@ def wait():
     threading.Event().wait()
 
 
-def _xdotool(*arguments, timeout=5.0):
+def _xdotool(*arguments, timeout=5.0, input=None):
     require_session()
     executable = shutil.which("xdotool")
     if executable is None:
         raise RuntimeError("xdotool is missing; install it with your system package manager.")
     try:
         subprocess.run([executable, *arguments], check=True, timeout=timeout,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, input=input)
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
         raise RuntimeError("X11 input injection failed; refusing to repeat possibly partial input.") from error
 
@@ -337,10 +372,20 @@ def send_text(text):
 def send_text_bulk(text):
     if not text:
         return True
+    if any(not (" " <= char <= "~" or char in "\r\n") for char in text):
+        from platforms.base import TextDeliveryUnavailable
+        raise TextDeliveryUnavailable(
+            "This text needs manual paste in this Linux target. Copy the complete text below, "
+            "then paste it using the target application's paste command. Nothing was typed.")
     if shutil.which("xdotool") is None:
         return False
-    _xdotool("type", "--clearmodifiers", "--delay", "2", "--", text,
-             timeout=max(5.0, len(text) * 0.004 + 5.0))
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for index, line in enumerate(lines):
+        if index:
+            _xdotool("key", "--clearmodifiers", "Return")
+        if line:
+            _xdotool("type", "--clearmodifiers", "--delay", "2", "--file", "-",
+                     timeout=max(5.0, len(line) * 0.004 + 5.0), input=line.encode("utf-8"))
     return True
 
 

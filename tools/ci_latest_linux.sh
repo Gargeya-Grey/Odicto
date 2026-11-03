@@ -66,9 +66,12 @@ repository="$2"
 test "$ID" = ubuntu && test "$VERSION_ID" = 26.10
 sudo cloud-init status --wait
 sudo apt-get update
-sudo apt-get install -y git curl ca-certificates nodejs libportaudio2 xclip xdotool xvfb xauth x11-utils \
+sudo apt-get install -y git curl ca-certificates nodejs libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils \
   libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
   libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+pulseaudio --start --exit-idle-time=-1
+pactl load-module module-null-sink sink_name=odicto_ci
+pactl set-default-source odicto_ci.monitor
 curl --proto '=https' --tlsv1.2 -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 export GITHUB_ACTIONS=true RUNNER_TEMP="$HOME/ci-temp" ODICTO_RUNNER_LABEL=ubuntu-26.10-vm

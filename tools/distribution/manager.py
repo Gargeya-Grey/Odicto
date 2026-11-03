@@ -29,6 +29,8 @@ MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
 MAX_ENTRIES = 10000
 CHECK_INTERVAL = 8 * 60 * 60
+STARTUP_TIMEOUT = 60.0
+CANCEL_TIMEOUT = 10.0
 _VERSION = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 _RELEASE_DIR = re.compile(r"v\d+\.\d+\.\d+-[a-f0-9]{12}-[a-f0-9]{8}\Z")
 _DOWNLOAD_HOSTS = {"api.github.com", "github.com", "release-assets.githubusercontent.com",
@@ -359,6 +361,7 @@ class Manager:
     def _activation_locks(self):
         with ExitStack() as stack:
             stack.enter_context(file_lock(self.home / "launch.lock"))
+            self._recover_launch_intent()
             stack.enter_context(file_lock(self.data / "setup.lock"))
             stack.enter_context(file_lock(self.data / "dictation.lock"))
             yield
@@ -545,10 +548,13 @@ runpy.run_path(str(script), run_name='__main__')
                 directory = self.release_path(current)
                 if command[0] in {"start", "setup", "restart"}:
                     launch.enter_context(file_lock(self.home / "launch.lock"))
-            python = directory / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-            result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
-                                    cwd=directory, env=self.environment())
-        if result.returncode and command[0] == "start" and before and current["directory"] != before["directory"]:
+            python = self._python(directory)
+            if command[0] in {"start", "setup", "restart"}:
+                result = self._launch(directory, python, command[0])
+            else:
+                result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
+                                        cwd=directory, env=self.environment()).returncode
+        if result and command[0] == "start" and before and current["directory"] != before["directory"]:
             try:
                 with file_lock(self.home / "manager.lock"):
                     if self.active()["directory"] == current["directory"]:
@@ -556,7 +562,145 @@ runpy.run_path(str(script), run_name='__main__')
                 print("The new release did not start; the previous version is active again.", file=sys.stderr)
             except BusyError:
                 print("The new runtime still owns its lock; rollback was deferred.", file=sys.stderr)
-        return result.returncode
+        return result
+
+    @staticmethod
+    def _python(directory: Path) -> Path:
+        return directory / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+    @staticmethod
+    def _pid_alive(pid) -> bool:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return True
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return ctypes.get_last_error() != 87
+            try:
+                code = ctypes.c_uint32()
+                return not kernel.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value == 259
+            finally:
+                kernel.CloseHandle(handle)
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
+
+    def _recover_launch_intent(self) -> None:
+        intent = self.home / "launch-intent.json"
+        if not intent.exists():
+            return
+        with file_lock(self.home / "launch-intent.lock"):
+            record = self._read_json(intent)
+            token = record.get("token", "")
+            if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{32}", token):
+                raise DistributionError("The pending startup reservation is invalid; it was preserved")
+            receipt = self.home / ("launch-receipt-" + token + ".json")
+            if record.get("receipt") != receipt.name:
+                raise DistributionError("The pending startup receipt is invalid; it was preserved")
+            if receipt.exists():
+                child = self._read_json(receipt)
+                safe = child.get("token") == token and (
+                    child.get("state") == "setup-owned" or not self._pid_alive(child.get("pid")))
+                if not safe and child.get("token") == token and child.get("state") == "owner-starting":
+                    active = self.active()
+                    if active and active["directory"] == record.get("directory"):
+                        directory = self.release_path(active)
+                        safe = self._ready(directory, self._python(directory), token)
+            else:
+                safe = not self._pid_alive(record.get("supervisor_pid")) and (
+                    record.get("child_pid") is None or not self._pid_alive(record.get("child_pid")))
+            if not safe:
+                raise BusyError("A managed startup has not confirmed exit; activation and rollback remain deferred")
+            intent.unlink()
+            receipt.unlink(missing_ok=True)
+
+    def _ready(self, directory: Path, python: Path, token: str = "") -> bool:
+        command = [str(python), str(directory / "odicto.py"), "wait-ready", "--timeout", "0",
+                   "--expected-root", str(directory)]
+        if token:
+            command += ["--launch-token", token]
+        try:
+            return subprocess.run(command, cwd=directory, env=self.environment(),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def _launch(self, directory: Path, python: Path, command: str) -> int:
+        intent = self.home / "launch-intent.json"
+        self._recover_launch_intent()
+        if command == "restart":
+            result = subprocess.run([str(python), str(directory / "odicto.py"), "stop"],
+                                    cwd=directory, env=self.environment()).returncode
+            if result:
+                return result
+            command = "start"
+        if command == "start" and self._ready(directory, python):
+            return 0
+        token = uuid.uuid4().hex
+        receipt = self.home / ("launch-receipt-" + token + ".json")
+        atomic_json(intent, {"token": token, "directory": directory.name,
+                             "supervisor_pid": os.getpid(), "child_pid": None, "receipt": receipt.name})
+        environment = self.environment()
+        environment["ODICTO_LAUNCH_TOKEN"] = token
+        environment["ODICTO_LAUNCH_RECEIPT"] = str(receipt)
+        process = None
+        confirmed = False
+        try:
+            options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
+            process = subprocess.Popen([str(python), str(directory / "odicto.py"),
+                                        "_managed-owner" if command == "start" else "_managed-setup"],
+                                       cwd=directory, env=environment, stdin=subprocess.PIPE, **options)
+            reservation = self._read_json(intent)
+            reservation["child_pid"] = process.pid
+            atomic_json(intent, reservation)
+            process.stdin.write(b"S")
+            process.stdin.flush()
+            deadline = time.monotonic() + STARTUP_TIMEOUT
+            while time.monotonic() < deadline:
+                status = process.poll()
+                if status is not None:
+                    confirmed = True
+                    return status if status else (0 if command == "setup" else 1)
+                owned_setup = False
+                if command == "setup" and receipt.exists():
+                    state = self._read_json(receipt)
+                    owned_setup = state.get("token") == token and state.get("state") == "setup-owned"
+                if owned_setup or command == "start" and self._ready(directory, python, token):
+                    process.stdin.write(b"R")
+                    process.stdin.flush()
+                    process.stdin.close()
+                    confirmed = True
+                    return 0
+                time.sleep(0.1)
+            print("Odicto did not complete startup; cancelling the unconfirmed child.", file=sys.stderr)
+            return 1
+        except (OSError, subprocess.SubprocessError) as error:
+            print(f"Odicto startup failed ({type(error).__name__}).", file=sys.stderr)
+            return 1
+        finally:
+            if process is None:
+                confirmed = True
+            elif not confirmed:
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+                try:
+                    process.wait(timeout=CANCEL_TIMEOUT)
+                    confirmed = True
+                except subprocess.TimeoutExpired:
+                    print("The startup child has not confirmed exit; activation and rollback remain deferred.", file=sys.stderr)
+            if confirmed:
+                intent.unlink(missing_ok=True)
+                receipt.unlink(missing_ok=True)
 
 
 def main(argv=None) -> int:

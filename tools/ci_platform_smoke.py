@@ -117,6 +117,19 @@ def installed(root: Path, evidence: Path, sha: str) -> int:
         for name in ("sounddevice", "soundfile", "faster_whisper", "PySide6.QtWidgets"):
             importlib.import_module(name)
         report["checks"]["native_imports"] = "pass"
+        import numpy as np
+        from faster_whisper.vad import get_speech_timestamps
+        if get_speech_timestamps(np.zeros(16000, dtype=np.float32)):
+            raise RuntimeError("Native VAD classified silence as speech")
+        report["checks"]["native_onnx_inference"] = "pass"
+        if sys.platform.startswith("linux"):
+            import sounddevice as sd
+            with sd.InputStream(samplerate=16000, channels=1, dtype="float32") as stream:
+                samples, overflow = stream.read(3200)
+            if samples.shape != (3200, 1) or not np.isfinite(samples).all() or overflow:
+                raise RuntimeError("The emulated Linux audio source did not deliver valid PCM")
+            report["checks"]["emulated_audio_capture"] = "pass"
+            report["audio_source"] = "CI PulseAudio null-sink monitor; not a physical microphone"
         report["dependencies"] = {name: importlib.metadata.version(name)
                                   for name in ("PySide6", "sounddevice", "faster-whisper", "google-genai")}
         from PySide6.QtWidgets import QApplication, QLabel

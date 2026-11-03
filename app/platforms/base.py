@@ -15,6 +15,10 @@ from typing import Optional
 import pyperclip
 
 
+class TextDeliveryUnavailable(RuntimeError):
+    """No input was sent; the caller may offer explicit copying instead."""
+
+
 def install_root() -> str:
     """Absolute path to the Odicto install directory (repo root)."""
     return str(DATA_ROOT)
@@ -57,6 +61,8 @@ def is_odicto_command(argv, cwd=None) -> bool:
             return False
         script = os.path.join(cwd, script)
     script = os.path.normcase(os.path.normpath(script))
+    managed_owner = (os.path.basename(script) == "odicto.py"
+                     and argv[index + 1:] == ["_managed-owner"])
     if script in {os.path.normcase(os.path.join(code_root(), "main.py")),
                   os.path.normcase(os.path.join(code_root(), "app", "main.py"))}:
         return True
@@ -69,7 +75,7 @@ def is_odicto_command(argv, cwd=None) -> bool:
         relative = Path(script).resolve().relative_to(releases)
         executed_main = (len(relative.parts) == 2 and relative.parts[-1] == "main.py"
                          or len(relative.parts) == 3 and relative.parts[-2:] == ("app", "main.py"))
-        if not executed_main:
+        if not (executed_main or managed_owner and len(relative.parts) == 2):
             return False
         ready = releases / relative.parts[0] / ".odicto-ready.json"
         if ready.is_symlink() or ready.stat().st_size > 65536:

@@ -651,3 +651,12 @@ Gemini receives the list; Groq and local Whisper receive whole terms within 224 
 through `prompt` and `initial_prompt`. OpenRouter speech has no hint parameter.
 Setup exposes vocabulary on Speech and a dedicated Polish page. These are recognition hints,
 not deterministic substitutions.
+
+Managed releases use a private startup pipe and token-bound health record before
+releasing `launch.lock`. Setup hands off to `data/setup.lock`; a failed or unknown
+owner keeps activation deferred until its exit is established. See
+`tools/distribution/README.md` for the pointer, ownership and rollback protocol.
+X11 grabs the configured modifier masks plus lock-key variants, preserving desktop
+shortcuts on unrelated masks. Typed text uses private stdin. Non-ASCII or control
+characters that xdotool cannot deliver reliably are refused before any input and
+offered in an explicit Copy/Dismiss recovery card. Clipboard paste remains Unicode.

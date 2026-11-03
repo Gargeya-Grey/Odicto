@@ -17,7 +17,7 @@ class TestManagedAutostart(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.home = self.root / "Odicto managed 100%"
         (self.home / "bin").mkdir(parents=True)
         self.target = self.root / "startup" / "odicto-entry"

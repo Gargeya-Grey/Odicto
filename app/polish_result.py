@@ -9,13 +9,14 @@ from paths import ROOT
 
 
 class PolishResultDialog(QDialog):
-    def __init__(self, original: str, polished: str, parent=None):
+    def __init__(self, original: str | None, polished: str, parent=None, *,
+                 title="Odicto · Polish", explanation=None):
         super().__init__(parent)
         font_id = QFontDatabase.addApplicationFont(str(ROOT / "assets/fonts/InstrumentSans-VF.ttf"))
         families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
         if families:
             self.setFont(QFont(families[0], 11))
-        self.setWindowTitle("Odicto · Polish")
+        self.setWindowTitle(title)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.resize(560, 440)
         self.setMinimumSize(320, 320)
@@ -32,18 +33,20 @@ class PolishResultDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
-        explanation = QLabel("Review the edit, then copy it when ready. Your document has not been changed.")
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
-        layout.addWidget(QLabel("Original text"))
-        self.original = QPlainTextEdit(original)
-        self.original.setReadOnly(True)
-        self.original.setAccessibleName("Original text")
-        self.original.setMaximumHeight(110)
-        layout.addWidget(self.original)
-        layout.addWidget(QLabel("Polished text"))
+        help_text = QLabel(explanation or "Review the edit, then copy it when ready. Your document has not been changed.")
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+        self.original = None
+        if original is not None:
+            layout.addWidget(QLabel("Original text"))
+            self.original = QPlainTextEdit(original)
+            self.original.setReadOnly(True)
+            self.original.setAccessibleName("Original text")
+            self.original.setMaximumHeight(110)
+            layout.addWidget(self.original)
+        layout.addWidget(QLabel("Polished text" if original is not None else "Text ready to copy"))
         self.polished = QPlainTextEdit(polished)
-        self.polished.setAccessibleName("Polished text")
+        self.polished.setAccessibleName("Polished text" if original is not None else "Text ready to copy")
         layout.addWidget(self.polished, 1)
         buttons = QHBoxLayout()
         buttons.addStretch()

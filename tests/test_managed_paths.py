@@ -13,6 +13,25 @@ from state_lock import StateLease
 
 
 class TestManagedPaths(unittest.TestCase):
+    def test_managed_owner_command_is_exact_and_release_verified(self):
+        from platforms import base
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            release = home / "releases/v1.2.0-test"
+            release.mkdir(parents=True)
+            marker = release / ".odicto-ready.json"
+            marker.write_text(json.dumps({"directory": release.name}))
+            command = [sys.executable, str(release / "odicto.py"), "_managed-owner"]
+            with patch.dict(os.environ, ODICTO_MANAGED_HOME=str(home)):
+                self.assertTrue(base.is_odicto_command(command))
+                self.assertFalse(base.is_odicto_command(command + ["extra"]))
+                self.assertFalse(base.is_odicto_command(command[:-1] + ["_managed-setup"]))
+                self.assertFalse(base.is_odicto_command(command[:-1]))
+                marker.unlink()
+                self.assertFalse(base.is_odicto_command(command))
+            with patch.dict(os.environ, {"ODICTO_MANAGED_HOME": ""}):
+                self.assertFalse(base.is_odicto_command(command))
+
     def test_code_version_and_mutable_files_use_separate_roots(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)

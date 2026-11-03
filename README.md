@@ -73,6 +73,12 @@ Notes:
   configured shortcuts while unrelated keys are replayed. Root and membership
   in the `input` group are unnecessary. Wayland sessions fail preflight with an
   explicit message; Xwayland does not provide global input.
+  When upgrading from an older version run as root, quit that existing instance
+  with its original privileges before starting the new version as your desktop user.
+  Linux terminal typing supports printable ASCII and line breaks. For other
+  characters Odicto sends no input and offers the complete text in a Copy/Dismiss
+  card. Use the terminal's paste command manually. Normal clipboard insertion in
+  browsers and editors preserves Unicode.
 - **Python 3.10 to 3.12.** The installers reuse an installed Python 3.12, 3.11 or 3.10
   (highest first). uv fetches 3.12 only when none is installed. Python 3.13+ is refused
   because `numpy<2` has no wheels. `.venv` is tied to the machine and Python that made it;

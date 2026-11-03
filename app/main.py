@@ -440,6 +440,8 @@ class DictationApp:
                 ready = (self.ready and microphone is not None and not microphone["closed"]
                          and microphone["callback_count"] > 0 and microphone["callback_age_s"] <= 3)
                 snapshot = {"pid": os.getpid(), "updated_at": time.time(),
+                            "launch_token": os.environ.get("ODICTO_LAUNCH_TOKEN", ""),
+                            "code_root": str(ROOT),
                             "ready": ready, "state": self.state.name,
                             "status": self.last_status,
                             "microphone": microphone}
@@ -867,6 +869,10 @@ class DictationApp:
 
         ensure_can_bind_hotkeys()
 
+        def hook(key, handler, suppress, modifier_sets=((),)):
+            options = {"modifier_sets": modifier_sets} if platforms.hotkey_backend_name() == "x11" else {}
+            platforms.hook_key(key, handler, suppress=suppress, **options)
+
         def primary_handler(event: object) -> bool:
             event_type = getattr(event, "event_type", None)
             if event_type == platforms.KEY_DOWN:
@@ -903,7 +909,14 @@ class DictationApp:
 
         # suppress=True installs a system-wide keyboard hook (all keys, all apps).
         # Only one process may do this — guarded by _INSTANCE_LOCK_HELD above.
-        platforms.hook_key(primary, primary_handler, suppress=True)
+        primary_modifiers = [dict_mods]
+        if self._ai_hotkey_modifiers:
+            primary_modifiers.append(self._ai_hotkey_modifiers)
+        elif Config.AI_MODIFIER:
+            modifier = Config.AI_MODIFIER.removeprefix("left ").removeprefix("right ")
+            if modifier in ("ctrl", "control", "shift", "alt", "cmd", "win", "windows"):
+                primary_modifiers.append((*dict_mods, Config.AI_MODIFIER))
+        hook(primary, primary_handler, True, tuple(primary_modifiers))
 
         polish_key = Config.effective_polish_hotkey()
         if polish_key:
@@ -924,7 +937,7 @@ class DictationApp:
                     held[0] = False
                     return False
                 return True
-            platforms.hook_key(polish_primary, polish_handler, suppress=True)
+            hook(polish_primary, polish_handler, True, (polish_mods,))
             print(f"Selection polish hotkey bound: '{polish_key}'", flush=True)
 
         # Persistent reset: a direct key hook (not add_hotkey) that clears the AI
@@ -939,7 +952,7 @@ class DictationApp:
                     self._dispatch_hotkey("reset")
                 return True  # never suppress; F5 keeps its normal app behavior
 
-            platforms.hook_key(reset_key, reset_handler, suppress=False)
+            hook(reset_key, reset_handler, False)
             print(
                 f"Reset-context hotkey bound: '{reset_key}' "
                 f"(clears AI multi-turn memory)",
@@ -958,7 +971,7 @@ class DictationApp:
                     self._dispatch_hotkey("cancel")
                 return True  # never suppress; the key keeps its normal app behavior
 
-            platforms.hook_key(cancel_key, cancel_handler, suppress=False)
+            hook(cancel_key, cancel_handler, False)
             print(
                 f"Cancel hotkey bound: '{cancel_key}' (while processing: insert nothing)",
                 flush=True,
@@ -979,7 +992,7 @@ class DictationApp:
                     return False
                 return True
 
-            platforms.hook_key(live_key, live_handler, suppress=True)
+            hook(live_key, live_handler, True)
             print(
                 f"Live tap-to-talk hotkey bound: '{live_key}' "
                 f"(press to start, press again to stop and paste)",
@@ -1687,6 +1700,13 @@ class DictationApp:
                 print(">>> Cancelled. Nothing inserted.", flush=True)
             if stop.status:
                 self.last_status = stop.status
+        except platforms.base.TextDeliveryUnavailable as error:
+            if self.indicator is not None and not self._closing.is_set() and not cycle.cancel.is_set():
+                self.indicator.show_copy_result(refined_text, str(error))
+                self.last_status = "copy_ready"
+            else:
+                self.last_status = "error"
+            print("Text delivery needs explicit copying; no input was sent.", file=sys.stderr)
         except Exception as e:
             print(f"!!! Pipeline Error: {e}", file=sys.stderr)
             self.last_status = "error"

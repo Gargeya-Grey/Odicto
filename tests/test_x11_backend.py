@@ -19,12 +19,13 @@ class TestX11Backend(unittest.TestCase):
         constants = SimpleNamespace(KeyPress=2, KeyRelease=3, AnyModifier=32768,
             AnyKey=0, GrabModeAsync=1, GrabModeSync=0, CurrentTime=0,
             ReplayKeyboard=5, SyncKeyboard=3, AsyncKeyboard=4, GrabSuccess=0,
-            ControlMask=4, ShiftMask=1, Mod1Mask=8, Mod4Mask=64)
+            ControlMask=4, ShiftMask=1, LockMask=2, Mod1Mask=8, Mod4Mask=64)
         display = MagicMock()
         display.query_keymap.return_value = bitmap()
         display.pending_events.return_value = 0
+        display.get_modifier_mapping.return_value = [[], [], [], [], [77], [], [], []]
         display.screen.return_value.root.grab_keyboard.return_value = 0
-        names = {"grave": 49, "F8": 74, "Control_L": 37, "Control_R": 105}
+        names = {"grave": 49, "F8": 74, "Control_L": 37, "Control_R": 105, "Num_Lock": 77}
         keysyms = SimpleNamespace(string_to_keysym=lambda name: names.get(name, 0))
         display.keysym_to_keycode.side_effect = lambda symbol: symbol
         return _x11._Backend(display, constants, keysyms)
@@ -38,9 +39,32 @@ class TestX11Backend(unittest.TestCase):
         callback = MagicMock()
         with patch.object(_x11.threading, "Thread") as thread:
             backend.bind("f8", callback, True)
-        backend.root.grab_key.assert_called_once_with(74, 32768, False, 1, 0, onerror=unittest.mock.ANY)
+        self.assertEqual([call.args[1] for call in backend.root.grab_key.call_args_list], [0, 2, 16, 18])
+        self.assertNotIn(backend.X.AnyModifier, [call.args[1] for call in backend.root.grab_key.call_args_list])
         thread.return_value.start.assert_called_once()
         self.assertEqual(backend.handlers[74], (callback, True, "f8"))
+
+    def test_shared_primary_registers_only_configured_chords_and_lock_variants(self):
+        backend = self.fixture()
+        with patch.object(_x11.threading, "Thread"):
+            backend.bind("grave", MagicMock(), True, modifier_sets=(("ctrl",), ("ctrl", "shift")))
+        self.assertEqual({call.args[1] for call in backend.root.grab_key.call_args_list},
+                         {4, 5, 6, 7, 20, 21, 22, 23})
+        self.assertFalse(any(call.args[1] & backend.X.Mod1Mask for call in backend.root.grab_key.call_args_list))
+
+    def test_production_binder_supplies_raw_ai_and_polish_chords_only_to_x11(self):
+        from config import Config
+        from tests.test_reliability import app_fixture
+        app = app_fixture()
+        with patch.multiple(Config, HOTKEY="ctrl+grave", AI_HOTKEY="ctrl+shift+grave",
+                            POLISH_HOTKEY="ctrl+shift+p", LIVE_HOTKEY="f7", CANCEL_HOTKEY="esc",
+                            RESET_CONTEXT_HOTKEY="f5"), patch("main.ensure_can_bind_hotkeys"), \
+                patch("main.platforms.hotkey_backend_name", return_value="x11"), \
+                patch("main.platforms.hook_key") as hook:
+            app._bind_hotkeys()
+        chords = {call.args[0]: call.kwargs["modifier_sets"] for call in hook.call_args_list}
+        self.assertEqual(chords, {"grave": (("ctrl",), ("ctrl", "shift")),
+                                 "p": (("ctrl", "shift"),), "f7": ((),), "esc": ((),), "f5": ((),)})
 
     def test_grab_conflict_is_reported_and_partial_grabs_released(self):
         backend = self.fixture()
@@ -137,13 +161,25 @@ class TestX11Backend(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     _x11.require_session()
 
-    def test_text_injection_uses_argument_vector_and_preserves_unicode_and_newlines(self):
+    def test_text_injection_uses_private_stdin_and_preserves_newlines(self):
         with patch.dict(_x11.os.environ, {"DISPLAY": ":99"}, clear=True), \
                 patch.object(_x11.shutil, "which", return_value="/bin/xdotool"), \
                 patch.object(_x11.subprocess, "run") as run:
-            self.assertTrue(_x11.send_text_bulk("नमस्ते\n--not-a-flag"))
-        self.assertEqual(run.call_args.args[0][-2:], ["--", "नमस्ते\n--not-a-flag"])
-        self.assertNotIn("shell", run.call_args.kwargs)
+            self.assertTrue(_x11.send_text_bulk("private words\n--not-a-flag"))
+        typed = [call for call in run.call_args_list if call.args[0][1] == "type"]
+        self.assertEqual([call.args[0][-2:] for call in typed], [["--file", "-"], ["--file", "-"]])
+        self.assertEqual([call.kwargs["input"] for call in typed], [b"private words", b"--not-a-flag"])
+        self.assertEqual(run.call_args_list[1].args[0], ["/bin/xdotool", "key", "--clearmodifiers", "Return"])
+        self.assertFalse(any("private words" in argument for call in run.call_args_list for argument in call.args[0]))
+        self.assertTrue(all("shell" not in call.kwargs for call in run.call_args_list))
+
+    def test_unsafe_characters_request_explicit_copy_before_any_input(self):
+        from platforms.base import TextDeliveryUnavailable
+        for text in ("safe prefix नमस्ते\nend", "café", "tab\ttext", "emoji 🙂"):
+            with self.subTest(text=text), patch.object(_x11.subprocess, "run") as run:
+                with self.assertRaises(TextDeliveryUnavailable):
+                    _x11.send_text_bulk(text)
+                run.assert_not_called()
 
     def test_failed_injection_raises_to_prevent_duplicate_fallback(self):
         with patch.dict(_x11.os.environ, {"DISPLAY": ":99"}, clear=True), \

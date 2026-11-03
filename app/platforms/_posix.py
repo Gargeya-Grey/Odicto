@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import errno
 import os
-import signal
 import subprocess
 import time
 from typing import Optional
@@ -72,76 +71,96 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
 
 
 def kill_process_tree(pid: int) -> None:
-    """Terminate a process and its children.
-
-    Prefers psutil so arbitrary process trees are handled correctly even when
-    ``pid`` is not a process-group leader. Falls back to ``os.kill``/``killpg``.
-    """
+    """Request termination, propagating any unconfirmed or denied operation."""
     if pid in _self_and_parent_pids():
         return
-
-    if psutil is not None:
-        try:
-            proc = psutil.Process(pid)
-            for child in proc.children(recursive=True):
-                try:
-                    child.kill()
-                except Exception:
-                    pass
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            return
-        except psutil.NoSuchProcess:
-            return
-        except Exception:
-            pass  # fall through to os.kill fallback
-
+    if psutil is None:
+        raise RuntimeError("Cannot verify process ownership without psutil")
     try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        pass
-    except Exception:
+        proc = psutil.Process(pid)
+        children = proc.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return
+    for child in children:
         try:
-            os.killpg(pid, signal.SIGTERM)
-        except Exception:
+            child.kill()
+        except psutil.NoSuchProcess:
             pass
+    try:
+        proc.kill()
+    except psutil.NoSuchProcess:
+        pass
 
 
 def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
-    """Kill every other ``main.py`` for this install; returns attempted PIDs."""
+    """Stop verified owners, retaining metadata until shutdown is proven."""
+    if psutil is None:
+        raise RuntimeError("Cannot verify Odicto process ownership without psutil")
     protected = _self_and_parent_pids()
     pids = set()
     verified_pids = enumerate_odicto_pids()
-
+    saved_pid_text = None
+    old_pid = None
     if pid_file and os.path.exists(pid_file):
         try:
             with open(pid_file) as f:
-                old_pid = int(f.read().strip())
-            if old_pid not in protected and old_pid in verified_pids:
-                pids.add(old_pid)
-        except Exception:
-            pass
+                saved_pid_text = f.read()
+            old_pid = int(saved_pid_text.strip())
+        except (OSError, ValueError) as error:
+            raise RuntimeError("Could not verify saved Odicto ownership; restart cancelled") from error
+    if old_pid is not None and old_pid not in protected and old_pid not in verified_pids:
         try:
-            os.remove(pid_file)
-        except Exception:
+            process = psutil.Process(old_pid)
+            name = process.name().lower()
+            if (not name or name.startswith(("python", "pypy"))) and base.is_odicto_command(
+                process.cmdline(), process.cwd()
+            ):
+                pids.add(old_pid)
+        except psutil.NoSuchProcess:
             pass
-
+        except (psutil.Error, OSError) as error:
+            raise RuntimeError(f"Could not verify saved Odicto PID {old_pid}; restart cancelled") from error
     pids |= verified_pids
     pids -= protected
-
     killed = []
     for pid in sorted(pids):
-        print(f"Killing stale Odicto instance (PID {pid})...")
+        print(f"Stopping Odicto process (PID {pid})...")
         try:
             kill_process_tree(pid)
             killed.append(pid)
-        except Exception as e:
-            print(f"Warning: Could not kill PID {pid}: {e}")
-
+        except Exception as error:
+            raise RuntimeError(f"Could not stop Odicto PID {pid}; restart cancelled: {error}") from error
     if killed:
-        time.sleep(0.15)
+        deadline = time.monotonic() + 8.0
+        pending = set(killed)
+        while pending:
+            try:
+                pending = {pid for pid in pending if psutil.pid_exists(pid)}
+            except Exception as error:
+                raise RuntimeError("Could not verify Odicto shutdown; restart cancelled") from error
+            if not pending:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"Odicto processes did not exit: {sorted(pending)}; restart cancelled")
+            time.sleep(min(0.1, remaining))
+
+    from contextlib import ExitStack
+    from state_lock import StateLease
+    with ExitStack() as ownership:
+        if _lock_file_obj is None:
+            try:
+                ownership.enter_context(StateLease(base.lock_file_path()))
+            except OSError as error:
+                raise RuntimeError("An existing Odicto owner still holds its runtime lock; restart cancelled") from error
+        if pid_file and saved_pid_text is not None:
+            try:
+                with open(pid_file) as handle:
+                    if handle.read() != saved_pid_text:
+                        raise RuntimeError("Odicto ownership changed during shutdown; restart cancelled")
+                os.remove(pid_file)
+            except FileNotFoundError:
+                pass
     return killed
 
 

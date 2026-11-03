@@ -39,6 +39,11 @@ Both Mac architectures need their own native installation. An update can require
 renewing OS permissions for the new executable. The installer does not bypass
 the operating system's consent.
 
+Before starting a managed installation, quit any existing source installation and
+disable that installation's startup entry. Use the managed command thereafter.
+Source and managed installations keep separate settings; the bootstrap does not
+migrate or stop an existing owner. Two installations must never run together.
+
 ## Commands
 
 The installed command is placed in the managed home's `bin` directory, with a
@@ -99,13 +104,23 @@ verified release. This switches the updater and app together. A failed start can
 restore the prior pointer only after the failed owner has released its lock. It
 does not pretend a failure-returning but still-running owner has exited.
 
+Managed startup keeps its launch lease until the exact child reports a live
+microphone and readiness with the matching launch token and code root. A private
+pipe cancels unconfirmed children if the supervising command disappears. An
+uncertain child keeps activation deferred. Setup hands off to its writer lease,
+so an open page blocks version switching while another start or Setup command can
+still proceed.
+
 ## Release and integration requirements
 
 - Ship `tools/distribution/capabilities.json` containing schema `1`,
   `stable_data_root: true` and `setup_writer_lock: true` only after integration tests
   establish those behaviors.
 - Ship `tools/distribution/requirements.lock`, generated for Python 3.12 with
-  universal platform resolution and hashes. The manager uses `uv pip sync
+  universal platform resolution and hashes. The resolution includes Python 3.10+
+  compatibility markers for source installs; managed installs use Python 3.12.
+  Intel Macs retain an ONNX Runtime version with a native Intel wheel.
+  The manager uses `uv pip sync
   --require-hashes`; it refuses an unlocked dependency release.
 - Build each virtual environment in its final unique release directory. No venv
   directory is moved after creation. Interrupted and failed staging evidence stays
