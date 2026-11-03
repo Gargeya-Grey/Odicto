@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from contextlib import redirect_stdout
+import io
 import unittest
 from unittest.mock import patch
 
@@ -48,7 +50,33 @@ class TestMigrationGuard(unittest.TestCase):
         self.complete()
         with patch.object(migration_guard.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
             self.assertEqual(migration_guard.forward(self.root, ["status"]), 0)
-        self.assertEqual(run.call_args.args[0][-2:], ["run", "status"])
+        self.assertEqual(run.call_args.args[0][-3:], ["run", "--", "status"])
+
+    def test_source_help_flags_reach_the_application_parser_without_starting(self):
+        import odicto
+        self.complete()
+        manager = self.fixture.manager
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                output = io.StringIO()
+                def process(command, **kwargs):
+                    if len(command) > 1 and command[1] == str(manager.release_path(manager.active()) / "odicto.py"):
+                        self.assertEqual(command[2:], [flag])
+                        with patch.object(sys, "argv", [command[1], *command[2:]]):
+                            with self.assertRaises(SystemExit) as exited:
+                                odicto.main()
+                        self.assertEqual(exited.exception.code, 0)
+                        return SimpleNamespace(returncode=0)
+                    self.assertEqual(command[-3:], ["run", "--", flag])
+                    return SimpleNamespace(returncode=dist.main(["--home", str(manager.home), *command[-3:]]))
+                with patch.object(dist, "Manager", return_value=manager), patch.object(manager, "bind_dependencies"), patch.object(
+                    manager, "_launch", side_effect=AssertionError("help launched an owner")
+                ), patch.object(manager, "update", side_effect=AssertionError("help updated the app")), patch.object(
+                    migration_guard.subprocess, "run", side_effect=process
+                ), redirect_stdout(output):
+                    self.assertEqual(migration_guard.forward(self.root, [flag]), 0)
+                for action in ("setup", "start", "stop", "remove-autostart"):
+                    self.assertIn(action, output.getvalue())
 
     def test_empty_legacy_arguments_never_become_an_implicit_start(self):
         self.complete()

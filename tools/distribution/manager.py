@@ -570,14 +570,14 @@ runpy.run_path(str(script), run_name='__main__')
         return command
 
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
-        if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart"}:
+        if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
             raise DistributionError("Unsupported managed Odicto command")
         self.initialize()
-        if command[0] not in {"status", "version", "stop", "wait-ready"}:
+        if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
             self._migration_guard()
         with ExitStack() as launch:
             with file_lock(self.home / "manager.lock"):
-                if command[0] not in {"status", "version", "stop", "wait-ready"}:
+                if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
                     self._migration_guard()
                 before = self.active()
                 if automatic_updates and command[0] in {"start", "setup"}:
@@ -932,7 +932,8 @@ def main(argv=None) -> int:
             print(latest_release().tag)
             return 0
         if args.command == "run":
-            return manager.run(args.app_args or ["start"], automatic_updates=not args.no_auto_updates)
+            app_args = args.app_args[1:] if args.app_args[:1] == ["--"] else args.app_args
+            return manager.run(app_args or ["start"], automatic_updates=not args.no_auto_updates)
         if args.command == "admin-task":
             return manager.admin_task()
         if args.command == "admin":
