@@ -228,7 +228,7 @@ class TestMacModifierSides(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(macos, "_pynput", SimpleNamespace(KeyCode=type("FakeKeyCode", (), {}))))
         stack.enter_context(patch.object(macos, "_pressed_tokens", set()))
-        stack.enter_context(patch.object(macos, "_pressed_key_tokens", {}, create=True))
+        stack.enter_context(patch.object(macos, "_pressed_keys", {}))
         stack.enter_context(patch.object(macos, "_hooks", {}))
         stack.enter_context(patch.object(macos, "_modifier_key_state", return_value=None))
 
@@ -272,6 +272,7 @@ class TestMacModifierSides(unittest.TestCase):
                     self.assertTrue(dispatch.call_args.args[2])
             self.assertFalse(mac.is_pressed("p"))
             self.assertFalse(mac._pressed_tokens & {"p", "grave", "~"})
+            self.assertFalse(mac._pressed_keys)
 
     def test_option_translated_character_keeps_physical_primary_and_release(self):
         self.translated_chord("option+p", (58,), True)
@@ -322,6 +323,7 @@ class TestMacModifierSides(unittest.TestCase):
                 mac._on_release(shift)
                 key.char = "`"
                 mac._on_release(key)
+                self.assertIs(mac._intercept(None, event), event)
                 self.assertEqual([call.args[0] for call in dispatch.call_args_list], ["polish"])
             else:
                 key.char = "`"
@@ -338,7 +340,7 @@ class TestMacModifierSides(unittest.TestCase):
                 self.assertIs(mac._intercept(None, event), event)
                 expected = ["cancel"] * 3 if observer == "cancel" else ["reset"]
                 self.assertEqual([call.args[0] for call in dispatch.call_args_list], expected)
-            self.assertFalse(any(hook.get("pressed_virtual_key") is not None for hook in mac._hooks.values()))
+            self.assertFalse(mac._pressed_keys)
             self.assertFalse(mac._pressed_tokens & {"grave", "~"})
             dispatch.reset_mock()
             mac._on_press(shift)
@@ -356,6 +358,18 @@ class TestMacModifierSides(unittest.TestCase):
 
     def test_failed_polish_press_cannot_redirect_release_to_reset(self):
         self.observer_ownership("reset", failed_polish=True)
+
+    def test_unowned_press_cannot_select_a_changed_character_release_action(self):
+        mac = self.mac
+        reset = MagicMock(return_value=True)
+        with patch.object(mac, "_listener", object()), patch.object(mac, "_primary_virtual_key", return_value=None):
+            mac.hook_key("~", reset, False)
+            key = mac._pynput.KeyCode()
+            key.vk, key.char = 50, "`"
+            mac._on_press(key)
+            key.char = "~"
+            mac._on_release(key)
+        reset.assert_not_called()
 
     def test_side_specific_option_translated_character_dispatches_once(self):
         self.translated_chord("right option+p", (61,), True)
