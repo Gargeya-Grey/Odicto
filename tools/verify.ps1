@@ -55,7 +55,9 @@ Set-Location $RepoRoot
 #      A broad isfile mock must never enable the real admin launcher. Assertions unchanged.
 # (14) The same source fixture clears inherited managed-home routing. Its source kill,
 #      spawn, argument and status assertions are unchanged; a subprocess tripwire covers it.
-$ExpectedTestUnitsHash = 'FE3734BA63382BD46067BC852B9463F7D137E66B2AB8AF75376FC9E75285472C'
+# (15) Selection fixtures mock modifier-state reads rather than consulting the owner's
+#      keyboard. Selection, copy, restoration and hotkey assertions are unchanged.
+$ExpectedTestUnitsHash = 'CE11948D5478D6BCEECC61F1F8ADCCC5A57207C07603832A16FD929D87161EAF'
 
 $Script:Failures = @()
 

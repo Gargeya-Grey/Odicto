@@ -76,6 +76,7 @@ class TestOdicto(unittest.TestCase):
             patch("typer.clipboard_restore", return_value=True),
             patch("typer.clipboard_change_token", return_value=None),
             patch("typer.foreground_is_ide_host", return_value=False),
+            patch("typer.is_pressed", return_value=False),
             patch.object(typer_mod, "_RESTORE_IN_BACKGROUND", False),
         ):
             clip_patch.start()
