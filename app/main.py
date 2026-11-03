@@ -107,6 +107,9 @@ def _stdout_is_discarded() -> bool:
     return False
 
 
+_LOG_ATTACHED = False
+
+
 def _is_managed_owner() -> bool:
     """The installed owner, started by its supervising launcher (managed install).
 
@@ -127,9 +130,11 @@ def attach_pythonw_log() -> None:
     """
     if not (_stdout_is_discarded() or _is_managed_owner()):
         return
+    global _LOG_ATTACHED
     try:
         path = _session_log_path()
-        _trim_log(path)
+        # No trim here: a second start reaches this before the instance lock and must not
+        # rewrite the running owner's log. The lock holder trims (acquire_single_instance_lock).
         raw = open(path, "a", encoding="utf-8", buffering=1)
         raw.write(
             f"----- session {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
@@ -139,6 +144,7 @@ def attach_pythonw_log() -> None:
         wrapped = _TimestampWriter(raw)
         sys.stdout = wrapped  # type: ignore[assignment]
         sys.stderr = wrapped  # type: ignore[assignment]
+        _LOG_ATTACHED = True
         try:
             import faulthandler
 
@@ -277,6 +283,8 @@ def acquire_single_instance_lock(timeout_ms: int = 8000) -> bool:
         return False
 
     _INSTANCE_LOCK_HELD = True
+    if _LOG_ATTACHED:
+        _trim_log(_session_log_path())  # only the owner rewrites the shared log
     print(
         f"Single-instance lock acquired (backend={platforms.hotkey_backend_name()}).",
         flush=True,
@@ -1471,7 +1479,8 @@ class DictationApp:
                 print("Live audio delivery incomplete; transcribing the full recording.")
             self.process_and_paste(audio, False, "", False, transcript, live=True)
         except Exception as e:
-            print(f"!!! Live finish failed: {e}", file=sys.stderr)
+            from http_clients import error_summary
+            print(f"!!! Live finish failed: {error_summary(e)}", file=sys.stderr)
             if epoch == self._live_epoch:
                 self.last_status = "error"
                 self._finish_cycle()
@@ -1739,7 +1748,8 @@ class DictationApp:
                 self.last_status = "error"
             print("Text delivery needs explicit copying; no input was sent.", file=sys.stderr)
         except Exception as e:
-            print(f"!!! Pipeline Error: {e}", file=sys.stderr)
+            from http_clients import error_summary
+            print(f"!!! Pipeline Error: {error_summary(e)}", file=sys.stderr)
             self.last_status = "error"
         finally:
             self._finish_cycle()
@@ -1861,8 +1871,8 @@ class DictationApp:
         if outcome == "done":
             # Cloud error: same silent local fallback the transcriber used to run.
             error = stage.error
-            print(f"{provider} STT fallback to Whisper ({str(error) or type(error).__name__})",
-                  flush=True)
+            from http_clients import error_summary
+            print(f"{provider} STT fallback to Whisper ({error_summary(error)})", flush=True)
             notice = ""
         else:
             print(f"!!! {provider} speech timed out after {seconds:g}s; trying local Whisper.",

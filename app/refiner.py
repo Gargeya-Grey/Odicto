@@ -7,6 +7,7 @@ import time
 from typing import Callable, Optional, Union
 
 from config import OPENROUTER_FALLBACK_MODEL, ENV_DEFAULTS, Config
+from http_clients import error_summary
 from http_clients import (
     Prewarmer,
     full_timeout,
@@ -776,7 +777,7 @@ class TextRefiner:
                 self.client.chat.completions.create(**kwargs, timeout=full_timeout(3.0, 20.0))
                 print(f"LLM model '{self.model}' pre-loaded successfully!")
             except Exception as e:
-                print(f"Notice: Background LLM pre-load did not complete: {e}")
+                print(f"Notice: Background LLM pre-load did not complete: {error_summary(e)}")
 
         threading.Thread(target=_load, daemon=True, name="llm-preload").start()
 
@@ -1069,7 +1070,7 @@ class TextRefiner:
         except Exception as e:
             self._pop_pending_user_turn(keep_history, user_turn)
             print(
-                f"!!! AI mode FAILED for model '{self.model}' ({self.provider}): {e}\n"
+                f"!!! AI mode FAILED for model '{self.model}' ({self.provider}): {error_summary(e)}\n"
                 f"    Using the raw transcript instead. "
                 f"Check the selected provider, key and model in Setup.",
                 file=sys.stderr,

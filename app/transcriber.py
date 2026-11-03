@@ -15,6 +15,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 
 from config import Config
+from http_clients import error_summary
 from http_clients import (
     KEEPALIVE_SECONDS,
     Prewarmer,
@@ -778,7 +779,7 @@ class CloudTranscriber(_LocalWhisperFallback):
                 headers["Content-Type"] = content_type
             result = _post_bytes(url, body, headers, timeout=stt_deadline_seconds())
         except Exception as e:
-            return self._whisper_fallback(audio, str(e) or type(e).__name__, allow_local_fallback)
+            return self._whisper_fallback(audio, error_summary(e), allow_local_fallback)
         text = _transcript_from_payload(result)
         if text is not None:
             return text
@@ -894,8 +895,7 @@ class GeminiTranscriber(_LocalWhisperFallback):
                 },
             )
         except Exception as e:
-            detail = str(getattr(e, "message", "")) or str(e)
-            return self._whisper_fallback(audio, detail.strip() or type(e).__name__, allow_local_fallback)
+            return self._whisper_fallback(audio, error_summary(e), allow_local_fallback)
 
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str):
@@ -999,8 +999,8 @@ class GeminiLiveSession:
         except asyncio.CancelledError:
             pass  # stop() deliberately cancelled the session's own task
         except Exception as e:
-            self._error = str(e) or type(e).__name__
-            print(f"Gemini Live STT thread failed: {e}", flush=True)
+            self._error = error_summary(e)
+            print(f"Gemini Live STT thread failed: {self._error}", flush=True)
 
     async def _run_owned(self) -> None:
         with self._transport_lock:

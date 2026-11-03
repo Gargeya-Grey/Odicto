@@ -10,9 +10,31 @@ never pay for them.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Callable, Optional
+
+
+def error_summary(error: BaseException) -> str:
+    """Error text for dictation.log. A provider error can echo the request (dictated text),
+    so unless LOG_TRANSCRIPTS is on, only the type and an HTTP status reach the log."""
+    try:
+        from config import Config
+        if getattr(Config, "LOG_TRANSCRIPTS", False):
+            return str(error) or type(error).__name__
+    except Exception:
+        pass
+    status = getattr(error, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(error, "code", None)
+    if not isinstance(status, int) or not 100 <= status <= 599:
+        match = re.match(r"\s*HTTP (\d{3})\b", str(error))
+        status = int(match.group(1)) if match else None
+    name = type(error).__name__
+    return f"{name} (HTTP {status})" if status else name
 
 # Idle connections stay open this long. Providers usually close an idle
 # socket after 60-350 s; a stale socket costs one transparent reconnect.

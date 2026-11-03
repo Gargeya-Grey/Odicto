@@ -126,6 +126,8 @@ def _source_migration_boundary():
 
 def main() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # An inherited managed launch token would make importing main attach the real data-root log.
+    os.environ.pop("ODICTO_LAUNCH_TOKEN", None)
     for stream in (sys.stdout, sys.stderr):
         try:  # a cp1252 console must not crash on non-ASCII text in a traceback
             stream.reconfigure(errors="replace")

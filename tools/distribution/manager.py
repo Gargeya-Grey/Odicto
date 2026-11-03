@@ -869,6 +869,9 @@ runpy.run_path(str(script), run_name='__main__')
                     result = self._read_json(result_path)
                     if result.get("token") != token or type(result.get("code")) is not int:
                         raise DistributionError("Administrator startup result is invalid")
+                    if result["code"]:
+                        print(f"Odicto did not start through admin mode (code {result['code']}); "
+                              f"see {self.data / 'dictation.log'}.", file=sys.stderr)
                     return result["code"]
                 time.sleep(0.1)
             raise BusyError("Administrator startup has not confirmed completion; its reservation was preserved")
@@ -1053,6 +1056,9 @@ runpy.run_path(str(script), run_name='__main__')
                 status = process.poll()
                 if status is not None:
                     confirmed = True
+                    if command == "start":
+                        print(f"Odicto exited during startup (code {status}); see {self.data / 'dictation.log'}.",
+                              file=sys.stderr)
                     return status if status else (0 if command == "setup" else 1)
                 owned_setup = False
                 if command == "setup" and receipt.exists():

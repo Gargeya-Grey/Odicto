@@ -58,6 +58,16 @@ class TestManagedLaunch(unittest.TestCase):
         self.assertEqual(self.manager.active()["directory"], self.old["directory"])
         self.assertFalse((self.manager.home / "launch-intent.json").exists())
 
+    def test_startup_exit_names_the_log_to_read(self):
+        child = Child(code=3)
+        errors = io.StringIO()
+        with patch.object(self.manager, "_ready", return_value=False), patch.object(
+            dist.subprocess, "Popen", return_value=child
+        ), patch.object(sys, "stderr", errors):
+            self.assertEqual(self.manager.run(["start"]), 3)
+        self.assertIn("exited during startup (code 3)", errors.getvalue())
+        self.assertIn(str(self.manager.data / "dictation.log"), errors.getvalue())
+
     def test_failure_to_execute_child_rolls_back(self):
         self.update()
         with patch.object(self.manager, "_ready", return_value=False), patch.object(dist.subprocess, "Popen", side_effect=OSError("fixture execute failure")):
@@ -293,41 +303,74 @@ class TestManagedLaunch(unittest.TestCase):
 
 
 class TestManagedOwnerLog(unittest.TestCase):
-    """The admin task gives the owner a hidden console as stdout; it must still log to disk."""
+    """The admin task gives the owner a hidden console as stdout; it must still log to disk.
+    Each case imports main in a child interpreter with a synthetic data root, so no live log,
+    stream or faulthandler state of this process is touched."""
 
-    def attach(self, environment):
-        import main as main_mod
+    def run_child(self, managed):
         with tempfile.TemporaryDirectory() as temporary:
-            path = os.path.join(temporary, "dictation.log")
-            console = io.StringIO()
-            with patch.dict(os.environ, environment, clear=False), patch.object(
-                main_mod, "_session_log_path", return_value=path
-            ), patch.object(sys, "stdout", console), patch.object(sys, "stderr", console), patch(
-                "faulthandler.enable"
-            ):
-                for key in ("ODICTO_MANAGED_HOME", "ODICTO_LAUNCH_TOKEN"):
-                    if key not in environment:
-                        os.environ.pop(key, None)
-                main_mod.attach_pythonw_log()
-                attached = sys.stdout is not console
-                if attached:
-                    print("Application ready!")
-                    sys.stdout._raw.close()
-            text = Path(path).read_text(encoding="utf-8") if os.path.exists(path) else ""
-        return attached, text, console.getvalue()
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"ODICTO_MANAGED_HOME", "ODICTO_LAUNCH_TOKEN", "ODICTO_DATA_ROOT"}}
+            environment.update(ODICTO_DATA_ROOT=temporary, QT_QPA_PLATFORM="offscreen")
+            if managed:
+                environment.update(ODICTO_MANAGED_HOME=temporary, ODICTO_LAUNCH_TOKEN="a" * 32)
+            program = ("import sys; sys.path.insert(0, sys.argv[1]); import main; "
+                       "print('Application ready!'); sys.stdout.flush()")
+            result = subprocess.run([sys.executable, "-c", program, str(Path(odicto.__file__).parent)],
+                                    env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=120)
+            log = Path(temporary) / "dictation.log"
+            text = log.read_text(encoding="utf-8") if log.exists() else ""
+        return result, text
 
     def test_managed_owner_logs_to_the_data_root_with_a_console_attached(self):
-        attached, text, console = self.attach({"ODICTO_MANAGED_HOME": "synthetic-home",
-                                               "ODICTO_LAUNCH_TOKEN": "a" * 32})
-        self.assertTrue(attached)
+        result, text = self.run_child(managed=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertIn("----- session ", text)
         self.assertIn("Application ready!", text)
-        self.assertEqual(console, "")
+        self.assertNotIn(b"Application ready!", result.stdout)
 
     def test_console_run_outside_a_managed_launch_keeps_its_console(self):
-        attached, text, console = self.attach({})
-        self.assertFalse(attached)
+        result, text = self.run_child(managed=False)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertEqual(text, "")
+        self.assertIn(b"Application ready!", result.stdout)
+
+
+class TestLogPrivacyAndOwnership(unittest.TestCase):
+    def test_provider_error_echoing_dictation_logs_only_type_and_status(self):
+        import http_clients
+        from config import Config
+        echoed = RuntimeError("HTTP 400 {\"error\": \"bad input: my secret dictated sentence\"}")
+        with patch.object(Config, "LOG_TRANSCRIPTS", False):
+            summary = http_clients.error_summary(echoed)
+        self.assertEqual(summary, "RuntimeError (HTTP 400)")
+        self.assertNotIn("dictated", summary)
+        with patch.object(Config, "LOG_TRANSCRIPTS", False):
+            self.assertEqual(http_clients.error_summary(TimeoutError("secret words")), "TimeoutError")
+        with patch.object(Config, "LOG_TRANSCRIPTS", True):
+            self.assertIn("dictated", http_clients.error_summary(echoed))
+
+    def test_ai_failure_line_keeps_the_dictation_out_of_the_log(self):
+        import refiner
+        from config import Config
+        source = Path(refiner.__file__).read_text(encoding="utf-8")
+        self.assertIn("({self.provider}): {error_summary(e)}", source)
+        self.assertNotIn("({self.provider}): {e}", source)
+        with patch.object(Config, "LOG_TRANSCRIPTS", False):
+            self.assertNotIn("sentence", refiner.error_summary(RuntimeError("HTTP 422 my sentence")))
+
+    def test_only_the_lock_holder_trims_the_shared_log(self):
+        import main as main_mod
+        trims = []
+        with patch.object(main_mod, "_trim_log", side_effect=trims.append), patch.object(
+            main_mod, "_LOG_ATTACHED", True
+        ), patch.object(main_mod.platforms, "acquire_lock", return_value=False):
+            self.assertFalse(main_mod.acquire_single_instance_lock(1))
+        self.assertEqual(trims, [])
+        source = Path(main_mod.__file__).read_text(encoding="utf-8")
+        attach = source[source.index("def attach_pythonw_log"):source.index("# Redirect before importing")]
+        self.assertNotIn("_trim_log(", attach)
 
 
 class TestManagedChildProtocol(unittest.TestCase):
