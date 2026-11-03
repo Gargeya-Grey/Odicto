@@ -35,7 +35,7 @@ class StartupPreference:
 @dataclass(frozen=True)
 class MigrationFile:
     name: str
-    source_sha256: str
+    source_sha256: str | None
     destination_sha256: str | None
 
 
@@ -177,38 +177,51 @@ def _files(value) -> tuple[MigrationFile, ...]:
     result = []
     for entry in value:
         if (not isinstance(entry, dict) or entry.get("name") not in KNOWN_FILES
-                or not re.fullmatch(r"[a-f0-9]{64}", str(entry.get("source_sha256", "")))
+                or "source_sha256" not in entry
+                or entry["source_sha256"] is not None
+                and not re.fullmatch(r"[a-f0-9]{64}", str(entry["source_sha256"]))
                 or entry.get("destination_sha256") is not None
                 and not re.fullmatch(r"[a-f0-9]{64}", str(entry["destination_sha256"]))):
             raise MigrationError("Invalid migration file inventory")
         result.append(MigrationFile(entry["name"], entry["source_sha256"], entry.get("destination_sha256")))
     if len({entry.name for entry in result}) != len(result):
         raise MigrationError("Duplicate migration file inventory")
+    if {entry.name for entry in result} != set(KNOWN_FILES):
+        raise MigrationError("Incomplete migration file inventory; absent settings must be recorded")
     return tuple(result)
 
 
 def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> MigrationPlan:
     """Read-only snapshot. Only execution can reserve the required owner leases."""
     source, home = _identity(manager, source)
-    settings = source / ".env"
-    _plain(settings)
-    if settings.exists():
-        with settings.open("rb") as stream:
-            for line in stream:
-                match = re.match(rb"\s*(?:export\s+)?SYSTEM_PROMPT_FILE\s*=\s*(.*?)\s*$", line)
-                if match is None:
-                    continue
-                value = match[1].strip()
-                if value.startswith(b"#") or not value:
-                    continue
-                canonical = rb"(?:(?:['\"])(?:\.[/\\])?prompt\.txt(?:['\"])|(?:\.[/\\])?prompt\.txt|['\"]{2})\s*(?:#.*)?"
-                if re.fullmatch(canonical, value) is None:
-                    raise MigrationError("Save the prompt in source Setup before migration; legacy prompt-file references must be normalized to prompt.txt")
     previous = _record_for(source, home)
     adapter.assert_inactive(source, manager)
     if previous:
-        return MigrationPlan(str(source), str(home), _files(previous.get("files")),
+        files = _files(previous.get("files"))
+        if previous["state"] != "complete":
+            for entry in files:
+                if _digest(source / entry.name) != entry.source_sha256:
+                    raise MigrationError(f"Source {entry.name} changed after migration began; recovery copies were preserved")
+                accepted = {entry.destination_sha256}
+                if entry.source_sha256 is not None:
+                    accepted.add(entry.source_sha256)
+                if _digest(manager.data / entry.name) not in accepted:
+                    raise MigrationError(f"Destination {entry.name} changed during migration; it was preserved")
+        return MigrationPlan(str(source), str(home), files,
                              _preference(previous.get("startup")), previous["state"])
+    settings = source / ".env"
+    _plain(settings)
+    if settings.exists():
+        from dotenv.parser import parse_stream
+        reference = ""
+        with settings.open("r", encoding="utf-8", errors="surrogateescape") as stream:
+            for binding in parse_stream(stream):
+                if binding.error:
+                    raise MigrationError("Save settings in source Setup before migration; the configuration syntax could not be verified")
+                if binding.key == "SYSTEM_PROMPT_FILE":
+                    reference = (binding.value or "").strip()
+        if reference and reference not in {"prompt.txt", "./prompt.txt", ".\\prompt.txt"}:
+            raise MigrationError("Save the prompt in source Setup before migration; legacy prompt-file references must be normalized to prompt.txt")
     preference = adapter.inspect(source, manager)
     if not isinstance(preference, StartupPreference):
         raise MigrationError("The startup adapter did not return a typed preference")
@@ -219,8 +232,9 @@ def plan_migration(manager, source: Path, *, adapter: MigrationAdapter) -> Migra
         destination_hash = _digest(manager.data / name)
         default_hash = _digest(release / (".env.example" if name == ".env" else "prompt.txt.example"))
         if source_hash is None:
-            if destination_hash is not None and destination_hash != default_hash:
+            if destination_hash is not None and (name == "prompt.txt" or destination_hash != default_hash):
                 raise MigrationError(f"Destination {name} is already configured; no settings were overwritten")
+            files.append(MigrationFile(name, None, destination_hash))
             continue
         if destination_hash is not None and destination_hash not in {default_hash, source_hash}:
             raise MigrationError(f"Destination {name} is already configured; no settings were overwritten")
@@ -290,6 +304,10 @@ def migrate(manager, source: Path, *, check: bool = False, adapter: MigrationAda
                 destination_backup = transaction / "destination" / entry.name
                 if _digest(source / entry.name) != entry.source_sha256:
                     raise MigrationError(f"Source {entry.name} changed after migration began; recovery copies were preserved")
+                if entry.source_sha256 is None:
+                    if _digest(manager.data / entry.name) != entry.destination_sha256:
+                        raise MigrationError(f"Destination {entry.name} changed during migration; it was preserved")
+                    continue
                 _copy_verified(source / entry.name, source_backup, entry.source_sha256)
                 destination = manager.data / entry.name
                 current_hash = _digest(destination)

@@ -261,6 +261,23 @@ class Manager:
     def admin_enabled(self) -> bool:
         return sys.platform == "win32" and self.support().enabled(self.home)
 
+    def bind_dependencies(self) -> None:
+        """Keep supervisor identity while loading ABI-matched release dependencies."""
+        directory = self.release_path(self.active())
+        environment = directory / ".venv"
+        configuration = environment / "pyvenv.cfg"
+        if environment.resolve() != environment or environment.is_symlink() or configuration.is_symlink():
+            raise DistributionError("The active Python environment has unknown ownership")
+        text = configuration.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^(?:version_info|version)\s*=\s*(\d+)\.(\d+)", text)
+        if match is None or tuple(map(int, match.groups())) != sys.version_info[:2]:
+            raise DistributionError("Use the installed odicto command with the active environment's Python version")
+        packages = environment / ("Lib/site-packages" if os.name == "nt" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
+        if not packages.is_dir() or packages.is_symlink() or packages.resolve() != packages:
+            raise DistributionError("The active Python dependency directory is unavailable or unowned")
+        if str(packages) not in sys.path:
+            sys.path.insert(0, str(packages))
+
     def _migration_guard(self):
         path = self.home / "migration.json"
         if path.exists() or path.is_symlink():
@@ -576,7 +593,7 @@ runpy.run_path(str(script), run_name='__main__')
                 directory = self.release_path(current)
                 if command[0] in {"start", "setup", "restart", "stop"}:
                     launch.enter_context(file_lock(self.home / "launch.lock"))
-                    if command[0] == "stop":
+                    if command[0] == "stop" and not self.admin_enabled():
                         self._recover_launch_intent()
             python = self._python(directory)
             admin = self.admin_enabled()
@@ -585,6 +602,13 @@ runpy.run_path(str(script), run_name='__main__')
                 raise DistributionError("Admin mode is off. Run odicto start from a normal terminal")
             if admin and command[0] in {"stop", "restart"}:
                 result = self.support().stop(self, directory)
+                if not result:
+                    try:
+                        self._recover_launch_intent()
+                    except BusyError:
+                        if command[0] != "stop":
+                            raise
+                        print("Odicto stopped; startup supervisor cleanup still defers another launch.", file=sys.stderr)
                 if result or command[0] == "stop":
                     return result
                 command = ["start", *command[1:]]
@@ -749,6 +773,12 @@ runpy.run_path(str(script), run_name='__main__')
             receipt = self.home / ("launch-receipt-" + token + ".json")
             if record.get("receipt") != receipt.name:
                 raise DistributionError("The pending startup receipt is invalid; it was preserved")
+            request_path = self.home / "admin-request.json"
+            if request_path.exists():
+                request_owner = self._read_json(request_path)
+                if (request_owner.get("token") == token
+                        and self._pid_alive(record.get("supervisor_pid"))):
+                    raise BusyError("The administrator startup supervisor still owns its reservation")
             if receipt.exists():
                 child = self._read_json(receipt)
                 safe = child.get("token") == token and (
@@ -757,13 +787,18 @@ runpy.run_path(str(script), run_name='__main__')
                     active = self.active()
                     if active and active["directory"] == record.get("directory"):
                         directory = self.release_path(active)
-                        request = self.home / "admin-request.json"
-                        admin_released = True
+                        request = request_path
+                        admin_release = None
                         if request.exists():
                             state = self._read_json(request)
                             if state.get("token") == token:
-                                admin_released = state.get("state") == "released"
-                        safe = admin_released and self._ready(directory, self._python(directory), token)
+                                admin_release = (
+                                    state.get("schema") == 1 and state.get("home") == str(self.home)
+                                    and state.get("directory") == record.get("directory")
+                                    and state.get("supervisor_pid") == record.get("supervisor_pid")
+                                    and state.get("state") == "released"
+                                )
+                        safe = admin_release if admin_release is not None else self._ready(directory, self._python(directory), token)
             else:
                 safe = not self._pid_alive(record.get("supervisor_pid")) and (
                     record.get("child_pid") is None or not self._pid_alive(record.get("child_pid")))
@@ -888,23 +923,11 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     manager = Manager(args.home)
     try:
-        if args.command in {"migrate", "admin"}:
+        if args.command in {"run", "migrate", "admin", "admin-task"}:
             current = manager.active()
             if current is None:
                 raise DistributionError("Install a verified managed release first")
-            directory = manager.release_path(current)
-            python = manager._python(directory)
-            if os.path.normcase(os.path.abspath(sys.executable)) != os.path.normcase(str(python)):
-                forwarded = ["--home", str(manager.home), args.command]
-                if args.command == "migrate":
-                    forwarded += ["--source", str(args.source.expanduser().absolute())]
-                    if args.check:
-                        forwarded.append("--check")
-                else:
-                    forwarded.append(args.setting)
-                return subprocess.run([str(python), str(directory / "tools/distribution/manager.py"), *forwarded],
-                                      cwd=directory, env=manager.environment(),
-                                      **({"creationflags": 0x08000000} if os.name == "nt" else {})).returncode
+            manager.bind_dependencies()
         if args.command == "check":
             print(latest_release().tag)
             return 0

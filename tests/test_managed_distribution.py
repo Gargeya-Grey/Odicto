@@ -89,44 +89,73 @@ class TestManagedDistribution(unittest.TestCase):
         self.manager.activate(record)
         return record
 
-    def test_dependency_commands_handoff_from_bootstrap_python_to_active_release(self):
+    def test_dependency_binding_rejects_an_incompatible_interpreter_before_dispatch(self):
         record = self.initial()
         directory = self.manager.release_path(record)
-        for args in (["migrate", "--source", str(self.root / "source"), "--check"], ["admin", "on"]):
-            with self.subTest(command=args[0]), patch.object(dist, "Manager", return_value=self.manager), patch.object(
-                self.manager, "support", side_effect=AssertionError("bootstrap interpreter touched native dependencies")
-            ), patch.object(self.manager, "configure_admin", side_effect=AssertionError("bootstrap administrator change")), patch.object(
-                dist.subprocess, "run", return_value=SimpleNamespace(returncode=23)
-            ) as run:
-                self.assertEqual(dist.main(["--home", str(self.manager.home), *args]), 23)
-            self.assertEqual(run.call_args.args[0], [str(self.manager._python(directory)),
-                str(directory / "tools/distribution/manager.py"), "--home", str(self.manager.home), *args])
-            self.assertEqual(run.call_args.kwargs["env"]["ODICTO_DATA_ROOT"], str(self.manager.data))
+        (directory / ".venv/pyvenv.cfg").write_text(f"version_info = {sys.version_info.major + 1}.0\n")
+        before = list(sys.path)
+        with patch.object(dist, "Manager", return_value=self.manager), patch.object(self.manager, "run") as run:
+            self.assertEqual(dist.main(["--home", str(self.manager.home), "run", "stop"]), 1)
+        run.assert_not_called()
+        self.assertEqual(sys.path, before)
+
+    def test_updater_can_rollback_without_active_application_dependencies(self):
+        original = self.initial()
+        newer = self.manager.stage(self.add_release("v1.3.0"))
+        self.manager.activate(newer)
+        with patch.object(dist, "Manager", return_value=self.manager), patch.object(
+            self.manager, "bind_dependencies", side_effect=AssertionError("Recovery must not require the broken app dependencies")
+        ):
+            self.assertEqual(dist.main(["--home", str(self.manager.home), "rollback"]), 0)
+        self.assertEqual(self.manager.active()["directory"], original["directory"])
 
     def test_dependency_commands_route_from_python_without_site_packages(self):
-        self.initial()
+        record = self.initial()
+        directory = self.manager.release_path(record)
+        environment = directory / ".venv"
+        (environment / "pyvenv.cfg").write_text(f"version_info = {sys.version_info.major}.{sys.version_info.minor}\n")
+        packages = environment / ("Lib/site-packages" if sys.platform == "win32" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
+        packages.mkdir(parents=True)
+        (packages / "psutil.py").write_text("MARKER = 'verified-active-dependency'\n")
         program = r'''
-import importlib.util, json, sys
+import importlib.util, json, os, sys
 from pathlib import Path
 from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('cold_manager',sys.argv[1])
 module=importlib.util.module_from_spec(spec)
 sys.modules[spec.name]=module
 spec.loader.exec_module(module)
-calls=[]
-module.subprocess.run=lambda command,**kwargs: (calls.append(command) or SimpleNamespace(returncode=0))
-for command in (['migrate','--source',sys.argv[3],'--check'],['admin','on']):
-    assert module.main(['--home',sys.argv[2],*command])==0
-assert len(calls)==2
-assert all('/.venv/' in str(command[0]).replace('\\','/') for command in calls)
+sys.path.insert(0,str(Path(sys.argv[1]).parents[2]))
+from tools.distribution import migration
 assert 'psutil' not in sys.modules
-print('COLD HANDOFF PASS')
+calls=[]; supervisor=os.getpid()
+def verified():
+    import psutil
+    assert psutil.MARKER=='verified-active-dependency'
+    assert os.getpid()==supervisor
+    calls.append(True)
+    return 0
+def runtime(self, arguments, automatic_updates):
+    assert arguments in (['stop'],['restart']) and not automatic_updates
+    return verified()
+def unexpected(*args,**kwargs):
+    raise AssertionError('An extra manager process would lose supervisor identity')
+module.subprocess.run=unexpected
+module.Manager.run=runtime
+module.Manager.configure_admin=lambda self,enabled: verified()
+module.Manager.admin_task=lambda self: verified()
+module.Manager.support=lambda self: SimpleNamespace(MigrationAdapter=lambda: None)
+migration.migrate=lambda *args,**kwargs: {'state':'synthetic'} if verified()==0 else None
+for command in (['migrate','--source',sys.argv[3],'--check'],['admin','on'],['admin-task'],['run','--no-auto-updates','stop'],['run','--no-auto-updates','restart']):
+    assert module.main(['--home',sys.argv[2],*command])==0
+assert len(calls)==5
+print('COLD DEPENDENCY PASS')
 '''
         done = subprocess.run([sys.executable, "-I", "-S", "-c", program, str(MODULE_PATH),
                                str(self.manager.home), str(self.root / "source")],
                               capture_output=True, text=True, timeout=20)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("COLD HANDOFF PASS", done.stdout)
+        self.assertIn("COLD DEPENDENCY PASS", done.stdout)
 
     def test_accepts_stable_metadata_but_rejects_bad_tags_drafts_and_external_assets(self):
         self.assertEqual(dist.latest_release(self.fetch), self.release)

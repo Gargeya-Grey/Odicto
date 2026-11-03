@@ -212,6 +212,51 @@ class TestManagedAdmin(unittest.TestCase):
         with self.assertRaises(dist.BusyError):
             self.manager.activate(self.old)
 
+    def released_reservation(self):
+        token = self.reservation()
+        request = self.manager._read_json(self.manager.home / "admin-request.json")
+        request.update(state="released", supervisor_pid=os.getpid())
+        dist.atomic_json(self.manager.home / "admin-request.json", request)
+        intent = self.manager._read_json(self.manager.home / "launch-intent.json")
+        intent["child_pid"] = 12344
+        dist.atomic_json(self.manager.home / "launch-intent.json", intent)
+        dist.atomic_json(self.manager.home / intent["receipt"], {"token": token, "pid": 12345, "state": "owner-starting"})
+        return token
+
+    def test_released_elevated_reservation_recovers_without_medium_readiness(self):
+        self.released_reservation()
+        with patch.object(self.manager, "_pid_alive", side_effect=lambda pid: pid != os.getpid()), patch.object(self.manager, "_ready", return_value=False):
+            self.manager._recover_launch_intent()
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+        with dist.file_lock(self.manager.data / "dictation.lock"):
+            with self.assertRaises(dist.BusyError):
+                self.manager.activate(self.old)
+
+    def test_live_privileged_cleanup_writer_keeps_released_reservation(self):
+        self.released_reservation()
+        with patch.object(self.manager, "_pid_alive", return_value=True), self.assertRaises(dist.BusyError):
+            self.manager._recover_launch_intent()
+        self.assertTrue((self.manager.home / "launch-intent.json").exists())
+
+    def test_stop_can_quit_owner_before_recovering_uncertain_elevated_reservation(self):
+        self.released_reservation()
+        request = self.manager._read_json(self.manager.home / "admin-request.json")
+        request["state"] = "claimed"
+        dist.atomic_json(self.manager.home / "admin-request.json", request)
+        alive = [True]
+        self.support.stop.side_effect = lambda *_: alive.__setitem__(0, False) or 0
+        with patch.object(self.manager, "_pid_alive", side_effect=lambda *_: alive[0]), patch.object(self.manager, "_ready", return_value=False):
+            self.assertEqual(self.manager.run(["stop"], automatic_updates=False), 0)
+        self.support.stop.assert_called_once()
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+
+    def test_successful_stop_preserves_live_startup_writer_reservation(self):
+        self.released_reservation()
+        with patch.object(self.manager, "_pid_alive", return_value=True), patch.object(self.manager, "_ready", return_value=False):
+            self.assertEqual(self.manager.run(["stop"], automatic_updates=False), 0)
+        self.support.stop.assert_called_once()
+        self.assertTrue((self.manager.home / "launch-intent.json").exists())
+
     def test_admin_enabled_version_switch_requires_capability_and_stable_marker(self):
         marker = self.manager.data / ".odicto-admin-enabled"
         marker.write_text("synthetic-enabled")
@@ -331,11 +376,40 @@ class TestManagedWindowsIdentity(unittest.TestCase):
 
 
 class TestManagedNativeBoundary(unittest.TestCase):
+    def test_recycled_non_python_health_pid_does_not_block_inactive_installation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            (data / "dictation-health.json").write_text(json.dumps({"pid": 12345, "updated_at": 1}))
+            with patch("psutil.pid_exists", return_value=True), patch("psutil.Process", return_value=SimpleNamespace(name=lambda: "browser.exe")), patch("psutil.process_iter", return_value=[]):
+                admin.assert_inactive(data, data)
+
+    def test_inaccessible_health_pid_keeps_migration_blocked(self):
+        import psutil
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            (data / "dictation-health.json").write_text(json.dumps({"pid": 12345, "updated_at": 1}))
+            with patch("psutil.pid_exists", return_value=True), patch("psutil.Process", side_effect=psutil.AccessDenied(12345)):
+                with self.assertRaisesRegex(RuntimeError, "unreadable"):
+                    admin.assert_inactive(data, data)
+
+    def test_posix_migration_preserves_already_owned_managed_autostart(self):
+        from tests.test_managed_migration import TestManagedMigration
+        fixture = TestManagedMigration("test_check_is_read_only_and_marks_lease_guarantee_as_advisory")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.adapter = admin.MigrationAdapter()
+        startup = SimpleNamespace(inspect=MagicMock(return_value=(Path("synthetic"), Path("receipt"), True)), configure=MagicMock())
+        with patch.object(admin, "sys", SimpleNamespace(platform="linux")), patch.object(admin, "_autostart", return_value=startup), patch.object(admin, "assert_inactive"), patch.object(Path, "home", return_value=fixture.root):
+            plan = fixture.migrate(check=True)
+            self.assertTrue(plan["startup"]["autostart"])
+            self.assertEqual(fixture.migrate()["state"], "complete")
+        startup.configure.assert_called_once_with(fixture.manager.home, True)
+
     def test_live_or_uncertain_pid_blocks_migration(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp)
             (data / "dictation.pid").write_text("12345")
-            with patch("psutil.pid_exists", return_value=True), self.assertRaisesRegex(RuntimeError, "live or uncertain"):
+            with patch("psutil.pid_exists", return_value=True), patch("psutil.Process", return_value=SimpleNamespace(name=lambda: "python.exe")), self.assertRaisesRegex(RuntimeError, "live or uncertain"):
                 admin.assert_inactive(data, data)
             (data / "dictation.pid").write_text("invalid")
             with self.assertRaisesRegex(RuntimeError, "uncertain"):

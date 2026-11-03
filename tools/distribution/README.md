@@ -124,6 +124,9 @@ Startup entry supplies login startup when enabled. Admin mode changes preserve
 that startup preference and leave the app stopped; use `odicto start` afterward.
 The supervisor retains the launch reservation until the exact child proves
 readiness, and cancels an unconfirmed child if its controlling pipe disappears.
+An abandoned elevated reservation uses its recorded release acknowledgement after
+the supervisor exits; a medium-integrity caller does not need to inspect the owner's
+command line to recognize that handoff. Instance and Setup leases still defer updates.
 
 An explicit migration holds source and destination writer/runtime leases and
 requires the source's `source_migration_guard` capability. A pending receipt
@@ -131,6 +134,10 @@ blocks legacy source starts before settings or startup changes. Completed,
 matching receipts allow supported legacy entry points to forward to the stable
 managed launcher. Recovery metadata and owned startup backups stay under
 `migrations/<token>` in the managed home. Private source files remain intact.
+The transaction records absent configuration files too, and checks that they remain
+absent on retry. An existing destination prompt blocks a source-without-prompt
+handoff so it cannot override the source's effective instructions. An already owned
+managed login-startup preference is preserved during POSIX migration.
 
 The stable launcher reads `active.json` before loading the updater from the active
 verified release. This switches the updater and app together. A failed start can

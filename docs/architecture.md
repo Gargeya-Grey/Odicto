@@ -77,8 +77,16 @@ trigger; `app/managed_autostart.py` owns the single stable login entry. Enabling
 admin mode requires compatible release capabilities during update and rollback.
 The elevated task rechecks readiness before spawning, since a medium-integrity
 caller can be denied access to an existing elevated owner's command line.
-Dependency-bearing migration/admin commands hand off from the bootstrap Python to
-the active release's verified environment before inspecting native ownership.
+Application lifecycle, migration and admin commands bind the active release's
+verified dependencies after checking the Python ABI. They keep the same supervisor
+process and startup pipes. Installation, updates, rollback and metadata commands
+remain independent of application dependencies.
+Migration records every known file, including its
+absence, and revalidates that inventory when a transaction resumes. Prompt-reference
+validation uses the same dotenv grammar as the application and exposes no values.
+An elevated release receipt can retire an abandoned reservation after its supervisor
+exits. The runtime and Setup leases still block activation while an owner is active.
+An explicit admin stop can signal the owner before reservation cleanup.
 
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.

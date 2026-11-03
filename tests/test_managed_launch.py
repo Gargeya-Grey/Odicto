@@ -203,7 +203,7 @@ class TestManagedLaunch(unittest.TestCase):
                 admin.assert_not_called()
 
     def test_cli_run_can_disable_automatic_updates(self):
-        with patch.object(dist, "Manager", return_value=self.manager), patch.object(self.manager, "run", return_value=0) as run:
+        with patch.object(dist, "Manager", return_value=self.manager), patch.object(self.manager, "bind_dependencies"), patch.object(self.manager, "run", return_value=0) as run:
             self.assertEqual(dist.main(["--home", str(self.manager.home), "run", "--no-auto-updates", "restart"]), 0)
         run.assert_called_once_with(["restart"], automatic_updates=False)
 

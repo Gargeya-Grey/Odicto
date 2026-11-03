@@ -101,7 +101,14 @@ def assert_inactive(data: Path, code: Path, *, allow_setup: bool = False) -> Non
         except (ValueError, TypeError):
             raise RuntimeError("Runtime ownership metadata is uncertain") from None
         if psutil.pid_exists(pid):
-            raise RuntimeError("An owner PID is live or uncertain; stop Odicto yourself before migrating")
+            try:
+                owner_name = psutil.Process(pid).name().lower()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied:
+                raise RuntimeError("Runtime PID ownership is unreadable; migration is blocked") from None
+            if owner_name.startswith(("python", "pypy")):
+                raise RuntimeError("An owner PID is live or uncertain; stop Odicto yourself before migrating")
     expected = {os.path.normcase(str((code / part).resolve())) for part in ("main.py", "app/main.py", "odicto.py", "app/odicto.py", "app/setup_web.py")}
     for process in psutil.process_iter(["pid", "name"]):
         if process.pid == os.getpid():
@@ -147,7 +154,7 @@ class MigrationAdapter:
                       Path.home() / ".config/autostart/odicto.desktop"]
         if any(path.exists() or path.is_symlink() for path in candidates):
             raise RuntimeError("Retire the existing source autostart entry before migration")
-        return StartupPreference(False, False, {})
+        return StartupPreference(False, bool(destination_startup), {})
 
     def assert_inactive(self, source, manager):
         assert_inactive(source, source)

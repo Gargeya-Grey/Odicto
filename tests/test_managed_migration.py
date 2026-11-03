@@ -160,6 +160,37 @@ class TestManagedMigration(unittest.TestCase):
             self.migrate(check=True)
         self.assertEqual(self.inventory(), before)
 
+    def test_missing_source_prompt_cannot_be_shadowed_by_destination_default_file(self):
+        (self.source / "prompt.txt").unlink()
+        (self.source / ".env").write_bytes(b"SYSTEM_PROMPT=synthetic inline prompt\n")
+        target = self.manager.data / "prompt.txt"
+        target.write_bytes((self.release / "prompt.txt.example").read_bytes())
+        with self.assertRaisesRegex(migration.MigrationError, "already configured"):
+            self.migrate(check=True)
+
+    def test_retry_rechecks_originally_absent_files_before_any_apply(self):
+        (self.source / "prompt.txt").unlink()
+        self.adapter.fail_once = True
+        with self.assertRaises(OSError):
+            self.migrate()
+        self.adapter.applications = 0
+        target = self.manager.data / "prompt.txt"
+        target.write_bytes(b"new destination prompt")
+        before = target.read_bytes()
+        with self.assertRaisesRegex(migration.MigrationError, "changed|configured"):
+            self.migrate()
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(self.adapter.applications, 0)
+
+    def test_actual_dotenv_key_grammar_cannot_bypass_prompt_guard(self):
+        (self.source / "prompt.txt").unlink()
+        for assignment in ("'SYSTEM_PROMPT_FILE'=custom.txt", "export 'SYSTEM_PROMPT_FILE'='custom.txt'",
+                           "\u00a0SYSTEM_PROMPT_FILE=custom.txt", "SYSTEM_PROMPT_FILE=\"custom\\nfile.txt\""):
+            with self.subTest(assignment=assignment):
+                (self.source / ".env").write_bytes((assignment + "\n").encode("utf-8"))
+                with self.assertRaisesRegex(migration.MigrationError, "Save.*source Setup"):
+                    self.migrate(check=True)
+
     def test_legacy_prompt_reference_blocks_before_any_receipt_or_settings_change(self):
         (self.source / "prompt.txt").unlink()
         for value in (b"custom.txt", b"'prompts/private.txt'", b'"C:/other/private.txt"'):
