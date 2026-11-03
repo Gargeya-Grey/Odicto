@@ -303,7 +303,7 @@ def migrate(manager, source: Path, *, check: bool = False, adapter: MigrationAda
         transaction = home / "migrations" / record["token"]
         for directory in (home / "migrations", transaction, transaction / "source", transaction / "destination"):
             _plain(directory, directory=True)
-            directory.mkdir(exist_ok=True, mode=0o700)
+            manager.private_directory(directory, exist_ok=True)
         _atomic(source / SOURCE_RECEIPT, _source_marker(record, "pending"))
         try:
             for entry in plan.files:

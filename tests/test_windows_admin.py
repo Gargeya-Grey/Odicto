@@ -322,7 +322,7 @@ class TestSetAdminMode(_AdminRootCase):
         self.elevated = self.patch_object(windows_admin, "_is_user_an_admin", return_value=False)
         self.scratch = tempfile.mkdtemp(prefix="odicto-admin-test-scratch-")
         self.addCleanup(lambda: os.path.isdir(self.scratch) and os.rmdir(self.scratch))
-        self.patch_object(windows_admin.tempfile, "mkdtemp", return_value=self.scratch)
+        self.patch_object(windows_admin, "_receipt_directory", return_value=self.scratch)
         self.spawn = MagicMock()
         platforms = __import__("platforms")
         self.patch_object(platforms, "spawn_detached", new=self.spawn)

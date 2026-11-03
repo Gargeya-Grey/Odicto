@@ -553,5 +553,203 @@ print('NATIVE DEPENDENCY PASS')
         self.assertIn("active release path is invalid", result.stderr)
 
 
+def _windows_dacls(*paths):
+    """The token user, then each path's DACL in SDDL, read by .NET (Access section only)."""
+    script = ("$ErrorActionPreference='Stop'; [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "
+              "foreach($p in $args) { if(Test-Path -LiteralPath $p -PathType Container) "
+              "{ [IO.Directory]::GetAccessControl($p,'Access').GetSecurityDescriptorSddlForm('Access') } "
+              "else { [IO.File]::GetAccessControl($p,'Access').GetSecurityDescriptorSddlForm('Access') } }")
+    program = "& { " + script + " } " + " ".join("'" + str(path).replace("'", "''") + "'" for path in paths)
+    # Popen, not run: a caller may replace subprocess.run with a fake while this reads the real ACL.
+    process = subprocess.Popen(["powershell", "-NoProfile", "-Command", program],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    output, error = process.communicate(timeout=30)
+    if process.returncode:
+        raise AssertionError(error)
+    lines = output.split()
+    if len(lines) != len(paths) + 1:
+        raise AssertionError(output + error)
+    return lines
+
+
+class TestPrivateDirectoryPolicy(unittest.TestCase):
+    """Pure DACL policy: add one explicit inheritable grant for the token user, relax nothing."""
+
+    USER = "S-1-5-21-111-222-333-1001"
+
+    def test_python_private_dacl_gains_only_the_token_user_grant(self):
+        python_mode_700 = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
+        self.assertEqual(dist._with_token_user(python_mode_700, self.USER),
+                         "D:P(A;OICI;FA;;;S-1-5-21-111-222-333-1001)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+
+    def test_existing_effective_grant_is_left_unchanged(self):
+        for dacl in ("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-111-222-333-1001)",
+                     "D:AI(A;OICIID;FA;;;S-1-5-21-111-222-333-1001)(A;OICIID;FA;;;SY)",
+                     "D:P(A;OICI;0x1f01ff;;;S-1-5-21-111-222-333-1001)",
+                     "D:NO_ACCESS_CONTROL"):
+            with self.subTest(dacl=dacl):
+                self.assertIsNone(dist._with_token_user(dacl, self.USER))
+        self.assertIsNone(dist._with_token_user("D:P(A;OICI;FA;;;SY)", "S-1-5-18",
+                                                canonical=lambda sid: {"SY": "S-1-5-18"}.get(sid, sid)))
+
+    def test_partial_and_inherit_only_grants_do_not_count_and_every_entry_is_kept(self):
+        user = self.USER
+        dacl = ("D:P(D;OICI;WD;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)"
+                % (user, user, user))
+        self.assertEqual(dist._with_token_user(dacl, user),
+                         "D:P(D;OICI;WD;;;%s)(A;OICI;FA;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)"
+                         "(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)" % (user, user, user, user))
+
+    def test_unrecognized_dacl_text_fails_closed(self):
+        for dacl in ("O:BAD:P(A;OICI;FA;;;SY)", "D:P(A;OICI;FA;;;SY", "D:P(A;OICI;FA;;;SY)junk",
+                     "S:(AU;SA;FA;;;WD)"):
+            with self.subTest(dacl=dacl), self.assertRaises(dist.DistributionError):
+                dist._with_token_user(dacl, self.USER)
+
+    def test_posix_private_directory_keeps_owner_only_mode(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "private"
+            with patch.object(dist, "os", SimpleNamespace(name="posix")), patch.object(
+                dist, "_grant_token_user", side_effect=AssertionError("POSIX has no Windows access list")
+            ):
+                path = dist.private_directory(target)
+            self.assertEqual(path, target)
+            self.assertTrue(path.is_dir())
+            if sys.platform != "win32":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o077, 0)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows DACLs and the elevated helper's PowerShell")
+class TestWindowsPrivateDirectoryAcl(unittest.TestCase):
+    """A file an elevated process writes is owned by Administrators. The same account must still
+    read it through an explicit inherited grant, never through ownership or a wider principal."""
+
+    @staticmethod
+    def grant(user):
+        return "(A;OICI;FA;;;%s)" % user
+
+    def assert_private(self, user, dacl):
+        import re
+        self.assertIn(self.grant(user), dacl)
+        if dacl.startswith("D:P"):
+            sids = set(re.findall(r";([^;()]+)\)", dacl))
+            self.assertLessEqual(sids, {"SY", "BA", "OW", user}, dacl)
+
+    def test_managed_and_release_directories_keep_elevated_files_readable(self):
+        fixture = TestManagedDistribution("test_missing_support_import_returns_a_clean_cli_error")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        record = fixture.initial()
+        manager = fixture.manager
+        written = manager.data / "elevated-owner-fixture.json"
+        dist.atomic_json(written, {"schema": 1})
+        user, *dacls = _windows_dacls(manager.home, manager.data, manager.releases,
+                                      manager.release_path(record), written)
+        for dacl in dacls[:4]:
+            self.assert_private(user, dacl)
+        self.assertIn("(A;ID;FA;;;%s)" % user, dacls[4])
+
+    def test_existing_private_directory_gains_the_grant_once_and_keeps_entries(self):
+        import os
+        import re
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "existing"
+            os.mkdir(path, 0o700)
+            user, before = _windows_dacls(path)
+            dist.private_directory(path, exist_ok=True)
+            _, after = _windows_dacls(path)
+            dist.private_directory(path, exist_ok=True)
+            _, again = _windows_dacls(path)
+        self.assert_private(user, after)
+        self.assertEqual(after, again)
+        for ace in re.findall(r"\([^()]*\)", before):
+            self.assertIn(ace, after)
+
+    def test_migration_transaction_directories_grant_the_token_user(self):
+        from tests.test_managed_migration import TestManagedMigration
+        fixture = TestManagedMigration("test_check_is_read_only_and_marks_lease_guarantee_as_advisory")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        recovery = Path(fixture.migrate()["recovery"])
+        user, *dacls = _windows_dacls(recovery.parent, recovery, recovery / "source", recovery / "destination")
+        for dacl in dacls:
+            self.assert_private(user, dacl)
+
+    def test_source_admin_receipt_directory_lets_this_account_read_an_elevated_receipt(self):
+        import os
+        import windows_admin
+        seen = []
+
+        def fake_run(command, **kwargs):
+            receipt = Path(command[command.index("-ReceiptPath") + 1])
+            seen.extend(_windows_dacls(receipt.parent))
+            receipt.write_text(json.dumps({"ok": False, "steps": ["elevated"], "error": "synthetic refusal"}))
+            return SimpleNamespace(returncode=1)
+
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ), patch.object(
+            windows_admin, "_is_windows", return_value=True
+        ), patch.object(windows_admin.subprocess, "run", side_effect=fake_run):
+            os.environ.pop("ODICTO_MANAGED_HOME", None)
+            root = Path(temporary)
+            helper = root.joinpath(*windows_admin.HELPER_PARTS)
+            helper.parent.mkdir(parents=True)
+            helper.write_text("# never executed")
+            ok, message = windows_admin.set_admin_mode(root, False)
+        self.assertFalse(ok)
+        self.assertIn("synthetic refusal", message)
+        user, dacl = seen
+        self.assertIsNone(dist._with_token_user(dacl, user), dacl)
+
+    def test_elevated_helper_grants_only_the_same_account_and_preserves_entries(self):
+        import os
+        import re
+        import _winapi
+        program = r'''
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:ODICTO_MANAGED_HELPER,[ref]$tokens,[ref]$errors)
+if($errors.Count) { throw ($errors | Out-String) }
+$wanted=@('Assert-SameAccount','Grant-SameAccount')
+$defs=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $n.Name},$true))
+if($defs.Count -ne $wanted.Count) { throw 'Missing same-account policy' }
+foreach($definition in $defs) { Invoke-Expression $definition.Extent.Text }
+$user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$refused=$false
+try { Assert-SameAccount 'S-1-5-21-999-999-999-1001' $user } catch { $refused=$true }
+if(-not $refused) { throw 'A different approving account was accepted' }
+Assert-SameAccount '' $user
+Assert-SameAccount $user $user
+$linked=$false
+try { Grant-SameAccount $env:ODICTO_ACL_LINK $user } catch { $linked=$true }
+if(-not $linked) { throw 'A linked directory was granted' }
+$target=$env:ODICTO_ACL_FIXTURE
+function Read-Dacl { [IO.Directory]::GetAccessControl($target,'Access').GetSecurityDescriptorSddlForm('Access') }
+$before=Read-Dacl
+Grant-SameAccount $target $user
+$after=Read-Dacl
+Grant-SameAccount $target $user
+$again=Read-Dacl
+"USER=$user"; "BEFORE=$before"; "AFTER=$after"; "AGAIN=$again"
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "owned"
+            os.mkdir(target, 0o700)
+            link = Path(temporary) / "linked"
+            _winapi.CreateJunction(str(target), str(link))
+            environment = dict(os.environ, ODICTO_ACL_FIXTURE=str(target), ODICTO_ACL_LINK=str(link),
+                               ODICTO_MANAGED_HELPER=str(MODULE_PATH.parents[2] / "scripts/windows/managed_admin.ps1"))
+            try:
+                result = subprocess.run(["powershell", "-NoProfile", "-Command", program], env=environment,
+                                        capture_output=True, text=True, timeout=30)
+            finally:
+                os.rmdir(link)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        values = dict(line.split("=", 1) for line in result.stdout.split() if "=" in line)
+        self.assert_private(values["USER"], values["AFTER"])
+        self.assertEqual(values["AFTER"], values["AGAIN"])
+        for ace in re.findall(r"\([^()]*\)", values["BEFORE"]):
+            self.assertIn(ace, values["AFTER"])
+
+
 if __name__ == "__main__":
     unittest.main()

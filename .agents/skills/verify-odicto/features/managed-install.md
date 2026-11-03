@@ -25,6 +25,26 @@ hands on their computer. A read-only migration check may be run by the agent.
 6. Drive raw dictation and F8 Polish with the owner's hands. Require the owner to
    confirm the text/result card, not just a healthy PID or green synthetic test.
 
+## Private-directory permissions (Windows)
+
+Elevated writes (admin receipts, launch results, the admin marker, PID, health, logs and
+migration backups) are owned by Administrators. The same account reads them only through
+an explicit grant on the directory. Prove it with the isolated tests:
+`python -m unittest tests.test_managed_distribution.TestPrivateDirectoryPolicy tests.test_managed_distribution.TestWindowsPrivateDirectoryAcl`.
+On an owner's managed home, a read-only check is allowed; it changes nothing:
+
+```powershell
+$managed = Join-Path $env:LOCALAPPDATA 'Odicto'
+foreach ($p in @($managed, (Join-Path $managed 'data'), (Join-Path $managed 'releases'))) {
+    [IO.Directory]::GetAccessControl($p, 'Access').GetSecurityDescriptorSddlForm('Access') }
+```
+
+Expect each protected `D:P` list to hold `(A;OICI;FA;;;<account SID>)` beside SY, BA and OW,
+and no WD, AU or BU entry. A file an elevated process wrote shows an inherited
+`(A;ID;FA;;;<account SID>)`. Do not use `$HOME` or `$home` as a variable name; PowerShell
+reserves it. The tests make no Administrators-owned file. Only an owner-run elevated
+action (UAC) proves a real elevated write is readable afterwards.
+
 Admin mode must use a stable, owned elevation task and the same managed launch
 reservation/readiness protocol as ordinary startup. Login startup uses one owned
 entry. Synthetic adapters and PowerShell parsing cannot establish real UAC,

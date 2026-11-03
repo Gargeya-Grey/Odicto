@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory=$true)][string]$HomePath,
     [string]$SourceRoot,
     [string]$TransactionPath,
-    [string]$ReceiptPath
+    [string]$ReceiptPath,
+    [string]$CallerSid
 )
 $ErrorActionPreference = 'Stop'
 $ManagedHome = [IO.Path]::GetFullPath($HomePath).TrimEnd('\')
@@ -24,6 +25,32 @@ function Write-Result([bool]$Ok, [string]$ErrorText, $Result) {
     $json = $value | ConvertTo-Json -Depth 8 -Compress
     if ($ReceiptPath) { [IO.File]::WriteAllText($ReceiptPath,$json,(New-Object Text.UTF8Encoding($false))) }
     if ($Action -eq 'Inspect') { [Console]::Out.WriteLine($json) }
+}
+# The elevated child writes receipts, the marker and backups that Administrators own. The same
+# account reads them only through an explicit inheritable grant on their directory. Approval by a
+# different account is refused: that account must not own this home's startup or its files.
+function Assert-SameAccount([string]$Caller, [string]$Current) {
+    if ($Caller -and $Caller -ne $Current) {
+        throw 'Administrator approval came from a different account; nothing changed. Sign in as the account that owns this Odicto installation'
+    }
+}
+# DACL only (Access section): no SACL privilege. Existing entries stay; no other account is added.
+function Grant-SameAccount([string]$Path, [string]$UserSid) {
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'A managed private directory is linked or missing; it was preserved'
+    }
+    $user = New-Object Security.Principal.SecurityIdentifier($UserSid)
+    $full = [Security.AccessControl.FileSystemRights]::FullControl
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $acl = [IO.Directory]::GetAccessControl($item.FullName, [Security.AccessControl.AccessControlSections]::Access)
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.IdentityReference -eq $user -and $rule.AccessControlType -eq 'Allow' -and
+            ($rule.FileSystemRights -band $full) -eq $full -and $rule.InheritanceFlags -eq $inherit -and
+            $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None) { return }
+    }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($user, $full, $inherit, 'None', 'Allow')))
+    [IO.Directory]::SetAccessControl($item.FullName, $acl)
 }
 function Read-Task([string]$Name) {
     try { return Get-ScheduledTask -TaskPath '\' -TaskName $Name -ErrorAction Stop }
@@ -185,9 +212,13 @@ try {
         if ($SourceRoot) { $arguments += @('-SourceRoot',('"{0}"' -f $SourceRoot)) }
         if ($TransactionPath) { $arguments += @('-TransactionPath',('"{0}"' -f $TransactionPath)) }
         if ($ReceiptPath) { $arguments += @('-ReceiptPath',('"{0}"' -f $ReceiptPath)) }
+        $arguments += @('-CallerSid',$sid)
         $child = Start-Process -FilePath $PowerShellExe -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru
         $null = $child.Handle; $child.WaitForExit(); exit $child.ExitCode
     }
+    Assert-SameAccount $CallerSid $sid
+    Grant-SameAccount $ManagedHome $sid
+    Grant-SameAccount (Join-Path $ManagedHome 'data') $sid
     if ($Action -in @('Migrate','MigrateAdmin')) {
         if (-not $TransactionPath -or -not $SourceRoot) { throw 'Migration requires its transaction directory and source' }
         $transaction = [IO.Path]::GetFullPath($TransactionPath)
@@ -197,6 +228,7 @@ try {
         $journal = Get-Content -Raw -LiteralPath (Join-Path $ManagedHome 'migration.json') | ConvertFrom-Json
         if ($journal.token -cne $pending.token -or $journal.source -cne $SourceRoot -or $journal.home -cne $ManagedHome -or $journal.state -notin @('pending','failed') -or -not (Get-Process -Id $journal.supervisor_pid -ErrorAction SilentlyContinue)) { throw 'Migration supervisor no longer owns its reservation' }
         if ($pending.schema -ne 1 -or $pending.home -cne $ManagedHome -or $pending.source -cne $SourceRoot -or $pending.state -ne 'pending') { throw 'Migration reservation is invalid' }
+        Grant-SameAccount $transaction $sid
         if ($source.source_task) {
             $backup = Join-Path $transaction 'source-task.xml'
             if (-not (Test-Path -LiteralPath $backup)) { Export-ScheduledTask -TaskName 'Odicto' -TaskPath '\' | Set-Content -LiteralPath $backup -Encoding UTF8 }

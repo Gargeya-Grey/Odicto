@@ -43,7 +43,8 @@ GATE = {
     # is: 737.
     # Vocabulary, explicit polish, upgrade safety, rootless X11 and managed updates
     # add coverage on every platform; platform-specific definitions still differ.
-    "floor": 1030,
+    # Plus 5 for the private-directory access-list policy (managed homes and migration): 1035.
+    "floor": 1035,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -56,6 +57,8 @@ GATE = {
         "other": [
             "tests.test_managed_admin.TestManagedNativeBoundary.test_powershell_helpers_parse_without_execution",
             "tests.test_managed_admin.TestManagedNativeBoundary.test_powershell_task_ownership_with_fake_objects",
+            # Real Windows DACLs and the elevated helper's same-account grant.
+            "tests.test_managed_distribution.TestWindowsPrivateDirectoryAcl.*",
             "tests.test_windows_admin.TestHelperDecisions.*",
             "tests.test_windows_admin.TestHelperParses.*",
             "tests.test_windows_admin.TestQuitEventRoundTrip.*",

@@ -624,6 +624,15 @@ def _read_receipt(path: str) -> dict:
         return {}
 
 
+def _receipt_directory() -> str:
+    """A new folder that keeps the user's temp-folder permissions. tempfile.mkdtemp uses mode
+    0o700, which current Windows Pythons turn into SYSTEM, Administrators and OWNER RIGHTS only;
+    the elevated helper's receipt is owned by Administrators, so this process could not read it."""
+    path = os.path.join(tempfile.gettempdir(), "odicto-admin-" + os.urandom(16).hex())
+    os.mkdir(path)
+    return path
+
+
 def _short(text: object, limit: int = 300) -> str:
     one_line = " ".join(str(text or "").split())
     return one_line if len(one_line) <= limit else one_line[: limit - 3] + "..."
@@ -660,7 +669,7 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
     helper = os.path.join(root, *HELPER_PARTS)
     if not os.path.isfile(helper):
         return False, "Admin mode was not changed: the helper script is missing."
-    scratch = tempfile.mkdtemp(prefix="odicto-admin-")
+    scratch = _receipt_directory()
     try:
         receipt_path = os.path.join(scratch, "receipt.json")
         action = ("-Action", "Start", "-InstallStartup") if enabled else ("-Action", "Disable")

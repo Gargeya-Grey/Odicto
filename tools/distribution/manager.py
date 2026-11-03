@@ -232,6 +232,140 @@ def file_lock(path: Path):
         handle.close()
 
 
+def _sddl_aces(dacl: str) -> tuple[str, list[str]]:
+    """Split DACL-only SDDL into its "D:<flags>" prefix and its ACE strings. Unknown text fails closed."""
+    start = dacl.find("(")
+    prefix = dacl if start < 0 else dacl[:start]
+    aces, depth, begin = [], 0, start
+    for index in range(max(start, 0), len(dacl) if start >= 0 else 0):
+        if dacl[index] == "(":
+            begin = index if depth == 0 else begin
+            depth += 1
+        elif dacl[index] == ")":
+            depth -= 1
+            if depth < 0:
+                break
+            if depth == 0:
+                aces.append(dacl[begin:index + 1])
+    if not re.fullmatch(r"D:(P|AI|AR|NO_ACCESS_CONTROL)*", prefix) or depth or prefix + "".join(aces) != dacl:
+        raise DistributionError("A private directory has an unrecognized access list; it was preserved")
+    return prefix, aces
+
+
+def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lambda value: value) -> str | None:
+    """Return the DACL plus one explicit inheritable full-control grant for sid, or None when an
+    effective one already exists. Every existing entry is kept; no other principal is added."""
+    prefix, aces = _sddl_aces(dacl)
+    if "NO_ACCESS_CONTROL" in prefix:
+        return None
+    position = None
+    for index, ace in enumerate(aces):
+        fields = ace[1:-1].split(";")
+        flags = {fields[1][at:at + 2] for at in range(0, len(fields[1]), 2)} if len(fields) > 1 else set()
+        if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and "IO" not in flags
+                and fields[2].upper() in {"FA", "0X1F01FF"} and canonical(fields[5]) == sid):
+            return None
+        if position is None and not (fields[0] in {"D", "OD", "XD"} and "ID" not in flags):
+            position = index  # canonical order: explicit denies stay first
+    position = len(aces) if position is None else position
+    return prefix + "".join(aces[:position] + [f"(A;OICI;FA;;;{sid})"] + aces[position:])
+
+
+def _grant_token_user(path: Path) -> None:
+    """Python's Windows mode 0o700 grants only SYSTEM, Administrators and OWNER RIGHTS. A file that
+    an elevated process writes there belongs to Administrators, so this account could not read it
+    at medium integrity. Add one explicit inheritable grant for the process token user. SetFileSecurity
+    writes this directory's DACL only: no SACL privilege and no walk over existing children."""
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    pointer = ctypes.POINTER
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, pointer(wintypes.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, pointer(wintypes.DWORD)]
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, pointer(ctypes.c_void_p)]
+    advapi.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, pointer(ctypes.c_void_p)]
+    advapi.GetFileSecurityW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, pointer(wintypes.DWORD)]
+    advapi.SetFileSecurityW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
+    advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, pointer(ctypes.c_void_p), ctypes.c_void_p]
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, pointer(ctypes.c_void_p), ctypes.c_void_p]
+    dacl_information = 0x4
+
+    def check(succeeded) -> None:
+        if not succeeded:
+            code = ctypes.get_last_error()
+            raise DistributionError(f"This account cannot be given access to private directory {path.name} "
+                                    f"(Windows error {code}); it was preserved")
+
+    def owned_text(address: ctypes.c_void_p) -> str:
+        try:
+            return ctypes.wstring_at(address.value)
+        finally:
+            kernel.LocalFree(address)
+
+    def sid_text(binary) -> str:
+        text = ctypes.c_void_p()
+        check(advapi.ConvertSidToStringSidW(binary, ctypes.byref(text)))
+        return owned_text(text)
+
+    def canonical(value: str) -> str:
+        if value.startswith("S-"):
+            return value
+        binary = ctypes.c_void_p()
+        if not advapi.ConvertStringSidToSidW(value, ctypes.byref(binary)):
+            return value
+        try:
+            return sid_text(binary)
+        finally:
+            kernel.LocalFree(binary)
+
+    def read_dacl() -> str:
+        needed = wintypes.DWORD()
+        advapi.GetFileSecurityW(str(path), dacl_information, None, 0, ctypes.byref(needed))
+        buffer = ctypes.create_string_buffer(needed.value)
+        check(needed.value and advapi.GetFileSecurityW(str(path), dacl_information, buffer, needed, ctypes.byref(needed)))
+        text = ctypes.c_void_p()
+        check(advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(buffer, 1, dacl_information, ctypes.byref(text), None))
+        return owned_text(text)
+
+    token = wintypes.HANDLE()
+    check(advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)))
+    try:
+        needed = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+        user = ctypes.create_string_buffer(needed.value)
+        check(needed.value and advapi.GetTokenInformation(token, 1, user, needed, ctypes.byref(needed)))
+    finally:
+        kernel.CloseHandle(token)
+    sid = sid_text(ctypes.c_void_p.from_buffer(user).value)  # TOKEN_USER starts with the SID pointer
+    updated = _with_token_user(read_dacl(), sid, canonical)
+    if updated is None:
+        return
+    descriptor = ctypes.c_void_p()
+    check(advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(updated, 1, ctypes.byref(descriptor), None))
+    try:
+        check(advapi.SetFileSecurityW(str(path), dacl_information, descriptor))
+    finally:
+        kernel.LocalFree(descriptor)
+    if _with_token_user(read_dacl(), sid, canonical) is not None:
+        raise DistributionError(f"Private directory {path.name} did not keep this account's access; it was preserved")
+
+
+def private_directory(path: Path, *, exist_ok: bool = False, parents: bool = False) -> Path:
+    """Owner-only directory: POSIX mode 0o700; on Windows also readable by this same account when
+    an elevated process owns the files inside. Never grants any other account."""
+    path.mkdir(mode=0o700, exist_ok=exist_ok, parents=parents)
+    if os.name == "nt":
+        _grant_token_user(path)
+    return path
+
+
 def default_home() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Odicto"
@@ -249,6 +383,9 @@ class Manager:
         self.marker = self.home / ".odicto-managed.json"
         self.fetch = fetch
         self.installer = installer or self._install_dependencies
+
+    # Migration runs where only the manager is known to be importable (see bootstrap).
+    private_directory = staticmethod(private_directory)
 
     @staticmethod
     def support(root: Path | None = None):
@@ -287,7 +424,7 @@ class Manager:
     def initialize(self) -> None:
         if self.home.exists() and not self.marker.exists() and any(self.home.iterdir()):
             raise DistributionError("Destination is not an empty managed installation; existing files were preserved")
-        self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_directory(self.home, parents=True, exist_ok=True)
         if self.marker.exists():
             marker = self._read_json(self.marker)
             if marker.get("schema") != 1 or marker.get("home") != str(self.home):
@@ -297,7 +434,7 @@ class Manager:
         for directory in (self.data, self.releases):
             if directory.is_symlink():
                 raise DistributionError("Managed installation directories cannot be symlinks")
-            directory.mkdir(exist_ok=True, mode=0o700)
+            private_directory(directory, exist_ok=True)
 
     @staticmethod
     def _read_json(path: Path) -> dict:
@@ -372,7 +509,7 @@ class Manager:
     def stage(self, release: Release) -> dict:
         contents, digest = verified_archive(release, self.fetch)
         directory = self.releases / f"{release.tag}-{digest[:12]}-{uuid.uuid4().hex[:8]}"
-        directory.mkdir(mode=0o700)
+        private_directory(directory)
         record = {"version": release.tag, "directory": directory.name, "archive_sha256": digest}
         try:
             extract_archive(contents, directory)
