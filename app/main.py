@@ -170,6 +170,7 @@ def attach_pythonw_log() -> None:
         sys.stdout = wrapped  # type: ignore[assignment]
         sys.stderr = wrapped  # type: ignore[assignment]
         _LOG_ATTACHED = True
+        session_log.install_safe_excepthooks()
         try:
             import faulthandler
 

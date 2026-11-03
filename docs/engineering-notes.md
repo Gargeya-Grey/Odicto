@@ -659,6 +659,20 @@ instead of patching lines:
   for 30 s, so a stuck peer cannot stall a hotkey path. Known limit: a writer in that short-wait
   window may write unlocked; if the owner trims in the same milliseconds, that writer's line can
   be lost. Both conditions together need a peer that held the lock over 0.25 s.
+- **Uncaught exceptions print frames and type names only** (`session_log.safe_traceback`,
+  installed for the main thread and other threads when the log is attached), and Gemini Live
+  retrieves every task exception itself, so asyncio never prints one verbatim. Source lines in a
+  traceback are code, not data. OpenAI-compatible response lines print a known finish reason and
+  integer token counts only.
+- **Two limits stay by decision.** A headless process (pythonw, or stdout at NUL) of an install
+  logs to that install's log: that is the source install's contract, so an unmarked headless
+  child that inherits the data root also writes there. `faulthandler` writes a fatal crash dump
+  straight to the file, outside the lock (a dying process cannot take it); a second process that
+  crashes during the owner's millisecond trim can lose its dump.
+- **Open design question for the owner.** Four review rounds kept finding new free-text paths
+  into the log. The rule above is enforced by review and tests, not by structure. A structured
+  event log (fixed event names and numeric fields, no free text when `LOG_TRANSCRIPTS=false`)
+  would make the rule structural; it is a larger change and needs the owner's decision.
 - **A managed start that ends early writes one line**: failures in the startup guard and
   launch receipt, a closed launcher pipe, and an exception or nonzero exit from main. OS errors
   keep their message; other exception types are named only (`session_log.failure_text`).

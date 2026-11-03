@@ -4,6 +4,14 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.5] - 2026-11-04
+
+### Fixed
+
+- With transcript logging off, a crash report in the log shows where it happened and the error type, not the error message.
+- Gemini Live errors and OpenRouter empty-reply notices in the log no longer include provider text.
+- Many log lines at once no longer wait long when another Odicto process holds the log lock.
+
 ## [1.2.4] - 2026-11-04
 
 ### Fixed

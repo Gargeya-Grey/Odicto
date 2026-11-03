@@ -318,6 +318,25 @@ def _choice_finish_reason(response: object) -> str:
         return ""
 
 
+_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls", "function_call", "error"})
+
+
+def _logged_finish_reason(response: object) -> str:
+    """The finish reason for dictation.log: a known value, else '?'."""
+    reason = _choice_finish_reason(response)
+    return reason if reason in _FINISH_REASONS else ("" if not reason else "?")
+
+
+def _logged_usage(response: object) -> str:
+    usage = getattr(response, "usage", None)
+    counts = []
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(usage, key, None)
+        if type(value) is int:
+            counts.append(f"{key}={value}")
+    return " ".join(counts) or "?"
+
+
 # Provider strings never reach dictation.log: a response can echo the request (dictated
 # text) in any field. Only these known values and integer token counts are printed.
 _META_STATUSES = frozenset({"completed", "incomplete", "in_progress", "failed", "cancelled", "queued"})
@@ -1056,8 +1075,8 @@ class TextRefiner:
                 retry_tokens = max(int(max_tokens) * 4, 2048)
                 print(
                     f"Notice: openrouter returned empty content "
-                    f"(finish_reason={_choice_finish_reason(response)!r}, "
-                    f"usage={getattr(response, 'usage', None)}). "
+                    f"(finish_reason={_logged_finish_reason(response)!r}, "
+                    f"usage={_logged_usage(response)}). "
                     f"Retrying with max_tokens={retry_tokens}.",
                     flush=True,
                 )
@@ -1082,7 +1101,7 @@ class TextRefiner:
 
             print(
                 f"Notice: {self.provider} returned no answer text "
-                f"(finish_reason={_choice_finish_reason(response)!r}); "
+                f"(finish_reason={_logged_finish_reason(response)!r}); "
                 f"pasting the raw transcript.",
                 flush=True,
             )

@@ -57,23 +57,25 @@ class LogLock:
         return _Hold(self, wait)
 
     def __enter__(self) -> "LogLock":
-        if time.monotonic() < self._degraded_until:
-            wait = _DEGRADED_WAIT_SECONDS
-        else:
-            wait = _WRITE_WAIT_SECONDS
-        self._acquire(wait)
-        if self._depth == 1 and not self._held:
-            self._degraded_until = time.monotonic() + _DEGRADED_SECONDS
+        self._acquire(None)
         return self
 
     def __exit__(self, *_exc) -> None:
         self._release()
 
-    def _acquire(self, wait: float) -> None:
+    def _acquire(self, wait) -> None:
+        """``wait`` None means a writer: its wait is chosen only once it holds the in-process
+        lock, so writers queued behind a timed-out one get the short wait too."""
         self._thread_lock.acquire()
         self._depth += 1
         if self._depth == 1:
+            writer = wait is None
+            if writer:
+                degraded = time.monotonic() < self._degraded_until
+                wait = _DEGRADED_WAIT_SECONDS if degraded else _WRITE_WAIT_SECONDS
             self._held = self._lock_os(wait)
+            if writer and not self._held:
+                self._degraded_until = time.monotonic() + _DEGRADED_SECONDS
 
     def _release(self) -> None:
         try:
@@ -141,6 +143,60 @@ class _Hold:
 
     def __exit__(self, *_exc) -> None:
         self._lock._release()
+
+
+def _transcripts_logged() -> bool:
+    try:
+        from config import Config
+        return bool(getattr(Config, "LOG_TRANSCRIPTS", False))
+    except Exception:
+        return False
+
+
+def safe_traceback(exc_type, error, tb) -> str:
+    """A traceback for dictation.log: frames and exception type names, never message text
+    (an exception from a provider call can carry the dictated request)."""
+    import traceback
+    lines = ["Traceback (most recent call last):\n", *traceback.format_tb(tb)]
+    lines.append(f"{getattr(exc_type, '__name__', 'Exception')} (message hidden; LOG_TRANSCRIPTS=false)\n")
+    link, seen = error, 0
+    while link is not None and seen < 5:
+        link = link.__cause__ or (None if link.__suppress_context__ else link.__context__)
+        if link is not None:
+            lines.append(f"  from {type(link).__name__}\n")
+        seen += 1
+    return "".join(lines)
+
+
+def install_safe_excepthooks() -> None:
+    """Uncaught exceptions (main thread and other threads) print through safe_traceback
+    unless LOG_TRANSCRIPTS is on. Installed only when stdout/stderr go to dictation.log."""
+    import sys
+    import threading as _threading
+    default_hook, default_thread_hook = sys.excepthook, _threading.excepthook
+
+    def hook(exc_type, error, tb):
+        if _transcripts_logged():
+            return default_hook(exc_type, error, tb)
+        try:
+            sys.stderr.write(safe_traceback(exc_type, error, tb))
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit or _transcripts_logged():
+            return default_thread_hook(args)
+        try:
+            name = getattr(args.thread, "name", "?")
+            sys.stderr.write(f"Exception in thread {name}:\n"
+                             + safe_traceback(args.exc_type, args.exc_value, args.exc_traceback))
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+    _threading.excepthook = thread_hook
 
 
 def failure_text(error: BaseException) -> str:

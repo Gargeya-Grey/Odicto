@@ -554,6 +554,99 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         self.assertIn("FileNotFoundError", text)
         self.assertFalse(session_log.is_managed_owner())
 
+    def test_openrouter_response_lines_log_only_known_values(self):
+        import refiner
+        from types import SimpleNamespace
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason="my secret words")],
+            usage=SimpleNamespace(prompt_tokens=3, completion_tokens=0, total_tokens=3, note="secret"))
+        self.assertEqual(refiner._logged_finish_reason(response), "?")
+        self.assertEqual(refiner._logged_usage(response),
+                         "prompt_tokens=3 completion_tokens=0 total_tokens=3")
+        response.choices[0].finish_reason = "length"
+        self.assertEqual(refiner._logged_finish_reason(response), "length")
+        source = Path(refiner.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("finish_reason={_choice_finish_reason", source)
+        self.assertNotIn("usage={getattr(response", source)
+
+    def test_gemini_live_task_errors_are_summarized_not_printed_verbatim(self):
+        import transcriber
+        from config import Config
+        from types import SimpleNamespace
+        session = SimpleNamespace(_error=None)
+        task = SimpleNamespace(cancelled=lambda: False, exception=lambda: RuntimeError("HTTP 500 my secret"))
+        output = io.StringIO()
+        with patch.object(Config, "LOG_TRANSCRIPTS", False), patch.object(sys, "stdout", output):
+            transcriber.GeminiLiveSession._observe_task(session, task)
+            transcriber.GeminiLiveSession._loop_exception(None, {"exception": RuntimeError("HTTP 502 my secret"),
+                                                                 "message": "Task exception was never retrieved"})
+        self.assertEqual(session._error, "RuntimeError (HTTP 500)")
+        self.assertIn("RuntimeError (HTTP 502)", output.getvalue())
+        self.assertNotIn("secret", output.getvalue())
+
+    def test_safe_traceback_keeps_frames_and_types_not_messages(self):
+        import session_log
+        cause_text, message = "my " + "secret cause", "my " + "secret words"  # source lines are shown
+        try:
+            try:
+                raise ValueError(cause_text)
+            except ValueError as cause:
+                raise RuntimeError(message) from cause
+        except RuntimeError as error:
+            text = session_log.safe_traceback(type(error), error, error.__traceback__)
+        self.assertIn("Traceback (most recent call last):", text)
+        self.assertIn("test_managed_launch.py", text)
+        self.assertIn("RuntimeError (message hidden", text)
+        self.assertIn("from ValueError", text)
+        self.assertNotIn("secret", text)
+
+    def test_uncaught_exception_in_the_attached_log_hides_its_message(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"ODICTO_MANAGED_HOME", "ODICTO_LAUNCH_TOKEN", "ODICTO_DATA_ROOT"}}
+            environment.update(ODICTO_DATA_ROOT=temporary, QT_QPA_PLATFORM="offscreen",
+                               ODICTO_MANAGED_HOME=temporary, ODICTO_LAUNCH_TOKEN="a" * 32)
+            program = ("import sys, threading; sys.path.insert(0, sys.argv[1]); import session_log; "
+                       "session_log.mark_managed_owner(True); import main; "
+                       "t = threading.Thread(target=lambda: (_ for _ in ()).throw(RuntimeError('thread secret'))); "
+                       "t.start(); t.join(); raise RuntimeError('my secret words')")
+            result = subprocess.run([sys.executable, "-c", program, str(Path(odicto.__file__).parent)],
+                                    env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            text = Path(temporary, "dictation.log").read_text(encoding="utf-8")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("RuntimeError (message hidden", text)
+        self.assertIn("Exception in thread", text)
+        self.assertNotIn("secret", text)
+
+    def test_queued_writers_all_get_the_short_wait(self):
+        import session_log
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "dictation.log")
+            program = ("import sys, time; sys.path.insert(0, sys.argv[1]); import session_log\n"
+                       "with session_log.LogLock(sys.argv[2]):\n"
+                       "    print('locked', flush=True); time.sleep(3)\n")
+            peer = subprocess.Popen([sys.executable, "-c", program, str(Path(session_log.__file__).parent),
+                                     path], stdout=subprocess.PIPE)
+            try:
+                self.assertEqual(peer.stdout.readline().strip(), b"locked")
+                lock = session_log.LogLock(path)
+
+                def write():
+                    with lock:
+                        pass
+
+                writers = [threading.Thread(target=write) for _ in range(5)]
+                started = time.monotonic()
+                for writer in writers:
+                    writer.start()
+                for writer in writers:
+                    writer.join()
+                elapsed = time.monotonic() - started
+            finally:
+                peer.wait(timeout=30)
+                peer.stdout.close()
+        self.assertLess(elapsed, 0.8)  # one 0.25 s wait, then short waits; not 5 x 0.25 s
+
     def test_managed_failure_before_main_is_logged(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
             os.environ, {"ODICTO_MANAGED_HOME": temporary, "ODICTO_LAUNCH_TOKEN": "a" * 32}

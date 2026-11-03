@@ -1013,10 +1013,25 @@ class GeminiLiveSession:
             self._error = error_summary(e)
             print(f"Gemini Live STT thread failed: {self._error}", flush=True)
 
+    def _observe_task(self, task) -> None:
+        """Retrieve a finished task's exception so asyncio never prints it verbatim."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and not self._error:
+            self._error = error_summary(error)
+
+    @staticmethod
+    def _loop_exception(_loop, context) -> None:
+        error = context.get("exception")
+        print(f"Gemini Live task error: {error_summary(error) if error is not None else 'unknown'}",
+              flush=True)
+
     async def _run_owned(self) -> None:
         with self._transport_lock:
             self._loop = asyncio.get_running_loop()
             self._task = asyncio.current_task()
+        self._loop.set_exception_handler(self._loop_exception)
         try:
             # stop() may time out before this worker has started its event loop.
             if self._cancel_requested.is_set():
@@ -1070,6 +1085,7 @@ class GeminiLiveSession:
                     activity_start=google_genai_types.ActivityStart()
                 )
                 receiver = asyncio.create_task(self._recv_loop(session))
+                receiver.add_done_callback(self._observe_task)
                 await self._send_loop(session, mime)
                 try:
                     await session.send_realtime_input(
