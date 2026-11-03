@@ -680,14 +680,16 @@ class CloudTranscriber(_LocalWhisperFallback):
         self._prewarmer = Prewarmer()
 
     def _whisper_fallback(
-        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True,
+        error: Optional[BaseException] = None,
     ) -> str:
+        # `reason` is returned to the caller; the log line names only `error`'s type and status.
         if not allow:
             raise LocalFallbackDisabled(reason)
         label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(
             self.kind, self.kind or "Cloud"
         )
-        print(f"{label} STT fallback to Whisper ({reason})", flush=True)
+        print(f"{label} STT fallback to Whisper ({error_summary(error) if error is not None else reason})", flush=True)
         return self.local_fallback(audio)
 
     def prewarm(self) -> None:
@@ -779,7 +781,7 @@ class CloudTranscriber(_LocalWhisperFallback):
                 headers["Content-Type"] = content_type
             result = _post_bytes(url, body, headers, timeout=stt_deadline_seconds())
         except Exception as e:
-            return self._whisper_fallback(audio, error_summary(e), allow_local_fallback)
+            return self._whisper_fallback(audio, str(e) or type(e).__name__, allow_local_fallback, error=e)
         text = _transcript_from_payload(result)
         if text is not None:
             return text
@@ -827,11 +829,13 @@ class GeminiTranscriber(_LocalWhisperFallback):
             print("Warning: Could not create Gemini STT client.", flush=True)
 
     def _whisper_fallback(
-        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True
+        self, audio: Union[str, np.ndarray], reason: str, allow: bool = True,
+        error: Optional[BaseException] = None,
     ) -> str:
+        # `reason` is returned to the caller; the log line names only `error`'s type and status.
         if not allow:
             raise LocalFallbackDisabled(reason)
-        print(f"Gemini STT fallback to Whisper ({reason})", flush=True)
+        print(f"Gemini STT fallback to Whisper ({error_summary(error) if error is not None else reason})", flush=True)
         return self.local_fallback(audio)
 
     def prewarm(self) -> None:
@@ -895,7 +899,8 @@ class GeminiTranscriber(_LocalWhisperFallback):
                 },
             )
         except Exception as e:
-            return self._whisper_fallback(audio, error_summary(e), allow_local_fallback)
+            detail = str(getattr(e, "message", "")) or str(e)
+            return self._whisper_fallback(audio, detail.strip() or type(e).__name__, allow_local_fallback, error=e)
 
         text = getattr(interaction, "output_text", None)
         if isinstance(text, str):

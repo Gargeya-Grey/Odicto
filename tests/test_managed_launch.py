@@ -360,6 +360,24 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         with patch.object(Config, "LOG_TRANSCRIPTS", False):
             self.assertNotIn("sentence", refiner.error_summary(RuntimeError("HTTP 422 my sentence")))
 
+    def test_cloud_stt_fallback_line_hides_an_echoed_body_but_the_caller_keeps_it(self):
+        import numpy as np
+        import transcriber
+        from config import Config
+        audio = np.ones(1600, dtype=np.float32) * 0.1
+        printed = io.StringIO()
+        with patch.object(transcriber, "WhisperTranscriber") as whisper, patch.object(
+            transcriber, "_post_bytes", side_effect=RuntimeError("HTTP 400 my secret sentence")
+        ), patch.object(Config, "LOG_TRANSCRIPTS", False), patch.object(sys, "stdout", printed):
+            whisper.return_value.transcribe.return_value = "local words"
+            cloud = transcriber.CloudTranscriber("groq")
+            cloud._endpoint = lambda: ("https://x.invalid/a", "synthetic-key", "m")
+            self.assertEqual(cloud.transcribe(audio), "local words")
+            with self.assertRaisesRegex(transcriber.LocalFallbackDisabled, "secret sentence"):
+                cloud.transcribe(audio, allow_local_fallback=False)
+        self.assertIn("STT fallback to Whisper (RuntimeError (HTTP 400))", printed.getvalue())
+        self.assertNotIn("secret", printed.getvalue())
+
     def test_only_the_lock_holder_trims_the_shared_log(self):
         import main as main_mod
         trims = []
