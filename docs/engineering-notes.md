@@ -663,7 +663,10 @@ instead of patching lines:
   installed for the main thread and other threads when the log is attached), and Gemini Live
   retrieves every task exception itself, so asyncio never prints one verbatim. Source lines in a
   traceback are code, not data. OpenAI-compatible response lines print a known finish reason and
-  integer token counts only.
+  integer token counts only. One exception: `SystemExit` with a text message skips
+  `sys.excepthook`, and Python prints that text. Odicto's only such exit is the setup page's
+  "No free port" message, which holds no user text; never pass provider or user text to
+  `SystemExit` or `sys.exit`.
 - **Two limits stay by decision.** A headless process (pythonw, or stdout at NUL) of an install
   logs to that install's log: that is the source install's contract, so an unmarked headless
   child that inherits the data root also writes there. `faulthandler` writes a fatal crash dump
