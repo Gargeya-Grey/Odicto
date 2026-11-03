@@ -9,6 +9,7 @@ section as the release notes and refuses a version that has no section.
 ### Fixed
 
 - The installed app keeps its log again. Started through admin mode, it wrote no `dictation.log` because its output went to a console nobody sees; it now always logs to the data folder, so startup problems and the verification report have a record.
+- With transcript logging off, provider errors in the log name only the error type and HTTP status, so a provider that echoes your words cannot put them in the log.
 
 ## [1.2.2] - 2026-11-04
 

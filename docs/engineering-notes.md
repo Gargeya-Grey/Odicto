@@ -636,3 +636,17 @@ see future children. Chosen: no proof claim. Odicto's own new folders hold no de
 an existing folder the grant is added in canonical order; a reader that is still denied
 reports "access denied" with the folder to check. Revisit only if a real install shows a deny
 entry on an Odicto folder; then use Windows `AccessCheck` on a probe file, not SDDL parsing.
+
+## Managed owner log (November, v1.2.3)
+
+The managed owner always appends to `data/dictation.log`, also when its stdout is a hidden
+console (admin mode). With `LOG_TRANSCRIPTS=false`, provider error text goes through
+`http_clients.error_summary` (type and HTTP status only), and Meta incomplete details log only
+the reason code. Two limits are known and left on purpose:
+
+- Only the lock holder trims the log. A second start that appends between the owner's read and
+  rewrite of the tail can lose its own lines. The window is milliseconds at owner startup, and
+  the cost is one lost record of a refused start, so no cross-process lock was added.
+- A failure in `odicto.py` before `main` imports (startup guard, launch receipt) is not in the
+  log. The launcher prints the exit code; the log may not explain it.
+

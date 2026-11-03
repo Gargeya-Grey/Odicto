@@ -343,10 +343,11 @@ def _log_meta_response(data: dict, budget: object) -> None:
     """Print what the model actually returned so dictation.log shows why."""
     print(f"Meta response: {_describe_meta_response(data)} (budget={budget})", flush=True)
     if data.get("status") not in (None, "completed"):
-        print(
-            f"Meta incomplete details: {str(data.get('incomplete_details', ''))[:300]}",
-            flush=True,
-        )
+        # Only the reason code: other fields can echo the request (dictated text).
+        details = data.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, dict) else None
+        reason = str(reason)[:60] if isinstance(reason, str) and reason.isidentifier() else "?"
+        print(f"Meta incomplete details: reason={reason}", flush=True)
 
 
 class _MetaClient:

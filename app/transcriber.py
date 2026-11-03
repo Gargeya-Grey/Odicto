@@ -1078,7 +1078,7 @@ class GeminiLiveSession:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     receiver.cancel()
         except Exception as e:
-            self._error = str(getattr(e, "message", "")) or str(e) or type(e).__name__
+            self._error = error_summary(e)
 
     async def _send_loop(self, session, mime: str) -> None:
         while True:
@@ -1098,7 +1098,7 @@ class GeminiLiveSession:
                     audio=google_genai_types.Blob(data=pcm, mime_type=mime)
                 )
             except Exception as e:
-                self._error = str(e) or type(e).__name__
+                self._error = error_summary(e)
                 break
         try:
             await session.send_realtime_input(audio_stream_end=True)

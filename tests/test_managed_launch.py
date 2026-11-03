@@ -378,6 +378,34 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         self.assertIn("STT fallback to Whisper (RuntimeError (HTTP 400))", printed.getvalue())
         self.assertNotIn("secret", printed.getvalue())
 
+    def test_gemini_live_errors_keep_the_dictation_out_of_the_log(self):
+        import transcriber
+        source = Path(transcriber.__file__).read_text(encoding="utf-8")
+        assigned = [line.strip() for line in source.splitlines()
+                    if "self._error = " in line and "error_summary" not in line]
+        self.assertTrue(all(line.split("=", 1)[1].strip().startswith('"') for line in assigned),
+                        assigned)
+
+    def test_meta_incomplete_details_log_only_the_reason(self):
+        import refiner
+        output = io.StringIO()
+        data = {"status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens", "text": "my secret sentence"}}
+        with patch.object(sys, "stdout", output):
+            refiner._log_meta_response(data, 64)
+            refiner._log_meta_response({"status": "incomplete",
+                                        "incomplete_details": "my secret sentence"}, 64)
+        text = output.getvalue()
+        self.assertIn("reason=max_output_tokens", text)
+        self.assertIn("reason=?", text)
+        self.assertNotIn("secret", text)
+
+    def test_test_package_drops_an_inherited_launch_token(self):
+        import tests
+        source = Path(tests.__file__).read_text(encoding="utf-8")
+        self.assertIn('os.environ.pop("ODICTO_LAUNCH_TOKEN", None)', source)
+        self.assertNotIn("ODICTO_LAUNCH_TOKEN", os.environ)
+
     def test_only_the_lock_holder_trims_the_shared_log(self):
         import main as main_mod
         trims = []
