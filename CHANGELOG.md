@@ -4,6 +4,12 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.6] - 2026-11-04
+
+### Documentation
+
+- The engineering notes state the one case where an error message still reaches the log: a main-thread exit with a text message. Odicto's only such message holds no user text.
+
 ## [1.2.5] - 2026-11-04
 
 ### Fixed
