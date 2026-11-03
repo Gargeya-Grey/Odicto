@@ -8,6 +8,7 @@ import io
 import json
 from pathlib import Path
 import stat
+import shutil
 import sys
 import subprocess
 import tempfile
@@ -156,6 +157,39 @@ print('COLD DEPENDENCY PASS')
                               capture_output=True, text=True, timeout=20)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("COLD DEPENDENCY PASS", done.stdout)
+
+    def test_bootstrap_imports_real_native_dependencies_in_the_same_process(self):
+        import dotenv
+        import psutil
+        record = self.initial()
+        environment = self.manager.release_path(record) / ".venv"
+        (environment / "pyvenv.cfg").write_text(f"version_info = {sys.version_info.major}.{sys.version_info.minor}\n")
+        packages = environment / ("Lib/site-packages" if sys.platform == "win32" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
+        packages.mkdir(parents=True)
+        for package in (dotenv, psutil):
+            shutil.copytree(Path(package.__file__).parent, packages / package.__name__)
+        program = r'''
+import importlib.util, io, os, sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('native_bound_manager',sys.argv[1])
+module=importlib.util.module_from_spec(spec)
+sys.modules[spec.name]=module
+spec.loader.exec_module(module)
+manager=module.Manager(Path(sys.argv[2]))
+before=os.getpid()
+manager.bind_dependencies()
+import psutil
+from dotenv.parser import parse_stream
+assert psutil.Process(before).pid==before==os.getpid()
+assert next(parse_stream(io.StringIO("'SYSTEM_PROMPT_FILE'=custom.txt\n"))).value=='custom.txt'
+assert str(Path(psutil.__file__).resolve()).startswith(sys.argv[3]+os.sep)
+print('NATIVE DEPENDENCY PASS')
+'''
+        done = subprocess.run([sys.executable, "-I", "-S", "-c", program, str(MODULE_PATH),
+                               str(self.manager.home), str(packages.resolve())],
+                              capture_output=True, text=True, timeout=20)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("NATIVE DEPENDENCY PASS", done.stdout)
 
     def test_accepts_stable_metadata_but_rejects_bad_tags_drafts_and_external_assets(self):
         self.assertEqual(dist.latest_release(self.fetch), self.release)
