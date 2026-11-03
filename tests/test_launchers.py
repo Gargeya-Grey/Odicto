@@ -29,7 +29,7 @@ class TestRootEntryPoints(unittest.TestCase):
                          {p.name for p in ROOT.glob("*.bat")})
 
     def test_posix_root_has_the_three_launchers_and_the_installer(self):
-        self.assertEqual({"install.sh", "setup.sh", "start_dictation.sh", "stop_dictation.sh"},
+        self.assertEqual({"install.sh", "install-managed.sh", "setup.sh", "start_dictation.sh", "stop_dictation.sh"},
                          {p.name for p in ROOT.glob("*.sh")})
 
     def test_each_windows_wrapper_calls_its_implementation(self):
@@ -126,7 +126,7 @@ class TestStopAndSetupBat(unittest.TestCase):
         text = read("scripts", "windows", "setup.bat")
         self.assertIn('start "" "%ODICTO_ROOT%\\.venv\\Scripts\\pythonw.exe" "%ODICTO_ROOT%\\odicto.py" setup', text)
         self.assertIn("exit /b 0", text)
-        self.assertNotIn("python.exe", text)
+        self.assertNotIn("python.exe", text.split("\n:managed_forward\n", 1)[0])
 
     def test_setup_reports_a_missing_venv_and_waits_before_the_launch(self):
         text = read("scripts", "windows", "setup.bat")

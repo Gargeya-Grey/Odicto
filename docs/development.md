@@ -1,0 +1,721 @@
+# Development and advanced configuration
+
+For normal installation and everyday use, follow the [user guide](../README.md).
+This guide covers running from source, development, manual dependencies, advanced
+configuration and architecture. Run its commands from the repository root.
+
+Installed releases live outside the checkout. Once a source checkout has been
+migrated, use the installed `odicto` command for daily operation. A development
+runtime and an installed runtime must not run together.
+
+Agents on a machine with an existing Odicto installation must follow
+[AGENTS.md](../AGENTS.md) and the project's verification skill. The owner controls
+live starts, stops, migration, UAC and Setup Save on that machine.
+
+### Source installation: Windows
+
+```powershell
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+.\setup.bat              # pick provider + paste key (or: python odicto.py setup)
+.\start_dictation.bat
+```
+
+Windows has three files at the root: `start_dictation.bat`, `setup.bat` and `stop_dictation.bat`.
+The installer also creates a **Start Menu** folder **Odicto** with the same three entries
+(**Odicto**, **Odicto Setup**, **Stop Odicto**), each with the Odicto logo. Running the
+installer again refreshes them; add `-NoShortcuts` to skip them. Odicto starts as a normal
+(not administrator) program. **Admin mode** is a switch on the setup page (see the
+Windows note under "Permissions" below).
+
+### Source installation: macOS
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+bash install.sh
+bash setup.sh
+bash scripts/posix/run_debug.sh
+# Grant Accessibility + Input Monitoring (System Settings > Privacy & Security)
+# to your terminal or Python, then restart the app. Check with:
+.venv/bin/python odicto.py status
+```
+
+### Source installation: Linux (X11)
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+bash install.sh        # as your normal user; it prints the sudo apt/dnf/pacman/zypper command to run
+bash setup.sh
+bash scripts/posix/run_debug.sh   # normal desktop user, X11 session
+.venv/bin/python odicto.py status   # lists remaining problems
+```
+
+---
+
+## For coding agents (install from zero)
+
+> **If you are an AI agent:** follow [`AGENTS.md`](../AGENTS.md) before installation
+> or runtime work. Disposable CI can drive its isolated platform checks. On the
+> owner's computer, live lifecycle and permission steps require the owner's hands.
+
+The installer will (when possible):
+
+| Step | What it does |
+|------|----------------|
+| 1 | Locate or install **uv** (fallback: locate/install **Python 3.10-3.12**) |
+| 2 | Reuse an installed Python 3.10-3.12 (`-Python` picks one), then create **`.venv`**, or repair a `.venv` that cannot run |
+| 3 | `uv pip install -r requirements.txt` (fallback: `pip install`) |
+| 4 | Copy **`.env.example` → `.env`** |
+| 5 | Pre-download **Whisper** weights (`tiny.en` by default) |
+| 6 | *(opt-in `-Ollama`)* Install Ollama + `ollama pull` default model |
+
+Optional flags:
+
+```powershell
+# Windows: also install Ollama + pull the default local model
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ollama
+```
+
+```bash
+# macOS / Linux: also install Ollama + pull the default local model
+bash install.sh -Ollama
+```
+
+```powershell
+# Windows: use a specific installed Python (a path, or 3.10 / 3.11 / 3.12)
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Python 3.11
+# Other flags: -NoUv (use pip + venv instead of uv), -VenvOnly (create or repair .venv, then stop)
+```
+
+```bash
+bash install.sh -Python 3.11        # or a path; also -NoUv and -VenvOnly
+```
+
+An explicit `-Python` that is missing, will not run, or is outside 3.10-3.12 stops the
+installer. It never switches to another Python for you.
+
+Ollama and its model are **opt-in**: without the flag, nothing local-AI
+related is downloaded. If you pick Ollama on the setup page later, the page
+offers a **Download local model** button that pulls exactly the model you
+entered — and only then.
+
+### Moving machines or removing Python
+
+A `.venv` points at the Python that created it (`home` in `.venv/pyvenv.cfg`). It breaks when
+you copy the folder to another machine or uninstall that Python (for example Miniconda).
+`start_dictation.bat` then stops with a message instead of a config error. To repair:
+
+1. If an old Odicto is still running, right-click its tray icon and choose **Quit Odicto**.
+   (`stop_dictation.bat` needs the same `.venv`, so it cannot help here.)
+2. Run `install.ps1` (or `install.sh`) again. It runs the `.venv` to judge it. A `.venv` that
+   works is kept as it is, and no separate base Python is needed. A `.venv` that cannot run, or
+   is not Python 3.10-3.12, is renamed to `.venv-backup-<timestamp>` and rebuilt.
+3. Nothing is deleted, and `.env` and `prompt.txt` are never touched. Delete the backup yourself
+   when you no longer need it. The installer refuses to rename while Odicto holds
+   `dictation.lock` or another program runs from the `.venv`.
+
+---
+
+## Manual install (human, step-by-step)
+
+Pick your OS below, or use the one-command installers above.
+
+### 0. Prerequisites you may need first
+
+| Tool | Why | How to get it |
+|------|-----|----------------|
+| **Git** | Clone the repo | Windows: `winget install Git.Git` · macOS: `xcode-select --install` · Linux: your package manager |
+| **uv** (recommended) | Fast, hash-verified dependency install | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) — the installers fetch it automatically when missing |
+| **Python 3.10 to 3.12** | Runtime. An installed one is reused; uv fetches 3.12 only if none exists. 3.13+ is not supported | Windows: `winget install Python.Python.3.12` · macOS: `brew install python` · Linux: distro package |
+| **Microphone** | Capture speech | Working default input device in system sound settings |
+| **(Optional) NVIDIA GPU + CUDA** | Faster Whisper on Windows/Linux | Drivers from NVIDIA; `faster-whisper` uses CUDA when available |
+| **(Optional) One API key per cloud backend** | AI replies — Meta, OpenRouter, or Gemini (Ollama needs none) | Use `odicto.py setup`, or paste each into its `*_API_KEY` in `.env` |
+| **(Optional) Ollama** | Local AI replies | [ollama.com/download](https://ollama.com/download) or `brew install ollama` |
+| **(Optional) OpenRouter key** | Cloud LLM instead of Meta/Ollama | [openrouter.ai](https://openrouter.ai/) |
+| **(Optional) Gemini API key** | Cloud LLM via Google Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+
+Permissions:
+- **Windows**: admin usually **not** required. Odicto cannot see keys typed into an
+  administrator window (for example an Administrator Windows Terminal). To dictate there,
+  turn on **Admin mode** on the setup page. It is off by default. Windows asks for approval
+  once for each change of the switch. While it is on, start, restart, stop and setup Save
+  show **no** approval prompt: Odicto starts from its own highest-privilege logon task and
+  quits through a per-install signal. Turning it off removes that task and starts Odicto
+  as a normal program. Only this install's own task and Startup shortcut are changed.
+- **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
+  System Settings → Privacy & Security (add your terminal or Python). Without
+  them startup stops before installing hooks; `odicto.py status` reports
+  `macos_accessibility` / `macos_input_monitoring`.
+- **Linux**: run as your normal desktop user in an X11 session. Install
+  `libportaudio2`, a clipboard tool (`xclip`/`xsel`), `xdotool` and Qt's native
+  display libraries. The managed Ubuntu/Debian bootstrap installs missing packages.
+
+### 1. Clone
+
+```bash
+git clone https://github.com/Gargeya-Grey/Odicto.git
+cd Odicto
+```
+
+### 2. One command (recommended)
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+```bash
+# macOS / Linux
+bash install.sh
+```
+
+**Or** do it by hand (Windows shows `.venv\Scripts`, macOS/Linux use `.venv/bin`):
+
+```bash
+# uv path (recommended)
+uv venv .venv
+uv pip install --python .venv -r requirements.txt
+
+# pip path (fallback)
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip wheel
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+### 3. Python packages installed (from `requirements.txt`)
+
+| Package | Role |
+|---------|------|
+| `faster-whisper` | Local speech-to-text (downloads model weights on first use) |
+| `google-genai` | Gemini LLM **and** Gemini 3.5 Transcribe (unary + Live API) |
+| `sounddevice` / `soundfile` / `numpy` | Microphone capture + audio buffers |
+| `keyboard` | Global hotkey hold-to-talk (Windows/Linux) |
+| `pynput` | Global hotkey hold-to-talk (macOS) |
+| `pyperclip` | Clipboard paste injection |
+| `openai` | OpenAI-compatible client for Ollama / OpenRouter |
+| `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
+| `python-dotenv` | Load `.env` |
+| `PySide6` | Always-on-top HUD overlay |
+| `psutil` | Cross-platform process enumeration |
+
+### 4. Models that get downloaded
+
+| Model | When | Approx. size | Purpose |
+|-------|------|--------------|---------|
+| **Whisper `tiny.en`** (default) | First transcribe / install warm-up | ~75 MB | English STT (fast) |
+| **Whisper `base.en` / `small.en`** | If you change `.env` | larger | Better accuracy, slower |
+| **Ollama model** (default example `qwen2.5:1.5b-instruct`) | Only when you pick Ollama (setup page **Download local model** button, or `-Ollama` installer flag) | ~1 GB class | Local AI replies |
+| Your chosen OpenRouter/Meta/Gemini model | Cloud — nothing downloads | — | AI mode |
+
+Whisper cache is managed by `faster-whisper` / Hugging Face cache on the machine.
+Ollama stores models in its own library (`ollama list` to inspect).
+
+### 5. Optional: pull an Ollama model yourself
+
+```powershell
+ollama serve
+ollama pull qwen2.5:1.5b-instruct
+```
+
+Edit `.env`:
+
+```env
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:1.5b-instruct
+LLM_API_BASE=http://localhost:11434/v1
+```
+
+### 6. Optional: pick an AI backend — one line, its own key
+
+Each cloud provider owns **its own API key**, saved independently:
+
+```env
+LLM_PROVIDER=gemini          # or: meta / ollama / openrouter / none
+GEMINI_API_KEY=AIza...      # each provider keeps its own key variable
+# META_API_KEY=...           # used when LLM_PROVIDER=meta
+# OPENROUTER_API_KEY=...     # used when LLM_PROVIDER=openrouter
+```
+
+Keys start empty. Save a key once under its provider and it is **remembered
+forever** — switching providers later never asks you to re-enter a key you
+already saved (the setup page shows stored keys masked; retype only to replace).
+The generic knobs (`LLM_MODEL`, `LLM_MAX_TOKENS`, …) follow whichever provider
+is selected.
+
+```env
+# Per-backend models (selected via the setup page’s categorized dropdowns):
+# META_MODEL=muse-spark-1.3-contributor
+# GEMINI_MODEL=gemini-3.5-flash-lite
+# OPENROUTER_MODEL=openai/gpt-5.6-luna
+# OLLAMA_MODEL= (blank → qwen2.5:1.5b-instruct)
+```
+
+See exactly what is in effect after any change:
+
+```bash
+python odicto.py config   # resolved values + which .env key supplied each
+```
+
+### 7. Optional: OpenRouter instead of Meta/Ollama
+
+You can keep all three backends configured, then flip one line:
+
+```env
+LLM_PROVIDER=openrouter
+OPENROUTER_MODEL=openai/gpt-5.6-luna
+OPENROUTER_API_KEY=sk-or-...
+```
+
+| Variable | Role |
+|----------|------|
+| `LLM_PROVIDER=openrouter` | Selects the cloud backend |
+| `OPENROUTER_MODEL` | OpenRouter model slug ([model list](https://openrouter.ai/models)) |
+| `OPENROUTER_API_KEY` | Required for openrouter (app refuses to start if missing) |
+| `OPENROUTER_API_BASE` | Defaults to `https://openrouter.ai/api/v1` |
+| `OPENROUTER_PROVIDER_SORT` | Always `latency` by default — pick the lowest time-to-first-token host for the chosen model (`throughput` / `price` also valid) |
+| `OPENROUTER_REASONING_EFFORT` | Always `none` by default — skip thinking when the model allows it. Odicto fetches OpenRouter's live model catalog and clamps illegal values (GLM-5.3 requires `low`/`high`/`max`) |
+| `LLM_MODEL` / `LLM_API_BASE` | Stay as your Ollama settings for easy switch-back |
+| `META_API_KEY` | Placeholder for Meta — paste real key in `.env` (never commit it) |
+| `META_MODEL` | Meta model id (default `muse-spark-1.3-contributor`) |
+
+Notes:
+- If `OPENROUTER_MODEL` is blank, the app falls back to `LLM_MODEL` (must be a valid OpenRouter id).
+- Every OpenRouter chat call sends `provider.sort=latency` and `reasoning.effort=none` so answers come from the fastest host with thinking turned off. The setup page loads OpenRouter's model list and per-model reasoning levels; mandatory-reasoning models are clamped to the lightest allowed effort. OpenRouter's own default is cheapest, not fastest.
+- For `meta`, `META_MODEL` is used; `LLM_MODEL` stays as the Ollama fallback when meta keys are not set.
+- Localhost `LLM_API_BASE` is ignored for openrouter so you do **not** need to edit the API path by hand.
+
+### 7b. Optional: Google Gemini instead of Meta/Ollama
+
+Gemini uses the official `google-genai` SDK and the GA **Interactions API**
+(`client.interactions.create`), the same call Google recommends for new code:
+
+```env
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=AIza...     # from https://aistudio.google.com/apikey
+GEMINI_MODEL=gemini-3.5-flash-lite
+# Optional: GEMINI_THINKING_LEVEL=minimal   (minimal|low|medium|high)
+```
+
+| Variable | Role |
+|----------|------|
+| `LLM_PROVIDER=gemini` | Selects the Gemini backend (`google` / `google-api` also work) |
+| `GEMINI_API_KEY` | Required (app refuses to start if missing) |
+| `GEMINI_MODEL` | Gemini model id (default `gemini-3.5-flash-lite` — the fast, non-reasoning pick for dictation; `gemini-3.7-flash` is available for heavier questions) |
+| `GEMINI_THINKING_LEVEL` | Thinking budget: `minimal` / `low` / `medium` / `high` (default `minimal`) |
+| `GEMINI_MAX_OUTPUT_TOKENS` | Output budget floor (default `4096`) |
+
+Notes:
+- Multi-turn chat (F6 chord only) uses Gemini **server-side state**
+  (`previous_interaction_id`), which reuses cached context across those turns.
+- Ctrl+Shift+\` AI is always a fresh one-shot (no previous_interaction_id).
+- Speaking “reset chat” (or pressing `RESET_CONTEXT_HOTKEY`) starts a fresh conversation.
+
+### 7c. Optional: Gemini 3.5 Transcribe as STT
+
+Speech-to-text is **independent** of `LLM_PROVIDER`. You can keep Meta/OpenRouter/Ollama
+for AI replies and still pick a different speech engine. Raw dictation and AI mode
+use that same speech provider and model. AI mode only adds the assistant on top.
+The setup page toggle **Verbatim ↔ Smart** is stored as `GEMINI_TRANSCRIBE_MODE`
+and applies when the speech engine is Gemini.
+
+```env
+STT_PROVIDER=auto            # whisper | gemini | groq | openrouter | auto
+GEMINI_API_KEY=AIza...       # same key as Gemini LLM; reused, not a second secret
+GROQ_STT_MODEL=whisper-large-v3-turbo
+OPENROUTER_STT_MODEL=openai/whisper-large-v3   # or x-ai/grok-stt-1.0
+GEMINI_TRANSCRIBE_MODE=smart # smart (cleaned) or verbatim (literal); Gemini only
+LIVE_HOTKEY=f7               # tap to start, tap again to stop and paste
+LIVE_STT_PROVIDER=auto       # auto = the same provider and model as STT_PROVIDER
+```
+
+| Variable | Role |
+|----------|------|
+| `STT_PROVIDER` | `whisper` (default, local), `gemini`, `groq`, `openrouter`, or `auto` (Gemini when a Gemini key is saved) |
+| `GROQ_API_KEY` / `GROQ_STT_MODEL` | Groq Whisper. Default model `whisper-large-v3-turbo` |
+| `OPENROUTER_STT_MODEL` | OpenRouter speech model. Uses `OPENROUTER_API_KEY`. Separate from the chat model. Grok speech models go here, for example `x-ai/grok-stt-1.0` |
+| `GEMINI_TRANSCRIBE_MODE` | `smart` strips ums/self-corrections and punctuates; `verbatim` is word-for-word. Gemini only |
+| `GEMINI_TRANSCRIBE_MODEL` | Unary model (`gemini-3.5-transcribe`) used after hold-to-talk release |
+| `GEMINI_TRANSCRIBE_LIVE_MODEL` | Live API model (`gemini-3.5-transcribe-live`) used while F7 is on Gemini |
+| `GEMINI_TRANSCRIBE_LANGUAGE` | Optional BCP-47 hint (`en-US`); blank = auto-detect. Also sent as a language hint to Groq and OpenRouter |
+| `GEMINI_TRANSCRIBE_VOCABULARY` | Personal spelling hints, comma or newline separated (Gemini, Groq, local Whisper and polish; legacy key name) |
+| `LIVE_STT_PROVIDER` | `auto` follows `STT_PROVIDER`. Gemini streams. The others transcribe the clip when you tap stop |
+| `LIVE_HOTKEY` | Tap-to-talk key (default `f7`). Empty disables. Captured while Odicto runs |
+
+On a cloud speech failure (no key, 429, network), Odicto falls back to local Whisper.
+Default `STT_PROVIDER=whisper` so existing local-only installs do not change.
+
+### Resource use: Ollama vs OpenRouter vs Meta vs Gemini vs Whisper
+
+| Component | When Odicto starts / uses it | RAM / GPU |
+|-----------|------------------------------|-----------|
+| **Whisper (STT)** | When `STT_PROVIDER` resolves to `whisper`, or as the fallback when a cloud speech call fails | Local. Loaded at startup when it is the active engine. `cuda` keeps it in GPU memory and warms it before the first hotkey. `auto` keeps tiny/base on CPU |
+| **Meta API** | Only if `LLM_PROVIDER=meta` | Cloud — no local LLM VRAM from Odicto |
+| **Ollama** | Only if `LLM_PROVIDER=ollama` | Odicto **does not** start or call Ollama for `meta` / `openrouter` / `gemini` / `none` |
+| **OpenRouter** | Only if `LLM_PROVIDER=openrouter` | Cloud — no local LLM VRAM from Odicto |
+| **Google Gemini (LLM)** | Only if `LLM_PROVIDER=gemini` | Cloud — no local LLM VRAM from Odicto |
+| **Gemini 3.5 Transcribe (STT)** | Only if `STT_PROVIDER` resolves to `gemini` | Cloud. Falls back to Whisper on error |
+| **Groq / OpenRouter STT** | Only if `STT_PROVIDER` resolves to that backend | Cloud. Same model for raw dictation and AI mode. Grok speech models are an OpenRouter slug. Falls back to Whisper on error |
+
+**Important:** Switching to Meta, OpenRouter, or Gemini stops Odicto from launching or talking to Ollama.
+It does **not** force-quit an Ollama tray app / service that Windows (or a previous session) already started. If Ollama is still in the system tray with a model loaded, that process can still use RAM/VRAM until you quit it yourself.
+
+```powershell
+# Optional: check whether Ollama is listening locally
+netstat -ano | findstr 11434
+# Optional: see loaded models (if the CLI is available)
+ollama ps
+```
+
+To free local LLM memory while using Meta/OpenRouter/Gemini: quit **Ollama** from the tray, or stop the service. Whisper will still use some local RAM for dictation.
+
+### 8. Optional: raw dictation only (no LLM)
+
+```env
+LLM_PROVIDER=none
+```
+
+Same as above: Odicto will not start Ollama. Whisper still loads for speech-to-text.
+
+### 9. Verify
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe -m unittest tests.test_units -v
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest tests.test_units -v
+```
+
+### 10. Run
+
+| Action | Windows | macOS / Linux |
+|--------|---------|---------------|
+| Configure provider | `setup.bat` (Start Menu: **Odicto Setup**) or `.venv\Scripts\python.exe odicto.py setup` | `bash setup.sh` or `.venv/bin/python odicto.py setup` |
+| Start (background) | `start_dictation.bat` (Start Menu: **Odicto**) | `bash start_dictation.sh` |
+| Start (console logs) | `scripts/windows/run_debug.bat` | `bash scripts/posix/run_debug.sh` |
+| Stop | `stop_dictation.bat` (Start Menu: **Stop Odicto**) | `bash stop_dictation.sh` |
+
+On Windows, `start_dictation.bat` shows the result and closes after about 3 seconds. It stays
+open when the start fails. A start leaves a running Odicto alone. `setup.bat` opens the setup
+page in your browser without a console window, and the page's server ends by itself when you
+close the page. `stop_dictation.bat` behaves like start: short on success, open on failure.
+
+---
+
+## Daily use (how to operate it)
+
+### Start your day
+
+1. Start Odicto with your OS's start script (see table above)
+2. Wait a few seconds for models to load (first run is slower)
+3. You’ll briefly see a **Starting** pill at the bottom center, then it fades
+
+### Dictate into any app
+
+1. Click into a text field (browser, Notion, VS Code, Discord, ...)
+2. **Tap** the hotkey (default: **Ctrl+\`**; hold it instead if `HOTKEY_TOGGLE=false`)
+3. Speak
+4. **Tap** the key again to stop
+5. Watch the HUD: **Listening -> Transcribing -> Done**
+6. Text is pasted at the cursor
+
+### Terminals
+
+There is no paste chord that works in every terminal — Windows Terminal and
+`cmd`/PowerShell take **Ctrl+V**, Git Bash/mintty defaults to **Shift+Insert**,
+most Linux terminals use **Ctrl+Shift+V**, macOS takes **Cmd+V**, and inside a
+TUI (vim, an agent CLI, an SSH session) the foreground app claims **Ctrl+V**
+outright. Plain **Ctrl+C** is worse: in a terminal it is **SIGINT** and kills
+whatever is running.
+
+So when the focused window is a terminal, Odicto **types the text** instead of
+pasting it — the same path your keyboard uses, which every terminal accepts —
+and leaves your clipboard untouched. For the same reason AI mode's
+"refine the selected text" probe sends **Ctrl+Shift+C**, never Ctrl+C.
+
+Detection is best-effort: a window it cannot identify falls back to the normal
+paste chord. Add your terminal with `EXTRA_TERMINAL_APPS` if it is not
+recognized. Notes:
+
+| Situation | Behavior |
+|-----------|----------|
+| Windows Terminal, `cmd`, PowerShell, Git Bash, WSL | Detected |
+| macOS Terminal, iTerm2, Warp, kitty | Detected |
+| Linux X11 (`xdotool` or `xprop` installed) | Detected |
+| Linux Wayland | Unsupported. Use an X11 session. |
+| VS Code / JetBrains built-in terminal | Not distinguishable from the editor — paste chord is used |
+| Multi-line dictation in a shell | Typed as-is, so each newline is **Enter** and the line runs |
+
+### Ask the AI
+
+1. Tap **Ctrl+Shift+\`** (hold it instead if `HOTKEY_TOGGLE=false`)
+2. Speak your question
+3. Tap the same chord again (or release in hold mode)
+4. HUD: **Listening -> Thinking -> Done**
+5. The model's short reply is pasted — this is always a **fresh** run (no previous task)
+
+To keep talking about the same task, hold **F6** together with **Ctrl+\`** (or with the AI chord). Only those captures share conversation memory. Press **F5** to wipe that memory.
+
+### Tips that matter
+
+| Tip | Detail |
+|-----|--------|
+| **Too-short clips are ignored** | Start+stop faster than `MIN_HOLD_MS` is dropped (anti-accidental) |
+| **Wait for Ready** | Hotkeys do nothing until models finish loading |
+| **One utterance at a time** | System is busy while processing; wait for **Done** |
+| **Clear AI memory** | Press **F5** (instant) or say *reset chat* / *clear conversation* in F6/AI mode — both wipe the multi-turn history |
+| **Continue a conversation** | Hold **F6** + **Ctrl+\`** (or F6 + the AI chord): that capture keeps / continues AI memory. Ctrl+Shift+\` alone is always a fresh one-shot |
+| **Keep focus in the field** | Prefer non-**Alt** chords; Alt often steals browser focus on release |
+| **VS Code note** | Ctrl+\` toggles the terminal there -- while Odicto runs it steals that chord |
+| **Change hotkey** | Edit `HOTKEY=` / `AI_HOTKEY=` in `.env` then restart |
+| **Logs** | Use `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`, or check `dictation.log` when using the no-console launcher |
+
+### Stop
+
+Run your OS's stop script (see table above), or close the debug console with Ctrl+C.
+
+### Keeping it fast
+
+- Raw dictation never waits on the clipboard or the LLM.
+- AI mode runs Whisper and selection-copy **at the same time**, so clipboard wait does not sit in front of STT.
+- Short hold-to-talk clips skip Silero VAD (set `WHISPER_VAD=true` if you want it always on).
+- AI replies are capped by `LLM_MAX_TOKENS` (default 1024, enough for a mid-length social post). Raise it only if you need long essays.
+- Gemini thinking stays at `minimal` unless you change it; higher thinking levels are slower.
+
+---
+
+## Configuration (`.env`)
+
+Copy from `.env.example`. The file follows one rule:
+
+> **Generic keys apply to whichever provider `LLM_PROVIDER` selects;
+> provider-specific keys are optional overrides that win when set.**
+> A commented-out or blank line means "use the built-in default".
+
+So switching AI backends is a one-line change plus one key. After editing,
+`python odicto.py config` prints every resolved value and which `.env` key
+supplied it (and warns about typo'd or legacy-shadowed keys).
+
+Core knobs:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `LLM_PROVIDER` | `none` | `none` · `ollama` · `openrouter` · `meta` (also `meta-api`) · `gemini` (also `google`) |
+| `LLM_MODEL` | provider default | Model id for any provider (`qwen2.5:1.5b-instruct` / `muse-spark-1.3-contributor` / `gemini-3.5-flash-lite` / an OpenRouter slug) |
+| `LLM_MAX_TOKENS` | `1024` | Output cap for every provider (~750 words) |
+| `LLM_REASONING_EFFORT` | provider default | Unified thinking knob; maps to Meta `reasoning.effort` / Gemini `thinking_level` / OpenRouter `reasoning.effort` (`minimal\|low\|medium\|high\|none`) |
+
+Per-provider credentials — each starts empty, is saved independently, and is
+**remembered across provider switches** (the setup page masks stored keys):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OPENROUTER_API_KEY` | *(empty)* | OpenRouter key ([openrouter.ai/keys](https://openrouter.ai/keys)) |
+| `META_API_KEY` | *(empty)* | Meta API key |
+| `GEMINI_API_KEY` | *(empty)* | Gemini key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) |
+
+Optional overrides:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OPENROUTER_MODEL` / `META_MODEL` / `GEMINI_MODEL` / `OLLAMA_MODEL` | `openai/gpt-5.6-luna` (fallback) / `muse-spark-1.3-contributor` / `gemini-3.5-flash-lite` / `qwen2.5:1.5b-instruct` | Pin a model per backend; OLLAMA is blank-by-default → falls back to `LLM_MODEL` |
+| `GEMINI_MAX_OUTPUT_TOKENS` | `4096` | Per-provider ceiling over `LLM_MAX_TOKENS` (Meta reasoning is uncapped; effort knob only) |
+| `META_REASONING_EFFORT` / `GEMINI_THINKING_LEVEL` / `OPENROUTER_REASONING_EFFORT` | `low` / `minimal` / `none` | Per-provider effort over `LLM_REASONING_EFFORT` |
+| `OPENROUTER_PROVIDER_SORT` | `latency` | OpenRouter host ranking: `latency` (fastest TTFT), `throughput`, or `price` |
+| `LLM_API_BASE` | `http://localhost:11434/v1` | Ollama endpoint (OpenRouter auto-switches to its own root) |
+
+Behavior & UI:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `HOTKEY` | `ctrl+grave` | Dictation chord (`grave` = the `` ` `` key) |
+| `AI_HOTKEY` | `ctrl+shift+grave` | AI chord (same primary key + Shift) |
+| `HOTKEY_TOGGLE` | `true` | `true` = tap chord to start, tap again to stop. `false` = hold while speaking |
+| `RESET_CONTEXT_HOTKEY` | `f5` | Instant clear of AI multi-turn memory (no recording) |
+| `CTRL_KEEP_CONTEXT_KEYS` | `f6` | Key held during a capture keeps AI conversation memory (default AI is always fresh) |
+| `WHISPER_MODEL_SIZE` | `tiny.en` | `tiny.en` / `base.en` / `small.en` … |
+| `WHISPER_DEVICE` | `auto` | `auto` (tiny/base on CPU; larger models try CUDA) · `cuda` (GPU memory, warmed at startup) · `cpu` |
+| `WHISPER_VAD` | `false` | Silero VAD before decode; auto-on for clips ≥ 8s |
+| `LLM_NUM_CTX` | `2048` | Ollama context window |
+| `SYSTEM_PROMPT_FILE` | *(empty)* | Set to `prompt.txt` when you have a private live prompt. Do not point this at other files. |
+| `SYSTEM_PROMPT` | *(empty)* | Leave blank. The prompt body lives in `prompt.txt` or `prompt.txt.example`, not in `.env`. |
+| `SHOW_VISUAL_INDICATOR` | `true` | Bottom HUD on/off |
+| `PLAY_AUDIO_CUES` | `true` | Soft start/stop beeps |
+| `MIN_HOLD_MS` | `80` | Ignore shorter presses |
+| `PASTE_DELAY_SECONDS` | `1.0` | Wait after the paste chord before the clipboard restore (restores only if the clipboard still holds the pasted text) |
+| `MAX_RECORDING_SECONDS` | `600` | A capture stops itself and is processed after this long (0 = no limit) |
+| `STT_DEADLINE_SECONDS` | `20` | Time limit per speech stage; cloud STT then falls back to local Whisper |
+| `LLM_DEADLINE_SECONDS` | `30` | Time limit per AI reply or polish stage; raw text is kept on timeout |
+| `CANCEL_HOTKEY` | `esc` | Cancels PROCESSING; never suppressed; blank disables |
+| `LOG_TRANSCRIPTS` | `false` | `false` = the log holds lengths and timings only, no text |
+| `POLISH_MAX_CHARS` | `1200` | Polish is skipped for longer transcripts (0 = no limit) |
+| `TYPE_IN_TERMINAL` | `true` | Type the text (clipboard untouched) when the focused window is a terminal |
+| `EXTRA_TERMINAL_APPS` | *(empty)* | Comma-separated window classes / process names to also treat as terminals |
+
+---
+
+
+## Project folders
+
+```text
+app/                Application modules and platforms/ OS backends
+assets/             Setup page HTML, CSS, and JavaScript
+tests/              Unit, reliability, equivalence, and layout tests
+scripts/windows/    Windows launcher implementations, debug, startup, install, and admin-mode helpers
+scripts/posix/      macOS/Linux launcher implementations, debug, and install helpers
+tools/              Verification and architecture tooling
+docs/               Architecture, engineering notes, and research
+```
+
+The root keeps the README, dependency list, installers, settings templates, small
+`main.py` and `odicto.py` launchers, and three entry points per platform: `start_dictation`,
+`setup` and `stop_dictation` (`.bat` on Windows, `.sh` on macOS and Linux). They are thin
+wrappers over `scripts/`. Existing startup shortcuts can continue to use `main.py`. Private `.env` and `prompt.txt`, and ignored runtime
+logs, PID, and lock files belong at `DATA_ROOT`. Source installs use the install
+root; managed versions share a stable `data` directory outside release folders.
+`app/paths.py` resolves code and data independently of the working directory.
+
+Application modules keep their existing import names. The launchers and `tests/__init__.py`
+put `app/` on Python's import path; no installation or package build is required.
+Run tests from the project root with `python -m unittest discover -s tests -t .`.
+The optional microphone diagnostic is `python tools/manual_pipeline_check.py`.
+
+## Architecture (quick map)
+
+**Canonical reference: [`docs/architecture.md`](architecture.md)** — module map, Mermaid
+diagrams (system context, dependency graph, the dictation and live-F7 sequences, state machine,
+lock gate, threads and locks, failure paths), the config cascade, "where do I change X?", and the
+invariants not to break.
+
+**Why the code is shaped this way, including refactorings that were deliberately rejected:
+[`docs/engineering-notes.md`](engineering-notes.md).**
+
+| File | Role |
+|------|------|
+| `app/main.py` | App lifecycle, hotkeys, pipeline orchestration |
+| `app/setup_web.py` + `assets/setup_template.html` | Local setup page (server + markup) |
+| `app/platforms/` | OS backends for hotkeys, clipboard, process, and window styling |
+| `tools/verify.ps1` | Runs every gate used to prove behaviour is unchanged |
+| `tools/module_graph.py` | Regenerates the dependency diagram in `docs/architecture.md` |
+| `install.ps1` / `install.sh` | Zero-to-one installers (uv-first, pip fallback) |
+| `start_dictation` / `setup` / `stop_dictation` (`.bat`, `.sh`) | Root entry points; wrappers over `scripts/windows/` and `scripts/posix/` |
+| `scripts/windows/admin_mode.ps1` + `app/windows_admin.py` | Admin mode switch (one prompt per change), task start, quit signal |
+| `AGENTS.md` | Agent-oriented install contract |
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| No HUD on hotkey | Restart with `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
+| Hotkey does nothing | Wait until “Application ready”; check shortcuts in Setup; grant macOS Accessibility/Input Monitoring; use an X11 desktop session on Linux; run `odicto.py status` |
+| Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
+| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
+| Always raw, never AI | Use the AI chord, **Ctrl+Shift+\`**. Log should say `Recording (AI refined)` |
+| Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone; macOS → Privacy → Microphone) |
+| AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
+| AI mode pastes raw text (OpenRouter) | Check `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Meta) | Check `META_API_KEY`, `META_MODEL`, and network; restart after `.env` edits |
+| AI mode pastes raw text (Gemini) | Check `GEMINI_API_KEY`, `GEMINI_MODEL`, and network; restart after `.env` edits |
+| App refuses to start on openrouter | `OPENROUTER_API_KEY` is required when `LLM_PROVIDER=openrouter` |
+| App refuses to start on gemini | `GEMINI_API_KEY` is required when `LLM_PROVIDER=gemini` |
+| Ollama still using RAM on Meta/OpenRouter/Gemini | Odicto is not calling it; quit the Ollama app / service separately (see resource section above) |
+| Slow first run | Whisper/Ollama downloading; later runs are faster |
+| CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
+| Import errors, or the launcher says `.venv ... cannot run` | Run the installer again; it repairs `.venv` (see [Moving machines or removing Python](#moving-machines-or-removing-python)) |
+| macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
+| Linux hotkey/paste doesn't work | Run as your normal desktop user in an X11 session; `odicto.py status` shows missing dependencies; Wayland is unsupported |
+| Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |
+| Terminal pastes but never types | `TYPE_IN_TERMINAL=false` is set, or the window wasn't detected. On Linux X11 install `xdotool` or `xprop`; Wayland can't be detected |
+| Multi-line text ran as commands in the shell | Newlines are typed as-is, so each is **Enter**. Dictate a single line, or set `TYPE_IN_TERMINAL=false` to paste instead |
+
+---
+
+## Development
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe -m unittest tests.test_units -v
+.\scripts\windows\run_debug.bat
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python -m unittest tests.test_units -v
+bash scripts/posix/run_debug.sh
+```
+
+### Versions and releases
+
+- `VERSION` holds the one version, `MAJOR.MINOR.PATCH`. The setup page shows it, and
+  `python odicto.py version` prints it.
+- [`CHANGELOG.md`](../CHANGELOG.md) has one section per version.
+- To release: bump `VERSION`, add its `CHANGELOG.md` section, merge to `main`, then run
+  the **Release** workflow from the Actions tab. It refuses a version that already has a
+  tag, runs the test gate, and publishes `Odicto-v<version>.zip` with its `.sha256`
+  file. The release notes are the changelog section plus
+  [`tools/release/release-notes.md`](../tools/release/release-notes.md).
+- Downloads: [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases).
+
+---
+
+## Privacy
+
+- **Dictation path** can stay fully local (Whisper + paste).
+- **AI path** stays local if you use Ollama; **Meta / OpenRouter / Gemini send the transcribed text to a third party**.
+- With `LLM_PROVIDER=meta` / `openrouter` / `gemini` / `none`, Odicto does not start Ollama — but a separately running Ollama install may still be active on the machine.
+- Never commit `.env` (may contain `META_API_KEY` / `MODEL_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY`).
+- No telemetry in this project.
+
+---
+
+## License
+
+Odicto is open source under the [Apache License 2.0](../LICENSE). You can use, change and share it, including commercially, as long as you:
+
+- keep the [LICENSE](../LICENSE) and the [NOTICE](../NOTICE) file, which credits Gargeya Sharma as the author, with any copy or derivative work you distribute;
+- say clearly which files you changed.
+
+The licence does not give you the right to use the name "Odicto" for your own product. Releases before this licence was added (up to v1.0.1) were published under the earlier note "use and modify freely, attribution appreciated"; this licence applies to the code from this commit on.
+
+---
+
+<p align="center">
+  Built for people who think faster than they type.<br/>
+  <b>Hold. Speak. Continue.</b>
+</p>
+
+### Polish selected text
+
+Select text in an editor and press **F8** to polish it. No recording is needed.
+Setup's **Polish** page lets you change the shortcut and choose or type a separate
+polish model. It uses the provider and saved key from **AI answers**; a blank model
+uses that provider's selected model. A blank shortcut disables selection polish.
+Raw and live dictation never run an extra polish call, even if an older configuration
+still has `POLISH_DICTATION=true`.
+
+Polish makes minimal grammar, spelling and structure repairs while preserving voice,
+emotion, deliberate emphasis, paragraph breaks and language. Esc cancels. Failure,
+timeout or an empty response leaves the original text alone. A review window shows the
+original and polished text with Copy and Dismiss. No automatic replacement is performed. Terminal targets are skipped. Copy-based
+selection checks depend on the editor; matching text cannot prove field identity.
+`POLISH_MAX_CHARS` defaults to 1200. Short requests wait up to two seconds; longer
+requests get a length-scaled wait bounded by `LLM_DEADLINE_SECONDS`.
+
+Groq is available on the AI page with a custom chat model. Its shared key is entered
+on Speech; `GROQ_MODEL` is independent of `GROQ_STT_MODEL`. The default is
+`openai/gpt-oss-20b`; `openai/gpt-oss-120b` is also offered. Account availability is
+documented in [Groq's model catalog](https://console.groq.com/docs/models).
+
+F7 previews captions in the HUD and inserts the final text once after stop. Other
+hotkeys wait during finalization. F7's finalized text remains on the clipboard outside
+terminals, so delayed paste handling cannot read an older clipboard value. AI errors
+show **AI failed · raw text**. Clipboard screenshots are off by default; enable the
+explicit AI setting with the visual indicator and an image-capable model.

@@ -7,6 +7,15 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent
     app_dir = root / "app"
     sys.path.insert(0, str(app_dir))
+    import migration_guard
+    try:
+        migrated_exit = migration_guard.forward(root, ["start"])
+    except RuntimeError as error:
+        if sys.stderr is not None:
+            print(str(error), file=sys.stderr)
+        sys.exit(1)
+    if migrated_exit is not None:
+        sys.exit(migrated_exit)
     # An install in admin mode runs elevated. A normal process starts the elevated logon task
     # instead (no prompt) and exits; this decides before the app's single-instance gate.
     import windows_admin

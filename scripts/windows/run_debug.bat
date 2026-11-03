@@ -3,6 +3,8 @@ setlocal EnableExtensions
 for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
 cd /d "%ODICTO_ROOT%"
 
+if exist "%ODICTO_ROOT%\.odicto-migration.json" goto :managed_forward
+
 REM Admin mode (.odicto-admin-enabled): the owner must run elevated, and an elevated process
 REM cannot be started with a console attached to this normal window. So debug mode restarts
 REM the background instance (no UAC prompt; odicto.py quits it through its quit event and runs
@@ -30,3 +32,11 @@ echo Expected hotkeys: Ctrl+` (dictation), Ctrl+Shift+` (AI)
 echo.
 "%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\main.py"
 pause
+
+:managed_forward
+if not exist "%ODICTO_ROOT%\.venv\Scripts\python.exe" (
+  echo This source installation was migrated. Use the installed odicto command. Source Python is missing.
+  exit /b 1
+)
+"%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\odicto.py" restart
+exit /b %ERRORLEVEL%

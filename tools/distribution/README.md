@@ -13,8 +13,8 @@ application itself is never started as root. Other Linux distributions receive a
 actionable prerequisite message before a managed install is created. macOS wheels
 are checked for native imports; Homebrew is not installed automatically. OS
 permissions remain prerequisites. An import failure leaves the staged version
-inactive. Linux Wayland sessions are unsupported. Managed Windows admin mode is
-unavailable; source installations retain their existing admin-mode support.
+inactive. Linux Wayland sessions are unsupported. Windows Admin mode uses a stable
+managed task, so updating application files does not change the task's target.
 
 ## Install
 
@@ -24,13 +24,13 @@ and extract it. Run the bootstrap from its `Odicto` directory as your desktop us
 Windows PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\distribution\bootstrap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 ```
 
 macOS, Ubuntu or Debian:
 
 ```bash
-bash tools/distribution/bootstrap.sh
+bash install-managed.sh
 ```
 
 The bootstrap prints the stable command path. Use it to run `odicto setup`, then
@@ -39,10 +39,19 @@ Both Mac architectures need their own native installation. An update can require
 renewing OS permissions for the new executable. The installer does not bypass
 the operating system's consent.
 
-Before starting a managed installation, quit any existing source installation and
-disable that installation's startup entry. Use the managed command thereafter.
-Source and managed installations keep separate settings; the bootstrap does not
-migrate or stop an existing owner. Two installations must never run together.
+The bootstrap does not migrate or stop an existing source owner. To transfer an
+updated source checkout, run `odicto migrate --source "PATH" --check`, quit its
+dictation and Setup yourself, then repeat without `--check`. Migration copies
+only known settings as opaque bytes, preserves recovery files, transfers owned
+Windows startup/admin preferences, and records reciprocal receipts. An unknown
+startup entry or configured destination blocks the operation. It never launches
+dictation. Keep the printed recovery path and repeat the same command to resume
+an interrupted transaction. Use the managed command afterward. Two installations
+must never run together.
+
+macOS/Linux source login-startup entries require owner retirement before
+migration; they are not automatically rewritten. After migration, use
+`odicto autostart` to enable the managed entry.
 
 ## Commands
 
@@ -65,6 +74,11 @@ to PATH. Existing unrelated commands and shell profiles are left untouched.
 | `odicto rollback` | Restore the previous ready version and block automatic reactivation of the failed version |
 | `odicto auto-updates off` | Stop automatic checks and activation |
 | `odicto auto-updates on` | Enable automatic update checks on subsequent launches |
+| `odicto autostart` | Enable one stable startup entry for this managed home |
+| `odicto remove-autostart` | Disable its owned startup entry |
+| `odicto admin on` / `odicto admin off` | Change Windows Admin mode with owner-approved UAC when required; leave dictation stopped |
+| `odicto migrate --source "PATH" --check` | Inspect a source migration without applying it |
+| `odicto migrate --source "PATH"` | Apply or resume a stopped source installation's migration |
 
 Automatic checks run before `start` and `setup`, at most once every eight hours.
 Offline checks and staging failures retain the active release. Explicit `update`
@@ -99,6 +113,20 @@ from the shipped example only if absent; existing settings are never merged or
 overwritten by an archive. Source checkouts and unmanaged directories are not
 automatically migrated.
 
+Windows administrator tasks are named per managed home and invoke the stable
+`bin/odicto.ps1 admin-task` entry. They have no login trigger. A single owned
+Startup entry supplies login startup when enabled. Admin mode changes preserve
+that startup preference and leave the app stopped; use `odicto start` afterward.
+The supervisor retains the launch reservation until the exact child proves
+readiness, and cancels an unconfirmed child if its controlling pipe disappears.
+
+An explicit migration holds source and destination writer/runtime leases and
+requires the source's `source_migration_guard` capability. A pending receipt
+blocks legacy source starts before settings or startup changes. Completed,
+matching receipts allow supported legacy entry points to forward to the stable
+managed launcher. Recovery metadata and owned startup backups stay under
+`migrations/<token>` in the managed home. Private source files remain intact.
+
 The stable launcher reads `active.json` before loading the updater from the active
 verified release. This switches the updater and app together. A failed start can
 restore the prior pointer only after the failed owner has released its lock. It
@@ -125,9 +153,9 @@ still proceed.
 - Build each virtual environment in its final unique release directory. No venv
   directory is moved after creation. Interrupted and failed staging evidence stays
   in place; it is never a ready release and is not automatically deleted.
-- Managed admin-mode installations need stable task/launcher integration. Until
-  that exists, a detected admin marker blocks version switching. No task is
-  rewritten or permission silently downgraded by this manager.
+- An admin-enabled home activates or rolls back only to releases declaring
+  `managed_admin_mode: true`. Its stable task and data-root quit event must remain
+  usable across a version switch. No update silently downgrades elevation.
 - Setup must retain its writer lock for its full lifetime, including draining
   request writers before release. Main must take the stable data-root instance
   lock before installing hooks. Every lifecycle launcher must honor those paths.

@@ -250,6 +250,23 @@ class Manager:
         self.fetch = fetch
         self.installer = installer or self._install_dependencies
 
+    @staticmethod
+    def support():
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from tools.distribution import managed_admin
+        return managed_admin
+
+    def admin_enabled(self) -> bool:
+        return sys.platform == "win32" and self.support().enabled(self.home)
+
+    def _migration_guard(self):
+        path = self.home / "migration.json"
+        if path.exists() or path.is_symlink():
+            if self._read_json(path).get("state") != "complete":
+                raise DistributionError("Migration is unfinished. Resume odicto migrate with the same --source before starting or changing versions")
+
     def initialize(self) -> None:
         if self.home.exists() and not self.marker.exists() and any(self.home.iterdir()):
             raise DistributionError("Destination is not an empty managed installation; existing files were preserved")
@@ -369,12 +386,19 @@ class Manager:
     def activate(self, record: dict) -> None:
         self.release_path(record)
         with self._activation_locks():
+            self._migration_guard()
             old = self.active()
             admin_markers = [self.data / ".odicto-admin-enabled"]
             if old:
                 admin_markers.append(self.release_path(old) / ".odicto-admin-enabled")
             if any(path.exists() for path in admin_markers):
-                raise DistributionError("Managed version switching requires stable admin-mode launcher integration")
+                capabilities = self._read_json(self.release_path(record) / "tools/distribution/capabilities.json")
+                if capabilities.get("managed_admin_mode") is not True:
+                    raise DistributionError("This release cannot preserve managed administrator mode; disable Admin mode before switching")
+                if any(path.exists() for path in admin_markers[1:]):
+                    raise DistributionError("A release-local administrator marker has unknown managed ownership")
+                if sys.platform == "win32":
+                    self.support().enabled(self.home)
             new = {key: record[key] for key in ("version", "directory", "archive_sha256")}
             if old:
                 new["previous"] = {key: old[key] for key in ("version", "directory", "archive_sha256")}
@@ -532,8 +556,12 @@ runpy.run_path(str(script), run_name='__main__')
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart"}:
             raise DistributionError("Unsupported managed Odicto command")
         self.initialize()
+        if command[0] not in {"status", "version", "stop", "wait-ready"}:
+            self._migration_guard()
         with ExitStack() as launch:
             with file_lock(self.home / "manager.lock"):
+                if command[0] not in {"status", "version", "stop", "wait-ready"}:
+                    self._migration_guard()
                 before = self.active()
                 if automatic_updates and command[0] in {"start", "setup"}:
                     try:
@@ -551,7 +579,18 @@ runpy.run_path(str(script), run_name='__main__')
                     if command[0] == "stop":
                         self._recover_launch_intent()
             python = self._python(directory)
-            if command[0] in {"start", "setup", "restart"}:
+            admin = self.admin_enabled()
+            if (not admin and sys.platform == "win32" and command[0] in {"start", "restart"}
+                    and self.support().elevated(directory)):
+                raise DistributionError("Admin mode is off. Run odicto start from a normal terminal")
+            if admin and command[0] in {"stop", "restart"}:
+                result = self.support().stop(self, directory)
+                if result or command[0] == "stop":
+                    return result
+                command = ["start", *command[1:]]
+            if admin and command[0] == "start" and not self.support().elevated(directory):
+                result = self._launch_admin(directory, python)
+            elif command[0] in {"start", "setup", "restart"}:
                 result = self._launch(directory, python, command[0])
             else:
                 result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
@@ -565,6 +604,96 @@ runpy.run_path(str(script), run_name='__main__')
             except BusyError:
                 print("The new runtime still owns its lock; rollback was deferred.", file=sys.stderr)
         return result
+
+    def configure_admin(self, enabled: bool) -> None:
+        if sys.platform != "win32":
+            raise DistributionError("Admin mode is available only on Windows")
+        self.initialize()
+        self._migration_guard()
+        with file_lock(self.home / "manager.lock"), file_lock(self.home / "launch.lock"):
+            self._migration_guard()
+            self._recover_launch_intent()
+            directory = self.release_path(self.active())
+            support = self.support()
+            if support.enabled(self.home) == enabled:
+                return
+            if support.stop(self, directory):
+                raise DistributionError("Odicto did not stop; administrator mode was preserved")
+            with file_lock(self.data / "dictation.lock"):
+                support.assert_inactive(self.data, directory, allow_setup=True)
+                support.helper(self, "Enable" if enabled else "Disable")
+                if support.enabled(self.home) != enabled:
+                    raise DistributionError("Administrator mode did not read back correctly")
+
+    def _launch_admin(self, directory: Path, python: Path) -> int:
+        self._recover_launch_intent()
+        if self._ready(directory, python):
+            return 0
+        token = uuid.uuid4().hex
+        intent = self.home / "launch-intent.json"
+        request = self.home / "admin-request.json"
+        result_path = self.home / ("admin-result-" + token + ".json")
+        if request.exists() or request.is_symlink():
+            previous = self._read_json(request)
+            previous_token = previous.get("token", "")
+            if (previous.get("schema") != 1 or previous.get("home") != str(self.home)
+                    or not isinstance(previous_token, str) or not re.fullmatch(r"[a-f0-9]{32}", previous_token)
+                    or previous.get("state") not in {"pending", "claimed", "released", "cancelled"}):
+                raise DistributionError("Administrator startup request has unknown ownership; it was preserved")
+        reservation = {"token": token, "directory": directory.name, "supervisor_pid": os.getpid(),
+                       "child_pid": None, "receipt": "launch-receipt-" + token + ".json"}
+        with file_lock(self.home / "launch-intent.lock"):
+            atomic_json(intent, reservation)
+            atomic_json(request, {"schema": 1, "home": str(self.home), "token": token, "directory": directory.name,
+                                  "launcher_pid": os.getpid(), "state": "pending"})
+        try:
+            self.support().start_task(self.home, directory)
+            deadline = time.monotonic() + STARTUP_TIMEOUT + CANCEL_TIMEOUT
+            while time.monotonic() < deadline:
+                if result_path.exists():
+                    result = self._read_json(result_path)
+                    if result.get("token") != token or type(result.get("code")) is not int:
+                        raise DistributionError("Administrator startup result is invalid")
+                    return result["code"]
+                time.sleep(0.1)
+            raise BusyError("Administrator startup has not confirmed completion; its reservation was preserved")
+        except Exception:
+            with file_lock(self.home / "launch-intent.lock"):
+                state = self._read_json(request)
+                if state.get("state") != "released":
+                    state["state"] = "cancelled"
+                atomic_json(request, state)
+                if state.get("supervisor_pid") is None:
+                    intent.unlink(missing_ok=True)
+            raise
+
+    def admin_task(self) -> int:
+        """Task Scheduler entry. Claim only the medium launcher's current reservation."""
+        active = self.active()
+        directory = self.release_path(active)
+        support = self.support()
+        if not self.admin_enabled() or not support.elevated(directory):
+            raise DistributionError("The managed administrator task requires its enabled elevated owner")
+        with file_lock(self.home / "admin-task.lock"):
+            request = self.home / "admin-request.json"
+            with file_lock(self.home / "launch-intent.lock"):
+                value = self._read_json(request)
+                token = value.get("token", "")
+                if (value.get("schema") != 1 or value.get("state") != "pending"
+                        or value.get("home") != str(self.home)
+                        or value.get("directory") != directory.name or not re.fullmatch(r"[a-f0-9]{32}", token)):
+                    raise DistributionError("Administrator startup reservation is invalid or cancelled")
+                reservation = self._read_json(self.home / "launch-intent.json")
+                if (reservation.get("token") != token or reservation.get("directory") != directory.name
+                        or not self._pid_alive(reservation.get("supervisor_pid"))):
+                    raise DistributionError("Administrator startup supervisor no longer owns its reservation")
+                value.update(state="claimed", supervisor_pid=os.getpid())
+                atomic_json(request, value)
+                reservation["supervisor_pid"] = os.getpid()
+                atomic_json(self.home / "launch-intent.json", reservation)
+            result = self._launch(directory, self._python(directory), "start", reservation=reservation)
+            atomic_json(self.home / ("admin-result-" + token + ".json"), {"token": token, "code": result})
+            return result
 
     @staticmethod
     def _python(directory: Path) -> Path:
@@ -617,7 +746,13 @@ runpy.run_path(str(script), run_name='__main__')
                     active = self.active()
                     if active and active["directory"] == record.get("directory"):
                         directory = self.release_path(active)
-                        safe = self._ready(directory, self._python(directory), token)
+                        request = self.home / "admin-request.json"
+                        admin_released = True
+                        if request.exists():
+                            state = self._read_json(request)
+                            if state.get("token") == token:
+                                admin_released = state.get("state") == "released"
+                        safe = admin_released and self._ready(directory, self._python(directory), token)
             else:
                 safe = not self._pid_alive(record.get("supervisor_pid")) and (
                     record.get("child_pid") is None or not self._pid_alive(record.get("child_pid")))
@@ -637,21 +772,23 @@ runpy.run_path(str(script), run_name='__main__')
         except (OSError, subprocess.SubprocessError):
             return False
 
-    def _launch(self, directory: Path, python: Path, command: str) -> int:
+    def _launch(self, directory: Path, python: Path, command: str, *, reservation: dict | None = None) -> int:
         intent = self.home / "launch-intent.json"
-        self._recover_launch_intent()
+        if reservation is None:
+            self._recover_launch_intent()
         if command == "restart":
             result = subprocess.run([str(python), str(directory / "odicto.py"), "stop"],
                                     cwd=directory, env=self.environment()).returncode
             if result:
                 return result
             command = "start"
-        if command == "start" and self._ready(directory, python):
+        if reservation is None and command == "start" and self._ready(directory, python):
             return 0
-        token = uuid.uuid4().hex
+        token = reservation["token"] if reservation else uuid.uuid4().hex
         receipt = self.home / ("launch-receipt-" + token + ".json")
-        atomic_json(intent, {"token": token, "directory": directory.name,
-                             "supervisor_pid": os.getpid(), "child_pid": None, "receipt": receipt.name})
+        if reservation is None:
+            atomic_json(intent, {"token": token, "directory": directory.name,
+                                 "supervisor_pid": os.getpid(), "child_pid": None, "receipt": receipt.name})
         environment = self.environment()
         environment["ODICTO_LAUNCH_TOKEN"] = token
         environment["ODICTO_LAUNCH_RECEIPT"] = str(receipt)
@@ -662,13 +799,20 @@ runpy.run_path(str(script), run_name='__main__')
             process = subprocess.Popen([str(python), str(directory / "odicto.py"),
                                         "_managed-owner" if command == "start" else "_managed-setup"],
                                        cwd=directory, env=environment, stdin=subprocess.PIPE, **options)
-            reservation = self._read_json(intent)
-            reservation["child_pid"] = process.pid
-            atomic_json(intent, reservation)
-            process.stdin.write(b"S")
-            process.stdin.flush()
+            child_reservation = self._read_json(intent)
+            child_reservation["child_pid"] = process.pid
+            atomic_json(intent, child_reservation)
+            with file_lock(self.home / "launch-intent.lock"):
+                if reservation is not None and self._read_json(self.home / "admin-request.json").get("state") != "claimed":
+                    raise OSError("Administrator startup was cancelled")
+                process.stdin.write(b"S")
+                process.stdin.flush()
             deadline = time.monotonic() + STARTUP_TIMEOUT
             while time.monotonic() < deadline:
+                if reservation is not None:
+                    state = self._read_json(self.home / "admin-request.json")
+                    if state.get("state") != "claimed" or not self._pid_alive(state.get("launcher_pid")):
+                        return 1
                 status = process.poll()
                 if status is not None:
                     confirmed = True
@@ -678,8 +822,16 @@ runpy.run_path(str(script), run_name='__main__')
                     state = self._read_json(receipt)
                     owned_setup = state.get("token") == token and state.get("state") == "setup-owned"
                 if owned_setup or command == "start" and self._ready(directory, python, token):
-                    process.stdin.write(b"R")
-                    process.stdin.flush()
+                    with file_lock(self.home / "launch-intent.lock"):
+                        if reservation is not None:
+                            state = self._read_json(self.home / "admin-request.json")
+                            if state.get("state") != "claimed" or not self._pid_alive(state.get("launcher_pid")):
+                                return 1
+                        process.stdin.write(b"R")
+                        process.stdin.flush()
+                        if reservation is not None:
+                            state["state"] = "released"
+                            atomic_json(self.home / "admin-request.json", state)
                     process.stdin.close()
                     confirmed = True
                     return 0
@@ -713,6 +865,12 @@ def main(argv=None) -> int:
         sub.add_parser(command)
     automatic = sub.add_parser("auto-updates")
     automatic.add_argument("setting", choices=("on", "off"))
+    admin = sub.add_parser("admin")
+    admin.add_argument("setting", choices=("on", "off"))
+    sub.add_parser("admin-task", help=argparse.SUPPRESS)
+    migration = sub.add_parser("migrate")
+    migration.add_argument("--source", type=Path, required=True)
+    migration.add_argument("--check", action="store_true")
     run = sub.add_parser("run")
     run.add_argument("--no-auto-updates", action="store_true")
     run.add_argument("app_args", nargs=argparse.REMAINDER)
@@ -724,6 +882,18 @@ def main(argv=None) -> int:
             return 0
         if args.command == "run":
             return manager.run(args.app_args or ["start"], automatic_updates=not args.no_auto_updates)
+        if args.command == "admin-task":
+            return manager.admin_task()
+        if args.command == "admin":
+            manager.configure_admin(args.setting == "on")
+            print("Admin mode changed. Start Odicto with odicto start.")
+            return 0
+        if args.command == "migrate":
+            support = manager.support()
+            from tools.distribution.migration import migrate
+            result = migrate(manager, args.source, check=args.check, adapter=support.MigrationAdapter(), lock_factory=file_lock)
+            print(json.dumps(result.as_dict() if hasattr(result, "as_dict") else result, indent=2))
+            return 0
         manager.initialize()
         with file_lock(manager.home / "manager.lock"):
             if args.command == "status":
@@ -750,7 +920,7 @@ def main(argv=None) -> int:
                     print(f"Configure with: {manager.home / 'bin' / ('odicto.cmd' if os.name == 'nt' else 'odicto')} setup")
                 print(f"Odicto {record['version']} is active.")
         return 0
-    except (DistributionError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Odicto: {error}", file=sys.stderr)
         return 1
 

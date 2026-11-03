@@ -44,6 +44,9 @@ def archive_for(tag="v1.2.0", extras=()):
 
 class TestManagedDistribution(unittest.TestCase):
     def setUp(self):
+        elevation = patch("tools.distribution.managed_admin.elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="odicto-distribution-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)

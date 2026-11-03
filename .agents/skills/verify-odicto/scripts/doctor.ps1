@@ -1,13 +1,14 @@
 # Read-only health check of the LIVE Odicto owner. Starts, stops and changes nothing.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File doctor.ps1 [-Root W:\AI-Projects\Odicto]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File doctor.ps1 [-Root CODE_ROOT] [-DataRoot RUNTIME_DATA]
 #
-# -Root is the install that runs Odicto for real (holds dictation.pid, dictation.log,
-# dictation-health.json). Default: this checkout if it holds dictation.pid, else the main
-# git worktree (an agent usually works in a worktree; the owner runs from the main checkout).
+# -Root identifies running code. -DataRoot holds dictation.pid, dictation.log and
+# dictation-health.json. For source installs they are the same. Default code root is
+# this checkout if it holds dictation.pid, else the main git worktree. Managed proof
+# must pass both paths explicitly.
 # Exit code 0 = worth driving, 1 = a problem line was printed.
 [CmdletBinding()]
-param([string]$Root)
+param([string]$Root, [string]$DataRoot)
 
 $ErrorActionPreference = 'Stop'
 $problems = @()
@@ -21,14 +22,17 @@ if (-not $Root) {
     }
 }
 $Root = (Resolve-Path $Root).Path
+if (-not $DataRoot) { $DataRoot = $Root }
+$DataRoot = (Resolve-Path $DataRoot).Path
 Write-Host "root: $Root"
+if ($DataRoot -ne $Root) { Write-Host "runtime data: $DataRoot" }
 
 $version = Get-Content (Join-Path $Root 'VERSION') -ErrorAction SilentlyContinue
-$codeLine = Select-String -Path (Join-Path $Root 'dictation.log') -Pattern 'Code version:' -ErrorAction SilentlyContinue | Select-Object -Last 1
+$codeLine = Select-String -Path (Join-Path $DataRoot 'dictation.log') -Pattern 'Code version:' -ErrorAction SilentlyContinue | Select-Object -Last 1
 Write-Host "VERSION file: $version; running build: $(if ($codeLine) { ($codeLine.Line -split 'Code version: ')[1] } else { 'unknown' })"
 
 # 1. Owner process
-$pidFile = Join-Path $Root 'dictation.pid'
+$pidFile = Join-Path $DataRoot 'dictation.pid'
 $ownerPid = if (Test-Path $pidFile) { [int](Get-Content $pidFile -TotalCount 1) } else { 0 }
 $owner = if ($ownerPid) { Get-Process -Id $ownerPid -ErrorAction SilentlyContinue } else { $null }
 if (-not $owner) { $problems += "no live owner (pid file: $ownerPid)" }
@@ -53,7 +57,7 @@ if (($inRoot.Count + $hidden.Count) -gt 1) {
 }
 
 # 3. Heartbeat (written every 2 s by the owner)
-$healthFile = Join-Path $Root 'dictation-health.json'
+$healthFile = Join-Path $DataRoot 'dictation-health.json'
 if (Test-Path $healthFile) {
     $h = Get-Content $healthFile -Raw | ConvertFrom-Json
     $age = [math]::Round(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0) - $h.updated_at, 1)

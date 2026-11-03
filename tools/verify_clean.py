@@ -24,7 +24,7 @@ def main():
         for folder in ("app", "tests", "assets", "tools", "docs", "scripts", ".github"):
             shutil.copytree(root / folder, clean / folder,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ("main.py", "odicto.py", ".env.example", "prompt.txt.example", "install.ps1", "install.sh",
+        for name in ("main.py", "odicto.py", ".env.example", "prompt.txt.example", "install.ps1", "install.sh", "install-managed.ps1", "install-managed.sh",
                      "start_dictation.bat", "setup.bat", "stop_dictation.bat",
                      "start_dictation.sh", "setup.sh", "stop_dictation.sh", ".gitignore",
                      "VERSION", "CHANGELOG.md"):

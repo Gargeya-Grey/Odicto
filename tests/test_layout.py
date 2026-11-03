@@ -32,7 +32,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertEqual({"start_dictation.bat", "setup.bat", "stop_dictation.bat"},
                          {n for n in root_files if n.endswith(".bat")})
         self.assertEqual({"start_dictation.sh", "setup.sh", "stop_dictation.sh"},
-                         {n for n in root_files if n.endswith(".sh")} - {"install.sh"})
+                         {n for n in root_files if n.endswith(".sh")} - {"install.sh", "install-managed.sh"})
         for name in ("start_dictation", "setup", "stop_dictation"):
             self.assertTrue((ROOT / "scripts" / "windows" / (name + ".bat")).is_file(), name)
             self.assertTrue((ROOT / "scripts" / "posix" / (name + ".sh")).is_file(), name)

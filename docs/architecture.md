@@ -15,7 +15,7 @@ transcript is first sent to an LLM as a prompt, and the model's reply is pasted 
 | Question | Answer |
 |---|---|
 | Entry point | Root `main.py` / `odicto.py` launch the implementations in `app/`; `app/setup_web.py` serves setup |
-| How it starts | `start_dictation.bat` / `scripts/posix/run_debug.sh` → `main.py` (pythonw on Windows) |
+| How it starts | Installed `odicto start` selects the active managed release; source debug helpers launch `main.py` |
 | Where config comes from | `.env` → `ENV_DEFAULTS` in `config.py` (single source of defaults) |
 | How text reaches your cursor | `typer.py` — clipboard paste, or **typing** when the target is a terminal |
 | Speech to text | `transcriber.py` — local Whisper, or cloud Gemini, Groq, or OpenRouter |
@@ -23,7 +23,14 @@ transcript is first sent to an LLM as a prompt, and the model's reply is pasted 
 | Audio capture | `recorder.py` — a persistent `sounddevice` stream + 0.4 s pre-roll |
 | The bit that bites you | a **global keyboard hook with suppression**, hence the single-instance lock |
 
-**How to run it locally**
+**Installed application**
+
+Run `install-managed.ps1` (Windows) or `bash install-managed.sh` (macOS/Linux),
+then use `odicto setup`, `odicto start`, and `odicto stop`. The [README](../README.md)
+is the customer journey. The [development guide](development.md) documents source
+installation and advanced configuration.
+
+**Source development**
 
 ```bash
 .\scripts\windows\run_debug.bat            # Windows: foreground, console logging
@@ -53,6 +60,21 @@ continue to use those entry points. Private `.env` and `prompt.txt`, and ignored
 logs, PID, and lock files belong at `DATA_ROOT`. Source installs use the install
 root; managed versions share a stable data directory outside release folders.
 `ROOT` always identifies the current release's code and assets.
+
+`tools/distribution/manager.py` owns release staging, activation, rollback and
+stable launch reservations. `migration.py` represents a source handoff with typed
+plans and reciprocal transaction receipts. It leases both roots, copies only
+known configuration files without interpreting them, and retires only proven
+startup ownership. `app/migration_guard.py` blocks pending source launches and
+forwards completed handoffs through the stable managed launcher. The source
+guard also runs after acquiring the runtime lock, before hooks can bind.
+
+On Windows, `tools/distribution/managed_admin.py` and
+`scripts/windows/managed_admin.ps1` manage a home-specific elevation task targeting
+the stable `bin/odicto.ps1 admin-task` command. A private reservation and startup
+pipe bind elevated readiness to the initiating launch. The task has no login
+trigger; `app/managed_autostart.py` owns the single stable login entry. Enabling
+admin mode requires compatible release capabilities during update and rollback.
 
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.

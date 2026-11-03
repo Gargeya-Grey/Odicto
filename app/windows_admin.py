@@ -105,12 +105,31 @@ def _powershell_exe() -> str:
 
 
 def marker_path(root) -> str:
+    home = os.environ.get("ODICTO_MANAGED_HOME")
+    if home:
+        data = os.path.join(os.path.abspath(home), "data")
+        if os.path.normcase(os.path.abspath(os.environ.get("ODICTO_DATA_ROOT", ""))) != os.path.normcase(data):
+            raise RuntimeError("Managed administrator identity has an invalid data root")
+        return os.path.join(data, MARKER_NAME)
     return os.path.join(os.path.abspath(os.fspath(root)), MARKER_NAME)
 
 
 def admin_mode_enabled(root) -> bool:
     """True only on Windows when this install's admin-mode marker exists."""
-    return _is_windows() and os.path.isfile(marker_path(root))
+    if not _is_windows():
+        return False
+    path = marker_path(root)
+    if not os.path.isfile(path):
+        return False
+    home = os.environ.get("ODICTO_MANAGED_HOME")
+    if home:
+        normal = os.path.normcase(os.path.abspath(home))
+        expected = "Odicto-managed-" + hashlib.sha256(normal.encode()).hexdigest()[:12]
+        with open(path, encoding="utf-8-sig") as handle:
+            value = json.load(handle)
+        if value != {"schema": 1, "home": os.path.abspath(home), "task": expected}:
+            raise RuntimeError("Managed administrator marker has unknown ownership")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +589,10 @@ def run_if_needed(root, action: str = "Start", timeout: Optional[float] = None) 
     if not _is_windows():
         return None
     root = os.path.abspath(os.fspath(root))
+    if os.environ.get("ODICTO_MANAGED_HOME"):
+        if admin_mode_enabled(root) and not caller_is_elevated() and action != "WaitReady":
+            raise RuntimeError("Start the enabled administrator owner through the stable odicto command")
+        return None
     if not os.path.isfile(marker_path(root)):
         return None
     try:
@@ -623,6 +646,16 @@ def set_admin_mode(root, enabled: bool, timeout: float = 180.0) -> Tuple[bool, s
 def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
     if not _is_windows():
         return False, "Admin mode is only available on Windows."
+    home = os.environ.get("ODICTO_MANAGED_HOME")
+    if home:
+        launcher = os.path.join(home, "launcher.py")
+        if not os.path.isfile(launcher):
+            return False, "The stable managed launcher is missing."
+        result = subprocess.run([sys.executable, launcher, "admin", "on" if enabled else "off"],
+                                check=False, timeout=timeout, creationflags=_CREATE_NO_WINDOW)
+        if result.returncode:
+            return False, "Admin mode was not changed. Close other lifecycle commands and retry."
+        return True, "Admin mode is %s. Start Odicto with odicto start." % ("on" if enabled else "off")
     root = os.path.abspath(os.fspath(root))
     helper = os.path.join(root, *HELPER_PARTS)
     if not os.path.isfile(helper):

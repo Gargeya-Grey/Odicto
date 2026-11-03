@@ -839,7 +839,7 @@ _SPAWN_BLOCKED_MESSAGE = "This setup page runs as administrator. Start Odicto wi
 
 def _admin_mode_state() -> tuple:
     """(available, enabled) for the Windows admin-windows switch; never raises."""
-    if sys.platform != "win32" or os.environ.get("ODICTO_MANAGED_HOME"):
+    if sys.platform != "win32":
         return (False, False)
     try:
         import windows_admin
@@ -905,8 +905,6 @@ def runtime_status() -> dict:
 
 def set_admin_mode(enabled: bool) -> dict:
     """Turn the Windows admin-windows mode on or off; the helper asks UAC once."""
-    if os.environ.get("ODICTO_MANAGED_HOME"):
-        return {"ok": False, "enabled": False, "message": "Admin mode is not available for managed installs yet; source installations retain admin mode."}
     available, current = _admin_mode_state()
     if not available:
         return {"ok": False, "enabled": False, "message": "Admin windows mode is only available on Windows."}
@@ -937,7 +935,7 @@ def start_odicto() -> dict:
     try:
         from windows_admin import run_if_needed
 
-        elevated = run_if_needed(str(ROOT), "Ensure")
+        elevated = None if os.environ.get("ODICTO_MANAGED_HOME") else run_if_needed(str(ROOT), "Ensure")
     except Exception as error:
         return {"ok": False, "message": f"Odicto did not start ({error})."}
     if elevated is not None:
@@ -945,7 +943,8 @@ def start_odicto() -> dict:
             return {"ok": True, "message": "Odicto is starting."}
         return {"ok": False, "message": f"Odicto did not start (exit code {elevated})."}
     if _SPAWN_BLOCKED.is_set():
-        return {"ok": False, "message": _SPAWN_BLOCKED_MESSAGE}
+        message = "This setup page runs as administrator. Run odicto start from a normal terminal." if os.environ.get("ODICTO_MANAGED_HOME") else _SPAWN_BLOCKED_MESSAGE
+        return {"ok": False, "message": message}
     try:
         message = restart_odicto()
     except Exception as error:  # an elevated restart reports failure by raising
@@ -1419,8 +1418,6 @@ def _watch_lifetime(
 
 
 def run_server(port: int = 8765, open_browser: bool = True) -> None:
-    if not os.environ.get("ODICTO_MANAGED_HOME"):
-        return _run_server(port, open_browser)
     from state_lock import StateLease
     lease = StateLease(DATA_ROOT / "setup.lock")
     try:
@@ -1435,6 +1432,9 @@ def run_server(port: int = 8765, open_browser: bool = True) -> None:
                 return
         raise RuntimeError("This installation's Setup is busy; close its existing page before trying again")
     try:
+        if not os.environ.get("ODICTO_MANAGED_HOME"):
+            from migration_guard import check_source
+            check_source(ROOT)
         return _run_server(port, open_browser)
     finally:
         lease.__exit__(None, None, None)

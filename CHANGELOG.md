@@ -4,6 +4,19 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.1] - 2026-11-03
+
+### Added
+
+- Top-level `install-managed.ps1` and `install-managed.sh` entrypoints for the standard installed-app journey. Daily operation uses the same `odicto` command outside the development checkout.
+- An explicit source-to-managed migration with a read-only check, opaque settings import, ownership checks, recoverable receipts and no automatic application launch.
+- Managed Windows admin mode with stable task, launcher and data-root ownership across compatible release updates. Existing source admin/startup preferences can be carried through an owner-approved migration.
+
+### Changed
+
+- The README now focuses on installation, Setup and daily use. Source setup, manual dependencies and advanced configuration moved to `docs/development.md`.
+- Migration guards protect against accidentally launching a retired source checkout alongside the installed application. Unknown files and startup entries remain preserved.
+
 ## [1.2.0] - 2026-11-03
 
 ### Added

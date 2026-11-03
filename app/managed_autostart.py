@@ -21,7 +21,7 @@ def _location():
     return Path(directory) / "Odicto managed.cmd"
 
 
-def configure(home: Path, enabled: bool):
+def inspect(home: Path):
     home = home.resolve()
     target = _location()
     receipt = home / "autostart.json"
@@ -32,6 +32,12 @@ def configure(home: Path, enabled: bool):
         if (target.is_symlink() or owned.get("path") != str(target)
                 or hashlib.sha256(target.read_bytes()).hexdigest() != owned.get("sha256")):
             raise RuntimeError("The existing startup entry has unknown ownership and was preserved")
+    return target, receipt, target.exists()
+
+
+def configure(home: Path, enabled: bool):
+    home = home.resolve()
+    target, receipt, _ = inspect(home)
     if not enabled:
         if target.exists():
             target.unlink()

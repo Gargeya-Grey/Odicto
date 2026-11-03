@@ -1,1 +1,1 @@
-{"schema":1,"stable_data_root":true,"setup_writer_lock":true,"managed_admin_mode":false,"wayland":false}
+{"schema":1,"stable_data_root":true,"setup_writer_lock":true,"managed_admin_mode":true,"source_migration_guard":true,"wayland":false}

@@ -4,6 +4,13 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_DIR"
+if [ -e .odicto-migration.json ] || [ -L .odicto-migration.json ]; then
+  if [ ! -x .venv/bin/python ]; then
+    echo "This source installation was migrated. Use the installed odicto command. Source Python is missing." >&2
+    exit 1
+  fi
+  exec .venv/bin/python odicto.py restart
+fi
 
 if [ -x ".venv/bin/python" ]; then
   .venv/bin/python odicto.py stop >/dev/null 2>&1 || true

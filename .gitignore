@@ -3,6 +3,7 @@
 prompt.txt
 *.pid
 .odicto-admin-enabled
+.odicto-migration.json
 
 # Python
 .venv/
@@ -20,6 +21,7 @@ __pycache__/
 dictation.log
 dictation.pid
 dictation.lock
+setup.lock
 dictation-health.json
 dictation-health.json.*.tmp
 *.log

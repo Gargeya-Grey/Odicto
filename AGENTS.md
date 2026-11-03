@@ -2,6 +2,12 @@
 
 This file is for coding agents (and power users) automating setup on a **fresh machine**.
 
+For the end-user installation, use root `install-managed.ps1` / `install-managed.sh`
+and the installed `odicto` command, as documented in `README.md`. The source setup
+below is for development and disposable CI. See `docs/development.md` for manual
+dependencies and advanced source configuration. On an owner's machine, the project
+verification skill governs live migration, UAC and application lifecycle actions.
+
 > **Before changing code, read [`docs/architecture.md`](docs/architecture.md)** — the canonical
 > module map, diagram set, "where do I change X?" cookbook, and the invariants not to break.
 > [`docs/engineering-notes.md`](docs/engineering-notes.md) records why the code is shaped this way,

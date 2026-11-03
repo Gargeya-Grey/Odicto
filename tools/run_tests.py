@@ -43,7 +43,7 @@ GATE = {
     # is: 737.
     # Vocabulary, explicit polish, upgrade safety, rootless X11 and managed updates
     # add coverage on every platform; platform-specific definitions still differ.
-    "floor": 900,
+    "floor": 1000,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -54,6 +54,8 @@ GATE = {
                   "tests.test_installer.TestWindowsInstaller.test_move_aside_refuses_python_running_main_py_through_a_short_path",
                   "tests.test_installer.TestWindowsInstaller.test_other_spellings_in_the_process_list_are_recognised"],
         "other": [
+            "tests.test_managed_admin.TestManagedNativeBoundary.test_powershell_helpers_parse_without_execution",
+            "tests.test_managed_admin.TestManagedNativeBoundary.test_powershell_task_ownership_with_fake_objects",
             "tests.test_windows_admin.TestHelperDecisions.*",
             "tests.test_windows_admin.TestHelperParses.*",
             "tests.test_windows_admin.TestQuitEventRoundTrip.*",

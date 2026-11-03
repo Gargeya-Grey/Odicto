@@ -3,6 +3,8 @@ setlocal EnableExtensions
 for %%I in ("%~dp0..\..") do set "ODICTO_ROOT=%%~fI"
 cd /d "%ODICTO_ROOT%"
 
+if exist "%ODICTO_ROOT%\.odicto-migration.json" goto :managed_forward
+
 REM A .venv belongs to the machine and Python that made it. Judge it by running it,
 REM before anything else (config, .env, launch), so every start mode reports it.
 set "ODICTO_VENV_PROBLEM="
@@ -101,3 +103,13 @@ REM The root start_dictation.bat shows the result and pauses once itself.
 if defined ODICTO_NO_PAUSE exit /b 0
 pause
 exit /b 0
+
+:managed_forward
+if not exist "%ODICTO_ROOT%\.venv\Scripts\python.exe" (
+  echo This source installation was migrated. Use the installed odicto command. Source Python is missing.
+  exit /b 1
+)
+set "ODICTO_FORWARD=start"
+if /I "%~1"=="/restart" set "ODICTO_FORWARD=restart"
+"%ODICTO_ROOT%\.venv\Scripts\python.exe" "%ODICTO_ROOT%\odicto.py" %ODICTO_FORWARD%
+exit /b %ERRORLEVEL%

@@ -284,6 +284,13 @@ def claim_install(pid_file: str) -> bool:
     """Leave a live owner alone; sweep orphans only under exclusive ownership."""
     if not acquire_single_instance_lock():
         return False
+    try:
+        from migration_guard import check_source
+        check_source(ROOT)
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr, flush=True)
+        release_single_instance_lock()
+        return False
     platforms.kill_other_odicto_processes(pid_file)
     # Owner only: stay resident and off efficiency cores so a hotkey after hours idle is instant.
     notes = platforms.keep_responsive()

@@ -8,7 +8,7 @@ Python and creates an `odicto` command. No system Python, Git, Node or npm is re
 Open PowerShell in the extracted `Odicto` directory and run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\distribution\bootstrap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 ```
 
 ### macOS / Ubuntu / Debian
@@ -16,7 +16,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\distribution\bootstr
 Open a terminal in the extracted `Odicto` directory and run:
 
 ```bash
-bash tools/distribution/bootstrap.sh
+bash install-managed.sh
 ```
 
 Use the command path printed by the installer to run `odicto setup`, then
@@ -31,22 +31,25 @@ stay in a stable data directory. Run `odicto update` to check immediately, or
 `odicto rollback` to restore the previous ready version. Automatic checks can be
 disabled with `odicto auto-updates off`.
 
-Quit an existing source installation and disable its startup entry before using
-the managed install. Their settings are separate. Never run both together. See
-`tools/distribution/README.md` for the complete command and permissions guide.
+### Existing source installations
 
-### Source installation on Windows
+After installing, inspect the migration with:
 
-1. Download the `.zip` file below. Unzip it to a folder you keep, for example `Documents\Odicto`.
-2. In that folder, right-click `install.ps1` and select **Run with PowerShell**. Or run `powershell -ExecutionPolicy Bypass -File .\install.ps1`. The installer sets up Python packages and the speech model.
-3. Double-click `setup.bat`. The setup page opens in your browser. Add a key on **Connections** if you want cloud speech or AI answers, then select **Save**.
-4. Double-click `start_dictation.bat`. Tap **Ctrl+`**, speak, then tap again. The text appears where your cursor is.
+```text
+odicto migrate --source "PATH-TO-YOUR-SOURCE-CHECKOUT" --check
+```
 
-Stop Odicto with `stop_dictation.bat`. The setup page stops by itself when you close it.
+Quit that source instance and close its Setup page, then run the same command
+without `--check` to import its known settings and retire verified source startup
+entries. Windows admin/startup changes may prompt through UAC. Migration does not
+launch dictation. Afterwards use `odicto setup` and `odicto start`, like a new user.
 
-### Source installation on macOS / Linux
+On macOS/Linux, retire an existing source login-startup entry before migration;
+use `odicto autostart` afterward to enable the managed entry.
 
-Run `bash install.sh`, then `bash setup.sh` and `bash start_dictation.sh`. Stop with `bash stop_dictation.sh`. macOS asks for Accessibility and Input Monitoring permissions. Linux needs an X11 desktop session and runs as your normal user. Wayland is unsupported.
+Never run the source and installed applications together. See
+`tools/distribution/README.md` for migration, command and permissions details.
+Development-only source setup is documented in `docs/development.md`.
 
 ### Your data
 

@@ -44,6 +44,11 @@ header whose time is after the change, and `Code version: git <sha>` names the n
 powershell -NoProfile -ExecutionPolicy Bypass -File .agents\skills\verify-odicto\scripts\doctor.ps1 [-Root W:\AI-Projects\Odicto]
 ```
 
+For a managed runtime, pass its active release directory as `-Root` and the stable
+managed `data` directory as `-DataRoot`. Run `log_report.py --root` against that
+same data directory. The checkout is development code; it is not the installed
+runtime after migration. Do not infer runtime acceptance from its source logs.
+
 Prints the running build, the owner pid, its working set vs private memory, the heartbeat age,
 the mic and its host API. Exit 1 with `PROBLEM:` lines when the owner is gone, hung (heartbeat
 older than 10 s), not ready, or paged out (working set < 60 MB: the next hotkey waits on disk).
