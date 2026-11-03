@@ -252,37 +252,27 @@ def _sddl_aces(dacl: str) -> tuple[str, list[str]]:
     return prefix, aces
 
 
-_DENY_ACE_TYPES = {"D", "OD", "XD"}
+def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lambda value: value) -> str | None:
+    """Return the DACL plus one explicit inheritable full-control grant for sid, or None when that
+    grant already exists. Every existing entry is kept; no other principal is added. The grant goes
+    after the leading explicit denies and before inherited entries (canonical order).
 
-
-def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lambda value: value,
-                     in_token: Callable[[str], bool] | None = None) -> str | None:
-    """Return the DACL plus one explicit inheritable full-control grant for sid, or None when an
-    effective one already exists. Every existing entry is kept; no other principal is added.
-
-    A deny entry (D, OD or XD, explicit or inherited) whose SID is in this account's token fails
-    closed: Windows reads entries in order, so a grant beside it would not prove access. A deny for
-    a SID outside the token cannot affect this account and is kept. `in_token` receives the raw SDDL
-    SID; by default only sid itself counts."""
+    The grant does not prove effective access: Windows also applies deny entries, including ones that
+    change meaning on inheritance (CREATOR OWNER) or match logon and deny-only token groups. Odicto's
+    own new directories carry no deny entries (atomic protected creation); a reader that is still
+    denied reports a clear access error instead of a misleading success."""
     prefix, aces = _sddl_aces(dacl)
     if "NO_ACCESS_CONTROL" in prefix:
         return None
-    in_token = in_token or (lambda value: canonical(value) == sid)
-    granted, position = False, None
+    position = None
     for index, ace in enumerate(aces):
         fields = ace[1:-1].split(";")
         flags = {fields[1][at:at + 2] for at in range(0, len(fields[1]), 2)} if len(fields) > 1 else set()
-        if fields[0].upper() in _DENY_ACE_TYPES:
-            if len(fields) < 6 or in_token(fields[5]):
-                raise DistributionError("A private directory denies this account access in its access list; "
-                                        "it was preserved")
-        elif position is None:
-            position = index  # canonical order: leading explicit denies stay first
         if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and "IO" not in flags
                 and fields[2].upper() in {"FA", "0X1F01FF"} and canonical(fields[5]) == sid):
-            granted = True
-    if granted:
-        return None
+            return None
+        if position is None and not (fields[0].upper() in {"D", "OD", "XD"} and "ID" not in flags):
+            position = index
     position = len(aces) if position is None else position
     return prefix + "".join(aces[:position] + [f"(A;OICI;FA;;;{sid})"] + aces[position:])
 
@@ -294,8 +284,9 @@ def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = Fals
     CVE-2024-4030 fix inherit the parent's list instead). A file an elevated process writes belongs
     to Administrators, so this account could not read it at medium integrity. With create=True the
     directory is made atomically with an explicit protected list: those three plus this account,
-    inheriting nothing. An existing directory gains one explicit inheritable grant for the token user.
-    SetFileSecurity writes this directory's DACL only: no SACL privilege, no walk over children."""
+    inheriting nothing. An existing directory gains one explicit inheritable grant for the token user
+    (see _with_token_user for what that does not prove). SetFileSecurity writes this directory's DACL
+    only: no SACL privilege, no walk over children."""
     import ctypes
     import errno
     from ctypes import wintypes
@@ -319,12 +310,6 @@ def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = Fals
     advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
         wintypes.LPCWSTR, wintypes.DWORD, pointer(ctypes.c_void_p), ctypes.c_void_p]
     dacl_information = 0x4
-
-    class SidAndAttributes(ctypes.Structure):
-        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
-
-    class TokenGroups(ctypes.Structure):
-        _fields_ = [("GroupCount", wintypes.DWORD), ("Groups", SidAndAttributes * 1)]
 
     class SecurityAttributes(ctypes.Structure):
         _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", ctypes.c_void_p),
@@ -387,11 +372,6 @@ def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = Fals
     try:
         user = token_information(token, 1)  # TOKEN_USER starts with the SID pointer
         sid = sid_text(ctypes.c_void_p.from_buffer(user).value)
-        groups = token_information(token, 2)  # TOKEN_GROUPS
-        count = TokenGroups.from_buffer(groups).GroupCount
-        entries = (SidAndAttributes * count).from_buffer(groups, TokenGroups.Groups.offset)
-        # Every group counts, deny-only ones included: Windows matches deny entries against them.
-        members = {sid} | {sid_text(entry.Sid) for entry in entries}
     finally:
         kernel.CloseHandle(token)
 
@@ -409,14 +389,11 @@ def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = Fals
 
         with_descriptor(f"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)(A;OICI;FA;;;{sid})", create_directory)
 
-    def membership(value: str) -> bool:
-        return canonical(value) in members
-
-    updated = _with_token_user(read_dacl(), sid, canonical, membership)
+    updated = _with_token_user(read_dacl(), sid, canonical)
     if updated is None:
         return
     check(with_descriptor(updated, lambda descriptor: advapi.SetFileSecurityW(str(path), dacl_information, descriptor)))
-    if _with_token_user(read_dacl(), sid, canonical, membership) is not None:
+    if _with_token_user(read_dacl(), sid, canonical) is not None:
         raise DistributionError(f"Private directory {path.name} did not keep this account's access; it was preserved")
 
 
@@ -510,6 +487,11 @@ class Manager:
             if path.stat().st_size > 64 * 1024:
                 raise DistributionError("Managed-install metadata is too large")
             value = json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError as error:
+            raise DistributionError(
+                f"This account cannot read managed-install metadata {path.name} (access denied). An elevated "
+                f"step may have written it; check that {path.parent} grants this account access and has no "
+                f"deny entry for it") from error
         except (OSError, ValueError) as error:
             raise DistributionError(f"Invalid managed-install metadata: {path.name}") from error
         if not isinstance(value, dict):

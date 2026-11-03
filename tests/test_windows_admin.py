@@ -1371,5 +1371,12 @@ class TestStaticOrdering(unittest.TestCase):
         self.assertIn(".odicto-admin-enabled", self.read(".gitignore").splitlines())
 
 
+
+class TestReceiptReadErrors(unittest.TestCase):
+    def test_unreadable_receipt_reports_access_denied(self):
+        with patch("builtins.open", side_effect=PermissionError(13, "Access is denied")):
+            receipt = windows_admin._read_receipt(os.path.join("synthetic", "receipt.json"))
+        self.assertIn("access denied", receipt["error"])
+
 if __name__ == "__main__":
     unittest.main()

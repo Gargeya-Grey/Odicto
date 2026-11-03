@@ -34,31 +34,6 @@ function Assert-SameAccount([string]$Caller, [string]$Current) {
         throw 'Administrator approval came from a different account; nothing changed. Sign in as the account that owns this Odicto installation'
     }
 }
-# Windows reads entries in order, so a deny (D, OD or XD, explicit or inherited) for a SID in this
-# account's token blocks access that a grant would seem to give. Read the raw SDDL: GetAccessRules
-# omits object and callback entries. A deny for a SID outside the token cannot affect the account.
-function Assert-NoDenyForAccount([string]$Sddl, $User) {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $mine = @($User.Value, $identity.User.Value) + @($identity.Groups | ForEach-Object { $_.Value })
-    $depth = 0; $begin = 0
-    for ($index = 0; $index -lt $Sddl.Length; $index++) {
-        if ($Sddl[$index] -eq '(') { if ($depth -eq 0) { $begin = $index }; $depth++ }
-        elseif ($Sddl[$index] -eq ')') {
-            $depth--
-            if ($depth -eq 0) {
-                $fields = $Sddl.Substring($begin + 1, $index - $begin - 1).Split(';')
-                if (@('D', 'OD', 'XD') -contains $fields[0].ToUpperInvariant()) {
-                    $denied = $null
-                    if ($fields.Count -ge 6) { try { $denied = (New-Object Security.Principal.SecurityIdentifier($fields[5])).Value } catch { } }
-                    if (-not $denied -or $mine -contains $denied) {
-                        throw 'A managed private directory denies this account access in its access list; it was preserved'
-                    }
-                }
-            }
-        }
-    }
-    if ($depth -ne 0) { throw 'A managed private directory has an unrecognized access list; it was preserved' }
-}
 # DACL only (Access section): no SACL privilege. Existing entries stay; no other account is added.
 function Grant-SameAccount([string]$Path, [string]$UserSid) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -69,7 +44,6 @@ function Grant-SameAccount([string]$Path, [string]$UserSid) {
     $full = [Security.AccessControl.FileSystemRights]::FullControl
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $acl = [IO.Directory]::GetAccessControl($item.FullName, [Security.AccessControl.AccessControlSections]::Access)
-    Assert-NoDenyForAccount $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) $user
     foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
         if ($rule.IdentityReference -eq $user -and $rule.AccessControlType -eq 'Allow' -and
             ($rule.FileSystemRights -band $full) -eq $full -and $rule.InheritanceFlags -eq $inherit -and

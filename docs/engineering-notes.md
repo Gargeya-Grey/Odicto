@@ -619,3 +619,20 @@ cache off (about 70 ms slower per 5 s clip). A value the user set has no marker 
 Tray icon at 16, 24, 32, 48 and 64 px (graphite rounded square, jade mark) renders cleanly
 offscreen. Check it once on the real taskbar (light and dark), and check that a standing
 error pill looks the same as before.
+
+## Private directory deny entries (November, agent decision under the owner's autonomy grant)
+
+Real 1.2.1 migration failed because Python's mode 0o700 gives a protected list without the
+account itself, so files that an elevated step wrote were unreadable at medium integrity.
+`manager.private_directory` now creates new Windows folders atomically with an explicit
+protected list (SYSTEM, Administrators, OWNER RIGHTS, token user), and adds the token user's
+explicit grant to an existing folder.
+
+Three review rounds (Terra Max) then asked the code to prove effective access by parsing deny
+entries. Each round found a new gap: object and callback denies, CREATOR OWNER substitution on
+inheritance, logon and deny-only token groups, and canonical order around inherited denies.
+Rejected: modelling Windows access evaluation in SDDL text. It keeps growing and still cannot
+see future children. Chosen: no proof claim. Odicto's own new folders hold no deny entries; on
+an existing folder the grant is added in canonical order; a reader that is still denied
+reports "access denied" with the folder to check. Revisit only if a real install shows a deny
+entry on an Odicto folder; then use Windows `AccessCheck` on a probe file, not SDDL parsing.

@@ -82,10 +82,13 @@ transaction) come only from `manager.private_directory`; the source admin receip
 uses it too. On Windows a new directory is created atomically (`CreateDirectoryW`) with an
 explicit protected DACL: SYSTEM, Administrators, OWNER RIGHTS and the token user, inheriting
 nothing on any Python version. An existing directory gains one explicit inheritable grant
-for the token user, so files that an elevated process owns stay readable to the same
-account. A deny entry (D, OD or XD) for any SID in the token fails closed; a deny for a SID
-outside the token is kept. The elevated helper applies the same rules (raw SDDL) before it
-writes, and refuses approval by another account.
+for the token user (after leading explicit denies, before inherited entries), so files that
+an elevated process owns stay readable to the same account. The grant is not treated as
+proof of effective access: deny entries are not modelled (CREATOR OWNER substitution, logon
+and deny-only groups), and a reader that is still denied reports "access denied" with the
+folder to check. The elevated helper adds the same grant before it writes, and refuses
+approval by another account. Decision record: `docs/engineering-notes.md`, "Private
+directory deny entries".
 Application lifecycle, migration and admin commands bind the active release's
 verified dependencies after checking the Python ABI. They keep the same supervisor
 process and startup pipes. Installation, updates, rollback and metadata commands

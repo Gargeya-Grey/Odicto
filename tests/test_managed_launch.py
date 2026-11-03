@@ -313,21 +313,28 @@ class TestManagedChildProtocol(unittest.TestCase):
         # Windows queues every operation on a synchronous pipe behind a pending ReadFile.
         # numpy's OpenBLAS load seeks stdin, so a guard that blocks in os.read hung the
         # real managed owner inside `import recorder` until the 60 s startup timeout.
-        # A guard that reads in its thread is put at that read before the seek (`entered`, then a
-        # pause), so the old guard is red every run. The fixed guard never reads before data arrives.
+        # The lease thread must be observed entering its wait (a read in the old guard, the pipe
+        # poll in the fixed one), then the seek waits 1 s more, so the old guard is reliably red.
         bootstrap = textwrap.dedent("""
             import os, sys, threading, time
             sys.path.insert(0, sys.argv[1])
             import odicto
-            real, entered = os.read, threading.Event()
-            def observed(descriptor, size):
+            real_read, entered = os.read, threading.Event()
+            real_wait = getattr(odicto, "_wait_for_pipe_data", None)
+            def observed_read(descriptor, size):
                 if threading.current_thread() is not threading.main_thread():
                     entered.set()
-                return real(descriptor, size)
-            odicto.os.read = observed
+                return real_read(descriptor, size)
+            def observed_wait(descriptor):
+                entered.set()
+                return real_wait(descriptor)
+            odicto.os.read = observed_read
+            if real_wait is not None:
+                odicto._wait_for_pipe_data = observed_wait
             odicto._managed_startup_guard()
-            if entered.wait(1.0):
-                time.sleep(0.3)
+            if not entered.wait(5.0):
+                sys.exit(3)  # the lease thread never started waiting
+            time.sleep(1.0)
             try:
                 os.lseek(0, 0, 1)
             except OSError:

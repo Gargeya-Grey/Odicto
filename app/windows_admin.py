@@ -620,6 +620,9 @@ def _read_receipt(path: str) -> dict:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
+    except PermissionError:
+        return {"error": "this account cannot read the administrator step's receipt (access denied); "
+                         "check the permissions of %s" % os.path.dirname(path)}
     except (OSError, ValueError):
         return {}
 
@@ -634,13 +637,9 @@ def _receipt_directory(root: str) -> str:
     from pathlib import Path
     from tools.distribution.manager import private_directory
     path = os.path.join(tempfile.gettempdir(), "odicto-admin-" + os.urandom(16).hex())
-    existed = os.path.lexists(path)
-    try:
-        private_directory(Path(path))
-    except BaseException:
-        if not existed and os.path.isdir(path):  # remove only a folder this call made
-            shutil.rmtree(path, ignore_errors=True)
-        raise
+    # No cleanup on failure: the path may belong to another process (FileExistsError), and a
+    # folder this call made but could not finish is empty and private.
+    private_directory(Path(path))
     return path
 
 
