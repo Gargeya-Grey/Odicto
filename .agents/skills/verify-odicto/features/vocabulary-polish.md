@@ -11,11 +11,13 @@ work, and searching alone does not mark settings changed. No automatic polish ru
 Only the owner saves Setup and restarts because Save restarts their running instance.
 
 Owner journey: in Notepad select text containing a grammatical error and deliberate
-emphasis. Press F8. Confirm minimal edits replace the selection and preserve meaning,
-emotion and paragraphs. Repeat with no selection, Esc during processing, and a changed
-selection: no result should be inserted. Confirm raw and F7 dictation never run polish.
+emphasis. Press F8. Confirm the review card shows minimal edits and preserves meaning,
+emotion and paragraphs. Confirm the document is unchanged. Edit the result, press Copy,
+return to the document and paste manually. Dismiss must leave the clipboard unchanged.
+Repeat with no selection, Esc during processing, and a changed selection: no result
+should be inserted. Confirm raw and F7 dictation never run polish.
 Check behavior in the actual editor too: copy-based probes cannot prove field identity,
 and some editors copy a line when nothing is selected. Terminal targets are refused.
 Real recognition, editor selection behavior and editorial quality need owner confirmation.
 
-Hook-free regression: python -m unittest tests.test_personal_vocabulary tests.test_reliability tests.test_provider_transport. Full gate: tools/verify.ps1. Synthetic request tests prove routing and instructions, not provider compliance or microphone recognition.
+Hook-free regression: python -m unittest tests.test_personal_vocabulary tests.test_selection_polish tests.test_polish_result tests.test_polish_upgrade tests.test_provider_transport. Full gate: tools/verify.ps1. Synthetic request tests prove routing and instructions, not provider compliance or microphone recognition.

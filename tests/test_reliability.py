@@ -375,7 +375,7 @@ class TestReliability(unittest.TestCase):
 
     def test_status_rejects_stale_heartbeat_without_touching_microphone(self):
         import odicto
-        with tempfile.TemporaryDirectory() as directory, patch.object(odicto, "_repo_root", return_value=directory), patch.object(
+        with tempfile.TemporaryDirectory() as directory, patch.object(odicto, "_repo_root", return_value=directory), patch.object(odicto, "_data_root", return_value=directory), patch.object(
             odicto.platforms, "lock_is_held", return_value=False
         ), patch("sys.stdout", new_callable=io.StringIO) as output:
             with open(os.path.join(directory, "dictation.pid"), "w") as f:

@@ -26,6 +26,11 @@ import platforms
 def _repo_root() -> str:
     from platforms import base
 
+    return base.code_root()
+
+
+def _data_root() -> str:
+    from platforms import base
     return base.install_root()
 
 
@@ -54,6 +59,8 @@ def _elevated_exit(action: str, timeout=None):
     """
     import windows_admin
 
+    if os.environ.get("ODICTO_MANAGED_HOME"):
+        return None
     try:
         return windows_admin.run_if_needed(_repo_root(), action, timeout)
     except RuntimeError as error:
@@ -94,7 +101,7 @@ def cmd_stop(_args) -> int:
 
 
 def _stop_processes() -> int:
-    pid_file = os.path.join(_repo_root(), "dictation.pid")
+    pid_file = os.path.join(_data_root(), "dictation.pid")
     try:
         killed = platforms.kill_other_odicto_processes(pid_file)
     except (OSError, RuntimeError) as error:
@@ -119,9 +126,9 @@ def cmd_wait_ready(args) -> int:
     deadline = time.monotonic() + max(0.0, args.timeout)
     while True:
         try:
-            with open(os.path.join(_repo_root(), "dictation.pid"), encoding="ascii") as f:
+            with open(os.path.join(_data_root(), "dictation.pid"), encoding="ascii") as f:
                 pid = int(f.read().strip())
-            with open(os.path.join(_repo_root(), "dictation-health.json"), encoding="utf-8") as f:
+            with open(os.path.join(_data_root(), "dictation-health.json"), encoding="utf-8") as f:
                 health = json.load(f)
             mic = health.get("microphone") or {}
             age = time.time() - health["updated_at"]
@@ -151,7 +158,7 @@ def cmd_wait_ready(args) -> int:
 
 
 def cmd_status(_args) -> int:
-    pid_file = os.path.join(_repo_root(), "dictation.pid")
+    pid_file = os.path.join(_data_root(), "dictation.pid")
     pid = None
     if os.path.exists(pid_file):
         try:
@@ -173,7 +180,7 @@ def cmd_status(_args) -> int:
             print(f"  [{p.severity}] {p.code}: {p.message}")
     else:
         print("Environment: no known problems")
-    health_path = os.path.join(_repo_root(), "dictation-health.json")
+    health_path = os.path.join(_data_root(), "dictation-health.json")
     try:
         with open(health_path, encoding="utf-8") as f:
             health = json.load(f)
@@ -239,6 +246,12 @@ def cmd_version(_args) -> int:
 
 
 def cmd_autostart(_args) -> int:
+    if os.environ.get("ODICTO_MANAGED_HOME"):
+        from pathlib import Path
+        from managed_autostart import configure
+        configure(Path(os.environ["ODICTO_MANAGED_HOME"]), True)
+        print("Installed startup entry for the stable managed launcher.")
+        return 0
     main_py = _main_py()
     venv_py = _venv_python()
     if sys.platform == "darwin":
@@ -287,6 +300,12 @@ X-GNOME-Autostart-enabled=true
 
 
 def cmd_remove_autostart(_args) -> int:
+    if os.environ.get("ODICTO_MANAGED_HOME"):
+        from pathlib import Path
+        from managed_autostart import configure
+        configure(Path(os.environ["ODICTO_MANAGED_HOME"]), False)
+        print("Removed this managed installation's startup entry.")
+        return 0
     if sys.platform == "darwin":
         plist = os.path.expanduser("~/Library/LaunchAgents/com.odicto.plist")
         subprocess.run(["launchctl", "unload", plist], check=False)

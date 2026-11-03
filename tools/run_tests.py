@@ -41,7 +41,9 @@ GATE = {
     # AltGr and is_pressed_exclusive: 733. Windows discovers 764, macOS/Linux 740.
     # Plus 4 for the setup page keeping every API key on Save whatever the AI provider
     # is: 737.
-    "floor": 737,
+    # Vocabulary, explicit polish, upgrade safety, rootless X11 and managed updates
+    # add coverage on every platform; platform-specific definitions still differ.
+    "floor": 850,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

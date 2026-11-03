@@ -2,7 +2,7 @@
 # Zero-to-one installer for Odicto on macOS and Linux.
 # Windows users: use install.ps1.
 #
-# Flags: -Ollama   -Python <path|3.10|3.11|3.12>   -NoUv   -VenvOnly
+# Flags: -Ollama   -Python <path|3.10|3.11|3.12>   -NoUv   -VenvOnly   -SkipWhisper
 # A .venv that cannot run (copied from another machine, base Python removed) is renamed to
 # .venv-backup-<timestamp> and rebuilt. Nothing is deleted; .env and prompt.txt are untouched.
 set -euo pipefail
@@ -12,6 +12,7 @@ WITH_OLLAMA=0
 PYTHON_SPEC=""
 NO_UV=0
 VENV_ONLY=0
+SKIP_WHISPER=0
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
 WHISPER_MODEL="${WHISPER_MODEL:-tiny.en}"
 
@@ -24,6 +25,7 @@ while [ "$#" -gt 0 ]; do
       PYTHON_SPEC="$2"; shift ;;
     -NoUv|--no-uv) NO_UV=1 ;;
     -VenvOnly|--venv-only) VENV_ONLY=1 ;;
+    -SkipWhisper|--skip-whisper) SKIP_WHISPER=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
@@ -156,7 +158,7 @@ if [ "$PLATFORM" = linux ]; then
   done
   MISSING=""
   command -v xdotool >/dev/null 2>&1 || MISSING="$MISSING xdotool"
-  if ! command -v xclip >/dev/null 2>&1 && ! command -v xsel >/dev/null 2>&1 && ! command -v wl-copy >/dev/null 2>&1; then
+  if ! command -v xclip >/dev/null 2>&1 && ! command -v xsel >/dev/null 2>&1; then
     MISSING="$MISSING clipboard"
   fi
   if ! "$VENV_PY" -c 'import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library("portaudio") else 1)' 2>/dev/null; then
@@ -179,12 +181,22 @@ fi
 
 
 echo "==> Installing Python requirements"
-if [ -n "$UV" ]; then
-  "$UV" pip install --python "$VENV_PY" -r requirements.txt
+REQUIREMENTS_FILE="requirements.txt"
+if [ -f "tools/distribution/requirements.lock" ]; then
+  REQUIREMENTS_FILE="tools/distribution/requirements.lock"
+  if [ -n "$UV" ]; then
+    "$UV" pip sync --python "$VENV_PY" --require-hashes "$REQUIREMENTS_FILE"
+  else
+    "$VENV_PY" -m pip install --upgrade pip wheel setuptools
+    "$VENV_PY" -m pip install --require-hashes -r "$REQUIREMENTS_FILE"
+  fi
+elif [ -n "$UV" ]; then
+  "$UV" pip install --python "$VENV_PY" -r "$REQUIREMENTS_FILE"
 else
   "$VENV_PY" -m pip install --upgrade pip wheel setuptools
-  "$VENV_PY" -m pip install -r requirements.txt
+  "$VENV_PY" -m pip install -r "$REQUIREMENTS_FILE"
 fi
+
 
 echo "==> Preparing .env"
 if [ ! -f ".env" ]; then
@@ -210,8 +222,12 @@ else
   echo "    Ollama skipped. Pick Ollama in the setup page later if you want a local LLM; the model downloads on demand."
 fi
 
-echo "==> Pre-downloading Whisper model ($WHISPER_MODEL)"
-"$VENV_PY" -c "from faster_whisper import WhisperModel; WhisperModel('$WHISPER_MODEL', device='cpu', compute_type='int8')"
+if [ "$SKIP_WHISPER" = "0" ]; then
+  echo "==> Pre-downloading Whisper model ($WHISPER_MODEL)"
+  "$VENV_PY" -c "from faster_whisper import WhisperModel; WhisperModel('$WHISPER_MODEL', device='cpu', compute_type='int8')"
+else
+  echo "    Whisper download skipped (-SkipWhisper). The model downloads when local speech is first used."
+fi
 
 echo "==> Checking the runtime environment"
 PROBLEMS="$("$VENV_PY" -c "
@@ -230,6 +246,9 @@ fi
 
 echo
 echo "Install complete."
+if [ "$PLATFORM" = linux ]; then
+  echo "Linux: run as your normal desktop user in an X11 session. Wayland is not supported."
+fi
 echo "Next:"
 echo "  1. Run:  bash setup.sh   (pick provider + paste key)"
 echo "  2. Run:  bash start_dictation.sh   (or scripts/posix/run_debug.sh for a console log; grant permissions if asked)"

@@ -18,7 +18,7 @@ if os.environ.pop("ODICTO_SET_MKL_DISABLE_FAST_MM", None) is not None:
 
 import json
 import queue
-from paths import ROOT
+from paths import ROOT, DATA_ROOT
 import subprocess
 import sys
 import tempfile
@@ -69,7 +69,7 @@ class _TimestampWriter:
 
 
 def _session_log_path() -> str:
-    return os.path.join(str(ROOT), "dictation.log")
+    return os.path.join(str(DATA_ROOT), "dictation.log")
 
 
 def _trim_log(path: str) -> None:
@@ -343,7 +343,7 @@ class DictationApp:
             self.temp_dir, "dictation_recording.wav"
         )
         self.pid_file = os.path.join(
-            str(ROOT), "dictation.pid"
+            str(DATA_ROOT), "dictation.pid"
         )
 
         self.state: AppState = AppState.IDLE
@@ -432,7 +432,7 @@ class DictationApp:
         """Publish only lifecycle metadata; never audio, transcripts or credentials."""
         if not getattr(self, "_runtime_enabled", False) or not platforms.lock_is_held():
             return  # test instances and nonowners must never overwrite runtime evidence
-        path = os.path.join(str(ROOT), "dictation-health.json")
+        path = os.path.join(str(DATA_ROOT), "dictation-health.json")
         temporary = path + f".{os.getpid()}.tmp"
         while not self._closing.is_set():
             try:
@@ -870,6 +870,8 @@ class DictationApp:
         def primary_handler(event: object) -> bool:
             event_type = getattr(event, "event_type", None)
             if event_type == platforms.KEY_DOWN:
+                if self._hotkey_physically_held:
+                    return False
                 # Freeze the modifiers AND any override keys at the exact instant
                 # the key went down so mid-hold releases don't flip the mode.
                 snapshot = [
@@ -887,8 +889,6 @@ class DictationApp:
                 match = self._match_active_chord(snapshot)
                 if match is None:
                     return True  # no chord — allow normal typing (e.g. bare `)
-                if self._hotkey_physically_held:
-                    return False  # key-repeat while held
                 self._hotkey_physically_held = True
                 self._dispatch_hotkey("primary", snapshot, match)
                 return False  # suppress so ` does not leak into the focused app
@@ -905,13 +905,16 @@ class DictationApp:
         # Only one process may do this — guarded by _INSTANCE_LOCK_HELD above.
         platforms.hook_key(primary, primary_handler, suppress=True)
 
-        polish_key = Config.POLISH_HOTKEY
+        polish_key = Config.effective_polish_hotkey()
         if polish_key:
             polish_mods, polish_primary = parse_hold_hotkey(polish_key)
             held = [False]
             def polish_handler(event):
                 if getattr(event, "event_type", None) == platforms.KEY_DOWN:
-                    if not all(platforms.is_pressed(mod) for mod in polish_mods):
+                    if held[0]:
+                        return False
+                    actual_mods = {mod for mod in ("ctrl", "shift", "alt", "cmd") if platforms.is_pressed(mod)}
+                    if actual_mods != set(polish_mods):
                         return True
                     if not held[0]:
                         held[0] = True
@@ -1470,25 +1473,17 @@ class DictationApp:
             if result == text:
                 self.last_status = "polish_unchanged"
                 return
-            if platforms.foreground_window_id() != target:
-                self.last_status = "polish_target"
-                return
-            if get_selected_text(timeout=0.35) != text:
-                self.last_status = "polish_target"
-                return
+            # Copy-based probes do not prove control identity or selection boundaries.
+            # Keep the document untouched and let the user review/copy explicitly.
             with self._lifecycle_lock:
                 if self._closing.is_set():
                     return
                 with self.state_lock:
                     if cycle.cancel.is_set() or self._cycle is not cycle:
                         raise _Abort("cancelled")
-                    if platforms.foreground_window_id() != target:
-                        self.last_status = "polish_target"
-                        return
-                    cycle.pasting = True
-                with delivery_callback(self._on_paste_delivered):
-                    paste_text(result)
-                self.last_status = "success"
+                if self.indicator is not None:
+                    self.indicator.show_polish_result(text, result)
+                self.last_status = "polish_ready"
         except _Abort as stop:
             self.last_status = stop.status
         except Exception as error:
@@ -1870,6 +1865,13 @@ if __name__ == "__main__":
 
     # STRICT single-instance: take lock, sweep orphans, then construct the app
     # (which binds a system-wide keyboard hook). Never skip this gate.
+    from platforms.preflight import environment_problems
+    startup_blockers = [problem for problem in environment_problems() if problem.severity == "error"]
+    if startup_blockers:
+        for problem in startup_blockers:
+            print(f"Cannot start Odicto [{problem.code}]: {problem.message}", file=sys.stderr, flush=True)
+        sys.exit(2)
+
     _pid_path = os.path.join(_install_root(), "dictation.pid")
     if not claim_install(_pid_path):
         sys.exit(2)

@@ -26,6 +26,7 @@ param(
     [switch]$SkipOllama,  # deprecated no-op: Ollama is now skipped by default
     [string]$OllamaModel = "qwen2.5:1.5b-instruct",
     [string]$WhisperModel = "tiny.en",
+    [switch]$SkipWhisper, # defer the optional model warmup (cloud-only installs and CI)
     [string]$Python,      # an installed Python to use: path to python.exe, or 3.10 / 3.11 / 3.12
     [switch]$NoUv,        # use pip + venv instead of uv
     [switch]$NoShortcuts, # do not create the Start Menu shortcuts
@@ -150,13 +151,22 @@ if ($VenvOnly) {
 }
 
 Write-Step "Installing Python requirements"
+$releaseLock = Join-Path $PSScriptRoot 'tools\distribution\requirements.lock'
 if ($uvPath) {
-    & $uvPath pip install --python $venvPy -r requirements.txt | Out-Host
+    if (Test-Path -LiteralPath $releaseLock) {
+        & $uvPath pip sync --python $venvPy --require-hashes $releaseLock | Out-Host
+    } else {
+        & $uvPath pip install --python $venvPy -r requirements.txt | Out-Host
+    }
     Assert-Native "uv pip install -r requirements.txt"
 } else {
     & $venvPy -m pip install --upgrade pip wheel setuptools | Out-Host
     Assert-Native "pip install --upgrade pip wheel setuptools"
-    & $venvPy -m pip install -r requirements.txt | Out-Host
+    if (Test-Path -LiteralPath $releaseLock) {
+        & $venvPy -m pip install --require-hashes -r $releaseLock | Out-Host
+    } else {
+        & $venvPy -m pip install -r requirements.txt | Out-Host
+    }
     Assert-Native "pip install -r requirements.txt"
 }
 Write-Ok "requirements.txt installed"
@@ -219,6 +229,7 @@ if ($Ollama) {
 }
 
 # --- Warm Whisper weights ---
+if (-not $SkipWhisper) {
 Write-Step "Pre-downloading Whisper model ($WhisperModel)"
 & $venvPy -c @"
 from faster_whisper import WhisperModel
@@ -228,6 +239,9 @@ print('Whisper model ready.')
 "@
 Assert-Native "Whisper model download"
 Write-Ok "Whisper model cached"
+} else {
+    Write-Ok "Whisper warmup skipped; weights download when local transcription first needs them"
+}
 
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  Install complete" -ForegroundColor Green

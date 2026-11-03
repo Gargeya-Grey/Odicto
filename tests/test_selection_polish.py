@@ -21,6 +21,7 @@ class TestSelectionPolish(unittest.TestCase):
         app = app_fixture()
         app._cycle = _Cycle(1)
         app._cycle_seq = 1
+        app.indicator = MagicMock()
         app.refiner = MagicMock()
         app.refiner.last_notice = ""
         app.refiner.polish.return_value = "These words are corrected."
@@ -49,13 +50,14 @@ class TestSelectionPolish(unittest.TestCase):
         paste.assert_not_called()
         self.assertEqual(app.state, AppState.IDLE)
 
-    def test_selected_text_is_polished_and_replaced_only_while_still_selected(self):
+    def test_selected_text_is_polished_for_explicit_review_without_input(self):
         app = self.fixture()
         with patch("main.get_selected_text", return_value="These words is wrong.") as selection, patch("main.paste_text") as paste:
             app._polish_selection()
         app.refiner.polish.assert_called_once_with("These words is wrong.")
-        self.assertGreaterEqual(selection.call_count, 2)
-        paste.assert_called_once_with("These words are corrected.")
+        selection.assert_called_once_with(timeout=0.35)
+        paste.assert_not_called()
+        app.indicator.show_polish_result.assert_called_once_with("These words is wrong.", "These words are corrected.")
         app.recorder.start.assert_not_called()
         app.transcriber.transcribe.assert_not_called()
         self.assertEqual(app.state, AppState.IDLE)
@@ -74,7 +76,16 @@ class TestSelectionPolish(unittest.TestCase):
             app._polish_selection()
         app.refiner.polish.assert_called_once_with("original selection")
         paste.assert_not_called()
-        self.assertEqual(app.last_status, "polish_target")
+        self.assertEqual(app.last_status, "polish_ready")
+
+    def test_copy_line_or_same_text_in_another_field_can_never_insert(self):
+        for copied in ("the current unselected line", "identical text in two fields"):
+            with self.subTest(copied=copied):
+                app = self.fixture()
+                with patch("main.get_selected_text", return_value=copied), patch("main.paste_text") as paste:
+                    app._polish_selection()
+                paste.assert_not_called()
+                app.indicator.show_polish_result.assert_called_once_with(copied, "These words are corrected.")
 
     def test_terminal_selection_is_not_polished_or_typed(self):
         app = self.fixture()

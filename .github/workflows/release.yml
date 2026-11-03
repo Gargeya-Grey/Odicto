@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release
@@ -28,6 +29,13 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require all platform install/test jobs for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release/check_platform_gate.py --repository $env:GITHUB_REPOSITORY --sha $env:GITHUB_SHA --output out/platform-gate.json
+          if ($LASTEXITCODE -ne 0) { throw 'Required platform evidence is missing or failed' }
 
       - name: Read version and refuse an existing tag
         id: version
@@ -68,7 +76,7 @@ jobs:
       # The setup-page JS syntax gate needs node; the skip allow-list refuses a skip.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Run the test gate
         env:
@@ -76,7 +84,7 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           if ($LASTEXITCODE -ne 0) { throw 'uv venv failed' }
-          uv pip install --python .venv -r requirements.txt
+          uv pip sync --python .venv --require-hashes tools/distribution/requirements.lock
           if ($LASTEXITCODE -ne 0) { throw 'dependency install failed' }
           .venv\Scripts\python.exe tools/run_tests.py
           if ($LASTEXITCODE -ne 0) { throw 'test gate failed' }
@@ -101,7 +109,7 @@ jobs:
           $name = '${{ steps.package.outputs.name }}'
           $flags = @()
           if ('${{ inputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
-          gh release create $tag "out/$name" "out/$name.sha256" `
+          gh release create $tag "out/$name" "out/$name.sha256" "out/platform-gate.json" `
             --target $env:GITHUB_SHA --title "Odicto $tag" `
             --notes-file out/notes.md --generate-notes @flags
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }

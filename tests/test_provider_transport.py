@@ -1,6 +1,7 @@
 """Shared HTTP pools, request budgets, polish sizing and prewarm. No network."""
 import contextlib
 import io
+import itertools
 import threading
 import time
 import unittest
@@ -162,10 +163,18 @@ class TestSpeechTransport(unittest.TestCase):
         try:
             with patch.object(refiner, "google_genai", SimpleNamespace(Client=factory)):
                 ai = refiner._GeminiClient("synthetic-key-4", "m")
-            with self.assertRaises(RuntimeError):
+            # The SDK subtracts elapsed monotonic time from its request budget.
+            with patch("time.monotonic", return_value=1000.0), self.assertRaises(RuntimeError):
                 ai.create_interaction("q", 10, system_instruction="s", timeout=7.0)
             self.assertEqual(len(seen), 1, "SDK retried the AI request")
             self.assertEqual(seen[0]["read"], 7.0)
+            ticks = itertools.count(1000.0, 0.001)
+            with patch("time.monotonic", side_effect=lambda: next(ticks)), self.assertRaises(RuntimeError):
+                ai.create_interaction("q", 10, system_instruction="s", timeout=7.0)
+            self.assertEqual(len(seen), 2, "Each call must make only one attempt")
+            self.assertGreater(seen[1]["read"], 0)
+            self.assertLessEqual(seen[1]["read"], 7.0)
+
         finally:
             for client in clients:
                 client.close()
@@ -612,7 +621,7 @@ class TestPolishSizing(unittest.TestCase):
         r = refiner_fixture()
         text = "word " * 200
         with patch.object(Config, "POLISH_MAX_CHARS", 0), patch.object(Config, "LLM_DEADLINE_SECONDS", 30.0):
-            self.assertEqual(r.polish(text), "Hello world.")
+            self.assertEqual(r.polish(text), "Hello world. ")
         _assert_full_timeout(self, r.client.chat.completions.create.call_args.kwargs["timeout"], read=5.0)
 
     def test_polish_waits_scaled_time_not_two_seconds(self):

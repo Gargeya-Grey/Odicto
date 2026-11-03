@@ -83,8 +83,9 @@ class StatusRouteTests(_ServerCase):
         self.assertEqual(payload["service"], "odicto-setup")
         self.assertEqual(payload["version"], "9.9.9")
         self.assertEqual(
-            set(payload), {"service", "version", "running", "ready", "state", "microphone", "admin"}
+            set(payload), {"service", "version", "running", "ready", "state", "microphone", "admin", "install_id"}
         )
+        self.assertEqual(payload["install_id"], setup_web._install_id())
 
     def test_reads_check_the_host_header(self) -> None:
         for path in ("/status", "/", "/assets/fonts/InstrumentSans-VF.ttf"):
@@ -288,6 +289,7 @@ class RuntimeStatusTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.patches = [
             mock.patch.object(setup_web, "ROOT", Path(self.tmp.name)),
+            mock.patch.object(setup_web, "DATA_ROOT", Path(self.tmp.name)),
             mock.patch.object(setup_web, "_admin_mode_state", lambda: (True, False)),
         ]
         for p in self.patches:

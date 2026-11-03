@@ -9,6 +9,7 @@ a probe that raises is skipped, the others still report.
 from __future__ import annotations
 
 import os
+import importlib.util
 import shutil
 import sys
 from dataclasses import dataclass
@@ -23,16 +24,21 @@ class Problem:
 
 # ---- Linux probes: each returns a list of Problems --------------------------
 
-def _linux_root() -> list[Problem]:
-    if os.geteuid() == 0:
+def _linux_x11() -> list[Problem]:
+    if os.environ.get("DISPLAY"):
         return []
     return [Problem(
-        "error", "linux_not_root",
-        "The Linux keyboard backend needs root (membership of the input group is not enough); "
-        "start Odicto as root with the session variables kept, for example "
-        "'sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,"
-        "PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS .venv/bin/python main.py'.",
+        "error", "linux_missing_display",
+        "No X11 desktop session is available; log into an X11 session and launch Odicto "
+        "as your normal desktop user, without sudo.",
     )]
+
+
+def _linux_xlib() -> list[Problem]:
+    if importlib.util.find_spec("Xlib") is not None:
+        return []
+    return [Problem("error", "linux_missing_xlib",
+                    "python-xlib is missing; rerun the Odicto installer.")]
 
 
 def _linux_root_env() -> list[Problem]:
@@ -53,19 +59,19 @@ def _linux_wayland() -> list[Problem]:
     if env.get("XDG_SESSION_TYPE", "").lower() != "wayland" and not env.get("WAYLAND_DISPLAY"):
         return []
     return [Problem(
-        "warning", "wayland_session",
-        "Wayland session: HUD placement, terminal detection and synthetic paste are limited and "
-        "the clipboard needs wl-clipboard; an X11 session is the reliable target.",
+        "error", "wayland_session",
+        "Wayland is not supported by Odicto's X11 global input backend. "
+        "Choose an X11 desktop session at login before starting Odicto.",
     )]
 
 
 def _linux_clipboard() -> list[Problem]:
-    if any(shutil.which(tool) for tool in ("xclip", "xsel", "wl-copy")):
+    if any(shutil.which(tool) for tool in ("xclip", "xsel")):
         return []
     return [Problem(
         "error", "linux_missing_clipboard_tool",
-        "No clipboard tool found; install xclip (X11) or wl-clipboard (Wayland), "
-        "for example 'sudo apt install xclip wl-clipboard'.",
+        "No X11 clipboard tool found; install xclip or xsel, "
+        "for example 'sudo apt install xclip'.",
     )]
 
 
@@ -73,9 +79,9 @@ def _linux_xdotool() -> list[Problem]:
     if shutil.which("xdotool"):
         return []
     return [Problem(
-        "warning", "linux_missing_xdotool",
-        "xdotool is missing, so the focused window cannot be detected (terminal typing and paste "
-        "fall back to defaults); install it, for example 'sudo apt install xdotool'.",
+        "error", "linux_missing_xdotool",
+        "xdotool is missing, so text insertion and focused-window checks cannot work; "
+        "install it, for example 'sudo apt install xdotool'.",
     )]
 
 
@@ -131,7 +137,7 @@ def _macos_input_monitoring() -> list[Problem]:
     )]
 
 
-_LINUX_PROBES = (_linux_root, _linux_root_env, _linux_wayland, _linux_clipboard,
+_LINUX_PROBES = (_linux_x11, _linux_xlib, _linux_root_env, _linux_wayland, _linux_clipboard,
                  _linux_xdotool, _linux_portaudio)
 _MACOS_PROBES = (_macos_accessibility, _macos_input_monitoring)
 

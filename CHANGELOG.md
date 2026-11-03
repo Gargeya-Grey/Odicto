@@ -11,15 +11,19 @@ section as the release notes and refuses a version that has no section.
 - Personal vocabulary on Speech for exact names, brands and technical terms. Gemini receives up to 100 terms; Groq and local Whisper receive whole spelling hints within a conservative UTF-8 budget. Polish also receives the preferred spellings.
 - On-demand selection polish. Select text in an editor and press F8, or configure a different shortcut. Minimal editing instructions preserve meaning, emotion, voice, deliberate emphasis, language and paragraph breaks.
 - A dedicated Polish page with the shared key recorder, keycap display and Disable control. Its searchable model picker supports an independent model choice or a custom model ID using the AI provider's saved key.
+- A managed installer with bundled Python provisioning, hash-locked dependencies, checksum-verified releases, preserved settings, staged automatic updates and rollback. No Node or system Python is required.
+- Fresh-install and update CI on native Windows and macOS ARM/Intel runners, plus Ubuntu and a separate Ubuntu 26.10 QEMU guest. Publication requires every platform job at the exact main commit.
 
 ### Changed
 
 - Raw and live transcription no longer run an automatic polish call, including installations with the legacy `POLISH_DICTATION=true` setting. Polish runs only when explicitly requested.
-- Selection polish checks the foreground target and selected text again before replacement. Cancellation, failed requests and changed selections leave the original text untouched. Terminal targets are skipped.
+- Selection polish leaves the original document untouched and shows the original and polished text in a review window with explicit Copy and Dismiss controls. Cancellation and failed requests never insert text. Terminal targets are skipped.
+- Linux X11 hotkeys use a rootless server-grab backend. Unusable desktop sessions are rejected before claiming the instance lock.
 
 ### Verification limits
 
 - Window and copy-based selection checks cannot establish field identity in every editor. Real microphone, global-hook and editor journeys require device verification; automated and offline UI checks do not establish that acceptance.
+- Wayland remains unsupported. Managed Windows admin mode is unavailable. Exact hosted macOS builds can lag Apple's latest patch; runner metadata is retained with each test result.
 
 ## [1.1.1] - 2026-10-14
 

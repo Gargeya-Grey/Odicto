@@ -50,8 +50,9 @@ docs/               Architecture, engineering notes, and research
 The root keeps the README, dependency list, installers, settings templates, and small
 `main.py`, `odicto.py`, and `start_dictation.*` launchers. Existing startup shortcuts can
 continue to use those entry points. Private `.env` and `prompt.txt`, and ignored runtime
-logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
-root independently of the working directory.
+logs, PID, and lock files belong at `DATA_ROOT`. Source installs use the install
+root; managed versions share a stable data directory outside release folders.
+`ROOT` always identifies the current release's code and assets.
 
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.
@@ -234,7 +235,7 @@ save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page
 | `app/odicto.py` | Lifecycle CLI (`setup`/`start`/`stop`/`status`/`config`/`autostart`) | `main()` |
 | `app/app_state.py` | The shared `AppState` enum, in its own module so `main` and `indicator` compare the *same* class | `AppState` |
 | `app/platforms/` | Per-OS keyboard, clipboard, window, lock and process behaviour | see §3.1 |
-| `app/paths.py` | Canonical install root; keeps settings and runtime paths stable after moves | `ROOT` |
+| `app/paths.py` | Code root and stable private-data root | `ROOT`, `DATA_ROOT` |
 | `app/windows_admin.py` | Admin mode: the switch (`set_admin_mode`), task start and quit-event stop with no UAC, helper fallback; stdlib only at import | `run_if_needed`, `set_admin_mode`, `admin_mode_enabled`, `request_quit`, `start_quit_listener` |
 
 ### 3.1 The platform layer
@@ -386,9 +387,9 @@ must not be reintroduced.
 Selection polish uses `POLISH_HOTKEY` (default F8), without recording. Raw and live
 transcription never calls polish. `POLISH_DICTATION` is retained as an ignored legacy key.
 `_start_polish_selection` reserves PROCESSING, then a worker copies the selection, calls
-`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), and checks foreground
-identity and exact selection text again before insertion. Empty selections, terminals,
-unknown targets, changed selections, cancellation and failures do not paste. The lifecycle
+`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), and shows a review window with explicit Copy and Dismiss controls. Copy-based probes
+cannot establish field identity, so selection polish never injects input into the editor.
+Empty selections, terminals, unknown targets, cancellation and failures do not show a result. The lifecycle
 and cycle gates reject late results. The refiner has no AI memory or image context here.
 Foreground identity is HWND on Windows, active window ID on X11 and frontmost application
 PID on macOS. Copy-based checks cannot prove field identity or detect every selection move.
@@ -562,7 +563,7 @@ supplied it**.
 |---|---|---|---|---|---|
 | Windows | `keyboard` lib + Win32 `SendInput` | `pyperclip`, `WM_COPY` | window class + process image name | named mutex + `msvcrt` lockfile | `taskkill`, then `tasklist` until gone |
 | macOS | `pynput` with `darwin_intercept` | `pyperclip` | `NSWorkspace` bundle id | `fcntl.flock` | `psutil`, then `os.kill` |
-| Linux | `keyboard` lib with suppression | `pyperclip` / `xclip` | `xdotool` / `xprop` (X11 only; Wayland returns False) | `fcntl.flock` | `psutil`, then `os.killpg` |
+| Linux | rootless Python Xlib grabs with event replay | `pyperclip` / `xclip` | `xdotool` / `xprop` (X11 only; Wayland rejected at preflight) | `fcntl.flock` | `psutil`, then `os.killpg` |
 
 Subprocesses spawned: `tasklist` / `taskkill` (Windows), `xdotool` / `xprop` (Linux), `ollama
 serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scripts.
@@ -599,7 +600,7 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 9. **Terminal targets are typed into, not pasted into.** No paste chord is dependable there and
    `Ctrl+C` is SIGINT.
 10. **Session-scoped runtime files** (`dictation.lock`, `dictation.pid`, `dictation.log`) live in
-    the install root and are gitignored.
+    `DATA_ROOT` and are gitignored. The code root stays release-specific.
 
 ## 14. Deliberate trade-offs (read before "improving" this)
 

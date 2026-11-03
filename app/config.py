@@ -3,11 +3,11 @@ import re
 import unicodedata
 from typing import Literal, Tuple
 from dotenv import load_dotenv
-from paths import ROOT
+from paths import ROOT, DATA_ROOT
 
 # Load environment variables from .env file (override system env vars so the
 # project's .env takes precedence over Windows user/system environment).
-load_dotenv(ROOT / ".env", override=True)
+load_dotenv(DATA_ROOT / ".env", override=True)
 
 
 def _env_bool(name: str, default: str = "true") -> bool:
@@ -189,6 +189,7 @@ def _present(key: str) -> bool:
 # once here because load_dotenv(ROOT / ".env", override=True) above has already merged .env
 # into os.environ.
 _PRESENT_AT_IMPORT: frozenset = frozenset(k for k in ENV_DEFAULTS if _present(k))
+_POLISH_HOTKEY_EXPLICIT_AT_IMPORT = "POLISH_HOTKEY" in os.environ
 
 # Import-time snapshot of resolved class attributes, filled right after the
 # Config class body (see below). Resolvers treat "attribute differs from its
@@ -285,7 +286,7 @@ PROMPT_EXAMPLE_NAME = "prompt.txt.example"
 
 
 def _prompt_dir() -> str:
-    return str(ROOT)
+    return str(DATA_ROOT)
 
 
 def _read_utf8_prompt(path: str) -> str:
@@ -301,7 +302,10 @@ def prompt_live_path() -> str:
 
 
 def prompt_example_path() -> str:
-    return os.path.join(_prompt_dir(), PROMPT_EXAMPLE_NAME)
+    candidate = os.path.join(_prompt_dir(), PROMPT_EXAMPLE_NAME)
+    if os.path.isfile(candidate) or DATA_ROOT == ROOT:
+        return candidate
+    return os.path.join(str(ROOT), PROMPT_EXAMPLE_NAME)
 
 
 def _sanitize_model_id(raw: str) -> str:
@@ -896,6 +900,29 @@ class Config:
         if primary in reserved_keys:
             raise ValueError("Polish shortcut must use a different primary key from other shortcuts")
 
+    @staticmethod
+    def resolve_polish_hotkey(value, *reserved, explicit=True):
+        try:
+            Config.validate_polish_hotkey(value, *reserved)
+        except ValueError:
+            if explicit:
+                raise
+            return ""
+        return value
+
+    @classmethod
+    def effective_polish_hotkey(cls):
+        explicit = (_POLISH_HOTKEY_EXPLICIT_AT_IMPORT or
+                    cls.POLISH_HOTKEY != _IMPORT_SNAPSHOT.get("POLISH_HOTKEY", cls.POLISH_HOTKEY))
+        resolved = cls.resolve_polish_hotkey(cls.POLISH_HOTKEY, cls.HOTKEY,
+            cls.LIVE_HOTKEY, cls.RESET_CONTEXT_HOTKEY, cls.CANCEL_HOTKEY,
+            *cls.CTRL_KEEP_CONTEXT_KEYS, explicit=explicit)
+        if cls.POLISH_HOTKEY and not resolved:
+            warning = "POLISH_HOTKEY default conflicts with an existing shortcut; selection polish disabled."
+            if warning not in cls.CONFIG_WARNINGS:
+                _warn_config(warning)
+        return resolved
+
     @classmethod
     def speech_vocabulary_prompt(cls) -> str:
         """Whole spelling hints within Whisper's conservative UTF-8 budget."""
@@ -1194,7 +1221,7 @@ class Config:
         )
         add("AI", "Groq chat model", cls.GROQ_MODEL, _source_of("GROQ_MODEL"))
         add("AI", "Clipboard image", cls.AI_CLIPBOARD_IMAGE, _source_of("AI_CLIPBOARD_IMAGE"))
-        add("Polish", "Selection shortcut", cls.POLISH_HOTKEY or "(disabled)", _source_of("POLISH_HOTKEY"))
+        add("Polish", "Selection shortcut", cls.effective_polish_hotkey() or "(disabled)", _source_of("POLISH_HOTKEY"))
         add("Polish", "Polish model", cls.POLISH_MODEL, _source_of("POLISH_MODEL"))
         add("Speech to text", "Groq STT model", cls.GROQ_STT_MODEL, _source_of("GROQ_STT_MODEL"))
         add(
@@ -1373,8 +1400,7 @@ class Config:
                     f"AI_MODIFIER '{cls.AI_MODIFIER}' must be distinct from HOTKEY parts "
                     f"({cls.HOTKEY})"
                 )
-        cls.validate_polish_hotkey(cls.POLISH_HOTKEY, cls.HOTKEY,
-                                   cls.LIVE_HOTKEY, cls.RESET_CONTEXT_HOTKEY, cls.CANCEL_HOTKEY)
+        cls.effective_polish_hotkey()
         live_key = (cls.LIVE_HOTKEY or "").split("+")[-1].strip()
         if live_key:
             if live_key == dict_primary:
@@ -1402,6 +1428,7 @@ _IMPORT_SNAPSHOT.update(
     {
         name: getattr(Config, name)
         for name in (
+            "POLISH_HOTKEY",
             "GROQ_MODEL",
             "LLM_MODEL",
             "OLLAMA_MODEL",
@@ -1426,7 +1453,7 @@ def load_env_file_keys() -> dict:
         from dotenv import dotenv_values
     except Exception:  # pragma: no cover
         return {}
-    path = os.path.join(str(ROOT), ".env")
+    path = os.path.join(str(DATA_ROOT), ".env")
     if not os.path.exists(path):
         return {}
     try:

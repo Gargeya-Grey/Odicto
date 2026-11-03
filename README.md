@@ -57,7 +57,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 |----|--------|
 | **Windows 10 / 11** | Supported and tested |
 | **macOS 12+** | Implemented, not yet tested by the author (Accessibility + Input Monitoring permissions required) |
-| **Linux (X11)** | Implemented, not yet tested by the author. Works on X11 only when run as **root** (the `keyboard` backend needs euid 0; `input` group membership is not enough). Wayland is limited. |
+| **Linux (X11)** | Rootless X11 backend. Native dependencies and a desktop X11 session are required. CI exercises shortcut suppression on an isolated X server. Wayland is unsupported. |
 
 Odicto has been tested on Windows only. If you try it on macOS or Linux, please open an issue with what worked and what did not.
 
@@ -69,24 +69,34 @@ Notes:
   avoid a ~1GB CUDA context at login. Larger models still try CUDA first.
   Set `WHISPER_DEVICE=cuda` to keep the model in GPU memory from startup
   and warm it so the first hotkey is not waiting on CUDA.
-- **Linux Wayland is limited.** HUD placement, terminal-window detection and
-  synthetic paste/typing can fail or fall back to defaults, and the clipboard
-  needs `wl-clipboard`. Use an X11 session for reliable behavior.
-- **Linux needs root.** The `keyboard` library only works with effective uid 0.
-  A non-root backend is not available yet. When you run as root, keep your
-  session environment or Qt, audio and the clipboard break:
-  `sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS .venv/bin/python main.py`
-  (installing is different: never run `install.sh` with sudo).
+- **Linux uses X11 as your desktop user.** Server-side key grabs suppress the
+  configured shortcuts while unrelated keys are replayed. Root and membership
+  in the `input` group are unnecessary. Wayland sessions fail preflight with an
+  explicit message; Xwayland does not provide global input.
 - **Python 3.10 to 3.12.** The installers reuse an installed Python 3.12, 3.11 or 3.10
   (highest first). uv fetches 3.12 only when none is installed. Python 3.13+ is refused
   because `numpy<2` has no wheels. `.venv` is tied to the machine and Python that made it;
   see [Moving machines or removing Python](#moving-machines-or-removing-python).
 - `odicto.py status` lists known environment problems (missing Linux
-  packages, Wayland, root, macOS permissions) with the fix for each.
+  packages, desktop session and macOS permissions) with the fix for each.
 
 ---
 
 ## Quick start
+
+### Managed installation and updates
+
+The managed installer supplies Python, installs a checksum-verified release with
+hash-locked dependencies, and creates an `odicto` command. It checks for updates
+before launch, stages them separately, preserves settings, and supports rollback.
+It does not require Node, npm or Git. See the [managed installation guide](tools/distribution/README.md)
+for bootstrap commands and update controls. Existing source installs remain separate.
+
+The platform release gate requires fresh installation, Setup HTTP, native Qt,
+the full test suite, and staged update/rollback checks on Windows, macOS ARM/Intel,
+and Ubuntu. A separate QEMU guest runs the current Ubuntu release. These checks
+record the actual OS builds and do not establish physical microphone, macOS
+permission-grant, or Wayland support.
 
 ### Windows
 
@@ -125,8 +135,7 @@ git clone https://github.com/Gargeya-Grey/Odicto.git
 cd Odicto
 bash install.sh        # as your normal user; it prints the sudo apt/dnf/pacman/zypper command to run
 bash setup.sh
-# The keyboard backend needs root. Keep your session variables:
-sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_RUNTIME_DIR,WAYLAND_DISPLAY,PULSE_SERVER,DBUS_SESSION_BUS_ADDRESS bash scripts/posix/run_debug.sh
+bash scripts/posix/run_debug.sh   # normal desktop user, X11 session
 .venv/bin/python odicto.py status   # lists remaining problems
 ```
 
@@ -223,12 +232,11 @@ Permissions:
   as a normal program. Only this install's own task and Startup shortcut are changed.
 - **macOS**: grant Odicto **Accessibility** and **Input Monitoring** in
   System Settings → Privacy & Security (add your terminal or Python). Without
-  them the app starts but hotkeys do nothing; `odicto.py status` reports
+  them startup stops before installing hooks; `odicto.py status` reports
   `macos_accessibility` / `macos_input_monitoring`.
-- **Linux**: run as **root** (the `input` group is not enough) and pass the
-  session environment (see Supported platforms). X11 is the reliable target;
-  Wayland is limited and needs `wl-clipboard`. Install `libportaudio2`, a
-  clipboard tool (`xclip`/`xsel`/`wl-clipboard`) and `xdotool`.
+- **Linux**: run as your normal desktop user in an X11 session. Install
+  `libportaudio2`, a clipboard tool (`xclip`/`xsel`), `xdotool` and Qt's native
+  display libraries. The managed Ubuntu/Debian bootstrap installs missing packages.
 
 ### 1. Clone
 
@@ -654,8 +662,9 @@ The root keeps the README, dependency list, installers, settings templates, smal
 `main.py` and `odicto.py` launchers, and three entry points per platform: `start_dictation`,
 `setup` and `stop_dictation` (`.bat` on Windows, `.sh` on macOS and Linux). They are thin
 wrappers over `scripts/`. Existing startup shortcuts can continue to use `main.py`. Private `.env` and `prompt.txt`, and ignored runtime
-logs, PID, and lock files still belong at the install root. `app/paths.py` resolves that
-root independently of the working directory.
+logs, PID, and lock files belong at `DATA_ROOT`. Source installs use the install
+root; managed versions share a stable `data` directory outside release folders.
+`app/paths.py` resolves code and data independently of the working directory.
 
 Application modules keep their existing import names. The launchers and `tests/__init__.py`
 put `app/` on Python's import path; no installation or package build is required.
@@ -691,7 +700,7 @@ invariants not to break.
 | Symptom | Fix |
 |---------|-----|
 | No HUD on hotkey | Restart with `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
-| Hotkey does nothing | Wait until “Application ready”; check `HOTKEY` / `AI_HOTKEY` in `.env`; on macOS grant Accessibility/Input Monitoring; on Linux run as root (input group is not enough) and run `odicto.py status` |
+| Hotkey does nothing | Wait until “Application ready”; check shortcuts in Setup; grant macOS Accessibility/Input Monitoring; use an X11 desktop session on Linux; run `odicto.py status` |
 | Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
 | **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
 | Always raw, never AI | Hold **Shift** too (`Ctrl+Shift+\``). Log should say `Recording (AI refined)` |
@@ -707,7 +716,7 @@ invariants not to break.
 | CUDA errors | Set `WHISPER_DEVICE=cpu` in `.env` |
 | Import errors, or the launcher says `.venv ... cannot run` | Run the installer again; it repairs `.venv` (see [Moving machines or removing Python](#moving-machines-or-removing-python)) |
 | macOS hotkey/paste doesn't work | Grant **Accessibility** and **Input Monitoring**, then fully quit and restart Odicto |
-| Linux hotkey/paste doesn't work | Run as root with your session env preserved (the `input` group is not enough); on Wayland prefer X11; `odicto.py status` shows what is missing |
+| Linux hotkey/paste doesn't work | Run as your normal desktop user in an X11 session; `odicto.py status` shows missing dependencies; Wayland is unsupported |
 | Nothing appears in the terminal | Odicto types there instead of pasting; if your terminal isn't detected, add its window class or process name to `EXTRA_TERMINAL_APPS` |
 | Terminal pastes but never types | `TYPE_IN_TERMINAL=false` is set, or the window wasn't detected. On Linux X11 install `xdotool` or `xprop`; Wayland can't be detected |
 | Multi-line text ran as commands in the shell | Newlines are typed as-is, so each is **Enter**. Dictate a single line, or set `TYPE_IN_TERMINAL=false` to paste instead |
@@ -779,8 +788,8 @@ still has `POLISH_DICTATION=true`.
 
 Polish makes minimal grammar, spelling and structure repairs while preserving voice,
 emotion, deliberate emphasis, paragraph breaks and language. Esc cancels. Failure,
-timeout, an empty response or a changed window/selection leaves the original text alone.
-Keep the selection active until it finishes. Terminal targets are skipped. Copy-based
+timeout or an empty response leaves the original text alone. A review window shows the
+original and polished text with Copy and Dismiss. No automatic replacement is performed. Terminal targets are skipped. Copy-based
 selection checks depend on the editor; matching text cannot prove field identity.
 `POLISH_MAX_CHARS` defaults to 1200. Short requests wait up to two seconds; longer
 requests get a length-scaled wait bounded by `LLM_DEADLINE_SECONDS`.

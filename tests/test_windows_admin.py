@@ -761,7 +761,7 @@ class TestCliDelegation(unittest.TestCase):
 
     def test_wait_ready_never_asks_for_elevation(self):
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(self.cli, "_repo_root", return_value=directory), \
+                patch.object(self.cli, "_repo_root", return_value=directory), patch.object(self.cli, "_data_root", return_value=directory), \
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.cli.cmd_wait_ready(SimpleNamespace(timeout=0)), 1)
         self.admin.assert_not_called()
@@ -799,7 +799,7 @@ class TestWaitReadyForAnElevatedOwner(unittest.TestCase):
             owner.create_time.return_value = time.time() - 20
             owner.cmdline.return_value = [argv[0], argv[1].format(root=base.install_root())]
             owner.cwd.side_effect = psutil.AccessDenied(12345)
-            with patch.object(odicto, "_repo_root", return_value=directory), \
+            with patch.object(odicto, "_repo_root", return_value=directory), patch.object(odicto, "_data_root", return_value=directory), \
                     patch("psutil.Process", return_value=owner), \
                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 return odicto.cmd_wait_ready(SimpleNamespace(timeout=0))

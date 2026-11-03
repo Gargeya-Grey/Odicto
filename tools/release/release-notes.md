@@ -11,7 +11,17 @@ Stop Odicto with `stop_dictation.bat`. The setup page stops by itself when you c
 
 ### macOS / Linux
 
-Run `bash install.sh`, then `bash setup.sh` and `bash start_dictation.sh`. Stop with `bash stop_dictation.sh`. macOS asks for Accessibility and Input Monitoring permissions. Linux needs X11 and root for the global hotkey.
+Run `bash install.sh`, then `bash setup.sh` and `bash start_dictation.sh`. Stop with `bash stop_dictation.sh`. macOS asks for Accessibility and Input Monitoring permissions. Linux needs an X11 desktop session and runs as your normal user. Wayland is unsupported.
+
+### Managed updates
+
+For a new managed install, run `tools/distribution/bootstrap.ps1` on Windows or
+`bash tools/distribution/bootstrap.sh` on macOS/Ubuntu/Debian from the extracted ZIP.
+It supplies Python and creates an `odicto` command. Settings stay in a stable data
+directory. Updates are checked before launch, staged and verified separately, and
+activated when Odicto and Setup have released their locks. `odicto rollback`
+restores the previous ready version. See the bundled managed installation guide
+for commands, permissions and current limits. Existing source installs are separate.
 
 ### Your data
 

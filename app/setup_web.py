@@ -14,7 +14,7 @@ from __future__ import annotations
 import html
 import json
 import os
-from paths import ROOT
+from paths import ROOT, DATA_ROOT
 import re
 import subprocess
 import hmac
@@ -42,7 +42,7 @@ try:
 except Exception:  # pragma: no cover
     dotenv_values = None
 
-ENV_PATH = os.path.join(str(ROOT), ".env")
+ENV_PATH = os.path.join(str(DATA_ROOT), ".env")
 ENV_EXAMPLE_PATH = os.path.join(str(ROOT), ".env.example")
 
 _TOKEN_RE = re.compile(r"__[A-Z0-9_]+__")
@@ -312,13 +312,13 @@ def merge_env(updates: dict) -> None:
             key = stripped.split("=", 1)[0].strip()
             if key in cleaned:
                 val = cleaned[key]
-                if val:
+                if val or key == "POLISH_HOTKEY":
                     out.append(_format_env_assignment(key, val))
                 else:
                     # Intentional clear (user blanked the field): restore the pristine slot.
                     out.append(line)
                 seen.add(key)
-            elif key in stored and (stored[key] or "").strip():
+            elif key in stored and ((stored[key] or "").strip() or key == "POLISH_HOTKEY"):
                 # Unsubmitted this round (sentinel or hidden field): preserve.
                 out.append(_format_env_assignment(key, stored[key].strip()))
                 seen.add(key)
@@ -340,7 +340,7 @@ def merge_env(updates: dict) -> None:
 
     # Keys submitted this round whose line never existed in the template (defensive).
     for key in sorted(cleaned):
-        if key not in seen and cleaned[key]:
+        if key not in seen and (cleaned[key] or key == "POLISH_HOTKEY"):
             out.append(_format_env_assignment(key, cleaned[key]))
 
     text = "\n".join(out).rstrip() + "\n"
@@ -420,6 +420,11 @@ def restart_odicto() -> str:
     Setup itself is ``odicto.py setup`` and is not matched by the main.py killer,
     so this page stays up. Returns a short status line for the save banner.
     """
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        from platforms.preflight import environment_problems
+        blockers = [problem.message for problem in environment_problems() if problem.severity == "error"]
+        if blockers:
+            raise RuntimeError("Settings saved, but Odicto cannot start: " + " ".join(blockers))
     from windows_admin import run_if_needed
 
     # An opted-in install restarts through the elevated helper; a Medium process
@@ -435,7 +440,7 @@ def restart_odicto() -> str:
     import platforms
 
     root = str(ROOT)
-    pid_file = os.path.join(root, "dictation.pid")
+    pid_file = os.path.join(str(DATA_ROOT), "dictation.pid")
     try:
         platforms.kill_other_odicto_processes(pid_file)
     except Exception as e:
@@ -530,6 +535,8 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
     # Form initial values come from .env when set, otherwise from the single
     # built-in defaults table — never a second copy of a default literal.
     def env_or(key: str) -> str:
+        if key == "POLISH_HOTKEY" and key in current:
+            return (current[key] or "").strip()
         value = (current.get(key) or "").strip()
         return value if value else ENV_DEFAULTS[key]
 
@@ -541,6 +548,14 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         user had chosen it.
         """
         return (current.get(key) or "").strip()
+
+    polish_hotkey = env_raw("POLISH_HOTKEY")
+    if "POLISH_HOTKEY" not in current:
+        polish_hotkey = Config.resolve_polish_hotkey(
+            ENV_DEFAULTS["POLISH_HOTKEY"], env_or("HOTKEY"), env_or("LIVE_HOTKEY"),
+            env_or("RESET_CONTEXT_HOTKEY"), env_or("CANCEL_HOTKEY"),
+            *(part.strip() for part in env_or("CTRL_KEEP_CONTEXT_KEYS").split(",") if part.strip()),
+            explicit=False)
 
     provider = env_or("LLM_PROVIDER")
     meta_key = current.get("META_API_KEY", "")
@@ -720,7 +735,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__GROQ_KEY__": html.escape(current.get("GROQ_API_KEY", "")),
         "__GROQ_KEY_SAVED__": 'true' if current.get("GROQ_API_KEY") else 'false',
         "__GROQ_MODEL__": html.escape(env_or("GROQ_MODEL")),
-        "__POLISH_HOTKEY__": html.escape(env_or("POLISH_HOTKEY")),
+        "__POLISH_HOTKEY__": html.escape(polish_hotkey),
         "__POLISH_MODEL__": html.escape(env_raw("POLISH_MODEL")),
         "__POLISH_ON__": " selected" if env_or("POLISH_DICTATION") == "true" else "",
         "__POLISH_CHECKED__": " checked" if env_or("POLISH_DICTATION") == "true" else "",
@@ -774,6 +789,12 @@ i.type='hidden';i.name='_odicto_token';i.value=t;fm.appendChild(i);}});})();</sc
 _FONT_FILES = {"/assets/fonts/InstrumentSans-VF.ttf": "InstrumentSans-VF.ttf"}
 _HEALTH_FRESH_S = 30.0  # the owner rewrites dictation-health.json every few seconds
 _SERVICE_NAME = "odicto-setup"
+
+
+def _install_id():
+    from platforms.base import install_digest
+    return install_digest()
+
 SETUP_IDLE_EXIT_S = 30 * 60  # no request at all for this long: the page is gone
 SETUP_BYE_GRACE_S = 8.0  # a reload or Save says goodbye, then asks again within this
 # Each open page polls /status with its own id: every few seconds when visible, once
@@ -793,7 +814,7 @@ _SPAWN_BLOCKED_MESSAGE = "This setup page runs as administrator. Start Odicto wi
 
 def _admin_mode_state() -> tuple:
     """(available, enabled) for the Windows admin-windows switch; never raises."""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or os.environ.get("ODICTO_MANAGED_HOME"):
         return (False, False)
     try:
         import windows_admin
@@ -823,6 +844,7 @@ def runtime_status() -> dict:
     _, admin_enabled = _admin_mode_state()
     out = {
         "service": _SERVICE_NAME,
+        "install_id": _install_id(),
         "version": app_version(),
         "running": False,
         "ready": False,
@@ -831,7 +853,7 @@ def runtime_status() -> dict:
         "admin": admin_enabled,
     }
     try:
-        with open(os.path.join(str(ROOT), "dictation-health.json"), "r", encoding="utf-8") as handle:
+        with open(os.path.join(str(DATA_ROOT), "dictation-health.json"), "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
         return out
@@ -858,6 +880,8 @@ def runtime_status() -> dict:
 
 def set_admin_mode(enabled: bool) -> dict:
     """Turn the Windows admin-windows mode on or off; the helper asks UAC once."""
+    if os.environ.get("ODICTO_MANAGED_HOME"):
+        return {"ok": False, "enabled": False, "message": "Admin mode is not available for managed installs yet; source installations retain admin mode."}
     available, current = _admin_mode_state()
     if not available:
         return {"ok": False, "enabled": False, "message": "Admin windows mode is only available on Windows."}
@@ -1209,6 +1233,24 @@ class _Handler(BaseHTTPRequestHandler):
             if key in form:
                 updates[key] = form[key][0]
 
+        hotkey = updates.get("HOTKEY") or Config.HOTKEY
+        ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
+        try:
+            validate_hotkey_pair(hotkey, ai_hotkey)
+            current = read_env()
+            polish = updates.get("POLISH_HOTKEY", current.get("POLISH_HOTKEY", ENV_DEFAULTS["POLISH_HOTKEY"]))
+            resolved = Config.resolve_polish_hotkey(polish,
+                hotkey, updates.get("LIVE_HOTKEY", Config.LIVE_HOTKEY),
+                Config.RESET_CONTEXT_HOTKEY, Config.CANCEL_HOTKEY,
+                *Config.CTRL_KEEP_CONTEXT_KEYS,
+                explicit="POLISH_HOTKEY" in updates or "POLISH_HOTKEY" in current)
+            if polish != resolved:
+                updates["POLISH_HOTKEY"] = resolved
+        except Exception as e:
+            body = self._inject_token(_page(f"Hotkey invalid: {e}", "err"))
+            self._send(body)
+            return
+
         # prompt.txt is the only live prompt. Matching the shipped default
         # deletes it; any other textarea content writes the private file.
         prompt_body = updates.get("SYSTEM_PROMPT", "")
@@ -1224,18 +1266,6 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             updates["SYSTEM_PROMPT_FILE"] = ""
         updates["SYSTEM_PROMPT"] = ""
-
-        hotkey = updates.get("HOTKEY") or Config.HOTKEY
-        ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
-        try:
-            validate_hotkey_pair(hotkey, ai_hotkey)
-            Config.validate_polish_hotkey(updates.get("POLISH_HOTKEY", Config.POLISH_HOTKEY),
-                hotkey, updates.get("LIVE_HOTKEY", Config.LIVE_HOTKEY),
-                Config.RESET_CONTEXT_HOTKEY, Config.CANCEL_HOTKEY)
-        except Exception as e:
-            body = self._inject_token(_page(f"Hotkey invalid: {e}", "err"))
-            self._send(body)
-            return
 
         merge_env(updates)
         merged = read_env_raw()
@@ -1303,7 +1333,7 @@ class _SetupServer(ThreadingHTTPServer):
     see the first one instead of silently sharing its port.
     """
 
-    daemon_threads = True
+    daemon_threads = False
     allow_reuse_address = sys.platform != "win32"
 
     def server_bind(self) -> None:
@@ -1327,7 +1357,8 @@ def _existing_setup_url(port: int) -> str:
             conn.close()
     except (OSError, ValueError):
         return ""
-    if isinstance(payload, dict) and payload.get("service") == _SERVICE_NAME:
+    if (isinstance(payload, dict) and payload.get("service") == _SERVICE_NAME
+            and payload.get("install_id") == _install_id()):
         return f"http://127.0.0.1:{port}"
     return ""
 
@@ -1363,6 +1394,28 @@ def _watch_lifetime(
 
 
 def run_server(port: int = 8765, open_browser: bool = True) -> None:
+    if not os.environ.get("ODICTO_MANAGED_HOME"):
+        return _run_server(port, open_browser)
+    from state_lock import StateLease
+    lease = StateLease(DATA_ROOT / "setup.lock")
+    try:
+        lease.__enter__()
+    except OSError:
+        first = int(os.getenv("SETUP_PORT", str(port)))
+        for candidate in range(first, first + 10):
+            existing = _existing_setup_url(candidate)
+            if existing:
+                if open_browser:
+                    webbrowser.open(existing)
+                return
+        raise RuntimeError("This installation's Setup is busy; close its existing page before trying again")
+    try:
+        return _run_server(port, open_browser)
+    finally:
+        lease.__exit__(None, None, None)
+
+
+def _run_server(port: int = 8765, open_browser: bool = True) -> None:
     port = int(os.getenv("SETUP_PORT", str(port)))
     server = None
     for candidate in range(port, port + 10):

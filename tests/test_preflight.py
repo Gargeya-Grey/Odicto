@@ -20,7 +20,8 @@ def run_linux(euid=0, env=None, which=None, portaudio="libportaudio.so.2"):
             mock.patch.object(os, "geteuid", lambda: euid, create=True), \
             mock.patch.dict(os.environ, env, clear=True), \
             mock.patch.object(shutil, "which", lambda n: "/usr/bin/" + n if n in which else None), \
-            mock.patch.object(ctypes.util, "find_library", lambda n: portaudio):
+            mock.patch.object(ctypes.util, "find_library", lambda n: portaudio), \
+            mock.patch.object(preflight.importlib.util, "find_spec", return_value=object()):
         return preflight.environment_problems()
 
 
@@ -53,8 +54,8 @@ class LinuxTests(unittest.TestCase):
     def test_clean_root_session_has_no_problems(self):
         self.assertEqual(run_linux(), [])
 
-    def test_not_root_is_error(self):
-        self.assertEqual(codes(run_linux(euid=1000)).get("linux_not_root"), "error")
+    def test_normal_desktop_user_needs_no_root(self):
+        self.assertEqual(run_linux(euid=1000), [])
 
     def test_root_without_session_env_warns(self):
         found = codes(run_linux(env={}))
@@ -65,16 +66,16 @@ class LinuxTests(unittest.TestCase):
 
     def test_wayland_by_session_type_and_display(self):
         base = {"DISPLAY": ":0", "XAUTHORITY": "/x", "XDG_RUNTIME_DIR": "/r"}
-        self.assertEqual(codes(run_linux(env=dict(base, XDG_SESSION_TYPE="wayland"))).get("wayland_session"), "warning")
+        self.assertEqual(codes(run_linux(env=dict(base, XDG_SESSION_TYPE="wayland"))).get("wayland_session"), "error")
         self.assertIn("wayland_session", codes(run_linux(env=dict(base, WAYLAND_DISPLAY="wayland-0"))))
         self.assertNotIn("wayland_session", codes(run_linux(env=dict(base, XDG_SESSION_TYPE="x11"))))
 
     def test_missing_clipboard_tool_is_error(self):
         self.assertEqual(codes(run_linux(which={"xdotool"})).get("linux_missing_clipboard_tool"), "error")
-        self.assertNotIn("linux_missing_clipboard_tool", codes(run_linux(which={"wl-copy", "xdotool"})))
+        self.assertNotIn("linux_missing_clipboard_tool", codes(run_linux(which={"xsel", "xdotool"})))
 
-    def test_missing_xdotool_is_warning(self):
-        self.assertEqual(codes(run_linux(which={"xclip"})).get("linux_missing_xdotool"), "warning")
+    def test_missing_xdotool_is_error(self):
+        self.assertEqual(codes(run_linux(which={"xclip"})).get("linux_missing_xdotool"), "error")
 
     def test_missing_portaudio_is_error(self):
         self.assertEqual(codes(run_linux(portaudio=None)).get("linux_missing_portaudio"), "error")
@@ -118,7 +119,7 @@ class RobustnessTests(unittest.TestCase):
                 mock.patch.object(shutil, "which", lambda n: None), \
                 mock.patch.object(ctypes.util, "find_library", boom):
             found = codes(preflight.environment_problems())
-        self.assertIn("linux_not_root", found)
+        self.assertIn("linux_missing_display", found)
         self.assertIn("linux_missing_clipboard_tool", found)
         self.assertNotIn("linux_missing_portaudio", found)
 

@@ -67,7 +67,7 @@ class TestProjectLayout(unittest.TestCase):
         original_path = sys.path[:]
         run_launcher = runpy.run_path
         try:
-            with patch("runpy.run_path") as execute:
+            with patch("runpy.run_path") as execute, patch("windows_admin.run_if_needed", return_value=None):
                 # Invoke the real wrapper while intercepting only application execution.
                 run_launcher(str(ROOT / "main.py"), run_name="__main__")
                 execute.assert_called_once_with(str(ROOT / "app" / "main.py"), run_name="__main__")

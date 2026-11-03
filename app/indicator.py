@@ -359,6 +359,7 @@ class _Spring:
 
 # Text was inserted, with a caveat the user should see.
 SUCCESS_NOTICE_LABELS = {
+    "polish_ready": "Polish ready - review result",
     "ai_fallback": "AI failed · raw text",
     "ai_timeout": "AI timed out · raw text",
     "stt_fallback": "Cloud slow · local speech",
@@ -438,6 +439,7 @@ class DictationIndicator(QWidget):
     """Bottom-center always-on-top glass HUD for the dictation service."""
 
     # Thread-safe wake-ups from keyboard / worker threads
+    _polish_result = Signal(str, str)
     _image_request = Signal(object)
     _wake = Signal()
     _hide_req = Signal()
@@ -456,6 +458,8 @@ class DictationIndicator(QWidget):
 
         super().__init__(None)
 
+        self._polish_result.connect(self._show_polish_result)
+        self._polish_dialog = None
         self._image_request.connect(self._read_clipboard_image)
         self.app = app
         self.gui_state: GuiState = GuiState.BOOTING
@@ -856,6 +860,24 @@ class DictationIndicator(QWidget):
         apply_window_exstyles(self)
 
     # -------------------------------------------------------------- public API
+    def show_polish_result(self, original, polished):
+        self._polish_result.emit(original, polished)
+
+    def _show_polish_result(self, original, polished):
+        from polish_result import PolishResultDialog
+        if self._polish_dialog is not None:
+            self._polish_dialog.close()
+        self._polish_dialog = PolishResultDialog(original, polished)
+        dialog = self._polish_dialog
+        dialog.finished.connect(lambda _: self._clear_polish_dialog(dialog))
+        self._polish_dialog.show()
+        self._polish_dialog.raise_()
+        self._polish_dialog.activateWindow()
+
+    def _clear_polish_dialog(self, dialog):
+        if self._polish_dialog is dialog:
+            self._polish_dialog = None
+
     def capture_clipboard_image(self):
         """Worker request; Qt clipboard access executes only on the GUI thread."""
         request = {"done": threading.Event(), "image": None}

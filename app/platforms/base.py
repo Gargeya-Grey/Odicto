@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from paths import ROOT
+from paths import ROOT, DATA_ROOT
 from typing import Optional
 
 import pyperclip
@@ -17,6 +17,10 @@ import pyperclip
 
 def install_root() -> str:
     """Absolute path to the Odicto install directory (repo root)."""
+    return str(DATA_ROOT)
+
+
+def code_root() -> str:
     return str(ROOT)
 
 
@@ -53,8 +57,28 @@ def is_odicto_command(argv, cwd=None) -> bool:
             return False
         script = os.path.join(cwd, script)
     script = os.path.normcase(os.path.normpath(script))
-    return script in {os.path.normcase(os.path.join(install_root(), "main.py")),
-                      os.path.normcase(os.path.join(install_root(), "app", "main.py"))}
+    if script in {os.path.normcase(os.path.join(code_root(), "main.py")),
+                  os.path.normcase(os.path.join(code_root(), "app", "main.py"))}:
+        return True
+    managed = os.environ.get("ODICTO_MANAGED_HOME")
+    if not managed:
+        return False
+    try:
+        from pathlib import Path
+        releases = Path(managed).resolve() / "releases"
+        relative = Path(script).resolve().relative_to(releases)
+        executed_main = (len(relative.parts) == 2 and relative.parts[-1] == "main.py"
+                         or len(relative.parts) == 3 and relative.parts[-2:] == ("app", "main.py"))
+        if not executed_main:
+            return False
+        ready = releases / relative.parts[0] / ".odicto-ready.json"
+        if ready.is_symlink() or ready.stat().st_size > 65536:
+            return False
+        import json
+        record = json.loads(ready.read_text(encoding="utf-8"))
+        return isinstance(record, dict) and record.get("directory") == relative.parts[0]
+    except (ValueError, OSError):
+        return False
 
 
 def clipboard_read() -> str:

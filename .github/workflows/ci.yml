@@ -5,50 +5,74 @@ on:
     branches: [main, feature/*]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
+    name: platform-${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-2025, macos-26, macos-26-intel, xcode-27, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
+    env:
+      ODICTO_RUNNER_LABEL: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: requirements.txt
-
-      # The setup-page JS syntax gate needs node; the skip allow-list refuses a skip.
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: Install Linux system dependencies
+          node-version: 24
+      - name: Install supported Python
+        run: uv python install 3.12
+      - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libportaudio2 xclip libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
-
-      - name: Create venv and install dependencies
+          sudo apt-get install -y libportaudio2 xclip xdotool xvfb xauth x11-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+      - name: Install macOS audio dependency
+        if: runner.os == 'macOS'
+        run: brew list portaudio >/dev/null 2>&1 || brew install portaudio
+      - name: Fresh committed archive, real installer, native smoke and test gate
+        shell: pwsh
         run: |
-          uv venv --python 3.12 .venv
-          uv pip install --python .venv -r requirements.txt
+          uv run --no-project --python 3.12 tools/ci_platform_smoke.py --root "$env:RUNNER_TEMP/odicto-installed" --evidence "$env:RUNNER_TEMP/odicto-evidence" --sha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh installation or installed test gate failed' }
+      - name: Real isolated X11 shortcut integration
+        if: runner.os == 'Linux'
+        run: |
+          cd "$RUNNER_TEMP/odicto-installed"
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv/bin/python tools/x11_integration_check.py --output "$RUNNER_TEMP/odicto-evidence/x11.json"
+      - name: Retain exact OS, install, test and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-${{ matrix.os }}
+          path: ${{ runner.temp }}/odicto-evidence/
+          if-no-files-found: error
 
-      # One gate for every OS: tools/run_tests.py discovers tests/test_*.py, then enforces
-      # no failures, a minimum test count and a per-platform skip allow-list (so a
-      # self-skipping gate, e.g. the JS check without node, fails instead of passing).
-      - name: Run test gate (Windows)
-        if: runner.os == 'Windows'
-        run: .venv\Scripts\python.exe tools/run_tests.py
-        env:
-          QT_QPA_PLATFORM: offscreen
-
-      - name: Run test gate (macOS/Linux)
-        if: runner.os != 'Windows'
-        run: .venv/bin/python tools/run_tests.py
-        env:
-          QT_QPA_PLATFORM: offscreen
+  latest-linux:
+    name: platform-ubuntu-26.10-vm
+    timeout-minutes: 45
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install isolated VM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils ovmf acl
+      - name: Fresh-install and test real Ubuntu 26.10 guest
+        run: bash tools/ci_latest_linux.sh
+      - name: Retain actual guest OS/kernel and installation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-ubuntu-26.10-vm
+          path: ${{ runner.temp }}/odicto-ubuntu2610-evidence/
+          if-no-files-found: error

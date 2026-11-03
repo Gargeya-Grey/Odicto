@@ -66,24 +66,25 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # Styled searchable Polish picker with provider and custom model state.
 # Polish label, model summary and help text now have explicit vertical spacing.
 # Polish shortcut now uses the shared key recorder and keycaps.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'a7778ba186dd17a0b751813d54443ffcba9372fe2a6702b77c7fc9314f8fc0e3',
- 'provider_meta': 'fdc3904c73bd7bc4c6301257fd16da4952234017de9a6018adf2acde628110d0',
- 'provider_openrouter': 'ae9bf051c2ff128128a5bbaac7579f8d74456ed8d9e2453759fb0aec5e7fa05d',
- 'provider_gemini': '8f27ad54faf83a4d95b7ac1b8828c962c715fb4bcd76e3a0bb0aae4714d284bc',
- 'provider_ollama': '02bb91c860981524d6528fdf4a5d9f1c89685b5783b70c7d941a9b649454be34',
- 'provider_none': 'a7778ba186dd17a0b751813d54443ffcba9372fe2a6702b77c7fc9314f8fc0e3',
- 'provider_groq': '86326c8e55e17a37e4dbc555f92bd1048b6b577b7d2e9e021b32f674fecf212e',
- 'polish_enabled': 'b7c49480c4be16dbb1d1ce7157ef90541b9d2b36110308a22b0c19183338b39a',
- 'history_and_custom': 'c5414c5c92adacdb58e8dcd0b88ccdfacd256caa5f89d28155842dc72feed945',
- 'hotkey_short': '893fb9ead4fefad7bec6b474e81bcd9b339043e6161ff153b0850149b0a42aa7',
- 'stt_gemini': '74eb8f6c3293577c5fbb758518997d60ef46363c13b038f28fea0f70148d8a3b',
- 'prompt_from_file': '8c75508eb005a99ac89c21d26c7aa4e513a76ba0e1526c31cb854d42b9c73985',
- 'prompt_from_inline_env': '601e88ecb1effbc0f4a1b121defe946524d8ebdc32c5a7c52e8824c556a29bf3',
- 'msg_ok': '0548e57689e0bd3773809d178aed63d2fa0b553fa38c1b5155f1cf70204401dc',
- 'msg_err': '4718313aee80aacae9aa895deae572ddef721cfa945ec4f6d2cb0b51999d9c7f',
- 'msg_neutral': 'fb5603d3ac5cdeb3a86ebe543624020cbeb4a37e41eb405d3f1a1c519330869c',
- 'admin_on': 'eecdce3cfa8575cc0c3b491446a6c3ef50e0657da91cae9a4c1ee395997175eb',
- 'admin_unavailable': '634d01391aaf33a82b4cc3c9954e7a893474b48cd42287e603c619d3092bd7ff'}
+# Selection polish explicitly reviews/copies instead of injecting into unverified fields.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
+ 'provider_meta': 'a206366010e827dd49dccab5b8b7f7262fc7c30b356f9f4474bea5ff52d38ec8',
+ 'provider_openrouter': '4909b6f37431abd424853675e7787005a3bc37a558f2ad663ec7ba1c356d4313',
+ 'provider_gemini': '13af00dc988bda06aae537e82b7d59433a87958059e8ebb076cda6387a99752a',
+ 'provider_ollama': '3fab3d59de4091542ee84677a189e3bd34ac89b4a9ac896b2abd6d1433043288',
+ 'provider_none': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
+ 'provider_groq': 'edae047c5d774094cd5ef4bdde6105c979317ffd0df52e17fd2bdae002247f01',
+ 'polish_enabled': 'ce03270699a6dd408801820cc813707ce838d6377c173b68cf89f0b84021d15c',
+ 'history_and_custom': '8d3c7f02f2cce0bac76d2207d232195b9cbb4844b409873d68a2c138c9b996ba',
+ 'hotkey_short': 'f4817b4e7622c9641af7ac556183893659841ddfb5f4709eb9e8b085b3d77d69',
+ 'stt_gemini': '10caca37e7c64c09a5017fd6cca2a22f141b29f1956e783aa97b55a58078e615',
+ 'prompt_from_file': '0bf7faf242c16034f5e0aeeec07ff2940225af902ae5d540969da07979d1aa0a',
+ 'prompt_from_inline_env': '5b99684aa685b944827dfd81d63aa783753d9f5279970c6c55f06e51b26fb6ae',
+ 'msg_ok': '25777821f06661a1f160996895df64f54515bf6b34c8f602cd523388890bf19b',
+ 'msg_err': '4f8dd23f2f993bf13eb329eba089bcc9ea33c0390059788576c17e7b8006eeb4',
+ 'msg_neutral': '1cb34f6da9056f19ebaa190ea1f2b151a4e63aea363361eee825b5b7e5fc2109',
+ 'admin_on': '7132562e31716d2ac9c0272f976bbc2ceb0dc6808291c9405770cb68891bbef0',
+ 'admin_unavailable': '1271a444b6729ac6f73be3d0737ee6b588e0b70f2eb1d20b9c625756e3a23e1c'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

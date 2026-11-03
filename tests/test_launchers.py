@@ -62,11 +62,13 @@ class TestRootEntryPoints(unittest.TestCase):
         self.assertFalse((ROOT / (RETIRED + ".bat")).exists())
         self.assertFalse((WINDOWS / (RETIRED + ".ps1")).exists())
         self.assertTrue((WINDOWS / "admin_mode.ps1").is_file())
-        skipped = {".git", ".venv", "__pycache__", ".claude", "node_modules"}
+        skipped = {".git", ".venv", "__pycache__", ".claude", "node_modules", "work", "outputs"}
         hits = []
         for folder, dirs, files in os.walk(ROOT):
             dirs[:] = [d for d in dirs if d not in skipped and not d.startswith(".venv")]
             for name in files:
+                if name in {".env", "prompt.txt"}:
+                    continue
                 path = Path(folder) / name
                 if path.suffix in {".png", ".ico", ".pyc", ".lnk", ".wav", ".log"}:
                     continue

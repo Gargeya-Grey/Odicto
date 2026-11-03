@@ -47,7 +47,9 @@ Set-Location $RepoRoot
 # (10) Windows is_pressed_exclusive reads the OS key state first. One patch decorator added
 #     to test_is_pressed_exclusive_right_ctrl makes that OS call fail, so the test still
 #     proves the keyboard-library scan-code fallback. No assertion changed; still 153 tests.
-$ExpectedTestUnitsHash = '5C04DE1DA2204276CCD0C1F5E1368D72C555F358CFB18E0D8A431129E63AF541'
+# (11) Linux now uses the rootless X11 backend. Add x11 to the exact backend-name enum;
+#      no assertion removed and the frozen test count is unchanged.
+$ExpectedTestUnitsHash = 'B1F0EDA0DF2F2E472D0D0ACBBA31E2A507F5E7983774FF8125A0AA64247B698A'
 
 $Script:Failures = @()
 

@@ -3502,7 +3502,7 @@ class TestCrossPlatform(unittest.TestCase):
     def test_odicto_status_reports_backend(self) -> None:
         import platforms
 
-        self.assertIn(platforms.hotkey_backend_name(), ("keyboard", "pynput"))
+        self.assertIn(platforms.hotkey_backend_name(), ("keyboard", "pynput", "x11"))
 
 
 class TestEnvExampleParity(unittest.TestCase):

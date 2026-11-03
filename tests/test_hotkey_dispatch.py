@@ -40,6 +40,7 @@ class TestHotkeyDispatch(unittest.TestCase):
         return self.hooks[key](SimpleNamespace(event_type=kind))
 
     def test_polish_key_suppresses_repeat_and_dispatches_once_per_tap(self):
+        self.held = set()
         with patch.object(self.app, "_dispatch_hotkey") as dispatch:
             self.assertFalse(self.key("down", "f8"))
             self.assertFalse(self.key("down", "f8"))
@@ -47,6 +48,24 @@ class TestHotkeyDispatch(unittest.TestCase):
             dispatch.assert_called_once_with("polish")
             self.assertFalse(self.key("down", "f8"))
             self.assertEqual(dispatch.call_count, 2)
+
+    def test_bare_polish_key_does_not_capture_modified_application_shortcuts(self):
+        for modifier in ("shift", "ctrl", "alt", "cmd"):
+            with self.subTest(modifier=modifier), patch.object(self.app, "_dispatch_hotkey") as dispatch:
+                self.held = {modifier}
+                self.assertTrue(self.key("down", "f8"))
+                self.assertTrue(self.key("up", "f8"))
+                dispatch.assert_not_called()
+
+    def test_accepted_key_repeats_stay_suppressed_after_modifiers_change(self):
+        for key, initial in (("grave", {"ctrl"}), ("f8", set())):
+            with self.subTest(key=key), patch.object(self.app, "_dispatch_hotkey") as dispatch:
+                self.held = initial
+                self.assertFalse(self.key("down", key))
+                self.held = {"shift"}
+                self.assertFalse(self.key("down", key))
+                self.assertFalse(self.key("up", key))
+                self.assertEqual(dispatch.call_count, 1)
 
     def test_slow_reconnect_returns_hook_immediately_and_orders_stop(self):
         entered, resume, stopped = threading.Event(), threading.Event(), threading.Event()
@@ -88,8 +107,9 @@ class TestHotkeyDispatch(unittest.TestCase):
         self.held = {"ctrl", "shift", "f6"}
         self.key()
         self.assertTrue(entered.wait(1))
+        self.key("up")
         self.held = set()
-        self.assertTrue(self.key(), "an unrelated key event must pass through")
+        self.assertTrue(self.key(), "an unrelated physical key press must pass through")
         resume.set()
         self.assertTrue(done.wait(1))
         self.assertEqual(observed, [(True, ("ctrl", "shift", "f6"))])

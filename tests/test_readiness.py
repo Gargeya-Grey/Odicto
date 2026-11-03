@@ -19,7 +19,7 @@ class TestReadiness(unittest.TestCase):
                 json.dump(health, f)
             owner = MagicMock()
             owner.create_time.return_value = time.time() - 20 if created is None else created
-            with patch.object(odicto, "_repo_root", return_value=directory), patch(
+            with patch.object(odicto, "_repo_root", return_value=directory), patch.object(odicto, "_data_root", return_value=directory), patch(
                 "psutil.Process", return_value=owner
             ), patch("platforms.base.is_odicto_command", return_value=verified):
                 return odicto.cmd_wait_ready(SimpleNamespace(timeout=0))

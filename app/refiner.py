@@ -1147,7 +1147,9 @@ class TextRefiner:
                         **kwargs, timeout=full_timeout(min(2.0, wait), wait))
                     answer = _choice_content(response) if _choice_finish_reason(response) != "length" else ""
                 if isinstance(answer, str) and answer.strip():
-                    result.append(answer.strip())
+                    leading = text[:len(text) - len(text.lstrip())]
+                    trailing = text[len(text.rstrip()):]
+                    result.append(leading + answer.strip() + trailing)
             except Exception as e:
                 print(f"Notice: transcript polish unavailable ({type(e).__name__}); using raw text.", flush=True)
             finally:

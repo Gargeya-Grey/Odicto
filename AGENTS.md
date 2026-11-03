@@ -85,7 +85,7 @@ button that pulls the model only when the user picks Ollama as provider.
 4. Optional AI: install Ollama from [ollama.com/download](https://ollama.com/download), then `ollama pull qwen2.5:1.5b-instruct`
 5. Warm Whisper: `.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('tiny.en', device='cpu', compute_type='int8')"`
 6. Tests: `.venv/bin/python -m unittest tests.test_units -v`
-7. Start: `bash scripts/posix/run_debug.sh` (run as root or with `input` group; prefer X11)
+7. Start: `bash scripts/posix/run_debug.sh` (normal desktop user, X11 session)
 
 ## Verify success
 
@@ -132,7 +132,7 @@ supplied it) with:
   speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
   dictation; tap again to finalize and insert once. Interim Gemini captions appear
-  in the HUD. Stop remains PROCESSING through finalization and optional polish, and
+  in the HUD. Stop remains PROCESSING through finalization, and
   waits up to ~2.5s for the single Live call's authoritative final. A final or draft
   skips batch STT. F7 leaves its final text on the clipboard outside terminals; no
   caret worker, tail replacement or delayed clipboard restoration remains.
@@ -224,7 +224,7 @@ supplied it) with:
 - **Provider `none`:** raw dictation only; no LLM client; Ollama not started.
 - macOS requires **Accessibility** and **Input Monitoring** permissions for
   `pynput` global hooks and synthetic copy/paste.
-- Linux global suppression usually requires root or `input` group; prefer X11.
+- Linux uses rootless X11 grabs through python-xlib; Wayland fails preflight.
 - GPU: `WHISPER_DEVICE=auto` keeps **tiny/base on CPU** so login does not pay a
   ~1GB CUDA context for a 75MB model. Larger models (`small` and up) still try
   CUDA first. Set `WHISPER_DEVICE=cuda` to keep the chosen model resident in
@@ -287,10 +287,11 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 `LLM_PROVIDER=groq` uses `GROQ_API_KEY`, `GROQ_API_BASE` and `GROQ_MODEL`
 (default `openai/gpt-oss-20b`), separately from `GROQ_STT_MODEL`. The setup page
 offers an editable chat model and the shared saved key on Speech.
-`POLISH_DICTATION=false` is opt-in grammar/punctuation/capitalization cleanup;
-`POLISH_MODEL` blank uses the selected AI model. It never touches AI memory or
-selection/image context, waits at most two seconds, and keeps raw text on failure.
-Gemini Smart skips the extra call. `AI_CLIPBOARD_IMAGE=false` makes screenshots
+`POLISH_HOTKEY=f8` requests polish separately from dictation. A blank disables it;
+an implicit default that conflicts with an existing shortcut is disabled safely.
+`POLISH_MODEL` blank uses the selected AI model. Polish leaves the document unchanged
+and shows a review window with explicit Copy and Dismiss. It never touches AI memory.
+`POLISH_DICTATION` is an ignored legacy key. `AI_CLIPBOARD_IMAGE=false` makes screenshots
 explicit; when enabled the HUD reads them on Qt's GUI thread. Auto Whisper uses
 CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must be
 16000. Run `.\tools\verify.ps1` (or `python tools/run_tests.py`); it is the full gate.

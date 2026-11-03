@@ -1,4 +1,5 @@
 """Provider-result handling without network, model loading, or microphone input."""
+import itertools
 from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
@@ -105,11 +106,25 @@ class TestSpeechResults(unittest.TestCase):
                 transcriber, "google_genai", SimpleNamespace(Client=factory)
             ), patch.object(Config, "GEMINI_API_KEY", "synthetic-key"):
                 backend = transcriber.GeminiTranscriber()
-            with patch.object(backend, "_whisper_fallback", return_value="fallback words") as fallback:
+            # Freeze the SDK budget clock so the exact configured timeout is observable.
+            with patch("time.monotonic", return_value=1000.0), patch.object(
+                backend, "_whisper_fallback", return_value="fallback words"
+            ) as fallback:
                 self.assertEqual(backend.transcribe(np.zeros(16000, dtype=np.float32)), "fallback words")
                 fallback.assert_called_once()
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0], dict(connect=15.0, read=15.0, write=15.0, pool=15.0))
+            ticks = itertools.count(1000.0, 0.001)
+            with patch("time.monotonic", side_effect=lambda: next(ticks)), patch.object(
+                backend, "_whisper_fallback", return_value="fallback words"
+            ) as fallback:
+                self.assertEqual(backend.transcribe(np.zeros(16000, dtype=np.float32)), "fallback words")
+                fallback.assert_called_once()
+            self.assertEqual(len(requests), 2)
+            for phase in ("connect", "read", "write", "pool"):
+                self.assertGreater(requests[1][phase], 0)
+                self.assertLessEqual(requests[1][phase], 15.0)
+
         finally:
             for client in clients:
                 client.close()

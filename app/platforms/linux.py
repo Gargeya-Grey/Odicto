@@ -1,15 +1,14 @@
 """Linux platform backend.
 
-Reuses the ``keyboard``-based hotkey backend and POSIX process/lock helpers.
-Global suppression requires root (or ``input`` group membership depending on
-the distribution); see README for details.
+Uses rootless X11 grabs for hotkeys and POSIX process/lock helpers.
+Wayland is rejected rather than starting with unreliable global input.
 """
 
 from __future__ import annotations
 
 import subprocess
 
-from platforms._keyboard import *  # noqa: F401,F403
+from platforms._x11 import *  # noqa: F401,F403
 from platforms._posix import (  # noqa: F401,F403
     acquire_lock,
     enumerate_odicto_pids,
@@ -112,7 +111,7 @@ def apply_window_exstyles(widget) -> None:
 
 
 def hotkey_backend_name() -> str:
-    return "keyboard"
+    return "x11"
 
 def foreground_window_id():
     try:
