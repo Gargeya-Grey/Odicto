@@ -56,6 +56,7 @@ class PolishResultDialog(QDialog):
         self.copy_button = QPushButton("Copy")
         self.copy_button.setObjectName("copyPolish")
         self.copy_button.clicked.connect(self.copy_result)
+        self.polished.textChanged.connect(lambda: self.copy_button.setText("Copy"))
         buttons.addWidget(self.copy_button)
         layout.addLayout(buttons)
 

@@ -57,3 +57,28 @@ class TestPolishResult(unittest.TestCase):
         paste.assert_called_once_with(text)
         app.indicator.show_copy_result.assert_called_once_with(text, "Manual paste needed")
         self.assertEqual(app.last_status, "copy_ready")
+
+    def test_new_results_preserve_each_uncopied_recovery(self):
+        from indicator import DictationIndicator
+        from tests.test_reliability import app_fixture
+        with patch.object(DictationIndicator, "_setup_tray"):
+            indicator = DictationIndicator(app_fixture())
+        try:
+            indicator._show_copy_result("first complete transcript", "Manual paste needed")
+            first = indicator._polish_dialog
+            indicator._show_copy_result("second complete transcript", "Manual paste needed")
+            second = indicator._polish_dialog
+            indicator._show_polish_result("original", "polished")
+            polish = indicator._polish_dialog
+            self.assertEqual(indicator._result_dialogs, {first, second, polish})
+            self.assertTrue(all(dialog.isVisible() for dialog in (first, second, polish)))
+            self.assertEqual(first.polished.toPlainText(), "first complete transcript")
+            first.dismiss_button.click()
+            self.assertEqual(indicator._result_dialogs, {second, polish})
+            self.assertTrue(second.isVisible())
+            self.assertTrue(polish.isVisible())
+        finally:
+            for dialog in list(indicator._result_dialogs):
+                dialog.close()
+            indicator._tick.stop()
+            indicator.close()

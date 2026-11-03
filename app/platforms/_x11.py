@@ -82,6 +82,7 @@ class _Backend:
         return tuple(found)
 
     def masks(self, modifier_sets):
+        from config import normalize_modifier_name
         named = {"ctrl": self.X.ControlMask, "control": self.X.ControlMask,
                  "shift": self.X.ShiftMask, "alt": self.X.Mod1Mask,
                  "cmd": self.X.Mod4Mask, "win": self.X.Mod4Mask, "windows": self.X.Mod4Mask}
@@ -99,7 +100,7 @@ class _Backend:
         for modifiers in modifier_sets:
             mask = 0
             for modifier in modifiers:
-                name = str(modifier).lower().removeprefix("left ").removeprefix("right ")
+                name = normalize_modifier_name(modifier).removeprefix("left ").removeprefix("right ")
                 if name not in named:
                     raise ValueError(f"Unknown X11 shortcut modifier: {modifier!r}")
                 mask |= named[name]

@@ -783,7 +783,8 @@ else:
         def test_move_aside_refuses_while_a_process_runs_from_the_venv(self):
             venv = self.broken_venv()
             os.unlink(venv / "bin" / "python")
-            runner = venv / "bin" / "odicto-fake-app"
+            # New coreutils dispatches by argv[0], so preserve the utility name.
+            runner = venv / "bin" / "sleep"
             shutil.copy(shutil.which("sleep"), runner)
             proc = subprocess.Popen([str(runner), "60"])
             self.addCleanup(proc.kill)
@@ -814,7 +815,7 @@ else:
             # different text. The installer matches the physical and the given spelling.
             venv = self.broken_venv()
             os.unlink(venv / "bin" / "python")
-            shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
+            shutil.copy(shutil.which("sleep"), venv / "bin" / "sleep")
             link = self.linked_install()
             cases = [  # (how the process is started, the install folder the installer is given)
                 ("symlink path", link, link),
@@ -826,7 +827,7 @@ else:
                 cases.append(("symlink path, physical install folder", link, self.install))
             for label, started, given in cases:
                 with self.subTest(label):
-                    proc = subprocess.Popen([str(started / ".venv" / "bin" / "odicto-fake-app"), "60"])
+                    proc = subprocess.Popen([str(started / ".venv" / "bin" / "sleep"), "60"])
                     self.addCleanup(proc.kill)
                     try:
                         self.assert_move_refused_for(proc, given)
@@ -859,13 +860,13 @@ else:
             # folder: the command names that folder only through the process's working folder.
             venv = self.broken_venv()
             os.unlink(venv / "bin" / "python")
-            shutil.copy(shutil.which("sleep"), venv / "bin" / "odicto-fake-app")
+            shutil.copy(shutil.which("sleep"), venv / "bin" / "sleep")
             (self.install / "main.py").write_text("import time\ntime.sleep(60)\n")
             # The rule reads the program name, the first word of the command. A Python whose own
             # path holds a space is an accepted miss, so start it under a space-free name.
             os.symlink(os.path.realpath(sys.executable), str(self.install / "python3"))
             cases = [
-                (".venv program", [".venv/bin/odicto-fake-app", "60"]),
+                (".venv program", [".venv/bin/sleep", "60"]),
                 ("python main.py", ["./python3", "main.py"]),
             ]
             for label, args in cases:

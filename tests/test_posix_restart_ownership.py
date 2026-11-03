@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import psutil
 from platforms import _posix
 
+_enumerate_real = _posix.enumerate_odicto_pids
+
 
 class TestPosixShutdownOwnership(unittest.TestCase):
     def setUp(self):
@@ -23,6 +25,8 @@ class TestPosixShutdownOwnership(unittest.TestCase):
         self.process.cmdline.return_value = ["python3.12", "/fixture/main.py"]
         self.process.cwd.return_value = "/fixture"
         self.process.children.return_value = []
+        self.process.create_time.return_value = 1000.0
+        self.process.is_running.return_value = True
         self.native = SimpleNamespace(
             Process=MagicMock(return_value=self.process),
             pid_exists=MagicMock(return_value=False),
@@ -110,6 +114,49 @@ class TestPosixShutdownOwnership(unittest.TestCase):
         with self.assertRaises((PermissionError, RuntimeError)):
             _posix.kill_other_odicto_processes(str(self.pid_file))
         self.assert_preserved()
+
+    def enumerate_process(self):
+        self.process.info = {"pid": 123456, "cmdline": ["python3.12", "/fixture/main.py"], "cwd": "/fixture"}
+        self.native.process_iter = MagicMock(return_value=[self.process])
+        self.enumerate.side_effect = _enumerate_real
+        self.stack.enter_context(patch.object(_posix.base, "is_odicto_command", return_value=True))
+
+    def test_verified_process_object_is_not_reopened_before_termination(self):
+        self.enumerate_process()
+        self.native.Process.side_effect = AssertionError("A PID alone is not a process identity")
+        self.assertEqual(_posix.kill_other_odicto_processes(str(self.pid_file)), [123456])
+        self.process.kill.assert_called_once()
+        self.native.Process.assert_not_called()
+
+    def test_pid_replacement_after_enumeration_is_never_signalled(self):
+        self.enumerate_process()
+        self.process.is_running.side_effect = [True, False]
+        replacement = MagicMock()
+        replacement.children.return_value = []
+        self.native.Process.return_value = replacement
+        self.native.pid_exists.return_value = True
+        with patch.object(_posix.time, "monotonic", side_effect=[0.0, 9.0]):
+            with self.assertRaisesRegex(RuntimeError, "identity|reused"):
+                _posix.kill_other_odicto_processes(str(self.pid_file))
+        self.process.kill.assert_not_called()
+        replacement.kill.assert_not_called()
+        self.assert_preserved()
+
+    def test_saved_verified_process_is_not_reopened(self):
+        self.enumerate.return_value = set()
+        replacement = MagicMock()
+        self.native.Process.side_effect = [self.process, replacement]
+        with patch.object(_posix.base, "is_odicto_command", return_value=True):
+            self.assertEqual(_posix.kill_other_odicto_processes(str(self.pid_file)), [123456])
+        self.native.Process.assert_called_once_with(123456)
+        self.process.kill.assert_called_once()
+        replacement.kill.assert_not_called()
+
+    def test_exited_owned_child_does_not_reopen_its_recycled_pid(self):
+        owned = MagicMock(pid=123456)
+        owned.poll.return_value = 0
+        _posix.terminate_process_tree(owned)
+        self.native.Process.assert_not_called()
 
 
 class TestSetupPosixRestart(unittest.TestCase):

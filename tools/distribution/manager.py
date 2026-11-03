@@ -218,7 +218,7 @@ def file_lock(path: Path):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             acquired = True
         except OSError as error:
-            raise BusyError(f"Another Odicto process owns {path.name}; activation was deferred") from error
+            raise BusyError(f"Another Odicto process owns {path.name}; this command has not completed. Retry when it finishes.") from error
         yield
     finally:
         if acquired:
@@ -546,8 +546,10 @@ runpy.run_path(str(script), run_name='__main__')
                 if current is None:
                     raise DistributionError("No active release; run install first")
                 directory = self.release_path(current)
-                if command[0] in {"start", "setup", "restart"}:
+                if command[0] in {"start", "setup", "restart", "stop"}:
                     launch.enter_context(file_lock(self.home / "launch.lock"))
+                    if command[0] == "stop":
+                        self._recover_launch_intent()
             python = self._python(directory)
             if command[0] in {"start", "setup", "restart"}:
                 result = self._launch(directory, python, command[0])
@@ -712,6 +714,7 @@ def main(argv=None) -> int:
     automatic = sub.add_parser("auto-updates")
     automatic.add_argument("setting", choices=("on", "off"))
     run = sub.add_parser("run")
+    run.add_argument("--no-auto-updates", action="store_true")
     run.add_argument("app_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     manager = Manager(args.home)
@@ -720,7 +723,7 @@ def main(argv=None) -> int:
             print(latest_release().tag)
             return 0
         if args.command == "run":
-            return manager.run(args.app_args or ["start"])
+            return manager.run(args.app_args or ["start"], automatic_updates=not args.no_auto_updates)
         manager.initialize()
         with file_lock(manager.home / "manager.lock"):
             if args.command == "status":

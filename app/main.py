@@ -143,7 +143,7 @@ def attach_pythonw_log() -> None:
 attach_pythonw_log()
 
 from app_state import AppState
-from config import Config, parse_hold_hotkey
+from config import Config, parse_hold_hotkey, normalize_modifier_name
 from recorder import AudioRecorder, play_beep
 from transcriber import (
     CloudTranscriber,
@@ -921,14 +921,24 @@ class DictationApp:
         polish_key = Config.effective_polish_hotkey()
         if polish_key:
             polish_mods, polish_primary = parse_hold_hotkey(polish_key)
+            polish_mods = tuple(normalize_modifier_name(modifier) for modifier in polish_mods)
+            polish_families = {normalize_modifier_name(modifier.removeprefix("left ").removeprefix("right "))
+                               for modifier in polish_mods}
             held = [False]
             def polish_handler(event):
                 if getattr(event, "event_type", None) == platforms.KEY_DOWN:
                     if held[0]:
                         return False
                     actual_mods = {mod for mod in ("ctrl", "shift", "alt", "cmd") if platforms.is_pressed(mod)}
-                    if actual_mods != set(polish_mods):
+                    if actual_mods != polish_families:
                         return True
+                    for modifier in polish_mods:
+                        if modifier.startswith(("left ", "right ")):
+                            side, family = modifier.split(" ", 1)
+                            opposite = ("right " if side == "left" else "left ") + family
+                            if (not platforms.is_pressed_exclusive(modifier)
+                                    or platforms.is_pressed_exclusive(opposite)):
+                                return True
                     if not held[0]:
                         held[0] = True
                         self._dispatch_hotkey("polish")

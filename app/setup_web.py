@@ -425,6 +425,19 @@ def restart_odicto() -> str:
         blockers = [problem.message for problem in environment_problems() if problem.severity == "error"]
         if blockers:
             raise RuntimeError("Settings saved, but Odicto cannot start: " + " ".join(blockers))
+    managed_home = os.environ.get("ODICTO_MANAGED_HOME")
+    if managed_home:
+        launcher = os.path.join(managed_home, "launcher.py")
+        if not os.path.isfile(launcher):
+            raise RuntimeError("Settings saved, but the stable managed launcher is missing; rerun the managed installer.")
+        try:
+            result = subprocess.run(
+                [sys.executable, launcher, "run", "--no-auto-updates", "restart"], timeout=90)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeError("Settings saved, but managed restart could not be confirmed; run odicto status.") from error
+        if result.returncode:
+            raise RuntimeError(f"Settings saved, but managed restart failed (exit code {result.returncode}); run odicto status.")
+        return "Settings saved. Odicto is ready with the new settings."
     from windows_admin import run_if_needed
 
     # An opted-in install restarts through the elevated helper; a Medium process

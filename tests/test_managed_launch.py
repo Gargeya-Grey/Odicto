@@ -1,11 +1,13 @@
 """Managed startup hands off ownership before activation can proceed."""
 import io
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -120,6 +122,131 @@ class TestManagedLaunch(unittest.TestCase):
                 self.assertEqual(self.manager.run(["setup"], automatic_updates=False), 0)
         self.manager.activate(staged)
         self.assertEqual(self.manager.active()["version"], "v1.3.0")
+
+    def test_stop_reports_busy_until_a_pending_start_has_handed_off(self):
+        entered = threading.Event()
+        release = threading.Event()
+        outcomes = []
+
+        def spawn(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("The disposable start adapter was not released")
+            return Child()
+
+        def start():
+            try:
+                outcomes.append(self.manager.run(["start"], automatic_updates=False))
+            except BaseException as error:
+                outcomes.append(error)
+
+        with patch.object(self.manager, "_ready", side_effect=lambda directory, python, token="": bool(token)), \
+                patch.object(dist.subprocess, "Popen", side_effect=spawn), \
+                patch.object(dist.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as stop:
+            thread = threading.Thread(target=start)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                with self.assertRaisesRegex(dist.BusyError, "has not completed"):
+                    self.manager.run(["stop"], automatic_updates=False)
+                stop.assert_not_called()
+            finally:
+                release.set()
+                thread.join(5)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [0])
+
+    def test_stop_refuses_an_unconfirmed_prior_start(self):
+        self.reservation()
+        with patch.object(self.manager, "_pid_alive", return_value=True), \
+                patch.object(dist.subprocess, "run") as stop:
+            with self.assertRaises(dist.BusyError):
+                self.manager.run(["stop"], automatic_updates=False)
+        stop.assert_not_called()
+
+    def test_managed_setup_save_uses_the_stable_supervisor(self):
+        import setup_web
+        import platforms
+        launcher = self.manager.home / "launcher.py"
+        launcher.write_text("synthetic stable launcher")
+        with patch.dict(os.environ, ODICTO_MANAGED_HOME=str(self.manager.home)), \
+                patch("platforms.preflight.environment_problems", return_value=[]), \
+                patch("windows_admin.run_if_needed", return_value=None) as admin, \
+                patch.object(setup_web.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as restart, \
+                patch.object(platforms, "kill_other_odicto_processes") as kill, \
+                patch.object(platforms, "spawn_detached") as detached:
+            message = setup_web.restart_odicto()
+        restart.assert_called_once_with(
+            [sys.executable, str(launcher), "run", "--no-auto-updates", "restart"], timeout=90)
+        self.assertIn("ready", message)
+        kill.assert_not_called()
+        detached.assert_not_called()
+        admin.assert_not_called()
+
+    def test_failed_setup_supervisor_never_falls_back_to_raw_spawn(self):
+        import setup_web
+        import platforms
+        launcher = self.manager.home / "launcher.py"
+        launcher.write_text("synthetic stable launcher")
+        for result in (SimpleNamespace(returncode=3), subprocess.TimeoutExpired("synthetic supervisor", 90)):
+            with self.subTest(result=result), patch.dict(os.environ, ODICTO_MANAGED_HOME=str(self.manager.home)), \
+                    patch("platforms.preflight.environment_problems", return_value=[]), \
+                    patch("windows_admin.run_if_needed", return_value=None) as admin, \
+                    patch.object(setup_web.subprocess, "run", side_effect=result if isinstance(result, Exception) else None,
+                                 return_value=result), \
+                    patch.object(platforms, "kill_other_odicto_processes") as kill, \
+                    patch.object(platforms, "spawn_detached") as detached:
+                with self.assertRaisesRegex(RuntimeError, "managed restart"):
+                    setup_web.restart_odicto()
+                kill.assert_not_called()
+                detached.assert_not_called()
+                admin.assert_not_called()
+
+    def test_cli_run_can_disable_automatic_updates(self):
+        with patch.object(dist, "Manager", return_value=self.manager), patch.object(self.manager, "run", return_value=0) as run:
+            self.assertEqual(dist.main(["--home", str(self.manager.home), "run", "--no-auto-updates", "restart"]), 0)
+        run.assert_called_once_with(["restart"], automatic_updates=False)
+
+    def test_setup_closure_cannot_release_a_save_created_start_before_handoff(self):
+        import setup_web
+        import platforms
+        launcher = self.manager.home / "launcher.py"
+        launcher.write_text("synthetic stable launcher")
+        staged = self.manager.stage(self.fixture.add_release("v1.3.0"))
+        setup = ExitStack()
+        setup.enter_context(dist.file_lock(self.manager.data / "setup.lock"))
+        blocked = []
+
+        def spawn(*args, **kwargs):
+            setup.close()
+            with self.assertRaises(dist.BusyError):
+                self.manager.activate(staged)
+            blocked.append(True)
+            return Child()
+
+        def run(command, **kwargs):
+            if command[1] == str(launcher):
+                self.assertEqual(command[2:], ["run", "--no-auto-updates", "restart"])
+                return SimpleNamespace(returncode=self.manager.run(["restart"], automatic_updates=False))
+            self.assertEqual(command[-1], "stop")
+            return SimpleNamespace(returncode=0)
+
+        try:
+            with patch.dict(os.environ, ODICTO_MANAGED_HOME=str(self.manager.home)), \
+                    patch("platforms.preflight.environment_problems", return_value=[]), \
+                    patch("windows_admin.run_if_needed", return_value=None), \
+                    patch.object(self.manager, "_ready", side_effect=lambda directory, python, token="": bool(token)), \
+                    patch.object(dist.subprocess, "Popen", side_effect=spawn), \
+                    patch.object(dist.subprocess, "run", side_effect=run), \
+                    patch.object(platforms, "kill_other_odicto_processes") as kill, \
+                    patch.object(platforms, "spawn_detached") as detached:
+                self.assertIn("ready", setup_web.restart_odicto())
+            self.assertEqual(blocked, [True])
+            self.assertEqual(self.manager.active()["directory"], self.old["directory"])
+            kill.assert_not_called()
+            detached.assert_not_called()
+        finally:
+            setup.close()
 
     def reservation(self, state=None):
         token = "a" * 32

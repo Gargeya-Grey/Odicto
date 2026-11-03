@@ -45,7 +45,11 @@ jobs:
       - name: Fresh committed archive, real installer, native smoke and test gate
         shell: pwsh
         run: |
-          uv run --no-project --python 3.12 tools/ci_platform_smoke.py --root "$env:RUNNER_TEMP/odicto-installed" --evidence "$env:RUNNER_TEMP/odicto-evidence" --sha $env:GITHUB_SHA
+          if ($IsLinux) {
+            xvfb-run -a env XDG_SESSION_TYPE=x11 WAYLAND_DISPLAY= uv run --no-project --python 3.12 tools/ci_platform_smoke.py --root "$env:RUNNER_TEMP/odicto-installed" --evidence "$env:RUNNER_TEMP/odicto-evidence" --sha $env:GITHUB_SHA
+          } else {
+            uv run --no-project --python 3.12 tools/ci_platform_smoke.py --root "$env:RUNNER_TEMP/odicto-installed" --evidence "$env:RUNNER_TEMP/odicto-evidence" --sha $env:GITHUB_SHA
+          }
           if ($LASTEXITCODE -ne 0) { throw 'Fresh installation or installed test gate failed' }
       - name: Real isolated X11 shortcut integration
         if: runner.os == 'Linux'

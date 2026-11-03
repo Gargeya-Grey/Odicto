@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import urllib.request
+from unittest.mock import patch
 import zipfile
 
 
@@ -106,6 +107,26 @@ def setup_http(root: Path, evidence: Path) -> None:
             "browser_opened": False, "process_stopped": process.poll() is not None}), encoding="utf-8")
 
 
+def speech_decode() -> dict:
+    url = "https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac"
+    digest = "63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715"
+    fixture = Path(os.environ["RUNNER_TEMP"]) / "odicto-public-speech-fixture.flac"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        audio = response.read(2_000_001)
+    if len(audio) > 2_000_000 or hashlib.sha256(audio).hexdigest() != digest:
+        raise RuntimeError("Public speech fixture failed its pinned checksum")
+    fixture.write_bytes(audio)
+    from config import Config
+    from transcriber import WhisperTranscriber
+    with patch.object(Config, "WHISPER_DEVICE", "cpu"), patch.object(Config, "WHISPER_MODEL_SIZE", "tiny.en"):
+        transcript = WhisperTranscriber().transcribe(str(fixture))
+    normalized = " ".join(re.sub(r"[^a-z ]", " ", transcript.lower()).split())
+    if "my fellow americans" not in normalized or "ask not what your country can do for you" not in normalized:
+        raise RuntimeError("The actual local speech engine did not recognize the pinned fixture")
+    return {"source": url, "sha256": digest, "model": "tiny.en", "device": "cpu",
+            "expected_phrases_recognized": True, "owner_audio_used": False}
+
+
 def installed(root: Path, evidence: Path, sha: str) -> int:
     if os.environ.get("GITHUB_ACTIONS") != "true" or not (root / ".odicto-ci-fixture").is_file():
         raise RuntimeError("Native smoke checks require a disposable CI fixture")
@@ -122,6 +143,8 @@ def installed(root: Path, evidence: Path, sha: str) -> int:
         if get_speech_timestamps(np.zeros(16000, dtype=np.float32)):
             raise RuntimeError("Native VAD classified silence as speech")
         report["checks"]["native_onnx_inference"] = "pass"
+        report["speech_fixture"] = speech_decode()
+        report["checks"]["local_speech_decode"] = "pass"
         if sys.platform.startswith("linux"):
             import sounddevice as sd
             with sd.InputStream(samplerate=16000, channels=1, dtype="float32") as stream:

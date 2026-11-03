@@ -74,7 +74,7 @@ pactl load-module module-null-sink sink_name=odicto_ci
 pactl set-default-source odicto_ci.monitor
 curl --proto '=https' --tlsv1.2 -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-export GITHUB_ACTIONS=true RUNNER_TEMP="$HOME/ci-temp" ODICTO_RUNNER_LABEL=ubuntu-26.10-vm
+export GITHUB_ACTIONS=true GITHUB_SHA="$sha" RUNNER_TEMP="$HOME/ci-temp" ODICTO_RUNNER_LABEL=ubuntu-26.10-vm
 mkdir -p "$RUNNER_TEMP" "$HOME/source"
 cd "$HOME/source"
 git init -q
@@ -82,7 +82,7 @@ git remote add origin "https://github.com/$repository.git"
 git fetch --depth 1 origin "$sha"
 git checkout --detach FETCH_HEAD
 uv python install 3.12
-uv run --no-project --python 3.12 tools/ci_platform_smoke.py \
+xvfb-run -a env XDG_SESSION_TYPE=x11 WAYLAND_DISPLAY= uv run --no-project --python 3.12 tools/ci_platform_smoke.py \
   --root "$RUNNER_TEMP/installed" --evidence "$RUNNER_TEMP/evidence" --sha "$sha"
 cd "$RUNNER_TEMP/installed"
 xvfb-run -a env QT_QPA_PLATFORM=xcb .venv/bin/python tools/x11_integration_check.py \

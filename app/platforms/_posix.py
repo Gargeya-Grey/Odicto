@@ -28,6 +28,15 @@ except ImportError:  # pragma: no cover
 _lock_file_obj = None
 
 
+class _VerifiedPid(int):
+    """A PID retaining the process object that established its identity."""
+
+    def __new__(cls, pid, process):
+        value = super().__new__(cls, pid)
+        value.process = process
+        return value
+
+
 def _self_and_parent_pids() -> set:
     pids = {os.getpid()}
     try:
@@ -64,7 +73,12 @@ def enumerate_odicto_pids(exclude_pid: Optional[int] = None) -> set:
             if pid in protected or pid == 0:
                 continue
             if base.is_odicto_command(cmdline, cwd):
-                found.add(pid)
+                try:
+                    proc.create_time()
+                    if proc.is_running():
+                        found.add(_VerifiedPid(pid, proc))
+                except (psutil.Error, OSError):
+                    continue
     except Exception:
         pass
     return found
@@ -77,7 +91,12 @@ def kill_process_tree(pid: int) -> None:
     if psutil is None:
         raise RuntimeError("Cannot verify process ownership without psutil")
     try:
-        proc = psutil.Process(pid)
+        proc = pid.process if isinstance(pid, _VerifiedPid) else psutil.Process(pid)
+        proc.create_time()
+        if not proc.is_running():
+            if psutil.pid_exists(pid):
+                raise RuntimeError("Process identity changed because its PID was reused")
+            return
         children = proc.children(recursive=True)
     except psutil.NoSuchProcess:
         return
@@ -86,6 +105,10 @@ def kill_process_tree(pid: int) -> None:
             child.kill()
         except psutil.NoSuchProcess:
             pass
+    if not proc.is_running():
+        if psutil.pid_exists(pid):
+            raise RuntimeError("Process identity changed because its PID was reused")
+        return
     try:
         proc.kill()
     except psutil.NoSuchProcess:
@@ -111,11 +134,12 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     if old_pid is not None and old_pid not in protected and old_pid not in verified_pids:
         try:
             process = psutil.Process(old_pid)
+            process.create_time()
             name = process.name().lower()
             if (not name or name.startswith(("python", "pypy"))) and base.is_odicto_command(
                 process.cmdline(), process.cwd()
             ):
-                pids.add(old_pid)
+                pids.add(_VerifiedPid(old_pid, process))
         except psutil.NoSuchProcess:
             pass
         except (psutil.Error, OSError) as error:
@@ -235,7 +259,11 @@ def terminate_process_tree(proc) -> None:
     if proc is None:
         return
     try:
-        kill_process_tree(proc.pid)
+        if proc.poll() is not None:
+            return
+        owner = psutil.Process(proc.pid)
+        owner.create_time()
+        kill_process_tree(_VerifiedPid(proc.pid, owner))
     except Exception as e:
         print(f"Warning: Failed to terminate process tree: {e}")
 

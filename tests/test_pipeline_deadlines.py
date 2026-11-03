@@ -345,7 +345,7 @@ class TestCancel(_Base):
                 patch.object(Config, "RESET_CONTEXT_HOTKEY", ""), patch.object(Config, "LIVE_HOTKEY", "f7"), \
                 patch.object(Config, "POLISH_HOTKEY", "f8"), patch.object(Config, "CANCEL_HOTKEY", cancel_key), patch("main.ensure_can_bind_hotkeys"), \
                 patch("main.platforms.hook_key",
-                      side_effect=lambda key, fn, suppress: hooks.update({key: (fn, suppress)})):
+                      side_effect=lambda key, fn, suppress, **options: hooks.update({key: (fn, suppress)})):
             app._hotkey_physically_held = False
             app._live_key_held = False
             app._bind_hotkeys()

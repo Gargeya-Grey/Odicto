@@ -43,7 +43,7 @@ GATE = {
     # is: 737.
     # Vocabulary, explicit polish, upgrade safety, rootless X11 and managed updates
     # add coverage on every platform; platform-specific definitions still differ.
-    "floor": 850,
+    "floor": 900,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

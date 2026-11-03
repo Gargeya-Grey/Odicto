@@ -112,11 +112,49 @@ def _key_token(key) -> str:
     return _canonical_token(name)
 
 
+_MODIFIER_VIRTUAL_KEYS = {"ctrl": (59, 62), "shift": (56, 60), "alt": (58, 61), "cmd": (55, 54)}
+
+
+def _modifier_side(key) -> str:
+    value = getattr(key, "value", key)
+    virtual_key = getattr(value, "vk", None)
+    for family, codes in _MODIFIER_VIRTUAL_KEYS.items():
+        if virtual_key in codes:
+            return ("left " if virtual_key == codes[0] else "right ") + ("windows" if family == "cmd" else family)
+    name = getattr(key, "name", "")
+    if name.endswith(("_l", "_r")):
+        from config import normalize_modifier_name
+        try:
+            return normalize_modifier_name(("left " if name.endswith("_l") else "right ") + name[:-2])
+        except ValueError:
+            pass
+    return ""
+
+
+def _modifier_key_state(token):
+    from config import normalize_modifier_name
+    side, family = "", token
+    if token.startswith(("left ", "right ")):
+        side, family = token.split(" ", 1)
+    family = normalize_modifier_name(family)
+    codes = _MODIFIER_VIRTUAL_KEYS[family]
+    if side:
+        codes = (codes[0 if side == "left" else 1],)
+    try:
+        from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+        return any(bool(CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code)) for code in codes)
+    except Exception:
+        return None
+
+
 def _on_press(key) -> None:
     global _pending_suppress
     token = _key_token(key)
     if token:
         _pressed_tokens.add(token)
+    side = _modifier_side(key)
+    if side:
+        _pressed_tokens.add(side)
     hook = _hooks.get(token)
     if hook is None:
         _pending_suppress = False
@@ -132,7 +170,13 @@ def _on_press(key) -> None:
 def _on_release(key) -> None:
     global _pending_suppress
     token = _key_token(key)
-    if token:
+    side = _modifier_side(key)
+    if side:
+        _pressed_tokens.discard(side)
+    if token and not any(modifier in _pressed_tokens for modifier in (
+        "left " + ("windows" if token == "cmd" else token),
+        "right " + ("windows" if token == "cmd" else token),
+    )):
         _pressed_tokens.discard(token)
     hook = _hooks.get(token)
     if hook is None:
@@ -177,6 +221,7 @@ def unhook_all() -> None:
 
     with _listener_lock:
         _hooks.clear()
+        _pressed_tokens.clear()
         if _listener is not None:
             try:
                 _listener.stop()
@@ -186,7 +231,16 @@ def unhook_all() -> None:
 
 
 def is_pressed(key: str) -> bool:
-    return _canonical_token(key) in _pressed_tokens
+    from config import normalize_modifier_name
+    try:
+        token = normalize_modifier_name(key)
+    except ValueError:
+        token = _canonical_token(key)
+    else:
+        pressed = _modifier_key_state(token)
+        if pressed is not None:
+            return pressed
+    return token in _pressed_tokens
 
 
 def side_exclusive_scan_codes(key: str):
@@ -195,6 +249,15 @@ def side_exclusive_scan_codes(key: str):
 
 
 def is_pressed_exclusive(key: str) -> bool:
+    from config import normalize_modifier_name
+    try:
+        token = normalize_modifier_name(key)
+    except ValueError:
+        return is_pressed(key)
+    if token.startswith(("left ", "right ")):
+        side, family = token.split(" ", 1)
+        opposite = ("right " if side == "left" else "left ") + family
+        return is_pressed(token) and not is_pressed(opposite)
     return is_pressed(key)
 
 

@@ -352,6 +352,23 @@ def normalize_key_name(key: str) -> str:
     return _KEY_ALIASES.get(k, k)
 
 
+def normalize_modifier_name(key: str) -> str:
+    """Use one modifier family spelling while retaining a requested side."""
+    name = normalize_key_name(key)
+    side = ""
+    for prefix in ("left ", "right "):
+        if name.startswith(prefix):
+            side, name = prefix, name[len(prefix):]
+            break
+    aliases = {"ctrl": "ctrl", "control": "ctrl", "shift": "shift",
+               "alt": "alt", "option": "alt", "cmd": "cmd", "command": "cmd",
+               "win": "cmd", "windows": "cmd", "super": "cmd"}
+    if name not in aliases:
+        raise ValueError(f"Unsupported shortcut modifier: {key!r}")
+    family = aliases[name]
+    return side + ("windows" if side and family == "cmd" else family)
+
+
 def parse_hold_hotkey(hotkey: str) -> Tuple[Tuple[str, ...], str]:
     """Split a hold-to-talk chord into (modifiers, primary_key).
 
@@ -895,7 +912,11 @@ class Config:
     def validate_polish_hotkey(value, *reserved):
         if not value:
             return
-        _, primary = parse_hold_hotkey(value)
+        modifiers, primary = parse_hold_hotkey(value)
+        normalized = {normalize_modifier_name(modifier) for modifier in modifiers}
+        for modifier in normalized:
+            if modifier.startswith("left ") and "right " + modifier[5:] in normalized:
+                raise ValueError("Polish shortcut cannot require both exclusive modifier sides")
         reserved_keys = [parse_hold_hotkey(key)[1] for key in reserved if key]
         if primary in reserved_keys:
             raise ValueError("Polish shortcut must use a different primary key from other shortcuts")

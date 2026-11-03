@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app_state import AppState
-from config import Config
+from config import Config, normalize_modifier_name
 from tests.test_reliability import app_fixture
 
 
@@ -140,6 +140,148 @@ class TestHotkeyDispatch(unittest.TestCase):
             self.app.on_live_toggle()
         self.assertEqual(observed, [AppState.IDLE])
         self.assertEqual(self.app.state, AppState.RECORDING)
+
+
+class TestPolishModifierAliases(unittest.TestCase):
+    def bind(self, chord, physical):
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        hooks, app = {}, app_fixture()
+        stack.enter_context(patch.multiple(Config, HOTKEY="ctrl+grave", AI_HOTKEY="ctrl+shift+grave",
+            POLISH_HOTKEY=chord, RESET_CONTEXT_HOTKEY="", LIVE_HOTKEY="f7", CANCEL_HOTKEY="esc",
+            CTRL_KEEP_CONTEXT_KEYS=("f6",)))
+        stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
+        stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: hooks.update({key: fn})))
+
+        def pressed(key):
+            requested = normalize_modifier_name(key)
+            if requested.startswith(("left ", "right ")):
+                return requested in physical
+            return any(normalize_modifier_name(value.removeprefix("left ").removeprefix("right ")) == requested
+                       for value in physical)
+
+        stack.enter_context(patch("main.platforms.is_pressed", side_effect=pressed))
+        stack.enter_context(patch("main.platforms.is_pressed_exclusive", side_effect=lambda key: key in physical))
+        dispatch = stack.enter_context(patch.object(app, "_dispatch_hotkey"))
+        app._bind_hotkeys()
+        return hooks[chord.split("+")[-1]], dispatch
+
+    def test_supported_modifier_aliases_dispatch_through_production_binder(self):
+        for modifier in ("ctrl", "control", "shift", "alt", "option", "cmd", "command", "win", "windows", "super"):
+            with self.subTest(modifier=modifier):
+                handler, dispatch = self.bind(modifier + "+p", {normalize_modifier_name(modifier)})
+                self.assertFalse(handler(SimpleNamespace(event_type="down")))
+                self.assertFalse(handler(SimpleNamespace(event_type="up")))
+                dispatch.assert_called_once_with("polish")
+
+    def test_side_modifiers_accept_only_the_requested_side(self):
+        for alias in ("ctrl", "control", "shift", "alt", "option", "cmd", "command", "win", "windows", "super"):
+            for side, opposite in (("left", "right"), ("right", "left")):
+                requested = normalize_modifier_name(side + " " + alias)
+                other = normalize_modifier_name(opposite + " " + alias)
+                for physical, accepted in (({requested}, True), ({other}, False), ({requested, other}, False)):
+                    with self.subTest(alias=alias, side=side, physical=physical):
+                        handler, dispatch = self.bind(side + " " + alias + "+p", physical)
+                        self.assertEqual(handler(SimpleNamespace(event_type="down")), not accepted)
+                        self.assertEqual(handler(SimpleNamespace(event_type="up")), not accepted)
+                        self.assertEqual(dispatch.call_count, int(accepted))
+
+    def test_alias_chord_repeats_remain_suppressed_after_modifier_release(self):
+        physical = {"left windows"}
+        handler, dispatch = self.bind("left win+p", physical)
+        self.assertFalse(handler(SimpleNamespace(event_type="down")))
+        physical.clear()
+        self.assertFalse(handler(SimpleNamespace(event_type="down")))
+        self.assertFalse(handler(SimpleNamespace(event_type="up")))
+        dispatch.assert_called_once_with("polish")
+        self.assertTrue(handler(SimpleNamespace(event_type="down")))
+
+    def test_generic_chords_still_require_exact_modifier_families(self):
+        for physical, accepted in (({"ctrl", "shift"}, True), ({"ctrl"}, False),
+                                   ({"ctrl", "shift", "alt"}, False)):
+            handler, dispatch = self.bind("control+shift+p", physical)
+            self.assertEqual(handler(SimpleNamespace(event_type="down")), not accepted)
+            self.assertEqual(dispatch.call_count, int(accepted))
+
+    def test_x11_masks_accept_the_same_modifier_aliases(self):
+        from tests.test_x11_backend import TestX11Backend
+        backend = TestX11Backend().fixture()
+        for alias, mask in (("control", 4), ("option", 8), ("command", 64), ("super", 64), ("left win", 64)):
+            with self.subTest(alias=alias):
+                self.assertIn(mask, backend.masks(((alias,),)))
+
+    def test_non_modifier_prefix_is_rejected_before_binding(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported shortcut modifier"):
+            Config.validate_polish_hotkey("f6+p", "ctrl+grave")
+
+    def test_conflicting_exclusive_modifier_sides_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "both exclusive modifier sides"):
+            Config.validate_polish_hotkey("left control+right ctrl+p", "ctrl+grave")
+
+
+class TestMacModifierSides(unittest.TestCase):
+    def setUp(self):
+        from platforms import macos
+        self.mac = macos
+        self.native_query = macos._modifier_key_state
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(macos, "_pynput", SimpleNamespace(KeyCode=type("FakeKeyCode", (), {}))))
+        stack.enter_context(patch.object(macos, "_pressed_tokens", set()))
+        stack.enter_context(patch.object(macos, "_hooks", {}))
+        stack.enter_context(patch.object(macos, "_modifier_key_state", return_value=None))
+
+    def test_physical_codes_preserve_generic_and_side_specific_state(self):
+        for family, left, right in (("ctrl", 59, 62), ("shift", 56, 60), ("alt", 58, 61), ("cmd", 55, 54)):
+            with self.subTest(family=family):
+                left_key = SimpleNamespace(name=family, value=SimpleNamespace(vk=left))
+                right_key = SimpleNamespace(name=family + "_r", value=SimpleNamespace(vk=right))
+                self.mac._on_press(left_key)
+                self.assertTrue(self.mac.is_pressed(family))
+                self.assertTrue(self.mac.is_pressed_exclusive("left " + family))
+                self.assertFalse(self.mac.is_pressed_exclusive("right " + family))
+                self.mac._on_press(right_key)
+                self.assertTrue(self.mac.is_pressed(family))
+                self.assertFalse(self.mac.is_pressed_exclusive("left " + family))
+                self.assertFalse(self.mac.is_pressed_exclusive("right " + family))
+                self.mac._on_release(left_key)
+                self.assertTrue(self.mac.is_pressed(family))
+                self.assertTrue(self.mac.is_pressed_exclusive("right " + family))
+                self.mac._on_release(right_key)
+                self.assertFalse(self.mac.is_pressed(family))
+
+    def test_aliases_read_the_same_physical_command_side(self):
+        key = SimpleNamespace(name="cmd", value=SimpleNamespace(vk=55))
+        self.mac._on_press(key)
+        for alias in ("cmd", "command", "win", "windows", "super"):
+            self.assertTrue(self.mac.is_pressed(alias))
+            self.assertTrue(self.mac.is_pressed_exclusive("left " + alias))
+            self.assertFalse(self.mac.is_pressed_exclusive("right " + alias))
+        self.mac._on_release(key)
+
+    def test_native_modifier_state_overrides_ambiguous_pynput_release_events(self):
+        import sys
+        pressed = {59, 62}
+        quartz = SimpleNamespace(kCGEventSourceStateCombinedSessionState=0,
+            CGEventSourceKeyState=lambda state, code: code in pressed)
+        with patch.dict(sys.modules, Quartz=quartz), patch.object(self.mac, "_modifier_key_state", self.native_query):
+            self.mac._on_press(SimpleNamespace(name="ctrl", value=SimpleNamespace(vk=59)))
+            self.mac._on_press(SimpleNamespace(name="ctrl_r", value=SimpleNamespace(vk=62)))
+            self.assertTrue(self.mac.is_pressed("control"))
+            self.assertFalse(self.mac.is_pressed_exclusive("left ctrl"))
+            self.assertFalse(self.mac.is_pressed_exclusive("right ctrl"))
+            pressed.remove(59)
+            self.mac._on_press(SimpleNamespace(name="ctrl", value=SimpleNamespace(vk=59)))
+            self.assertFalse(self.mac.is_pressed("left control"))
+            self.assertTrue(self.mac.is_pressed_exclusive("right control"))
+            pressed.clear()
+            self.assertFalse(self.mac.is_pressed("ctrl"))
+
+    def test_unhook_clears_tracked_modifier_state(self):
+        with patch.object(self.mac, "_listener", None):
+            self.mac._on_press(SimpleNamespace(name="shift", value=SimpleNamespace(vk=56)))
+            self.mac.unhook_all()
+            self.assertFalse(self.mac.is_pressed("shift"))
 
 
 if __name__ == "__main__":
