@@ -228,6 +228,7 @@ class TestMacModifierSides(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(macos, "_pynput", SimpleNamespace(KeyCode=type("FakeKeyCode", (), {}))))
         stack.enter_context(patch.object(macos, "_pressed_tokens", set()))
+        stack.enter_context(patch.object(macos, "_pressed_key_tokens", {}, create=True))
         stack.enter_context(patch.object(macos, "_hooks", {}))
         stack.enter_context(patch.object(macos, "_modifier_key_state", return_value=None))
 
@@ -270,6 +271,7 @@ class TestMacModifierSides(unittest.TestCase):
                 if action == "primary":
                     self.assertTrue(dispatch.call_args.args[2])
             self.assertFalse(mac.is_pressed("p"))
+            self.assertFalse(mac._pressed_tokens & {"p", "grave", "~"})
 
     def test_option_translated_character_keeps_physical_primary_and_release(self):
         self.translated_chord("option+p", (58,), True)
@@ -287,6 +289,73 @@ class TestMacModifierSides(unittest.TestCase):
     def test_polish_symbol_release_does_not_dispatch_passthrough_reset(self):
         self.translated_chord("shift+~", (56,), True, "~", 50, "`",
                               dictation="ctrl+p", reset="grave")
+
+    def test_unmatched_symbol_release_clears_pressed_state_when_modifiers_change(self):
+        self.translated_chord("shift+~", (56, 58), False, "~", 50, "`", dictation="ctrl+p")
+
+    def observer_ownership(self, observer, failed_polish=False):
+        mac, app = self.mac, app_fixture()
+        with ExitStack() as stack:
+            stack.enter_context(patch.multiple(Config, HOTKEY="ctrl+p", AI_HOTKEY="ctrl+shift+p",
+                POLISH_HOTKEY="shift+~", RESET_CONTEXT_HOTKEY="grave" if observer == "reset" else "",
+                CANCEL_HOTKEY="grave" if observer == "cancel" else "esc", LIVE_HOTKEY="f7",
+                CTRL_KEEP_CONTEXT_KEYS=("f6",)))
+            stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
+            stack.enter_context(patch("main.platforms.hotkey_backend_name", return_value="pynput"))
+            stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: mac.hook_key(key, fn, **kw)))
+            stack.enter_context(patch("main.platforms.is_pressed", side_effect=mac.is_pressed))
+            stack.enter_context(patch("main.platforms.is_pressed_exclusive", side_effect=mac.is_pressed_exclusive))
+            stack.enter_context(patch.object(mac, "_listener", object()))
+            stack.enter_context(patch.object(mac, "_primary_virtual_key", side_effect=lambda token: {"p": 35, "grave": 50}.get(token)))
+            dispatch = stack.enter_context(patch.object(app, "_dispatch_hotkey"))
+            app._bind_hotkeys()
+            shift = SimpleNamespace(name="shift", value=SimpleNamespace(vk=56))
+            key, event = mac._pynput.KeyCode(), object()
+            key.vk = 50
+            if failed_polish:
+                mac._on_press(shift)
+                key.char = "~"
+                dispatch.side_effect = RuntimeError("Synthetic dispatch failure")
+                mac._on_press(key)
+                self.assertIs(mac._intercept(None, event), event)
+                dispatch.side_effect = None
+                mac._on_release(shift)
+                key.char = "`"
+                mac._on_release(key)
+                self.assertEqual([call.args[0] for call in dispatch.call_args_list], ["polish"])
+            else:
+                key.char = "`"
+                mac._on_press(key)
+                self.assertIs(mac._intercept(None, event), event)
+                mac._on_press(shift)
+                key.char = "~"
+                for _ in range(2):
+                    mac._on_press(key)
+                    self.assertIs(mac._intercept(None, event), event)
+                mac._on_release(shift)
+                key.char = "`"
+                mac._on_release(key)
+                self.assertIs(mac._intercept(None, event), event)
+                expected = ["cancel"] * 3 if observer == "cancel" else ["reset"]
+                self.assertEqual([call.args[0] for call in dispatch.call_args_list], expected)
+            self.assertFalse(any(hook.get("pressed_virtual_key") is not None for hook in mac._hooks.values()))
+            self.assertFalse(mac._pressed_tokens & {"grave", "~"})
+            dispatch.reset_mock()
+            mac._on_press(shift)
+            key.char = "~"
+            mac._on_press(key)
+            mac._on_release(key)
+            mac._on_release(shift)
+            dispatch.assert_called_once_with("polish")
+
+    def test_cancel_owns_repeats_and_release_after_modifier_changes(self):
+        self.observer_ownership("cancel")
+
+    def test_reset_owns_repeats_and_release_after_modifier_changes(self):
+        self.observer_ownership("reset")
+
+    def test_failed_polish_press_cannot_redirect_release_to_reset(self):
+        self.observer_ownership("reset", failed_polish=True)
 
     def test_side_specific_option_translated_character_dispatches_once(self):
         self.translated_chord("right option+p", (61,), True)

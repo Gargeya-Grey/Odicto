@@ -88,6 +88,7 @@ _listener = None
 _listener_lock = threading.Lock()
 _hooks: Dict[str, Dict[str, Any]] = {}
 _pressed_tokens: set = set()
+_pressed_key_tokens: dict = {}
 _pending_suppress = False
 
 
@@ -169,17 +170,20 @@ def _modifier_key_state(token):
 def _on_press(key) -> None:
     global _pending_suppress
     token = _key_token(key)
+    virtual_key = getattr(key, "vk", None) if isinstance(key, _pynput.KeyCode) else None
+    if virtual_key is not None:
+        _pressed_tokens.discard(_pressed_key_tokens.get(virtual_key))
+        _pressed_key_tokens[virtual_key] = token
     if token:
         _pressed_tokens.add(token)
     side = _modifier_side(key)
     if side:
         _pressed_tokens.add(side)
     candidates = [token]
-    virtual_key = None
     if isinstance(key, _pynput.KeyCode):
-        virtual_key = getattr(key, "vk", None)
         character = _canonical_token(key.char or "")
-        if character != token and character in _hooks:
+        already_claimed = virtual_key is not None and _hooks.get(token, {}).get("pressed_virtual_key") == virtual_key
+        if not already_claimed and character != token and character in _hooks:
             if _hooks.get(token, {}).get("can_decline", False):
                 candidates.append(character)
             else:
@@ -188,17 +192,18 @@ def _on_press(key) -> None:
         hook = _hooks.get(candidate)
         if hook is None:
             continue
+        result, claimed = True, True
         try:
             result = hook["handler"](_Event(KEY_DOWN, candidate))
+            claimed = result is False or not hook["can_decline"]
         except Exception as e:
             print(f"Error in hotkey press handler: {e}", flush=True)
-            _pending_suppress = False
-            return
-        if result is False or not hook["can_decline"]:
+        if claimed:
             _pressed_tokens.discard(token)
             _pressed_tokens.add(candidate)
             if virtual_key is not None:
                 hook["pressed_virtual_key"] = virtual_key
+                _pressed_key_tokens[virtual_key] = candidate
             _pending_suppress = bool(hook["suppress"]) and result is False
             return
     _pending_suppress = False
@@ -207,6 +212,8 @@ def _on_press(key) -> None:
 def _on_release(key) -> None:
     global _pending_suppress
     token = _key_token(key)
+    if isinstance(key, _pynput.KeyCode):
+        _pressed_tokens.discard(_pressed_key_tokens.pop(getattr(key, "vk", None), None))
     side = _modifier_side(key)
     if side:
         _pressed_tokens.discard(side)
@@ -262,6 +269,7 @@ def unhook_all() -> None:
     with _listener_lock:
         _hooks.clear()
         _pressed_tokens.clear()
+        _pressed_key_tokens.clear()
         if _listener is not None:
             try:
                 _listener.stop()
