@@ -51,7 +51,7 @@ class TestManagedMigration(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="odicto-migration-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.source = self.root / "source"
         (self.source / "app").mkdir(parents=True)
         for relative in ("main.py", "odicto.py", "app/paths.py"):

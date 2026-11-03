@@ -118,12 +118,21 @@ def assert_inactive(data: Path, code: Path, *, allow_setup: bool = False) -> Non
             if not name.startswith(("python", "pypy")):
                 continue
             command = process.cmdline()
+            def script_path(argument):
+                if not argument.lower().endswith(".py"):
+                    return None
+                if not os.path.isabs(argument):
+                    argument = os.path.join(process.cwd(), argument)
+                try:
+                    return os.path.normcase(os.path.realpath(argument))
+                except (OSError, ValueError):
+                    raise RuntimeError("Python script ownership could not be resolved; migration is blocked") from None
             setup_scripts = {os.path.normcase(str((code / name).resolve())) for name in ("odicto.py", "app/odicto.py")}
             if (allow_setup and len(command) >= 3
-                    and os.path.normcase(os.path.abspath(command[1])) in setup_scripts
+                    and script_path(command[1]) in setup_scripts
                     and command[2] in {"setup", "_managed-setup"}):
                 continue
-            if any(os.path.normcase(os.path.abspath(arg)) in expected for arg in command[1:] if not arg.startswith("-")):
+            if any(script_path(arg) in expected for arg in command[1:] if not arg.startswith("-")):
                 raise RuntimeError("A source or destination lifecycle process is active; close it before migration")
         except psutil.NoSuchProcess:
             continue

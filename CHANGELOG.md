@@ -20,6 +20,7 @@ section as the release notes and refuses a version that has no section.
 ### Fixed
 
 - Windows installation selects the first `uv` executable on PATH even when several are installed.
+- Migration recognizes source processes launched through filesystem aliases or relative script paths.
 - Migration/admin commands use the installed release's dependencies. Startup receipt recovery, legacy prompt checks and launcher ownership checks prevent incomplete or misleading transfers.
 - The elevated task recognizes an existing owner before spawning a child. Closing a normal source debug session no longer falls through into a background restart.
 

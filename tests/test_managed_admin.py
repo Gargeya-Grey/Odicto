@@ -376,6 +376,35 @@ class TestManagedWindowsIdentity(unittest.TestCase):
 
 
 class TestManagedNativeBoundary(unittest.TestCase):
+    def test_process_identity_resolves_script_path_aliases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            alias = root / "alias"
+            physical = root / "physical"
+            physical.mkdir()
+            process = SimpleNamespace(pid=12345, info={"name": "python.exe"},
+                cmdline=lambda: ["python", str(alias / "main.py"), "setup"])
+            original = os.path.realpath
+            def resolve_alias(value, *args, **kwargs):
+                path = Path(value)
+                if path.is_relative_to(alias):
+                    return str(physical / path.relative_to(alias))
+                return original(value, *args, **kwargs)
+            with patch("os.path.realpath", side_effect=resolve_alias), patch("psutil.process_iter", return_value=[process]):
+                with self.assertRaisesRegex(RuntimeError, "lifecycle process"):
+                    admin.assert_inactive(alias, alias, allow_setup=True)
+
+    def test_relative_process_scripts_resolve_against_process_working_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code = Path(temporary).resolve()
+            process = SimpleNamespace(pid=12345, info={"name": "python.exe"}, cwd=lambda: str(code),
+                cmdline=lambda: ["python", "main.py", "setup"])
+            with patch("psutil.process_iter", return_value=[process]):
+                with self.assertRaisesRegex(RuntimeError, "lifecycle process"):
+                    admin.assert_inactive(code, code, allow_setup=True)
+                process.cmdline = lambda: ["python", "odicto.py", "_managed-setup"]
+                admin.assert_inactive(code, code, allow_setup=True)
+
     def test_recycled_non_python_health_pid_does_not_block_inactive_installation(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp)
