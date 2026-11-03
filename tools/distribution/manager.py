@@ -251,8 +251,8 @@ class Manager:
         self.installer = installer or self._install_dependencies
 
     @staticmethod
-    def support():
-        root = Path(__file__).resolve().parents[2]
+    def support(root: Path | None = None):
+        root = root if root is not None else Path(__file__).resolve().parents[2]
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         from tools.distribution import managed_admin
@@ -415,7 +415,7 @@ class Manager:
                 if any(path.exists() for path in admin_markers[1:]):
                     raise DistributionError("A release-local administrator marker has unknown managed ownership")
                 if sys.platform == "win32":
-                    self.support().enabled(self.home)
+                    self.support(self.release_path(record)).enabled(self.home)
             new = {key: record[key] for key in ("version", "directory", "archive_sha256")}
             if old:
                 new["previous"] = {key: old[key] for key in ("version", "directory", "archive_sha256")}
@@ -972,7 +972,7 @@ def main(argv=None) -> int:
                     print(f"Configure with: {manager.home / 'bin' / ('odicto.cmd' if os.name == 'nt' else 'odicto')} setup")
                 print(f"Odicto {record['version']} is active.")
         return 0
-    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         print(f"Odicto: {error}", file=sys.stderr)
         return 1
 

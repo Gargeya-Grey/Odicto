@@ -100,6 +100,58 @@ class TestManagedDistribution(unittest.TestCase):
         run.assert_not_called()
         self.assertEqual(sys.path, before)
 
+    def test_cold_bootstrap_repairs_admin_enabled_installation_from_verified_release(self):
+        import os
+        self.initial()
+        helper = MODULE_PATH.with_name("managed_admin.py").read_text(encoding="utf-8")
+        newer = self.manager.stage(self.add_release("v1.3.0", archive=archive_for("v1.3.0", extras=[
+            ("Odicto/tools/distribution/managed_admin.py", helper)])))
+        directory = self.manager.release_path(newer)
+        capabilities = directory / "tools/distribution/capabilities.json"
+        value = json.loads(capabilities.read_text())
+        value["managed_admin_mode"] = True
+        capabilities.write_text(json.dumps(value))
+        identity = hashlib.sha256(os.path.normcase(str(self.manager.home)).encode()).hexdigest()[:12]
+        dist.atomic_json(self.manager.data / ".odicto-admin-enabled", {"schema": 1,
+            "home": str(self.manager.home), "task": "Odicto-managed-" + identity})
+        program = r'''
+import json, sys, types
+from pathlib import Path
+from types import SimpleNamespace
+module = types.ModuleType('odicto_verified_bootstrap')
+module.__file__ = '<verified-release-manager>'
+sys.modules[module.__name__] = module
+exec(compile(Path(sys.argv[1]).read_bytes(), module.__file__, 'exec'), module.__dict__)
+module.sys = SimpleNamespace(platform='win32', stderr=sys.stderr, path=sys.path)
+def unexpected(*args, **kwargs):
+    raise AssertionError('Repair must use the staged release without network, native dependencies or lifecycle actions')
+module.latest_release = unexpected
+module.Manager.bind_dependencies = unexpected
+module.subprocess.run = unexpected
+module.subprocess.Popen = unexpected
+module.shutil.which = lambda name: 'fixture-uv'
+module.Manager.expose_command = lambda self: self.home / 'bin/odicto.cmd'
+assert module.main(['--home', sys.argv[2], 'install']) == 0
+home = Path(sys.argv[2])
+active = json.loads((home / 'active.json').read_text())
+assert active['version'] == 'v1.3.0'
+assert (home / 'bin/odicto.cmd').is_file()
+assert Path(sys.modules['tools.distribution.managed_admin'].__file__).resolve() == (
+    home / 'releases' / active['directory'] / 'tools/distribution/managed_admin.py').resolve()
+print('COLD ADMIN REPAIR PASS')
+'''
+        done = subprocess.run([sys.executable, "-I", "-S", "-c", program, str(MODULE_PATH),
+                               str(self.manager.home)], cwd=self.root, capture_output=True, text=True, timeout=20)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("COLD ADMIN REPAIR PASS", done.stdout)
+
+    def test_missing_support_import_returns_a_clean_cli_error(self):
+        with patch.object(dist, "Manager", return_value=self.manager), patch.object(
+            self.manager, "update", side_effect=ImportError("fixture missing support")
+        ), patch.object(dist.sys, "stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(dist.main(["--home", str(self.manager.home), "install"]), 1)
+        self.assertIn("Odicto: fixture missing support", error.getvalue())
+
     def test_updater_can_rollback_without_active_application_dependencies(self):
         original = self.initial()
         newer = self.manager.stage(self.add_release("v1.3.0"))
