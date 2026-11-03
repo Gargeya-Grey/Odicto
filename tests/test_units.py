@@ -3182,7 +3182,9 @@ class TestCrossPlatform(unittest.TestCase):
             backend.subprocess, "run"
         ) as mock_run:
             if sys.platform != "win32":
-                with patch.object(backend, "kill_process_tree") as mock_tree:
+                with patch.object(backend, "kill_process_tree") as mock_tree, patch.object(
+                    backend.psutil, "pid_exists", return_value=False
+                ):
                     killed = backend.kill_other_odicto_processes(None)
                     mock_tree.assert_called_once_with(333)
             else:
@@ -3351,7 +3353,9 @@ class TestCrossPlatform(unittest.TestCase):
 
         with patch("platforms.kill_other_odicto_processes") as mock_kill, patch(
             "platforms.spawn_detached"
-        ) as mock_spawn, patch("os.path.isfile", return_value=True):
+        ) as mock_spawn, patch("os.path.isfile", return_value=True), patch(
+            "windows_admin.run_if_needed", return_value=None
+        ):
             msg = setup_web.restart_odicto()
         mock_kill.assert_called_once()
         mock_spawn.assert_called_once()

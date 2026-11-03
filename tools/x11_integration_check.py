@@ -114,6 +114,7 @@ def main():
         from PySide6.QtWidgets import QApplication, QPlainTextEdit
         from platforms import _x11
         from Xlib import X, XK, display
+        from Xlib.ext import xtest
         backend = _x11
         desktop = display.Display()
         desktop_root = desktop.screen().root
@@ -145,7 +146,28 @@ def main():
                 time.sleep(0.005)
 
         def inject(*arguments):
-            subprocess.run(["xdotool", *arguments], check=True, timeout=10)
+            # Older xdotool adds Alt to function keys with XKB 2.46+ (upstream #493).
+            if arguments[0] in ("key", "keydown", "keyup"):
+                action = None
+                for argument in arguments:
+                    if argument in ("key", "keydown", "keyup"):
+                        action = argument
+                        continue
+                    names = argument.split("+")
+                    aliases = {"alt": "Alt_L", "ctrl": "Control_L", "shift": "Shift_L"}
+                    codes = [desktop.keysym_to_keycode(XK.string_to_keysym(aliases.get(name, name)))
+                             for name in names]
+                    if not all(codes):
+                        raise RuntimeError(f"Cannot inject physical keys for {argument!r}")
+                    if action != "keyup":
+                        for code in codes:
+                            xtest.fake_input(desktop, X.KeyPress, code)
+                    if action != "keydown":
+                        for code in reversed(codes):
+                            xtest.fake_input(desktop, X.KeyRelease, code)
+                    desktop.sync()
+            else:
+                subprocess.run(["xdotool", *arguments], check=True, timeout=10)
             pump()
 
         pump()
@@ -261,6 +283,7 @@ def main():
         editor.close()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps({"pass": True, "display": os.environ["DISPLAY"],
+            "key_injector": "XTEST physical keycodes; xdotool retained for text and window operations",
             "owned_display": True, "cases": ["normal typing", "bare shortcut suppression", "modifier passthrough",
             "bare primary replay", "typing during held chord", "primary release suppression", "eight repeated held chords",
             "desktop Alt+F7/F8 coexistence", "private-pipe ASCII and multiline typing",
@@ -268,6 +291,25 @@ def main():
             "teardown recovery"],
             "limits": ["Xvfb X11 only", "No physical microphone or Wayland coverage"]}, indent=2), encoding="utf-8")
         return 0
+    except Exception as error:
+        report = {"pass": False, "error": f"{type(error).__name__}: {error}",
+                  "display": os.environ.get("DISPLAY"), "owned_display": True,
+                  "captured": locals().get("captured", []), "observed": locals().get("observed", [])}
+        active = getattr(backend, "_backend", None) if backend is not None else None
+        if active is not None:
+            try:
+                with active.lock:
+                    report["input_state"] = {"pointer_mask": active.root.query_pointer().mask,
+                        "pressed": active.pressed, "suppressed": sorted(active.suppressed),
+                        "grab_masks": {code: sorted(masks) for code, masks in active.modifier_masks.items()},
+                        "keymap": {code: list(active.display.get_keyboard_mapping(code, 1)[0])
+                                   for code in active.handlers},
+                        "worker_alive": active.thread.is_alive()}
+            except Exception as snapshot_error:
+                report["diagnostic_error"] = str(snapshot_error)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        raise
     finally:
         if backend is not None:
             backend.unhook_all()

@@ -106,7 +106,10 @@ def _key_token(key) -> str:
     if isinstance(key, _pynput.KeyCode):
         virtual_key = getattr(key, "vk", None)
         if virtual_key is not None:
-            for token, hook in _hooks.items():
+            for token, hook in _hooks.copy().items():
+                if hook.get("pressed_virtual_key") == virtual_key:
+                    return token
+            for token, hook in _hooks.copy().items():
                 if hook.get("virtual_key") == virtual_key:
                     return token
         ch = key.char
@@ -171,16 +174,30 @@ def _on_press(key) -> None:
     side = _modifier_side(key)
     if side:
         _pressed_tokens.add(side)
-    hook = _hooks.get(token)
-    if hook is None:
-        _pending_suppress = False
-        return
-    try:
-        result = hook["handler"](_Event(KEY_DOWN, token))
-    except Exception as e:
-        print(f"Error in hotkey press handler: {e}", flush=True)
-        result = True
-    _pending_suppress = bool(hook["suppress"]) and result is False
+    candidates = [token]
+    virtual_key = None
+    if isinstance(key, _pynput.KeyCode):
+        virtual_key = getattr(key, "vk", None)
+        character = _canonical_token(key.char or "")
+        if character != token and character in _hooks:
+            candidates.append(character)
+    for candidate in candidates:
+        hook = _hooks.get(candidate)
+        if hook is None:
+            continue
+        try:
+            result = hook["handler"](_Event(KEY_DOWN, candidate))
+        except Exception as e:
+            print(f"Error in hotkey press handler: {e}", flush=True)
+            result = True
+        if result is False:
+            _pressed_tokens.discard(token)
+            _pressed_tokens.add(candidate)
+            if virtual_key is not None:
+                hook["pressed_virtual_key"] = virtual_key
+            _pending_suppress = bool(hook["suppress"])
+            return
+    _pending_suppress = False
 
 
 def _on_release(key) -> None:
@@ -198,6 +215,7 @@ def _on_release(key) -> None:
     if hook is None:
         _pending_suppress = False
         return
+    hook.pop("pressed_virtual_key", None)
     try:
         result = hook["handler"](_Event(KEY_UP, token))
     except Exception as e:

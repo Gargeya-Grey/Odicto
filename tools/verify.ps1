@@ -49,7 +49,11 @@ Set-Location $RepoRoot
 #     proves the keyboard-library scan-code fallback. No assertion changed; still 153 tests.
 # (11) Linux now uses the rootless X11 backend. Add x11 to the exact backend-name enum;
 #      no assertion removed and the frozen test count is unchanged.
-$ExpectedTestUnitsHash = 'B1F0EDA0DF2F2E472D0D0ACBBA31E2A507F5E7983774FF8125A0AA64247B698A'
+# (12) The fake foreign PID test mocks its post-termination liveness on POSIX too.
+#      Real macOS PID 333 can exist; all kill/return assertions remain unchanged.
+# (13) The source restart test mocks the admin boundary even outside the gate runner.
+#      A broad isfile mock must never enable the real admin launcher. Assertions unchanged.
+$ExpectedTestUnitsHash = '2541843840CB3BC042FA30895F7AB3CB98B7FF78228411EED40AAE4445A969A1'
 
 $Script:Failures = @()
 
