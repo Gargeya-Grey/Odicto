@@ -99,7 +99,7 @@ class _KeyPress:
     failed: bool = False
 
 
-_pressed_keys: dict[int | str, _KeyPress] = {}
+_pressed_keys: dict[tuple[str, int | str], _KeyPress] = {}
 _pending_suppress = False
 
 
@@ -117,7 +117,7 @@ def _key_token(key) -> str:
         return ""
     if isinstance(key, _pynput.KeyCode):
         virtual_key = getattr(key, "vk", None)
-        if virtual_key is not None:
+        if virtual_key is not None and not getattr(key, "_is_media", False):
             for token, hook in _hooks.copy().items():
                 if hook.get("virtual_key") == virtual_key:
                     return token
@@ -225,8 +225,11 @@ def _on_press(key) -> None:
 
 
 def _key_identity(key):
-    virtual_key = getattr(getattr(key, "value", key), "vk", None)
-    return virtual_key if virtual_key is not None else str(getattr(key, "name", None) or getattr(key, "char", ""))
+    value = getattr(key, "value", key)
+    virtual_key = getattr(value, "vk", None)
+    namespace = "media" if getattr(value, "_is_media", False) else "keyboard"
+    code = virtual_key if virtual_key is not None else str(getattr(key, "name", None) or getattr(key, "char", ""))
+    return namespace, code
 
 
 def _on_release(key) -> None:

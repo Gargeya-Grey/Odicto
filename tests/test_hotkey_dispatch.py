@@ -371,6 +371,46 @@ class TestMacModifierSides(unittest.TestCase):
             mac._on_release(key)
         reset.assert_not_called()
 
+    def test_media_and_keyboard_codes_have_independent_hold_sessions(self):
+        mac = self.mac
+        for order in (("letter", "media"), ("media", "letter")):
+            with self.subTest(order=order), ExitStack() as stack:
+                stack.enter_context(patch.object(mac, "_hooks", {}))
+                stack.enter_context(patch.object(mac, "_pressed_tokens", set()))
+                stack.enter_context(patch.object(mac, "_pressed_keys", {}))
+                app = app_fixture()
+                stack.enter_context(patch.multiple(Config, HOTKEY="ctrl+a", AI_HOTKEY="ctrl+shift+a",
+                    HOTKEY_TOGGLE=False, POLISH_HOTKEY="f8", RESET_CONTEXT_HOTKEY="",
+                    CANCEL_HOTKEY="esc", LIVE_HOTKEY="f7", CTRL_KEEP_CONTEXT_KEYS=("f6",)))
+                stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
+                stack.enter_context(patch("main.platforms.hotkey_backend_name", return_value="pynput"))
+                stack.enter_context(patch("main.platforms.hook_key", side_effect=lambda key, fn, **kw: mac.hook_key(key, fn, **kw)))
+                stack.enter_context(patch("main.platforms.is_pressed", side_effect=mac.is_pressed))
+                stack.enter_context(patch("main.platforms.is_pressed_exclusive", side_effect=mac.is_pressed_exclusive))
+                stack.enter_context(patch.object(mac, "_listener", object()))
+                stack.enter_context(patch.object(mac, "_primary_virtual_key", side_effect=lambda token: 0 if token == "a" else None))
+                dispatch = stack.enter_context(patch.object(app, "_dispatch_hotkey"))
+                app._bind_hotkeys()
+                ctrl = SimpleNamespace(name="ctrl", value=SimpleNamespace(vk=59))
+                letter = mac._pynput.KeyCode()
+                letter.vk, letter.char = 0, "a"
+                media = SimpleNamespace(name="media_volume_up", value=SimpleNamespace(vk=0, _is_media=True))
+                event = object()
+                mac._on_press(ctrl)
+                for name in order:
+                    mac._on_press(letter if name == "letter" else media)
+                    self.assertIs(mac._intercept(None, event), None if name == "letter" else event)
+                self.assertEqual([call.args[0] for call in dispatch.call_args_list], ["primary"])
+                mac._on_release(media)
+                self.assertIs(mac._intercept(None, event), event)
+                self.assertEqual([call.args[0] for call in dispatch.call_args_list], ["primary"])
+                mac._on_release(letter)
+                self.assertIs(mac._intercept(None, event), None)
+                mac._on_release(ctrl)
+                self.assertEqual([call.args[0] for call in dispatch.call_args_list], ["primary", "release"])
+                self.assertFalse(mac._pressed_keys)
+                self.assertFalse(mac._pressed_tokens)
+
     def test_side_specific_option_translated_character_dispatches_once(self):
         self.translated_chord("right option+p", (61,), True)
 
