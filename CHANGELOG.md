@@ -4,6 +4,12 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.3] - 2026-11-04
+
+### Fixed
+
+- The installed app keeps its log again. Started through admin mode, it wrote no `dictation.log` because its output went to a console nobody sees; it now always logs to the data folder, so startup problems and the verification report have a record.
+
 ## [1.2.2] - 2026-11-04
 
 ### Fixed

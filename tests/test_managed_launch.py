@@ -292,6 +292,44 @@ class TestManagedLaunch(unittest.TestCase):
         self.assertFalse(receipt.exists())
 
 
+class TestManagedOwnerLog(unittest.TestCase):
+    """The admin task gives the owner a hidden console as stdout; it must still log to disk."""
+
+    def attach(self, environment):
+        import main as main_mod
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "dictation.log")
+            console = io.StringIO()
+            with patch.dict(os.environ, environment, clear=False), patch.object(
+                main_mod, "_session_log_path", return_value=path
+            ), patch.object(sys, "stdout", console), patch.object(sys, "stderr", console), patch(
+                "faulthandler.enable"
+            ):
+                for key in ("ODICTO_MANAGED_HOME", "ODICTO_LAUNCH_TOKEN"):
+                    if key not in environment:
+                        os.environ.pop(key, None)
+                main_mod.attach_pythonw_log()
+                attached = sys.stdout is not console
+                if attached:
+                    print("Application ready!")
+                    sys.stdout._raw.close()
+            text = Path(path).read_text(encoding="utf-8") if os.path.exists(path) else ""
+        return attached, text, console.getvalue()
+
+    def test_managed_owner_logs_to_the_data_root_with_a_console_attached(self):
+        attached, text, console = self.attach({"ODICTO_MANAGED_HOME": "synthetic-home",
+                                               "ODICTO_LAUNCH_TOKEN": "a" * 32})
+        self.assertTrue(attached)
+        self.assertIn("----- session ", text)
+        self.assertIn("Application ready!", text)
+        self.assertEqual(console, "")
+
+    def test_console_run_outside_a_managed_launch_keeps_its_console(self):
+        attached, text, console = self.attach({})
+        self.assertFalse(attached)
+        self.assertEqual(text, "")
+
+
 class TestManagedChildProtocol(unittest.TestCase):
     def test_guard_does_not_block_normal_interpreter_shutdown(self):
         bootstrap = "import sys;sys.path.insert(0,sys.argv[1]);import odicto;odicto._managed_startup_guard()"

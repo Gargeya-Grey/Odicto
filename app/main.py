@@ -107,14 +107,25 @@ def _stdout_is_discarded() -> bool:
     return False
 
 
+def _is_managed_owner() -> bool:
+    """The installed owner, started by its supervising launcher (managed install).
+
+    Its stdout can be a console nobody sees: the admin task runs PowerShell, then uv,
+    then python.exe. Without this the owner kept no log at all, and a startup stall
+    left no trace.
+    """
+    return bool(os.environ.get("ODICTO_MANAGED_HOME") and os.environ.get("ODICTO_LAUNCH_TOKEN"))
+
+
 def attach_pythonw_log() -> None:
     """pythonw has no console; append stdout/stderr to dictation.log.
 
+    The managed owner always logs there too (see _is_managed_owner).
     Must run before heavy imports so a PortAudio/Qt/CUDA failure at login is
     still on disk. Append (do not overwrite) so a later restart cannot erase
     the boot crash that just happened.
     """
-    if not _stdout_is_discarded():
+    if not (_stdout_is_discarded() or _is_managed_owner()):
         return
     try:
         path = _session_log_path()
