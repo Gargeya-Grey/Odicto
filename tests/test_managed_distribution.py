@@ -594,11 +594,20 @@ class TestPrivateDirectoryPolicy(unittest.TestCase):
 
     def test_partial_and_inherit_only_grants_do_not_count_and_every_entry_is_kept(self):
         user = self.USER
-        dacl = ("D:P(D;OICI;WD;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)"
-                % (user, user, user))
+        dacl = "D:P(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)" % (user, user)
         self.assertEqual(dist._with_token_user(dacl, user),
-                         "D:P(D;OICI;WD;;;%s)(A;OICI;FA;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)"
-                         "(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)" % (user, user, user, user))
+                         "D:P(A;OICI;FA;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)"
+                         "(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)" % (user, user, user))
+
+    def test_any_deny_entry_fails_closed_even_beside_an_effective_grant(self):
+        # Windows evaluates entries in order, so an earlier deny can block reads that the grant allows.
+        user = self.USER
+        for deny in ("(D;OICI;FR;;;%s)" % user, "(D;OICIID;FR;;;WD)", "(D;;WD;;;BU)",
+                     "(OD;CI;FR;;;%s)" % user, "(XD;OICI;FR;;;%s)" % user):
+            for dacl in ("D:P%s(A;OICI;FA;;;%s)" % (deny, user), "D:P(A;OICI;FA;;;%s)%s" % (user, deny),
+                         "D:P%s(A;OICI;FA;;;SY)" % deny):
+                with self.subTest(dacl=dacl), self.assertRaises(dist.DistributionError):
+                    dist._with_token_user(dacl, user)
 
     def test_unrecognized_dacl_text_fails_closed(self):
         for dacl in ("O:BAD:P(A;OICI;FA;;;SY)", "D:P(A;OICI;FA;;;SY", "D:P(A;OICI;FA;;;SY)junk",
@@ -700,6 +709,26 @@ class TestWindowsPrivateDirectoryAcl(unittest.TestCase):
         user, dacl = seen
         self.assertIsNone(dist._with_token_user(dacl, user), dacl)
 
+    def test_source_admin_receipt_directory_inherits_nothing_from_a_shared_temp_folder(self):
+        import os
+        import windows_admin
+        with tempfile.TemporaryDirectory() as temporary:
+            shared = Path(temporary) / "shared-temp"
+            shared.mkdir()
+            # Another account holds an inheritable Modify grant on TEMP (seen on real machines).
+            subprocess.run(["icacls", str(shared), "/grant", "*S-1-5-32-545:(OI)(CI)(M)"],
+                           check=True, capture_output=True)
+            with patch.object(tempfile, "tempdir", str(shared)):
+                scratch = windows_admin._receipt_directory(str(MODULE_PATH.parents[2]))
+            try:
+                user, dacl = _windows_dacls(Path(scratch))
+            finally:
+                os.rmdir(scratch)
+        self.assertTrue(dacl.startswith("D:P"), dacl)
+        self.assert_private(user, dacl)
+        self.assertNotIn("S-1-5-32-545", dacl)
+        self.assertNotIn(";BU)", dacl)
+
     def test_elevated_helper_grants_only_the_same_account_and_preserves_entries(self):
         import os
         import re
@@ -722,6 +751,9 @@ Assert-SameAccount $user $user
 $linked=$false
 try { Grant-SameAccount $env:ODICTO_ACL_LINK $user } catch { $linked=$true }
 if(-not $linked) { throw 'A linked directory was granted' }
+$denied=$false
+try { Grant-SameAccount $env:ODICTO_ACL_DENIED $user } catch { $denied=($_.Exception.Message -like '*deny entry*') }
+if(-not $denied) { throw 'A directory with a deny entry was reported as granted' }
 $target=$env:ODICTO_ACL_FIXTURE
 function Read-Dacl { [IO.Directory]::GetAccessControl($target,'Access').GetSecurityDescriptorSddlForm('Access') }
 $before=Read-Dacl
@@ -736,7 +768,12 @@ $again=Read-Dacl
             os.mkdir(target, 0o700)
             link = Path(temporary) / "linked"
             _winapi.CreateJunction(str(target), str(link))
+            denied = Path(temporary) / "denied"
+            os.mkdir(denied, 0o700)
+            subprocess.run(["icacls", str(denied), "/deny", "*S-1-5-7:(OI)(CI)(R)"],
+                           check=True, capture_output=True)
             environment = dict(os.environ, ODICTO_ACL_FIXTURE=str(target), ODICTO_ACL_LINK=str(link),
+                               ODICTO_ACL_DENIED=str(denied),
                                ODICTO_MANAGED_HELPER=str(MODULE_PATH.parents[2] / "scripts/windows/managed_admin.ps1"))
             try:
                 result = subprocess.run(["powershell", "-NoProfile", "-Command", program], env=environment,

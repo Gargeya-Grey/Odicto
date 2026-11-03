@@ -103,9 +103,13 @@ def _managed_startup_guard() -> None:
 
     def supervise():
         ready.set()
-        if os.name == "nt":
-            _wait_for_pipe_data(descriptor)
-        if os.read(descriptor, 1) != b"R":
+        try:
+            if os.name == "nt":
+                _wait_for_pipe_data(descriptor)
+            confirmed = os.read(descriptor, 1) == b"R"
+        except BaseException:
+            confirmed = False  # Without supervision an unconfirmed child must not keep running.
+        if not confirmed:
             os._exit(2)
 
     threading.Thread(target=supervise, daemon=True, name="odicto-startup-lease").start()

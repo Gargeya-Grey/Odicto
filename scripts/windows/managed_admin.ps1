@@ -44,6 +44,10 @@ function Grant-SameAccount([string]$Path, [string]$UserSid) {
     $full = [Security.AccessControl.FileSystemRights]::FullControl
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $acl = [IO.Directory]::GetAccessControl($item.FullName, [Security.AccessControl.AccessControlSections]::Access)
+    # A deny entry (explicit or inherited) can block the same account despite an allow; never report success then.
+    if (@($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.AccessControlType)" -eq 'Deny' }).Count) {
+        throw 'A managed private directory has a deny entry in its access list; it was preserved'
+    }
     foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
         if ($rule.IdentityReference -eq $user -and $rule.AccessControlType -eq 'Allow' -and
             ($rule.FileSystemRights -band $full) -eq $full -and $rule.InheritanceFlags -eq $inherit -and

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from types import SimpleNamespace
@@ -313,6 +314,7 @@ class TestManagedChildProtocol(unittest.TestCase):
         # numpy's OpenBLAS load seeks stdin, so a guard that blocks in os.read hung the
         # real managed owner inside `import recorder` until the 60 s startup timeout.
         bootstrap = ("import os,sys;sys.path.insert(0,sys.argv[1]);import odicto;odicto._managed_startup_guard()\n"
+                     "import time;time.sleep(0.5)\n"  # let the lease thread reach its wait first
                      "try:\n os.lseek(0,0,1)\nexcept OSError:\n pass\n"
                      "sys.stdout.write('imported\\n');sys.stdout.flush()\n"
                      "import time;time.sleep(30)")
@@ -332,6 +334,39 @@ class TestManagedChildProtocol(unittest.TestCase):
         finally:
             if not process.stdin.closed:
                 process.stdin.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_lease_failure_after_start_ends_the_unconfirmed_child(self):
+        # A failure inside the lease thread must not leave a child running without supervision.
+        bootstrap = textwrap.dedent("""
+            import os, sys, time
+            sys.path.insert(0, sys.argv[1])
+            import odicto
+            real, calls = os.read, []
+            def failing(descriptor, size):
+                calls.append(descriptor)
+                if len(calls) > 1:
+                    raise OSError("synthetic lease failure")
+                return real(descriptor, size)
+            def broken_wait(descriptor):
+                raise OSError("synthetic lease failure")
+            odicto.os.read = failing
+            odicto._wait_for_pipe_data = broken_wait
+            odicto._managed_startup_guard()
+            time.sleep(20)
+        """)
+        process = subprocess.Popen([sys.executable, "-c", bootstrap, str(Path(odicto.__file__).parent)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(b"S")
+            process.stdin.flush()
+            self.assertEqual(process.wait(timeout=10), 2)  # stdin stays open: the launcher is alive
+        finally:
+            process.stdin.close()
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)

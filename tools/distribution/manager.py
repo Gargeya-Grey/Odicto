@@ -258,17 +258,17 @@ def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lamb
     prefix, aces = _sddl_aces(dacl)
     if "NO_ACCESS_CONTROL" in prefix:
         return None
-    position = None
-    for index, ace in enumerate(aces):
+    if any(ace[1:-1].split(";")[0].upper() in {"D", "OD", "XD"} for ace in aces):
+        # Windows evaluates entries in order: a deny before an allow blocks access, so a grant
+        # would not prove this account can read elevated files. Odicto never writes deny entries.
+        raise DistributionError("A private directory has a deny entry in its access list; it was preserved")
+    for ace in aces:
         fields = ace[1:-1].split(";")
         flags = {fields[1][at:at + 2] for at in range(0, len(fields[1]), 2)} if len(fields) > 1 else set()
         if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and "IO" not in flags
                 and fields[2].upper() in {"FA", "0X1F01FF"} and canonical(fields[5]) == sid):
             return None
-        if position is None and not (fields[0] in {"D", "OD", "XD"} and "ID" not in flags):
-            position = index  # canonical order: explicit denies stay first
-    position = len(aces) if position is None else position
-    return prefix + "".join(aces[:position] + [f"(A;OICI;FA;;;{sid})"] + aces[position:])
+    return prefix + f"(A;OICI;FA;;;{sid})" + "".join(aces)  # no denies: first place is canonical
 
 
 def _grant_token_user(path: Path) -> None:

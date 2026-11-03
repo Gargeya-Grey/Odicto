@@ -624,12 +624,21 @@ def _read_receipt(path: str) -> dict:
         return {}
 
 
-def _receipt_directory() -> str:
-    """A new folder that keeps the user's temp-folder permissions. tempfile.mkdtemp uses mode
-    0o700, which current Windows Pythons turn into SYSTEM, Administrators and OWNER RIGHTS only;
-    the elevated helper's receipt is owned by Administrators, so this process could not read it."""
-    path = os.path.join(tempfile.gettempdir(), "odicto-admin-" + os.urandom(16).hex())
-    os.mkdir(path)
+def _receipt_directory(root: str) -> str:
+    """A protected folder for the elevated helper's receipt. tempfile.mkdtemp uses mode 0o700, which
+    current Windows Pythons turn into a protected list (SYSTEM, Administrators, OWNER RIGHTS) that
+    inherits nothing from TEMP, where another account may hold an inheritable grant. The receipt is
+    owned by Administrators, so add only this account's explicit grant, as managed folders do."""
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from pathlib import Path
+    from tools.distribution.manager import private_directory
+    path = tempfile.mkdtemp(prefix="odicto-admin-")
+    try:
+        private_directory(Path(path), exist_ok=True)
+    except BaseException:
+        shutil.rmtree(path, ignore_errors=True)
+        raise
     return path
 
 
@@ -669,7 +678,10 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
     helper = os.path.join(root, *HELPER_PARTS)
     if not os.path.isfile(helper):
         return False, "Admin mode was not changed: the helper script is missing."
-    scratch = _receipt_directory()
+    try:
+        scratch = _receipt_directory(root)
+    except Exception as error:
+        return False, "Admin mode was not changed: the receipt folder could not be secured (%s)." % _short(error)
     try:
         receipt_path = os.path.join(scratch, "receipt.json")
         action = ("-Action", "Start", "-InstallStartup") if enabled else ("-Action", "Disable")
