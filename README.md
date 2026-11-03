@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows%2010%2F11-tested-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10/11, tested" />
-  <img src="https://img.shields.io/badge/macOS-untested-808080?style=for-the-badge&logo=apple&logoColor=white" alt="macOS, not yet tested" />
-  <img src="https://img.shields.io/badge/Linux-untested-808080?style=for-the-badge&logo=linux&logoColor=white" alt="Linux, not yet tested" />
+  <img src="https://img.shields.io/badge/macOS-native%20CI-41CD52?style=for-the-badge&logo=apple&logoColor=white" alt="macOS, native CI coverage" />
+  <img src="https://img.shields.io/badge/Linux-X11%20CI-41CD52?style=for-the-badge&logo=linux&logoColor=white" alt="Linux X11, native CI coverage" />
   <img src="https://img.shields.io/badge/Python-3.10%E2%80%933.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/STT-Whisper%20%7C%20Gemini%203.5%20Transcribe-00C853?style=for-the-badge" alt="Whisper" />
   <img src="https://img.shields.io/badge/LLM-Meta%20%7C%20Ollama%20%7C%20OpenRouter%20%7C%20Gemini-FF6F00?style=for-the-badge" alt="LLM" />
@@ -19,7 +19,7 @@
   <i>Push-to-talk dictation for the app you are using. Private by default.</i>
 </p>
 
-**Odicto is free, open-source voice typing and dictation for Windows.** Tap a hotkey, speak, tap again, and your words are pasted into the app you are using, such as browsers, editors, chat and terminals. Speech-to-text runs on your own PC with local OpenAI Whisper (via faster-whisper), so your voice is not uploaded. Odicto itself has no telemetry, and the Whisper model is downloaded from Hugging Face. Cloud engines and AI replies are optional and off by default. The default model is English-only. Licensed under Apache-2.0. Tested on Windows 10/11 only; macOS and Linux code exists but is untested (see [Supported platforms](#supported-platforms)).
+**Odicto is free, open-source voice typing and dictation for Windows, macOS and Linux X11.** Tap a hotkey, speak, tap again, and your words are pasted into the app you are using, such as browsers, editors, chat and terminals. Speech-to-text runs on your own PC with local OpenAI Whisper (via faster-whisper), so your voice is not uploaded. Odicto itself has no telemetry, and the Whisper model is downloaded from Hugging Face. Cloud engines and AI replies are optional and off by default. The default model is English-only. Licensed under Apache-2.0. Windows has real-user verification; macOS and Linux have native CI coverage with explicit device-testing limits (see [Supported platforms](#supported-platforms)).
 
 ---
 
@@ -46,6 +46,7 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 | **Dictation** | Tap **Ctrl+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Transcript pasted (smart or verbatim) |
 | **AI reply** | Tap **Ctrl+Shift+\`**, speak, tap again (hold if `HOTKEY_TOGGLE=false`) | Local Whisper, then a fresh model answer |
 | **Live tap-to-talk** | Tap **F7**, speak, tap **F7** again | Captions in HUD; tap again to finalize and insert once |
+| **Selection polish** | Select text and press **F8** | Original and polished text in a review card with Copy/Dismiss; raw and live dictation never polish automatically |
 | **AI with memory** | Tap **F6** + **Ctrl+\`**, speak, tap again | Continues the F6 conversation |
 | **Reset chat** | **F5**, or say *“reset chat”* | Clears multi-turn memory |
 
@@ -56,10 +57,12 @@ Most dictation tools are either cloud-bound, locked to one app, or slow.
 | OS | Status |
 |----|--------|
 | **Windows 10 / 11** | Supported and tested |
-| **macOS 12+** | Implemented, not yet tested by the author (Accessibility + Input Monitoring permissions required) |
-| **Linux (X11)** | Rootless X11 backend. Native dependencies and a desktop X11 session are required. CI exercises shortcut suppression on an isolated X server. Wayland is unsupported. |
+| **macOS** | Native CI on macOS 26 ARM/Intel and macOS 27.0.1. Accessibility + Input Monitoring permissions required; physical-device journeys remain unverified. |
+| **Linux (X11)** | Native CI on Ubuntu 26.04 and a real Ubuntu 26.10 QEMU guest. Rootless X11 backend; shortcut suppression tested on an isolated X server. Wayland is unsupported. |
 
-Odicto has been tested on Windows only. If you try it on macOS or Linux, please open an issue with what worked and what did not.
+Native CI checks fresh installation, speech decoding, Setup HTTP, Qt, the test suite,
+and managed updates/rollback. It does not establish physical microphone, permission-grant
+or genuine-editor acceptance on macOS/Linux, or coverage of every vendor-latest patch.
 
 Notes:
 - **macOS** runs Whisper on CPU. `faster-whisper` does not currently
@@ -90,13 +93,67 @@ Notes:
 
 ## Quick start
 
-### Managed installation and updates
+### Managed installation and updates (recommended)
 
 The managed installer supplies Python, installs a checksum-verified release with
 hash-locked dependencies, and creates an `odicto` command. It checks for updates
 before launch, stages them separately, preserves settings, and supports rollback.
-It does not require Node, npm or Git. See the [managed installation guide](tools/distribution/README.md)
-for bootstrap commands and update controls. Existing source installs remain separate.
+It does not require Node, npm, Git or a preinstalled Python.
+
+1. Download `Odicto-v<version>.zip` from the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest).
+2. Extract it and open a terminal in the extracted `Odicto` directory.
+3. Run the installer for your operating system:
+
+**Windows PowerShell**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\distribution\bootstrap.ps1
+```
+
+**macOS / Ubuntu / Debian**
+
+```bash
+bash tools/distribution/bootstrap.sh
+```
+
+The installer prints the installed command path. If `odicto` is not on your PATH,
+use that full path in the commands below. An existing unrelated `odicto` command
+is preserved, so use the printed path in that case too.
+
+**Configure once, then start**
+
+```text
+odicto setup
+odicto start
+```
+
+`odicto setup` opens the settings UI in your browser and starts its local web server.
+The usual address is **http://127.0.0.1:8765**. If the port is busy, Odicto opens and
+prints the actual address it selected. No separate web-server command is needed.
+Choose your speech/AI providers, add any keys you need, configure vocabulary and
+Polish, then save. Closing the Setup page shuts down its web server; dictation runs
+as a separate background application.
+
+`odicto start` starts background dictation. Focus an editor, tap **Ctrl+\`**, speak,
+then tap it again to insert the transcript. No separate activation command is needed.
+
+| Everyday action | Managed command |
+| --- | --- |
+| Open settings / localhost UI again | `odicto setup` |
+| Start background dictation | `odicto start` |
+| Check the running application's status | `odicto run status` |
+| Stop dictation | `odicto stop` |
+| Check for and apply an update | `odicto update` |
+| Restore the previous ready version | `odicto rollback` |
+
+Automatic update checks run before `start` and `setup`, at most once every eight
+hours. A running app or open Setup defers version activation. See the
+[managed installation guide](tools/distribution/README.md) for all update controls.
+
+Existing source installs keep separate settings and are not migrated automatically.
+Quit the old source instance and disable its startup entry before starting a managed
+installation. Never run both at once. Managed Windows admin mode is unavailable;
+the source installation below retains its admin-mode support.
 
 The platform release gate requires fresh installation, Setup HTTP, native Qt,
 the full test suite, and staged update/rollback checks on Windows, macOS ARM/Intel,
@@ -104,7 +161,7 @@ and Ubuntu. A separate QEMU guest runs the current Ubuntu release. These checks
 record the actual OS builds and do not establish physical microphone, macOS
 permission-grant, or Wayland support.
 
-### Windows
+### Source installation: Windows
 
 ```powershell
 git clone https://github.com/Gargeya-Grey/Odicto.git
@@ -121,7 +178,7 @@ installer again refreshes them; add `-NoShortcuts` to skip them. Odicto starts a
 (not administrator) program. **Admin mode** is a switch on the setup page (see the
 Windows note under "Permissions" below).
 
-### macOS
+### Source installation: macOS
 
 ```bash
 git clone https://github.com/Gargeya-Grey/Odicto.git
@@ -134,7 +191,7 @@ bash scripts/posix/run_debug.sh
 .venv/bin/python odicto.py status
 ```
 
-### Linux (X11)
+### Source installation: Linux (X11)
 
 ```bash
 git clone https://github.com/Gargeya-Grey/Odicto.git
