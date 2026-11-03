@@ -139,7 +139,7 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         str(ROOT / "tests"), pattern="test_*.py", top_level_dir=str(ROOT))
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
-    # Capture a stalled worker before verify.ps1's shorter 180-second deadline.
+    # Capture thread stacks from a long-running suite before the parent deadline.
     faulthandler.dump_traceback_later(160, repeat=True)
     try:
         with _elevation_probe_boundary(), _source_migration_boundary():
