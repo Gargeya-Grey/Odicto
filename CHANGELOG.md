@@ -8,7 +8,7 @@ section as the release notes and refuses a version that has no section.
 
 ### Documentation
 
-- The engineering notes state the one case where an error message still reaches the log: a main-thread exit with a text message. Odicto's only such message holds no user text.
+- The engineering notes state the one case where an uncaught error's message still reaches the log: a main-thread exit with a text message. The app's only such message holds no user text.
 
 ## [1.2.5] - 2026-11-04
 

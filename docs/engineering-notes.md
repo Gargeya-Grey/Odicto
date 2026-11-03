@@ -664,8 +664,9 @@ instead of patching lines:
   retrieves every task exception itself, so asyncio never prints one verbatim. Source lines in a
   traceback are code, not data. OpenAI-compatible response lines print a known finish reason and
   integer token counts only. One exception: an uncaught `SystemExit` with a text message in the
-  main thread skips `sys.excepthook`, and Python prints that text (in other threads it is ignored). Odicto's only such exit is the setup page's
-  "No free port" message, which holds no user text; never pass provider or user text to
+  main thread skips `sys.excepthook`, and Python prints that text (in other threads a plain `SystemExit` is ignored). In the app process the only such exit is the setup page's
+  "No free port" message, which holds no user text (the managed launcher's own text exits go
+  to the launcher's stderr, not to this log); never pass provider or user text to
   `SystemExit` or `sys.exit`.
 - **Two limits stay by decision.** A headless process (pythonw, or stdout at NUL) of an install
   logs to that install's log: that is the source install's contract, so an unmarked headless
