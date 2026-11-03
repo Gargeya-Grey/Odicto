@@ -78,10 +78,14 @@ admin mode requires compatible release capabilities during update and rollback.
 The elevated task rechecks readiness before spawning, since a medium-integrity
 caller can be denied access to an existing elevated owner's command line.
 Private managed directories (home, data, releases, each release and each migration
-transaction) come only from `manager.private_directory`. On Windows it keeps Python's
-protected mode-0o700 DACL and adds one explicit inheritable grant for the token user, so
-files that an elevated process owns stay readable to the same account. The elevated
-helper adds the same grant before it writes, and refuses approval by another account.
+transaction) come only from `manager.private_directory`; the source admin receipt folder
+uses it too. On Windows a new directory is created atomically (`CreateDirectoryW`) with an
+explicit protected DACL: SYSTEM, Administrators, OWNER RIGHTS and the token user, inheriting
+nothing on any Python version. An existing directory gains one explicit inheritable grant
+for the token user, so files that an elevated process owns stay readable to the same
+account. A deny entry (D, OD or XD) for any SID in the token fails closed; a deny for a SID
+outside the token is kept. The elevated helper applies the same rules (raw SDDL) before it
+writes, and refuses approval by another account.
 Application lifecycle, migration and admin commands bind the active release's
 verified dependencies after checking the Python ABI. They keep the same supervisor
 process and startup pipes. Installation, updates, rollback and metadata commands

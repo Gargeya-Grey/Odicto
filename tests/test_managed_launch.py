@@ -313,11 +313,29 @@ class TestManagedChildProtocol(unittest.TestCase):
         # Windows queues every operation on a synchronous pipe behind a pending ReadFile.
         # numpy's OpenBLAS load seeks stdin, so a guard that blocks in os.read hung the
         # real managed owner inside `import recorder` until the 60 s startup timeout.
-        bootstrap = ("import os,sys;sys.path.insert(0,sys.argv[1]);import odicto;odicto._managed_startup_guard()\n"
-                     "import time;time.sleep(0.5)\n"  # let the lease thread reach its wait first
-                     "try:\n os.lseek(0,0,1)\nexcept OSError:\n pass\n"
-                     "sys.stdout.write('imported\\n');sys.stdout.flush()\n"
-                     "import time;time.sleep(30)")
+        # A guard that reads in its thread is put at that read before the seek (`entered`, then a
+        # pause), so the old guard is red every run. The fixed guard never reads before data arrives.
+        bootstrap = textwrap.dedent("""
+            import os, sys, threading, time
+            sys.path.insert(0, sys.argv[1])
+            import odicto
+            real, entered = os.read, threading.Event()
+            def observed(descriptor, size):
+                if threading.current_thread() is not threading.main_thread():
+                    entered.set()
+                return real(descriptor, size)
+            odicto.os.read = observed
+            odicto._managed_startup_guard()
+            if entered.wait(1.0):
+                time.sleep(0.3)
+            try:
+                os.lseek(0, 0, 1)
+            except OSError:
+                pass
+            sys.stdout.write("imported\\n")
+            sys.stdout.flush()
+            time.sleep(30)
+        """)
         process = subprocess.Popen([sys.executable, "-c", bootstrap, str(Path(odicto.__file__).parent)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         reader = threading.Thread(target=lambda: lines.append(process.stdout.readline()), daemon=True)

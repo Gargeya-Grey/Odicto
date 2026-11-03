@@ -571,10 +571,14 @@ def _windows_dacls(*paths):
     if len(lines) != len(paths) + 1:
         raise AssertionError(output + error)
     user = lines[0]
-    # SDDL may name the token user by an alias: the built-in Administrator (RID 500, as on GitHub's
-    # Windows runners) is "LA". The product canonicalizes aliases; write them as the full SID here too.
-    return [user] + [re.sub(r";([A-Z]{2})\)", lambda match: ";%s)" % user
-                            if _full_sid(match.group(1)) == user else match.group(0), dacl) for dacl in lines[1:]]
+    return [user] + [_user_as_full_sid(user, dacl) for dacl in lines[1:]]
+
+
+def _user_as_full_sid(user, dacl):
+    """SDDL may name the token user by an alias: the built-in Administrator (RID 500, as on GitHub's
+    Windows runners) is "LA". The product canonicalizes aliases; write the user's as its full SID."""
+    return re.sub(r";([A-Z]{2})\)", lambda match: ";%s)" % user
+                  if _full_sid(match.group(1)) == user else match.group(0), dacl)
 
 
 def _full_sid(alias):
@@ -627,15 +631,29 @@ class TestPrivateDirectoryPolicy(unittest.TestCase):
                          "D:P(A;OICI;FA;;;%s)(A;OICIIO;FA;;;%s)(A;OICI;FR;;;%s)"
                          "(A;OICI;0x1200a9;;;S-1-5-21-9-9-9-500)" % (user, user, user))
 
-    def test_any_deny_entry_fails_closed_even_beside_an_effective_grant(self):
+    def test_deny_entry_for_any_token_sid_fails_closed_even_beside_a_grant(self):
         # Windows evaluates entries in order, so an earlier deny can block reads that the grant allows.
         user = self.USER
+        token = {user, "WD", "BU", "S-1-5-32-544"}.__contains__
         for deny in ("(D;OICI;FR;;;%s)" % user, "(D;OICIID;FR;;;WD)", "(D;;WD;;;BU)",
-                     "(OD;CI;FR;;;%s)" % user, "(XD;OICI;FR;;;%s)" % user):
+                     "(D;OICIIO;FR;;;S-1-5-32-544)", "(OD;CI;FR;;;%s)" % user,
+                     "(XD;OICI;FR;;;%s;(Member_of {SID(BA)}))" % user, "(D;OICI;FR)"):
             for dacl in ("D:P%s(A;OICI;FA;;;%s)" % (deny, user), "D:P(A;OICI;FA;;;%s)%s" % (user, deny),
                          "D:P%s(A;OICI;FA;;;SY)" % deny):
                 with self.subTest(dacl=dacl), self.assertRaises(dist.DistributionError):
-                    dist._with_token_user(dacl, user)
+                    dist._with_token_user(dacl, user, in_token=token)
+        with self.assertRaises(dist.DistributionError):  # by default the user SID itself counts
+            dist._with_token_user("D:P(D;OICI;FR;;;%s)" % user, user)
+
+    def test_deny_entry_outside_the_token_is_kept_and_the_grant_follows_explicit_denies(self):
+        # An inherited deny for Anonymous Logon cannot affect this account; it must not block stop/status.
+        user = self.USER
+        token = {user, "WD", "BU"}.__contains__
+        self.assertIsNone(dist._with_token_user("D:AI(A;OICI;FA;;;%s)(D;OICIID;FR;;;AN)" % user, user,
+                                                in_token=token))
+        self.assertEqual(dist._with_token_user("D:P(D;OICI;FR;;;AN)(A;OICI;FA;;;SY)(D;OICIID;FR;;;S-1-5-7)",
+                                               user, in_token=token),
+                         "D:P(D;OICI;FR;;;AN)(A;OICI;FA;;;%s)(A;OICI;FA;;;SY)(D;OICIID;FR;;;S-1-5-7)" % user)
 
     def test_unrecognized_dacl_text_fails_closed(self):
         for dacl in ("O:BAD:P(A;OICI;FA;;;SY)", "D:P(A;OICI;FA;;;SY", "D:P(A;OICI;FA;;;SY)junk",
@@ -685,6 +703,37 @@ class TestWindowsPrivateDirectoryAcl(unittest.TestCase):
         for dacl in dacls[:4]:
             self.assert_private(user, dacl)
         self.assertIn("(A;ID;FA;;;%s)" % user, dacls[4])
+
+    def assert_private_with_foreign_deny(self, user, dacl):
+        self.assertIn(self.grant(user), dacl)
+        self.assertIn(";AN)", dacl)
+
+    def test_existing_directory_with_a_deny_for_this_account_is_refused_and_a_foreign_deny_is_kept(self):
+        import os
+        user = _windows_dacls(Path(tempfile.gettempdir()))[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            mine, foreign = Path(temporary) / "mine", Path(temporary) / "foreign"
+            for path, sid in ((mine, user), (foreign, "S-1-5-7")):
+                os.mkdir(path, 0o700)
+                # AD (add subdirectory) only, so cleanup still works.
+                subprocess.run(["icacls", str(path), "/deny", "*%s:(OI)(CI)(AD)" % sid],
+                               check=True, capture_output=True)
+            with self.assertRaises(dist.DistributionError):
+                dist.private_directory(mine, exist_ok=True)
+            dist.private_directory(foreign, exist_ok=True)
+            _, dacl = _windows_dacls(foreign)
+        self.assert_private_with_foreign_deny(user, dacl)
+
+    def test_new_private_directory_is_protected_atomically_under_a_permissive_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "shared"
+            parent.mkdir()
+            subprocess.run(["icacls", str(parent), "/grant", "*S-1-5-32-545:(OI)(CI)(M)"],
+                           check=True, capture_output=True)
+            user, dacl = _windows_dacls(dist.private_directory(parent / "private"))
+        self.assertTrue(dacl.startswith("D:P"), dacl)
+        self.assert_private(user, dacl)
+        self.assertNotIn(";BU)", dacl)
 
     def test_existing_private_directory_gains_the_grant_once_and_keeps_entries(self):
         import os
@@ -766,7 +815,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:ODICTO_MANAGED_HELPER,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw ($errors | Out-String) }
-$wanted=@('Assert-SameAccount','Grant-SameAccount')
+$wanted=@('Assert-SameAccount','Assert-NoDenyForAccount','Grant-SameAccount')
 $defs=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $n.Name},$true))
 if($defs.Count -ne $wanted.Count) { throw 'Missing same-account policy' }
 foreach($definition in $defs) { Invoke-Expression $definition.Extent.Text }
@@ -779,9 +828,15 @@ Assert-SameAccount $user $user
 $linked=$false
 try { Grant-SameAccount $env:ODICTO_ACL_LINK $user } catch { $linked=$true }
 if(-not $linked) { throw 'A linked directory was granted' }
-$denied=$false
-try { Grant-SameAccount $env:ODICTO_ACL_DENIED $user } catch { $denied=($_.Exception.Message -like '*deny entry*') }
-if(-not $denied) { throw 'A directory with a deny entry was reported as granted' }
+foreach($denyPath in @($env:ODICTO_ACL_DENIED, $env:ODICTO_ACL_OBJECT_DENIED)) {
+  $denied=$false
+  try { Grant-SameAccount $denyPath $user } catch { $denied=($_.Exception.Message -like '*denies this account*') }
+  if(-not $denied) { throw "A directory that denies this account was reported as granted: $denyPath" }
+}
+$objectAcl=[IO.Directory]::GetAccessControl($env:ODICTO_ACL_OBJECT_DENIED,'Access').GetSecurityDescriptorSddlForm('Access')
+if($objectAcl -notmatch '\(OD;') { throw "The object deny fixture holds no OD entry: $objectAcl" }
+Grant-SameAccount $env:ODICTO_ACL_FOREIGN_DENIED $user
+"FOREIGN=" + [IO.Directory]::GetAccessControl($env:ODICTO_ACL_FOREIGN_DENIED,'Access').GetSecurityDescriptorSddlForm('Access')
 $target=$env:ODICTO_ACL_FIXTURE
 function Read-Dacl { [IO.Directory]::GetAccessControl($target,'Access').GetSecurityDescriptorSddlForm('Access') }
 $before=Read-Dacl
@@ -796,12 +851,25 @@ $again=Read-Dacl
             os.mkdir(target, 0o700)
             link = Path(temporary) / "linked"
             _winapi.CreateJunction(str(target), str(link))
-            denied = Path(temporary) / "denied"
-            os.mkdir(denied, 0o700)
-            subprocess.run(["icacls", str(denied), "/deny", "*S-1-5-7:(OI)(CI)(R)"],
+            user = _windows_dacls(Path(temporary))[0]
+            denied, object_denied, foreign_denied = (Path(temporary) / name for name in ("denied", "object", "foreign"))
+            for path in (denied, object_denied, foreign_denied):
+                os.mkdir(path, 0o700)
+            # AD (add subdirectory) only, so cleanup still works.
+            subprocess.run(["icacls", str(denied), "/deny", "*%s:(OI)(CI)(AD)" % user],
                            check=True, capture_output=True)
+            subprocess.run(["icacls", str(foreign_denied), "/deny", "*S-1-5-7:(OI)(CI)(AD)"],
+                           check=True, capture_output=True)
+            # GetAccessRules omits object entries; the helper must still see this one.
+            subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "$a=[IO.Directory]::GetAccessControl($env:P,'Access');"
+                            "$a.SetSecurityDescriptorSddlForm($a.GetSecurityDescriptorSddlForm('Access') + "
+                            "'(OD;;0x4;00000000-0000-0000-0000-000000000001;;' + $env:U + ')','Access');"
+                            "[IO.Directory]::SetAccessControl($env:P,$a)"],
+                           env=dict(os.environ, P=str(object_denied), U=user), check=True, capture_output=True)
             environment = dict(os.environ, ODICTO_ACL_FIXTURE=str(target), ODICTO_ACL_LINK=str(link),
-                               ODICTO_ACL_DENIED=str(denied),
+                               ODICTO_ACL_DENIED=str(denied), ODICTO_ACL_OBJECT_DENIED=str(object_denied),
+                               ODICTO_ACL_FOREIGN_DENIED=str(foreign_denied),
                                ODICTO_MANAGED_HELPER=str(MODULE_PATH.parents[2] / "scripts/windows/managed_admin.ps1"))
             try:
                 result = subprocess.run(["powershell", "-NoProfile", "-Command", program], env=environment,
@@ -810,7 +878,9 @@ $again=Read-Dacl
                 os.rmdir(link)
         self.assertEqual(result.returncode, 0, result.stderr)
         values = dict(line.split("=", 1) for line in result.stdout.split() if "=" in line)
+        values = {key: _user_as_full_sid(values["USER"], value) for key, value in values.items()}
         self.assert_private(values["USER"], values["AFTER"])
+        self.assert_private_with_foreign_deny(values["USER"], values["FOREIGN"])
         self.assertEqual(values["AFTER"], values["AGAIN"])
         for ace in re.findall(r"\([^()]*\)", values["BEFORE"]):
             self.assertIn(ace, values["AFTER"])

@@ -252,31 +252,52 @@ def _sddl_aces(dacl: str) -> tuple[str, list[str]]:
     return prefix, aces
 
 
-def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lambda value: value) -> str | None:
+_DENY_ACE_TYPES = {"D", "OD", "XD"}
+
+
+def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lambda value: value,
+                     in_token: Callable[[str], bool] | None = None) -> str | None:
     """Return the DACL plus one explicit inheritable full-control grant for sid, or None when an
-    effective one already exists. Every existing entry is kept; no other principal is added."""
+    effective one already exists. Every existing entry is kept; no other principal is added.
+
+    A deny entry (D, OD or XD, explicit or inherited) whose SID is in this account's token fails
+    closed: Windows reads entries in order, so a grant beside it would not prove access. A deny for
+    a SID outside the token cannot affect this account and is kept. `in_token` receives the raw SDDL
+    SID; by default only sid itself counts."""
     prefix, aces = _sddl_aces(dacl)
     if "NO_ACCESS_CONTROL" in prefix:
         return None
-    if any(ace[1:-1].split(";")[0].upper() in {"D", "OD", "XD"} for ace in aces):
-        # Windows evaluates entries in order: a deny before an allow blocks access, so a grant
-        # would not prove this account can read elevated files. Odicto never writes deny entries.
-        raise DistributionError("A private directory has a deny entry in its access list; it was preserved")
-    for ace in aces:
+    in_token = in_token or (lambda value: canonical(value) == sid)
+    granted, position = False, None
+    for index, ace in enumerate(aces):
         fields = ace[1:-1].split(";")
         flags = {fields[1][at:at + 2] for at in range(0, len(fields[1]), 2)} if len(fields) > 1 else set()
+        if fields[0].upper() in _DENY_ACE_TYPES:
+            if len(fields) < 6 or in_token(fields[5]):
+                raise DistributionError("A private directory denies this account access in its access list; "
+                                        "it was preserved")
+        elif position is None:
+            position = index  # canonical order: leading explicit denies stay first
         if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and "IO" not in flags
                 and fields[2].upper() in {"FA", "0X1F01FF"} and canonical(fields[5]) == sid):
-            return None
-    return prefix + f"(A;OICI;FA;;;{sid})" + "".join(aces)  # no denies: first place is canonical
+            granted = True
+    if granted:
+        return None
+    position = len(aces) if position is None else position
+    return prefix + "".join(aces[:position] + [f"(A;OICI;FA;;;{sid})"] + aces[position:])
 
 
-def _grant_token_user(path: Path) -> None:
-    """Python's Windows mode 0o700 grants only SYSTEM, Administrators and OWNER RIGHTS. A file that
-    an elevated process writes there belongs to Administrators, so this account could not read it
-    at medium integrity. Add one explicit inheritable grant for the process token user. SetFileSecurity
-    writes this directory's DACL only: no SACL privilege and no walk over existing children."""
+def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = False) -> None:
+    """Make a Windows directory private to this account and readable when elevated files are inside.
+
+    Python's mode 0o700 grants only SYSTEM, Administrators and OWNER RIGHTS (and Pythons without the
+    CVE-2024-4030 fix inherit the parent's list instead). A file an elevated process writes belongs
+    to Administrators, so this account could not read it at medium integrity. With create=True the
+    directory is made atomically with an explicit protected list: those three plus this account,
+    inheriting nothing. An existing directory gains one explicit inheritable grant for the token user.
+    SetFileSecurity writes this directory's DACL only: no SACL privilege, no walk over children."""
     import ctypes
+    import errno
     from ctypes import wintypes
     advapi = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -285,6 +306,8 @@ def _grant_token_user(path: Path) -> None:
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
+    kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p]
+    kernel.CreateDirectoryW.restype = wintypes.BOOL
     advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, pointer(wintypes.HANDLE)]
     advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, pointer(wintypes.DWORD)]
     advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, pointer(ctypes.c_void_p)]
@@ -296,6 +319,16 @@ def _grant_token_user(path: Path) -> None:
     advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
         wintypes.LPCWSTR, wintypes.DWORD, pointer(ctypes.c_void_p), ctypes.c_void_p]
     dacl_information = 0x4
+
+    class SidAndAttributes(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    class TokenGroups(ctypes.Structure):
+        _fields_ = [("GroupCount", wintypes.DWORD), ("Groups", SidAndAttributes * 1)]
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", ctypes.c_void_p),
+                    ("bInheritHandle", wintypes.BOOL)]
 
     def check(succeeded) -> None:
         if not succeeded:
@@ -325,6 +358,13 @@ def _grant_token_user(path: Path) -> None:
         finally:
             kernel.LocalFree(binary)
 
+    def token_information(token, kind: int):
+        needed = wintypes.DWORD()
+        advapi.GetTokenInformation(token, kind, None, 0, ctypes.byref(needed))
+        buffer = ctypes.create_string_buffer(needed.value)
+        check(needed.value and advapi.GetTokenInformation(token, kind, buffer, needed, ctypes.byref(needed)))
+        return buffer
+
     def read_dacl() -> str:
         needed = wintypes.DWORD()
         advapi.GetFileSecurityW(str(path), dacl_information, None, 0, ctypes.byref(needed))
@@ -334,35 +374,61 @@ def _grant_token_user(path: Path) -> None:
         check(advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(buffer, 1, dacl_information, ctypes.byref(text), None))
         return owned_text(text)
 
+    def with_descriptor(sddl: str, action):
+        descriptor = ctypes.c_void_p()
+        check(advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None))
+        try:
+            return action(descriptor)
+        finally:
+            kernel.LocalFree(descriptor)
+
     token = wintypes.HANDLE()
     check(advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)))
     try:
-        needed = wintypes.DWORD()
-        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
-        user = ctypes.create_string_buffer(needed.value)
-        check(needed.value and advapi.GetTokenInformation(token, 1, user, needed, ctypes.byref(needed)))
+        user = token_information(token, 1)  # TOKEN_USER starts with the SID pointer
+        sid = sid_text(ctypes.c_void_p.from_buffer(user).value)
+        groups = token_information(token, 2)  # TOKEN_GROUPS
+        count = TokenGroups.from_buffer(groups).GroupCount
+        entries = (SidAndAttributes * count).from_buffer(groups, TokenGroups.Groups.offset)
+        # Every group counts, deny-only ones included: Windows matches deny entries against them.
+        members = {sid} | {sid_text(entry.Sid) for entry in entries}
     finally:
         kernel.CloseHandle(token)
-    sid = sid_text(ctypes.c_void_p.from_buffer(user).value)  # TOKEN_USER starts with the SID pointer
-    updated = _with_token_user(read_dacl(), sid, canonical)
+
+    if create:
+        def create_directory(descriptor) -> None:
+            attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+            if kernel.CreateDirectoryW(str(path), ctypes.byref(attributes)):
+                return
+            code = ctypes.get_last_error()
+            if code == 183 and exist_ok and path.is_dir():  # ERROR_ALREADY_EXISTS: repair it below
+                return
+            if code == 183:
+                raise FileExistsError(errno.EEXIST, "Private directory already exists", str(path))
+            raise ctypes.WinError(code)
+
+        with_descriptor(f"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)(A;OICI;FA;;;{sid})", create_directory)
+
+    def membership(value: str) -> bool:
+        return canonical(value) in members
+
+    updated = _with_token_user(read_dacl(), sid, canonical, membership)
     if updated is None:
         return
-    descriptor = ctypes.c_void_p()
-    check(advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(updated, 1, ctypes.byref(descriptor), None))
-    try:
-        check(advapi.SetFileSecurityW(str(path), dacl_information, descriptor))
-    finally:
-        kernel.LocalFree(descriptor)
-    if _with_token_user(read_dacl(), sid, canonical) is not None:
+    check(with_descriptor(updated, lambda descriptor: advapi.SetFileSecurityW(str(path), dacl_information, descriptor)))
+    if _with_token_user(read_dacl(), sid, canonical, membership) is not None:
         raise DistributionError(f"Private directory {path.name} did not keep this account's access; it was preserved")
 
 
 def private_directory(path: Path, *, exist_ok: bool = False, parents: bool = False) -> Path:
-    """Owner-only directory: POSIX mode 0o700; on Windows also readable by this same account when
-    an elevated process owns the files inside. Never grants any other account."""
-    path.mkdir(mode=0o700, exist_ok=exist_ok, parents=parents)
-    if os.name == "nt":
-        _grant_token_user(path)
+    """Owner-only directory: POSIX mode 0o700; on Windows an explicit protected list, made atomically,
+    that also lets this same account read files an elevated process owns. Never grants any other account."""
+    if os.name != "nt":
+        path.mkdir(mode=0o700, exist_ok=exist_ok, parents=parents)
+        return path
+    if parents:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    _grant_token_user(path, create=True, exist_ok=exist_ok)
     return path
 
 

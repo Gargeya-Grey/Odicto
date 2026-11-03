@@ -625,19 +625,21 @@ def _read_receipt(path: str) -> dict:
 
 
 def _receipt_directory(root: str) -> str:
-    """A protected folder for the elevated helper's receipt. tempfile.mkdtemp uses mode 0o700, which
-    current Windows Pythons turn into a protected list (SYSTEM, Administrators, OWNER RIGHTS) that
-    inherits nothing from TEMP, where another account may hold an inheritable grant. The receipt is
-    owned by Administrators, so add only this account's explicit grant, as managed folders do."""
+    """A new private folder for the elevated helper's receipt, made atomically with an explicit
+    protected list (SYSTEM, Administrators, OWNER RIGHTS and this account). It inherits nothing
+    from TEMP, where another account may hold an inheritable grant, on any Python version. The
+    receipt is owned by Administrators, so this account reads it through its explicit grant."""
     if root not in sys.path:
         sys.path.insert(0, root)
     from pathlib import Path
     from tools.distribution.manager import private_directory
-    path = tempfile.mkdtemp(prefix="odicto-admin-")
+    path = os.path.join(tempfile.gettempdir(), "odicto-admin-" + os.urandom(16).hex())
+    existed = os.path.lexists(path)
     try:
-        private_directory(Path(path), exist_ok=True)
+        private_directory(Path(path))
     except BaseException:
-        shutil.rmtree(path, ignore_errors=True)
+        if not existed and os.path.isdir(path):  # remove only a folder this call made
+            shutil.rmtree(path, ignore_errors=True)
         raise
     return path
 
