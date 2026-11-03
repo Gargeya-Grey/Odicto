@@ -4,6 +4,23 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.2.0] - 2026-11-03
+
+### Added
+
+- Personal vocabulary on Speech for exact names, brands and technical terms. Gemini receives up to 100 terms; Groq and local Whisper receive whole spelling hints within a conservative UTF-8 budget. Polish also receives the preferred spellings.
+- On-demand selection polish. Select text in an editor and press F8, or configure a different shortcut. Minimal editing instructions preserve meaning, emotion, voice, deliberate emphasis, language and paragraph breaks.
+- A dedicated Polish page with the shared key recorder, keycap display and Disable control. Its searchable model picker supports an independent model choice or a custom model ID using the AI provider's saved key.
+
+### Changed
+
+- Raw and live transcription no longer run an automatic polish call, including installations with the legacy `POLISH_DICTATION=true` setting. Polish runs only when explicitly requested.
+- Selection polish checks the foreground target and selected text again before replacement. Cancellation, failed requests and changed selections leave the original text untouched. Terminal targets are skipped.
+
+### Verification limits
+
+- Window and copy-based selection checks cannot establish field identity in every editor. Real microphone, global-hook and editor journeys require device verification; automated and offline UI checks do not establish that acceptance.
+
 ## [1.1.1] - 2026-10-14
 
 ### Fixed

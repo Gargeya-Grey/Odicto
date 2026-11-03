@@ -515,3 +515,14 @@ def keep_responsive(resident_mb: int = RESIDENT_MIN_MB) -> list:
     except Exception as e:
         notes.append(f"working set unchanged ({e})")
     return notes
+
+def foreground_window_id():
+    """Foreground HWND, or None when no target can be established."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        return user32.GetForegroundWindow() or None
+    except Exception:
+        return None

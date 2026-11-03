@@ -418,7 +418,7 @@ LIVE_STT_PROVIDER=auto       # auto = the same provider and model as STT_PROVIDE
 | `GEMINI_TRANSCRIBE_MODEL` | Unary model (`gemini-3.5-transcribe`) used after hold-to-talk release |
 | `GEMINI_TRANSCRIBE_LIVE_MODEL` | Live API model (`gemini-3.5-transcribe-live`) used while F7 is on Gemini |
 | `GEMINI_TRANSCRIBE_LANGUAGE` | Optional BCP-47 hint (`en-US`); blank = auto-detect. Also sent as a language hint to Groq and OpenRouter |
-| `GEMINI_TRANSCRIBE_VOCABULARY` | Optional comma-separated bias terms (Gemini) |
+| `GEMINI_TRANSCRIBE_VOCABULARY` | Personal spelling hints, comma or newline separated (Gemini, Groq, local Whisper and polish; legacy key name) |
 | `LIVE_STT_PROVIDER` | `auto` follows `STT_PROVIDER`. Gemini streams. The others transcribe the clip when you tap stop |
 | `LIVE_HOTKEY` | Tap-to-talk key (default `f7`). Empty disables. Captured while Odicto runs |
 
@@ -768,14 +768,22 @@ The licence does not give you the right to use the name "Odicto" for your own pr
   <b>Hold. Speak. Continue.</b>
 </p>
 
-### Optional fast transcript polish
+### Polish selected text
 
-Open Setup, select an AI backend, then enable **Speech → Polish dictated text**.
-It fixes grammar, punctuation and capitalization after local or cloud transcription.
-An optional **Polish model** can use a smaller model than your AI answers. Leave it
-blank to use the selected chat model. Polish never answers spoken questions or uses
-AI conversation memory. Gemini Smart already polishes speech and skips the extra call.
-After a two-second wait or provider failure, raw text is inserted with a visible notice.
+Select text in an editor and press **F8** to polish it. No recording is needed.
+Setup's **Polish** page lets you change the shortcut and choose or type a separate
+polish model. It uses the provider and saved key from **AI answers**; a blank model
+uses that provider's selected model. A blank shortcut disables selection polish.
+Raw and live dictation never run an extra polish call, even if an older configuration
+still has `POLISH_DICTATION=true`.
+
+Polish makes minimal grammar, spelling and structure repairs while preserving voice,
+emotion, deliberate emphasis, paragraph breaks and language. Esc cancels. Failure,
+timeout, an empty response or a changed window/selection leaves the original text alone.
+Keep the selection active until it finishes. Terminal targets are skipped. Copy-based
+selection checks depend on the editor; matching text cannot prove field identity.
+`POLISH_MAX_CHARS` defaults to 1200. Short requests wait up to two seconds; longer
+requests get a length-scaled wait bounded by `LLM_DEADLINE_SECONDS`.
 
 Groq is available on the AI page with a custom chat model. Its shared key is entered
 on Speech; `GROQ_MODEL` is independent of `GROQ_STT_MODEL`. The default is

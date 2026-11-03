@@ -113,3 +113,9 @@ def apply_window_exstyles(widget) -> None:
 
 def hotkey_backend_name() -> str:
     return "keyboard"
+
+def foreground_window_id():
+    try:
+        return subprocess.check_output(["xdotool", "getactivewindow"], timeout=0.5).strip() or None
+    except Exception:
+        return None

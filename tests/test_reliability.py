@@ -511,7 +511,7 @@ class TestReliability(unittest.TestCase):
         factory.assert_called_once_with("groq")
         app.transcriber.transcribe.assert_not_called()
 
-    def test_raw_polish_is_optional_and_precedes_insertion(self):
+    def test_raw_never_polishes_even_with_legacy_flag(self):
         for enabled in (False, True):
             with self.subTest(enabled=enabled):
                 app = app_fixture()
@@ -520,7 +520,7 @@ class TestReliability(unittest.TestCase):
                     Config, "effective_stt_provider", return_value="whisper"
                 ), patch("main.paste_text") as paste:
                     app.process_and_paste(np.zeros(10), False)
-                paste.assert_called_once_with("Hello world." if enabled else "hello world")
+                paste.assert_called_once_with("hello world")
                 self.assertEqual(app.refiner.conversation_history, [])
 
     def test_gemini_smart_skips_duplicate_polish(self):
@@ -713,7 +713,8 @@ class TestReliability(unittest.TestCase):
             self.assertIn(key, parser.ids)
         self.assertNotIn("fake-test-key", page)
         self.assertNotIn("__POLISH_", page)
-        self.assertIn('value="true" selected', page)
+        self.assertIn('id="POLISH_DICTATION" value="false"', page)
+        self.assertIn('id="POLISH_HOTKEY"', page)
         self.assertIn('value="openai/gpt-oss-120b"', page)
 
     def test_non_16khz_capture_rejected_instead_of_changing_whisper_speed(self):

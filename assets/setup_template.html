@@ -237,6 +237,9 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .inline-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* Chips and dots */
+.polish-model-field > .field-label { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.polish-model-field > .model-summary { margin-top: 10px; font-size: 12px; line-height: 18px; color: var(--faint); overflow-wrap: anywhere; }
+.polish-model-field > .model-help { margin-top: 8px; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   height: 22px; padding: 0 9px; border-radius: var(--r-pill);
@@ -374,6 +377,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
 .cselect-option > span { min-width: 0; overflow-wrap: anywhere; }
 .cselect-option:hover, .cselect-option.active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .cselect-option.selected { background: var(--sel-fill); color: var(--accent); }
+.model-option-id { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 .cselect-option .check { width: 16px; height: 16px; flex: none; opacity: 0; }
 .cselect-option.selected .check { opacity: 1; }
 .cselect-empty { padding: 12px; font-size: 12.5px; color: var(--muted); }
@@ -652,6 +656,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
       <button type="button" class="nav-item" data-view="connections"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.6 17.4A2 2 0 0 0 2 18.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r="1"/></svg><span class="nav-label">Connections</span><span class="nav-dot" id="nav_dot_keys"></span></button>
       <button type="button" class="nav-item" data-view="ai"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.9 15.5A2 2 0 0 0 8.5 14l-6.1-1.6a.5.5 0 0 1 0-1L8.5 10A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0L14 8.5a2 2 0 0 0 1.5 1.4l6.1 1.6a.5.5 0 0 1 0 1L15.5 14a2 2 0 0 0-1.4 1.5l-1.6 6.1a.5.5 0 0 1-1 0z"/></svg><span class="nav-label">AI answers</span><span class="nav-dot" id="nav_dot_ai"></span></button>
       <button type="button" class="nav-item" data-view="speech"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg><span class="nav-label">Speech</span><span class="nav-dot" id="nav_dot_speech"></span></button>
+      <button type="button" class="nav-item" data-view="polish"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4-1 12-12-3-3L5 16z"/></svg><span class="nav-label">Polish</span></button>
       <button type="button" class="nav-item" data-view="controls"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M8 16h8"/></svg><span class="nav-label">Shortcuts</span><span class="nav-dot" id="nav_dot_controls"></span></button>
       <button type="button" class="nav-item" data-view="prompt"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg><span class="nav-label">Prompt</span><span class="nav-dot" id="nav_dot_prompt"></span></button>
       <button type="button" class="nav-item" data-view="system"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="nav-label">System</span><span class="nav-dot" id="nav_dot_system"></span></button>
@@ -959,6 +964,42 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
         </section>
 
         <!-- ============================================================ speech -->
+        <section class="view" id="view-polish" aria-labelledby="h_polish_page">
+          <header class="page-head"><h1 id="h_polish_page">Polish</h1><p>Light editing for your dictated text. Keep your meaning and your voice.</p></header>
+          <section class="sect" aria-labelledby="h_polish">
+            <div class="sect-label"><h2 id="h_polish">Text polish</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div class="row-text"><h3>Polish selected text</h3><p>Select text in an editor, then press the shortcut. Fixes grammar, sentence structure and accidental repetition while preserving ideas, emotions, voice and paragraph breaks. Raw and live dictation never run an extra polish call. Esc cancels. Keep the original selection active while it works; changes to the selection cancel replacement. Terminal targets are skipped.</p></div>
+                <input type="hidden" name="POLISH_DICTATION" id="POLISH_DICTATION" value="false">
+              </li>
+              <li class="row">
+                <div class="row-text"><h3>Polish shortcut</h3><p>Choose Change, then press your shortcut. Default F8.</p></div>
+                <div class="row-ctl">
+                  <span class="keycaps" id="keycaps_row_polish"></span>
+                  <input type="text" name="POLISH_HOTKEY" id="POLISH_HOTKEY" value="__POLISH_HOTKEY__" readonly class="visually-hidden" tabindex="-1">
+                  <button type="button" class="btn secondary small" data-record-for="POLISH_HOTKEY" onclick="recordHotkey(this)" aria-label="Change Polish shortcut">Change</button>
+                  <button type="button" class="btn tertiary small" onclick="if (hotkeyRecorder) stopHotkeyRecording(true); el('POLISH_HOTKEY').value = ''; updateKeycaps(); markDirty();" aria-label="Disable Polish shortcut">Disable</button>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="polish-model-field">
+                  <label class="field-label" for="polish_model_select">Polish model <span class="chip muted" id="polish_provider_label"></span></label>
+                  <div class="cselect"><select id="polish_model_select" onchange="syncPolishModel()" aria-describedby="polish_model_summary"></select></div>
+                  <input type="hidden" name="POLISH_MODEL" id="POLISH_MODEL" value="__POLISH_MODEL__">
+                  <div id="polish_custom_field" hidden style="margin-top:12px">
+                    <label class="field-label" for="polish_model_custom">Custom model ID</label>
+                    <input type="text" id="polish_model_custom" placeholder="provider/model-name" spellcheck="false" autocapitalize="off" autocomplete="off" oninput="syncPolishCustomModel()">
+                  </div>
+                  <p class="note model-summary" id="polish_model_summary" aria-live="polite"></p>
+                  <p class="note model-help">Uses the provider and key from AI answers. Your model choice stays separate.</p>
+                </div>
+              </li>
+            </ul>
+          </section>
+
+        </section>
+
         <section class="view" id="view-speech" aria-labelledby="h_speech">
           <header class="page-head">
             <h1 id="h_speech">Speech</h1>
@@ -1000,10 +1041,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                     <label class="field-label" for="GEMINI_TRANSCRIBE_LANGUAGE">Language <span class="hint">· blank detects it</span></label>
                     <input type="text" name="GEMINI_TRANSCRIBE_LANGUAGE" id="GEMINI_TRANSCRIBE_LANGUAGE" value="__TRANSCRIBE_LANG__" placeholder="en-US" spellcheck="false">
                   </div>
-                  <div>
-                    <label class="field-label" for="GEMINI_TRANSCRIBE_VOCABULARY">Your words <span class="hint">· names and terms, comma-separated</span></label>
-                    <input type="text" name="GEMINI_TRANSCRIBE_VOCABULARY" id="GEMINI_TRANSCRIBE_VOCABULARY" value="__TRANSCRIBE_VOCAB__" placeholder="Odicto, Kubernetes">
-                  </div>
+
                 </div>
               </li>
             </ul>
@@ -1073,23 +1111,13 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
             </ul>
           </section>
 
-          <section class="sect" aria-labelledby="h_polish">
-            <div class="sect-label"><h2 id="h_polish">Text polish</h2></div>
-            <ul class="group">
-              <li class="row">
-                <div class="row-text"><h3 id="t_polish">Polish dictated text</h3><p>Fixes grammar, punctuation and capitals with your AI provider. Waits at most two seconds, then types the raw text. Gemini Smart is already polished.</p></div>
-                <div class="row-ctl">
-                  <label class="switch"><input type="checkbox" data-select="POLISH_DICTATION" aria-labelledby="t_polish"__POLISH_CHECKED__><span class="switch-track"><span class="switch-thumb"></span></span></label>
-                  <select name="POLISH_DICTATION" id="POLISH_DICTATION" class="visually-hidden" tabindex="-1" aria-hidden="true"><option value="false"__POLISH_OFF__>Off — raw transcription</option><option value="true"__POLISH_ON__>On — grammar, punctuation and capitalization</option></select>
-                </div>
-              </li>
-              <li class="row block">
-                <div>
-                  <label class="field-label" for="POLISH_MODEL">Polish model <span class="hint">· blank uses the AI answers model</span></label>
-                  <input type="text" name="POLISH_MODEL" id="POLISH_MODEL" value="__POLISH_MODEL__" placeholder="Blank uses the chosen AI model" spellcheck="false">
-                </div>
-              </li>
-            </ul>
+          <section class="sect" aria-labelledby="h_vocabulary">
+            <div class="sect-label"><h2 id="h_vocabulary">Personal vocabulary</h2></div>
+            <ul class="group"><li class="row block">
+              <label class="field-label" for="GEMINI_TRANSCRIBE_VOCABULARY">Names, brands and personal terms</label>
+              <textarea name="GEMINI_TRANSCRIBE_VOCABULARY" id="GEMINI_TRANSCRIBE_VOCABULARY" rows="3" placeholder="Odicto, Gargeya, Edudojo" spellcheck="false">__TRANSCRIBE_VOCAB__</textarea>
+              <p class="note">Exact spellings, separated by commas or new lines. Hints guide Gemini, Groq and local Whisper; recognition can still vary. Gemini uses up to 100 terms. Groq and Whisper use whole terms within 224 UTF-8 bytes, so put priority words first. OpenRouter speech does not use hints. Polish also receives these spellings.</p>
+            </li></ul>
           </section>
 
           <section class="sect" aria-labelledby="h_live">
@@ -1346,6 +1374,7 @@ var CURRENT_VIEW = 'overview';
 function showView(name) {
   if (!el('view-' + name)) name = 'overview';
   CURRENT_VIEW = name;
+  if (name === "polish") refreshPolishModels();
   var views = document.querySelectorAll('.view');
   for (var i = 0; i < views.length; i++) {
     views[i].classList.toggle('active', views[i].id === 'view-' + name);
@@ -1417,6 +1446,9 @@ function chooseOption(entry, opt) {
   entry.sel.dispatchEvent(evt);
   refreshCustomSelect(entry.sel);
   closeCustomSelect(entry, true);
+  if (entry.sel.id === 'polish_model_select') {
+    (entry.sel.value === '__custom__' ? el('polish_model_custom') : entry.trigger).focus();
+  }
 }
 function refreshCustomSelect(sel) {
   var entry = null;
@@ -1470,6 +1502,11 @@ function renderCustomOptions(entry, keepActive) {
       if (keepActive && opt.value === entry.activeValue) item.className += ' active';
       var label = document.createElement('span');
       label.textContent = opt.textContent;
+      if (opt.dataset.detail) {
+        var detail = document.createElement("small");
+        detail.className = "model-option-id"; detail.textContent = opt.dataset.detail;
+        label.appendChild(detail);
+      }
       if (opt.title) item.title = opt.title;
       item.appendChild(label);
       item.appendChild(svgIcon('check', 'M20 6 9 17l-5-5', '2.2'));
@@ -1792,8 +1829,58 @@ function showProvider(v) {
   var tb = el('test_button');
   if (tb) tb.disabled = (v === 'none');
   updateProviderCards();
+  refreshPolishModels();
   syncSttProvider();
   updateMeters();
+}
+
+function polishProvider() {
+  return el('LLM_PROVIDER').value || 'none';
+}
+function polishModelSummary() {
+  var provider = polishProvider();
+  var names = { meta: 'Meta', openrouter: 'OpenRouter', gemini: 'Gemini', groq: 'Groq', ollama: 'Ollama', none: 'No provider' };
+  el('polish_provider_label').textContent = names[provider] || provider;
+  var value = el('POLISH_MODEL').value.trim();
+  var aiModel = el(provider.toUpperCase() + '_MODEL');
+  var fallback = (aiModel && aiModel.value.trim()) || MODEL_DEFAULTS[provider] || (provider === 'groq' ? 'openai/gpt-oss-20b' : '');
+  el('polish_model_summary').textContent = provider === 'none'
+    ? 'Choose a provider on AI answers to load its models.'
+    : (value ? 'Polish uses ' + value : 'Follows AI answers: ' + fallback);
+}
+function refreshPolishModels() {
+  var select = el('polish_model_select');
+  if (!select) return;
+  var provider = polishProvider();
+  var saved = el('POLISH_MODEL').value;
+  var models = MODEL_CATALOGS[provider] || (provider === 'groq' ? ['openai/gpt-oss-20b', 'openai/gpt-oss-120b'] : []);
+  select.textContent = '';
+  var follow = document.createElement('option');
+  follow.value = ''; follow.textContent = 'Use AI answers model'; select.appendChild(follow);
+  modelOptionOrder(provider, models).forEach(function(id) {
+    var option = document.createElement('option'); option.value = id; option.title = id;
+    option.textContent = provider === 'openrouter' ? (OPENROUTER_NAMES[id] || id) : id;
+    if (option.textContent !== id) option.dataset.detail = id;
+    select.appendChild(option);
+  });
+  var custom = document.createElement('option'); custom.value = '__custom__';
+  custom.textContent = 'Custom model\u2026'; select.appendChild(custom);
+  select.value = saved && models.indexOf(saved) < 0 ? '__custom__' : saved;
+  el('polish_custom_field').hidden = select.value !== '__custom__';
+  el('polish_model_custom').value = select.value === '__custom__' ? saved : '';
+  polishModelSummary();
+  refreshCustomSelect(select);
+}
+function syncPolishModel() {
+  var custom = el('polish_model_select').value === '__custom__';
+  el('polish_custom_field').hidden = !custom;
+  el('POLISH_MODEL').value = custom ? el('polish_model_custom').value.trim() : el('polish_model_select').value;
+  polishModelSummary();
+  if (custom) el('polish_model_custom').focus();
+}
+function syncPolishCustomModel() {
+  el('POLISH_MODEL').value = el('polish_model_custom').value.trim();
+  polishModelSummary();
 }
 
 // ----------------------------------------------------------- model selects
@@ -1955,6 +2042,7 @@ function loadOpenrouterCatalog() {
       if (MODEL_CATALOGS.openrouter.indexOf(id) < 0) MODEL_CATALOGS.openrouter.push(id);
     });
     initModelSelects();
+    refreshPolishModels();
     initEffortSelects();
     filterOpenrouterEffort();
   }).catch(function() {
@@ -2246,7 +2334,7 @@ function renderKeycaps(targetId, chord) {
   });
 }
 function updateKeycaps() {
-  var pairs = [['HOTKEY', 'hotkey'], ['AI_HOTKEY', 'ai'], ['LIVE_HOTKEY', 'live']];
+  var pairs = [['HOTKEY', 'hotkey'], ['AI_HOTKEY', 'ai'], ['LIVE_HOTKEY', 'live'], ['POLISH_HOTKEY', 'polish']];
   pairs.forEach(function (pair) {
     var chord = (el(pair[0]) || {}).value || '';
     renderKeycaps('keycaps_' + pair[1], chord);

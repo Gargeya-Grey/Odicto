@@ -492,6 +492,8 @@ class DictationApp:
             self.on_release()
         elif kind == "live":
             self.on_live_toggle()
+        elif kind == "polish":
+            self._start_polish_selection()
         elif kind == "reset":
             self._reset_context_via_hotkey()
         elif kind == "cancel":
@@ -791,7 +793,7 @@ class DictationApp:
     def _prewarm_for_capture(self, use_llm: bool) -> None:
         """Wake provider connections while the user speaks. Never blocks or raises."""
         targets = [self.transcriber]
-        if use_llm or Config.POLISH_DICTATION:
+        if use_llm:
             targets.append(self.refiner)
         for target in targets:
             prewarm = getattr(target, "prewarm", None)
@@ -902,6 +904,25 @@ class DictationApp:
         # suppress=True installs a system-wide keyboard hook (all keys, all apps).
         # Only one process may do this — guarded by _INSTANCE_LOCK_HELD above.
         platforms.hook_key(primary, primary_handler, suppress=True)
+
+        polish_key = Config.POLISH_HOTKEY
+        if polish_key:
+            polish_mods, polish_primary = parse_hold_hotkey(polish_key)
+            held = [False]
+            def polish_handler(event):
+                if getattr(event, "event_type", None) == platforms.KEY_DOWN:
+                    if not all(platforms.is_pressed(mod) for mod in polish_mods):
+                        return True
+                    if not held[0]:
+                        held[0] = True
+                        self._dispatch_hotkey("polish")
+                    return False
+                if getattr(event, "event_type", None) == platforms.KEY_UP and held[0]:
+                    held[0] = False
+                    return False
+                return True
+            platforms.hook_key(polish_primary, polish_handler, suppress=True)
+            print(f"Selection polish hotkey bound: '{polish_key}'", flush=True)
 
         # Persistent reset: a direct key hook (not add_hotkey) that clears the AI
         # multi-turn memory immediately, no recording needed. add_hotkey fails to
@@ -1408,6 +1429,74 @@ class DictationApp:
                 self.last_status = "error"
                 self._finish_cycle()
 
+    def _start_polish_selection(self):
+        with self.state_lock:
+            if not self.ready or self.state != AppState.IDLE or self._closing.is_set():
+                return
+            self._cycle_seq += 1
+            self._cycle = _Cycle(self._cycle_seq)
+            self.paste_delivered = False
+            self.last_status = "polishing"
+            self._set_state(AppState.PROCESSING)
+        threading.Thread(target=self._polish_selection, daemon=True,
+                         name="odicto-selection-polish").start()
+
+    def _polish_selection(self):
+        cycle = self._claim_cycle()
+        try:
+            target = platforms.foreground_window_id()
+            if target is None or platforms.foreground_is_terminal(Config.EXTRA_TERMINAL_APPS):
+                self.last_status = "polish_target"
+                return
+            text = get_selected_text(timeout=0.35)
+            if not text.strip():
+                self.last_status = "polish_no_selection"
+                return
+            if platforms.foreground_window_id() != target:
+                self.last_status = "polish_target"
+                return
+            if self.refiner is None or not self.refiner.client:
+                self.last_status = "polish_fallback"
+                return
+            outcome, stage = self._run_stage(lambda: self.refiner.polish(text),
+                Config.LLM_DEADLINE_SECONDS, cycle, "odicto-selection-edit")
+            if outcome == "timeout":
+                self.last_status = "polish_fallback"
+                return
+            result = stage.result()
+            if not result or self.refiner.last_notice:
+                self.last_status = "polish_fallback"
+                return
+            if result == text:
+                self.last_status = "polish_unchanged"
+                return
+            if platforms.foreground_window_id() != target:
+                self.last_status = "polish_target"
+                return
+            if get_selected_text(timeout=0.35) != text:
+                self.last_status = "polish_target"
+                return
+            with self._lifecycle_lock:
+                if self._closing.is_set():
+                    return
+                with self.state_lock:
+                    if cycle.cancel.is_set() or self._cycle is not cycle:
+                        raise _Abort("cancelled")
+                    if platforms.foreground_window_id() != target:
+                        self.last_status = "polish_target"
+                        return
+                    cycle.pasting = True
+                with delivery_callback(self._on_paste_delivered):
+                    paste_text(result)
+                self.last_status = "success"
+        except _Abort as stop:
+            self.last_status = stop.status
+        except Exception as error:
+            print(f"Selection polish failed: {type(error).__name__}", flush=True)
+            self.last_status = "polish_fallback"
+        finally:
+            self._finish_cycle()
+
     def _capture_selection(self) -> tuple[str, Optional[bytes]]:
         """Capture highlighted text and/or clipboard image off the hook thread."""
         # Brief settle so physical modifier key-ups finish after the chord.
@@ -1563,21 +1652,6 @@ class DictationApp:
             else:
                 # Raw dictation: transcript only; no selection probe / no LLM.
                 refined_text = raw_text
-                speech_provider = (Config.effective_live_stt_provider() if live else
-                                   Config.effective_stt_provider())
-                already_smart = speech_provider == "gemini" and Config.GEMINI_TRANSCRIBE_MODE == "smart"
-                if Config.POLISH_DICTATION and not already_smart and self.refiner is not None:
-                    self.last_status = "polishing"
-                    self._notify_ui()
-                    refiner = self.refiner
-                    outcome, stage = self._run_stage(
-                        lambda: refiner.polish(raw_text),
-                        Config.LLM_DEADLINE_SECONDS, cycle, "odicto-polish-wait")
-                    if outcome == "timeout":
-                        refined_text, notice = raw_text, "polish_fallback"
-                    else:
-                        refined_text = stage.result() or raw_text
-                        notice = refiner.last_notice
                 self._log_text("Raw Text (Bypass)", refined_text)
 
             if not refined_text.strip():

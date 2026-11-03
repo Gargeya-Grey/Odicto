@@ -361,3 +361,11 @@ def apply_window_exstyles(widget) -> None:
 
 def hotkey_backend_name() -> str:
     return "pynput"
+
+def foreground_window_id():
+    try:
+        from AppKit import NSWorkspace
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return app.processIdentifier() if app else None
+    except Exception:
+        return None

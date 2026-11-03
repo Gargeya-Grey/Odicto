@@ -24,7 +24,7 @@ class TestHotkeyDispatch(unittest.TestCase):
         self.hooks = {}
         for name, value in {"HOTKEY": "ctrl+grave", "AI_HOTKEY": "ctrl+shift+grave",
                             "HOTKEY_TOGGLE": True, "RESET_CONTEXT_HOTKEY": "", "LIVE_HOTKEY": "f7",
-                            "CTRL_KEEP_CONTEXT_KEYS": ("f6",), "PLAY_AUDIO_CUES": False,
+                            "CTRL_KEEP_CONTEXT_KEYS": ("f6",), "POLISH_HOTKEY": "f8", "PLAY_AUDIO_CUES": False,
                             "RETRIGGER_COOLDOWN_MS": 0}.items():
             self.stack.enter_context(patch.object(Config, name, value))
         self.stack.enter_context(patch("main.ensure_can_bind_hotkeys"))
@@ -38,6 +38,15 @@ class TestHotkeyDispatch(unittest.TestCase):
 
     def key(self, kind="down", key="grave"):
         return self.hooks[key](SimpleNamespace(event_type=kind))
+
+    def test_polish_key_suppresses_repeat_and_dispatches_once_per_tap(self):
+        with patch.object(self.app, "_dispatch_hotkey") as dispatch:
+            self.assertFalse(self.key("down", "f8"))
+            self.assertFalse(self.key("down", "f8"))
+            self.assertFalse(self.key("up", "f8"))
+            dispatch.assert_called_once_with("polish")
+            self.assertFalse(self.key("down", "f8"))
+            self.assertEqual(dispatch.call_count, 2)
 
     def test_slow_reconnect_returns_hook_immediately_and_orders_stop(self):
         entered, resume, stopped = threading.Event(), threading.Event(), threading.Event()

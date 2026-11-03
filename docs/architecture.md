@@ -332,9 +332,6 @@ sequenceDiagram
     alt AI mode
         Pipe->>LLM: refine(transcript, context, image, keep_history)
         LLM-->>Pipe: reply
-    else dictation polish enabled (and speech is not Gemini Smart)
-        Pipe->>LLM: polish(transcript), independent 2s wait
-        LLM-->>Pipe: edited transcript, or raw fallback
     end
     Pipe->>Typ: paste_text(text)
     Typ-->>Cursor: paste, or type when the window is a terminal
@@ -368,7 +365,6 @@ sequenceDiagram
     App->>Pipe: finish session off hook thread
     Pipe->>Sess: stop, drain PCM, wait up to 2.5s for final
     Sess-->>Pipe: authoritative transcript
-    Pipe->>Pipe: optional text polish (skip Gemini Smart)
     Pipe->>Typ: insert once, restore_clipboard=False
     Pipe->>App: clear recorder, IDLE
 ```
@@ -379,7 +375,7 @@ ordinary speech provider. A Gemini final or an available draft skips batch STT. 
 empty Live result falls back to the selected speech engine. Callbacks from an old capture
 are ignored by epoch; no callback or background cleanup edits the target field.
 
-F7 stays PROCESSING through finalization, polish and insertion, so both hotkeys reject a
+F7 stays PROCESSING through finalization and insertion, so both hotkeys reject a
 new capture until completion. Preview text and committed fragments belong to that capture:
 clear them on ordinary capture start and at every pipeline exit before returning to IDLE.
 In non-terminals its final text stays on the clipboard for
@@ -387,11 +383,17 @@ asynchronous paste consumers. Terminals still receive typed Unicode without a cl
 change. The deleted caret worker, tail backspacing and delayed F7 clipboard restoration
 must not be reintroduced.
 
-`POLISH_DICTATION=false` is the default. When enabled, raw dictation uses the selected AI
-provider with `POLISH_MODEL` or its selected chat model, a fixed editing prompt, and no
-selection, image, reset commands or history. A separate worker waits at most two seconds;
-at most one polish call can be outstanding. Timeout, empty/truncated chat output or failure
-keeps raw text and shows "Polish skipped · raw text". Gemini Smart skips duplicate polish.
+Selection polish uses `POLISH_HOTKEY` (default F8), without recording. Raw and live
+transcription never calls polish. `POLISH_DICTATION` is retained as an ignored legacy key.
+`_start_polish_selection` reserves PROCESSING, then a worker copies the selection, calls
+`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), and checks foreground
+identity and exact selection text again before insertion. Empty selections, terminals,
+unknown targets, changed selections, cancellation and failures do not paste. The lifecycle
+and cycle gates reject late results. The refiner has no AI memory or image context here.
+Foreground identity is HWND on Windows, active window ID on X11 and frontmost application
+PID on macOS. Copy-based checks cannot prove field identity or detect every selection move.
+Editing preserves voice, emotion, emphasis, language and paragraphs. Short calls wait two
+seconds, scaling with length up to the stage deadline; one request may be outstanding.
 AI answer failure similarly shows "AI failed · raw text" instead of "Done". Screenshot
 context requires explicit `AI_CLIPBOARD_IMAGE=true`; the HUD marshals Qt image access to
 the GUI thread. Remote AI providers do not generate a startup warmup reply; Ollama does.
@@ -641,3 +643,10 @@ Plus one manual check that no test can replace: launch with `scripts/windows/run
 shows `Application ready!` and `HUD enabled`, hold the hotkey, watch the pill show **Listening**,
 release, and confirm the text lands. Then stop the app and confirm normal typing returns — that
 is the single-instance invariant in practice.
+
+Personal vocabulary uses the legacy `GEMINI_TRANSCRIBE_VOCABULARY` key. Commas, fullwidth commas
+and newlines separate NFC-normalized terms, deduplicated case-insensitively, capped at 100.
+Gemini receives the list; Groq and local Whisper receive whole terms within 224 UTF-8 bytes
+through `prompt` and `initial_prompt`. OpenRouter speech has no hint parameter.
+Setup exposes vocabulary on Speech and a dedicated Polish page. These are recognition hints,
+not deterministic substitutions.

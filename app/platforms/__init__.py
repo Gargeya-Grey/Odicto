@@ -39,6 +39,7 @@ __all__ = [
     "send_backspaces",
     "send_text",
     "send_text_bulk",
+    "foreground_window_id",
     "foreground_is_terminal",
     "foreground_is_ide_host",
     "force_release_modifiers",

@@ -491,6 +491,9 @@ class WhisperTranscriber:
             "language": "en" if is_english_model else None,
             "word_timestamps": False,
         }
+        vocabulary = Config.speech_vocabulary_prompt()
+        if vocabulary:
+            transcribe_kwargs["initial_prompt"] = vocabulary
         if use_vad:
             transcribe_kwargs["vad_parameters"] = {
                 "threshold": 0.4,
@@ -760,6 +763,9 @@ class CloudTranscriber(_LocalWhisperFallback):
                 fields = {"model": model}
                 if self.kind == "groq":
                     fields["response_format"] = "json"
+                    vocabulary = Config.speech_vocabulary_prompt()
+                    if vocabulary:
+                        fields["prompt"] = vocabulary
                 if language:
                     fields["language"] = language
                 body, content_type = _encode_multipart(

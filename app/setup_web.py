@@ -97,6 +97,7 @@ EDITABLE_KEYS = {
     "GROQ_MODEL",
     "POLISH_DICTATION",
     "POLISH_MODEL",
+    "POLISH_HOTKEY",
     "AI_CLIPBOARD_IMAGE",
     "OPENROUTER_STT_MODEL",
     "GEMINI_TRANSCRIBE_MODE",
@@ -241,7 +242,7 @@ def read_env_raw() -> dict:
 
 def _format_env_assignment(key: str, value: str) -> str:
     """Write a .env assignment. Multiline SYSTEM_PROMPT is double-quoted with \\n."""
-    if key == "SYSTEM_PROMPT":
+    if key in ("SYSTEM_PROMPT", "GEMINI_TRANSCRIBE_VOCABULARY"):
         escaped = (
             value.replace("\\", "\\\\")
             .replace('"', '\\"')
@@ -719,6 +720,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__GROQ_KEY__": html.escape(current.get("GROQ_API_KEY", "")),
         "__GROQ_KEY_SAVED__": 'true' if current.get("GROQ_API_KEY") else 'false',
         "__GROQ_MODEL__": html.escape(env_or("GROQ_MODEL")),
+        "__POLISH_HOTKEY__": html.escape(env_or("POLISH_HOTKEY")),
         "__POLISH_MODEL__": html.escape(env_raw("POLISH_MODEL")),
         "__POLISH_ON__": " selected" if env_or("POLISH_DICTATION") == "true" else "",
         "__POLISH_CHECKED__": " checked" if env_or("POLISH_DICTATION") == "true" else "",
@@ -1227,6 +1229,9 @@ class _Handler(BaseHTTPRequestHandler):
         ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
         try:
             validate_hotkey_pair(hotkey, ai_hotkey)
+            Config.validate_polish_hotkey(updates.get("POLISH_HOTKEY", Config.POLISH_HOTKEY),
+                hotkey, updates.get("LIVE_HOTKEY", Config.LIVE_HOTKEY),
+                Config.RESET_CONTEXT_HOTKEY, Config.CANCEL_HOTKEY)
         except Exception as e:
             body = self._inject_token(_page(f"Hotkey invalid: {e}", "err"))
             self._send(body)

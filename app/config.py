@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 from typing import Literal, Tuple
 from dotenv import load_dotenv
 from paths import ROOT
@@ -102,6 +103,7 @@ ENV_DEFAULTS: dict[str, str] = {
     "GROQ_MODEL": "openai/gpt-oss-20b",
     "AI_CLIPBOARD_IMAGE": "false",
     "POLISH_DICTATION": "false",
+    "POLISH_HOTKEY": "f8",
     "POLISH_MODEL": "",
     "OPENROUTER_STT_MODEL": "openai/whisper-large-v3",
     "LIVE_HOTKEY": "f7",
@@ -480,6 +482,7 @@ class Config:
     GEMINI_TRANSCRIBE_VOCABULARY: str = _default_env("GEMINI_TRANSCRIBE_VOCABULARY").strip()
     AI_CLIPBOARD_IMAGE: bool = _env_bool("AI_CLIPBOARD_IMAGE", _def("AI_CLIPBOARD_IMAGE"))
     POLISH_DICTATION: bool = _env_bool("POLISH_DICTATION", _def("POLISH_DICTATION"))
+    POLISH_HOTKEY: str = _default_env("POLISH_HOTKEY").strip().lower()
     POLISH_MODEL: str = _sanitize_model_id(_default_env("POLISH_MODEL"))
     GROQ_MODEL: str = _sanitize_model_id(_default_env("GROQ_MODEL"))
     GROQ_API_KEY: str = _clean_secret("GROQ_API_KEY")
@@ -884,6 +887,24 @@ class Config:
                 codes.append(code)
         return codes
 
+    @staticmethod
+    def validate_polish_hotkey(value, *reserved):
+        if not value:
+            return
+        _, primary = parse_hold_hotkey(value)
+        reserved_keys = [parse_hold_hotkey(key)[1] for key in reserved if key]
+        if primary in reserved_keys:
+            raise ValueError("Polish shortcut must use a different primary key from other shortcuts")
+
+    @classmethod
+    def speech_vocabulary_prompt(cls) -> str:
+        """Whole spelling hints within Whisper's conservative UTF-8 budget."""
+        terms = []
+        for term in cls.gemini_transcribe_vocabulary():
+            if len(", ".join(terms + [term]).encode("utf-8")) <= 224:
+                terms.append(term)
+        return ", ".join(terms)
+
     @classmethod
     def gemini_transcribe_vocabulary(cls) -> list:
         """Custom vocabulary terms (best ≤100). Empty when unset."""
@@ -892,10 +913,10 @@ class Config:
             return []
         terms = []
         seen = set()
-        for tok in raw.split(","):
-            term = tok.strip()
-            if term and term not in seen:
-                seen.add(term)
+        for tok in re.split(r"[,\uff0c\r\n]+", raw):
+            term = unicodedata.normalize("NFC", tok.strip())
+            if term and term.casefold() not in seen:
+                seen.add(term.casefold())
                 terms.append(term)
             if len(terms) >= 100:
                 break
@@ -1173,8 +1194,8 @@ class Config:
         )
         add("AI", "Groq chat model", cls.GROQ_MODEL, _source_of("GROQ_MODEL"))
         add("AI", "Clipboard image", cls.AI_CLIPBOARD_IMAGE, _source_of("AI_CLIPBOARD_IMAGE"))
-        add("Speech to text", "Polish dictation", cls.POLISH_DICTATION, _source_of("POLISH_DICTATION"))
-        add("Speech to text", "Polish model", cls.POLISH_MODEL, _source_of("POLISH_MODEL"))
+        add("Polish", "Selection shortcut", cls.POLISH_HOTKEY or "(disabled)", _source_of("POLISH_HOTKEY"))
+        add("Polish", "Polish model", cls.POLISH_MODEL, _source_of("POLISH_MODEL"))
         add("Speech to text", "Groq STT model", cls.GROQ_STT_MODEL, _source_of("GROQ_STT_MODEL"))
         add(
             "Speech to text",
@@ -1352,6 +1373,8 @@ class Config:
                     f"AI_MODIFIER '{cls.AI_MODIFIER}' must be distinct from HOTKEY parts "
                     f"({cls.HOTKEY})"
                 )
+        cls.validate_polish_hotkey(cls.POLISH_HOTKEY, cls.HOTKEY,
+                                   cls.LIVE_HOTKEY, cls.RESET_CONTEXT_HOTKEY, cls.CANCEL_HOTKEY)
         live_key = (cls.LIVE_HOTKEY or "").split("+")[-1].strip()
         if live_key:
             if live_key == dict_primary:

@@ -61,24 +61,29 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # was checked for leftover __TOKENS__ and for the test API keys before capture.
 # Review fixes: one status poll loop, and the select search box no longer marks the page dirty.
 # Select menus render as a fixed layer on <body> so cards and the save bar cannot clip or cover them.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '186f3f3a08b5976076ecc4ef5d3c207708aad8b2579d74994f16332c9d4b4fbe',
- 'provider_meta': '88763b12b557db2b4ae00264865e624053e64ccd455bdb9b0829ea8ba1bb3c00',
- 'provider_openrouter': 'a6e0226d38133dedefa084a650040387834d2b43f1c5976478e96c4980a953c4',
- 'provider_gemini': 'a1e7833276c7a32e15024579e08406e8a53db6972937678f5660f95a417082ae',
- 'provider_ollama': '1b0f3e8065962e2a33a07637912cc6be9db8dc548269c90ab44ee537c4b3fe2a',
- 'provider_none': '186f3f3a08b5976076ecc4ef5d3c207708aad8b2579d74994f16332c9d4b4fbe',
- 'provider_groq': 'fa7602e555208863fc7893d9380746c02f1cf0e255c5663f8b439bee1a4f2883',
- 'polish_enabled': '68bf6e936120b67a40333b1c308069f77cd9a3e5dc3604ae968ec34fa8212f7f',
- 'history_and_custom': 'e0148f9596266cf4f7ced91298c17af4f9b015d1bce7c1f8c5ee16349b3f5c1e',
- 'hotkey_short': '44c03a07a2eeebc8c43164b5df900b5c2215ae41d8d1752209066f7e945aabde',
- 'stt_gemini': '45761b0d619fa7b8c43afab43334d1d8ed2657494fad18a7394b5e313d141126',
- 'prompt_from_file': 'eb7e4814dc87ebb544049ad73c8c366e6ee4bbbb78dc5a2229307aa186cb7798',
- 'prompt_from_inline_env': '6b3f6e76629c0e116bc61f9519e0e6499b941433296d0d74e00a2923ab7cc6f3',
- 'msg_ok': 'abaf141f4ae135ff0f42e7d9201e4d820196fb6c22bf771f6ace0b9e3ae17a2a',
- 'msg_err': '4bcebcfb5cb1ef4b424712f017cfc6bfb5886b898a6b653f21d51f96c5c690b9',
- 'msg_neutral': '83472b8e6e4cf4244e00f6f432f54276688391f3f5e7abaffd86ccb2f14c34e0',
- 'admin_on': '80607c4d31001addefc5ad6f9bd9057b598a96abeadf6d14a8d80d3e59f2ab00',
- 'admin_unavailable': 'b1bc3f4d7df0597cf21d534509863b63bd68f5ae8bb6b17a2a5d61c8fb3c7a45'}
+# Personal vocabulary moved outside Gemini; Polish now has its own page.
+# Selection-only polish controls and separate model suggestions.
+# Styled searchable Polish picker with provider and custom model state.
+# Polish label, model summary and help text now have explicit vertical spacing.
+# Polish shortcut now uses the shared key recorder and keycaps.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'a7778ba186dd17a0b751813d54443ffcba9372fe2a6702b77c7fc9314f8fc0e3',
+ 'provider_meta': 'fdc3904c73bd7bc4c6301257fd16da4952234017de9a6018adf2acde628110d0',
+ 'provider_openrouter': 'ae9bf051c2ff128128a5bbaac7579f8d74456ed8d9e2453759fb0aec5e7fa05d',
+ 'provider_gemini': '8f27ad54faf83a4d95b7ac1b8828c962c715fb4bcd76e3a0bb0aae4714d284bc',
+ 'provider_ollama': '02bb91c860981524d6528fdf4a5d9f1c89685b5783b70c7d941a9b649454be34',
+ 'provider_none': 'a7778ba186dd17a0b751813d54443ffcba9372fe2a6702b77c7fc9314f8fc0e3',
+ 'provider_groq': '86326c8e55e17a37e4dbc555f92bd1048b6b577b7d2e9e021b32f674fecf212e',
+ 'polish_enabled': 'b7c49480c4be16dbb1d1ce7157ef90541b9d2b36110308a22b0c19183338b39a',
+ 'history_and_custom': 'c5414c5c92adacdb58e8dcd0b88ccdfacd256caa5f89d28155842dc72feed945',
+ 'hotkey_short': '893fb9ead4fefad7bec6b474e81bcd9b339043e6161ff153b0850149b0a42aa7',
+ 'stt_gemini': '74eb8f6c3293577c5fbb758518997d60ef46363c13b038f28fea0f70148d8a3b',
+ 'prompt_from_file': '8c75508eb005a99ac89c21d26c7aa4e513a76ba0e1526c31cb854d42b9c73985',
+ 'prompt_from_inline_env': '601e88ecb1effbc0f4a1b121defe946524d8ebdc32c5a7c52e8824c556a29bf3',
+ 'msg_ok': '0548e57689e0bd3773809d178aed63d2fa0b553fa38c1b5155f1cf70204401dc',
+ 'msg_err': '4718313aee80aacae9aa895deae572ddef721cfa945ec4f6d2cb0b51999d9c7f',
+ 'msg_neutral': 'fb5603d3ac5cdeb3a86ebe543624020cbeb4a37e41eb405d3f1a1c519330869c',
+ 'admin_on': 'eecdce3cfa8575cc0c3b491446a6c3ef50e0657da91cae9a4c1ee395997175eb',
+ 'admin_unavailable': '634d01391aaf33a82b4cc3c9954e7a893474b48cd42287e603c619d3092bd7ff'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

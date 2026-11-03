@@ -9,6 +9,7 @@ the owner's hands plus `log_report.py`, and what proves it.
 | AI chord | [ai-chord.md](ai-chord.md) | row `mode=AI`, LLM reply pasted |
 | Hotkey responsiveness | [responsiveness.md](responsiveness.md) | `hud_lag` ≤ 1 s after idle; doctor working set stays high |
 | F7 live dictation | [live-f7.md](live-f7.md) | interim captions in the pill; one insert at stop |
+| Vocabulary and Polish | [vocabulary-polish.md](vocabulary-polish.md) | spelling hints reach STT; careful editing; owner confirms text |
 | Cancel (Esc) | [cancel.md](cancel.md) | `Cancelled. Nothing inserted.`; nothing pasted |
 
 The chords come from the owner's `.env` (`HOTKEY`, `AI_HOTKEY`). Read them from the log's

@@ -343,7 +343,7 @@ class TestCancel(_Base):
         hooks = {}
         with patch.object(Config, "HOTKEY", "ctrl+grave"), patch.object(Config, "AI_HOTKEY", "ctrl+shift+grave"), \
                 patch.object(Config, "RESET_CONTEXT_HOTKEY", ""), patch.object(Config, "LIVE_HOTKEY", "f7"), \
-                patch.object(Config, "CANCEL_HOTKEY", cancel_key), patch("main.ensure_can_bind_hotkeys"), \
+                patch.object(Config, "POLISH_HOTKEY", "f8"), patch.object(Config, "CANCEL_HOTKEY", cancel_key), patch("main.ensure_can_bind_hotkeys"), \
                 patch("main.platforms.hook_key",
                       side_effect=lambda key, fn, suppress: hooks.update({key: (fn, suppress)})):
             app._hotkey_physically_held = False
@@ -371,7 +371,7 @@ class TestCancel(_Base):
     def test_blank_cancel_key_binds_nothing(self):
         hooks = self._bind(app_fixture(), cancel_key="")
         self.assertNotIn("esc", hooks)
-        self.assertEqual(set(hooks), {"grave", "f7"})
+        self.assertEqual(set(hooks), {"grave", "f7", "f8"})
 
 
 class TestLogging(_Base):

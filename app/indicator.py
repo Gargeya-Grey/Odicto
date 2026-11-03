@@ -360,7 +360,6 @@ class _Spring:
 # Text was inserted, with a caveat the user should see.
 SUCCESS_NOTICE_LABELS = {
     "ai_fallback": "AI failed · raw text",
-    "polish_fallback": "Polish skipped · raw text",
     "ai_timeout": "AI timed out · raw text",
     "stt_fallback": "Cloud slow · local speech",
     "mic_gap": "Mic gap · check text",
@@ -369,6 +368,10 @@ SUCCESS_NOTICE_LABELS = {
 SUCCESS_STATUSES = ("success",) + tuple(SUCCESS_NOTICE_LABELS)
 # Nothing was inserted. "init_error" stays up until init succeeds.
 ERROR_STATUS_LABELS = {
+    "polish_fallback": "Polish unavailable - text kept",
+    "polish_no_selection": "Select text to polish",
+    "polish_target": "Selection changed - text kept",
+    "polish_unchanged": "Already polished - text kept",
     "empty": "No speech",
     "cancelled": "Cancelled",
     "stt_timeout": "Speech timed out",
