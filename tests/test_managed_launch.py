@@ -308,6 +308,36 @@ class TestManagedChildProtocol(unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
+    def test_waiting_guard_does_not_stall_other_stdin_operations(self):
+        # Windows queues every operation on a synchronous pipe behind a pending ReadFile.
+        # numpy's OpenBLAS load seeks stdin, so a guard that blocks in os.read hung the
+        # real managed owner inside `import recorder` until the 60 s startup timeout.
+        bootstrap = ("import os,sys;sys.path.insert(0,sys.argv[1]);import odicto;odicto._managed_startup_guard()\n"
+                     "try:\n os.lseek(0,0,1)\nexcept OSError:\n pass\n"
+                     "sys.stdout.write('imported\\n');sys.stdout.flush()\n"
+                     "import time;time.sleep(30)")
+        process = subprocess.Popen([sys.executable, "-c", bootstrap, str(Path(odicto.__file__).parent)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        reader = threading.Thread(target=lambda: lines.append(process.stdout.readline()), daemon=True)
+        lines = []
+        try:
+            process.stdin.write(b"S")
+            process.stdin.flush()
+            reader.start()
+            reader.join(timeout=10)
+            self.assertEqual([line.strip() for line in lines], [b"imported"],
+                             "startup stalled on stdin while the guard waited")
+            process.stdin.close()
+            self.assertEqual(process.wait(timeout=10), 2, "launcher EOF must still cancel the child")
+        finally:
+            if not process.stdin.closed:
+                process.stdin.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
     def test_private_pipe_eof_cancels_child_and_release_permits_completion(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

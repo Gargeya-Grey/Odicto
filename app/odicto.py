@@ -67,6 +67,33 @@ def _managed_receipt(state: str) -> None:
         os.replace(temporary, path)
 
 
+def _wait_for_pipe_data(descriptor: int) -> None:
+    """Wait for launcher data without a pending ReadFile on the pipe (Windows).
+
+    Windows queues every operation on a synchronous pipe handle behind a pending read,
+    so a thread blocked in os.read makes any other stdin call (numpy's OpenBLAS load
+    seeks it) wait too. The managed owner then hung in `import recorder` until the
+    launcher's startup timeout. Polling with PeekNamedPipe never holds the handle.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    peek = kernel32.PeekNamedPipe
+    peek.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+                     ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+    peek.restype = wintypes.BOOL
+    handle = msvcrt.get_osfhandle(descriptor)
+    available = wintypes.DWORD()
+    while True:
+        if not peek(handle, None, 0, None, ctypes.byref(available), None):
+            os._exit(2)  # The launcher closed the pipe or exited.
+        if available.value:
+            return
+        time.sleep(0.05)
+
+
 def _managed_startup_guard() -> None:
     """An unconfirmed startup must die if its supervising launcher disappears."""
     descriptor = sys.stdin.fileno()
@@ -76,6 +103,8 @@ def _managed_startup_guard() -> None:
 
     def supervise():
         ready.set()
+        if os.name == "nt":
+            _wait_for_pipe_data(descriptor)
         if os.read(descriptor, 1) != b"R":
             os._exit(2)
 
