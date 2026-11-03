@@ -82,7 +82,8 @@ transaction) come only from `manager.private_directory`; the source admin receip
 uses it too. On Windows a new directory is created atomically (`CreateDirectoryW`) with an
 explicit protected DACL: SYSTEM, Administrators, OWNER RIGHTS and the token user, inheriting
 nothing on any Python version. An existing directory gains one explicit inheritable grant
-for the token user (after leading explicit denies, before inherited entries), so files that
+for the token user (after leading explicit denies, before inherited entries; an inherited or
+non-propagating grant does not count, and a junction is refused), so files that
 an elevated process owns stay readable to the same account. The grant is not treated as
 proof of effective access: deny entries are not modelled (CREATOR OWNER substitution, logon
 and deny-only groups), and a reader that is still denied reports "access denied" with the

@@ -469,11 +469,43 @@ class TestSetAdminMode(_AdminRootCase):
         self.run.assert_not_called()
 
     def test_scratch_receipt_folder_is_removed(self):
-        os.makedirs(os.path.join(self.scratch, "left"), exist_ok=True)
         self.effect = self.write_marker
         windows_admin.set_admin_mode(self.root, True)
         self.assertFalse(os.path.exists(self.scratch))
         os.makedirs(self.scratch)  # for the cleanup hook
+
+    def test_scratch_folder_holding_other_content_is_kept(self):
+        # Another same-account process may have replaced the folder; never remove its tree.
+        other = os.path.join(self.scratch, "other-process.txt")
+        self.effect = lambda: (self.write_marker(), open(other, "w").close())
+        windows_admin.set_admin_mode(self.root, True)
+        self.assertTrue(os.path.isfile(other))
+        self.assertFalse(os.path.exists(os.path.join(self.scratch, "receipt.json")))
+        os.remove(other)
+
+    def test_unreadable_receipt_after_a_clean_exit_is_not_success(self):
+        self.effect = self.write_marker
+        unreadable = {"unreadable": True, "error": "this account cannot read the receipt (access denied)"}
+        with patch.object(windows_admin, "_read_receipt", return_value=unreadable):
+            ok, message = windows_admin.set_admin_mode(self.root, True)
+        self.assertFalse(ok)
+        self.assertIn("access denied", message)
+
+    def test_managed_admin_failure_names_the_launcher_error(self):
+        import shutil
+        home = tempfile.mkdtemp(prefix="odicto-admin-test-home-")
+        self.addCleanup(lambda: shutil.rmtree(home, ignore_errors=True))
+        open(os.path.join(home, "launcher.py"), "w").close()
+
+        def failing(command, **kwargs):
+            kwargs["stderr"].write(b"Odicto: This account cannot read managed-install metadata x.json (access denied)\n")
+            return SimpleNamespace(returncode=1)
+
+        self.run.side_effect = failing
+        with patch.dict(os.environ, {"ODICTO_MANAGED_HOME": home}):
+            ok, message = windows_admin.set_admin_mode(self.root, True)
+        self.assertFalse(ok)
+        self.assertIn("access denied", message)
 
 
 class TestQuitEvent(unittest.TestCase):

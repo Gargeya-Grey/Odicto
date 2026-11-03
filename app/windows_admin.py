@@ -621,7 +621,8 @@ def _read_receipt(path: str) -> dict:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except PermissionError:
-        return {"error": "this account cannot read the administrator step's receipt (access denied); "
+        return {"unreadable": True,
+                "error": "this account cannot read the administrator step's receipt (access denied); "
                          "check the permissions of %s" % os.path.dirname(path)}
     except (OSError, ValueError):
         return {}
@@ -670,9 +671,17 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
         launcher = os.path.join(home, "launcher.py")
         if not os.path.isfile(launcher):
             return False, "The stable managed launcher is missing."
-        result = subprocess.run([sys.executable, launcher, "admin", "on" if enabled else "off"],
-                                check=False, timeout=timeout, creationflags=_CREATE_NO_WINDOW)
+        # stderr goes to a file, not a pipe: a started Odicto may inherit it and outlive this call.
+        with tempfile.TemporaryFile() as errors:
+            result = subprocess.run([sys.executable, launcher, "admin", "on" if enabled else "off"],
+                                    check=False, timeout=timeout, creationflags=_CREATE_NO_WINDOW,
+                                    stderr=errors)
+            errors.seek(0)
+            lines = [line.strip() for line in errors.read().decode("utf-8", "replace").splitlines() if line.strip()]
         if result.returncode:
+            detail = lines[-1][len("Odicto: "):] if lines and lines[-1].startswith("Odicto: ") else ""
+            if detail:
+                return False, "Admin mode was not changed: %s" % _short(detail)
             return False, "Admin mode was not changed. Close other lifecycle commands and retry."
         return True, "Admin mode is %s. Start Odicto with odicto start." % ("on" if enabled else "off")
     root = os.path.abspath(os.fspath(root))
@@ -683,8 +692,8 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
         scratch = _receipt_directory(root)
     except Exception as error:
         return False, "Admin mode was not changed: the receipt folder could not be secured (%s)." % _short(error)
+    receipt_path = os.path.join(scratch, "receipt.json")
     try:
-        receipt_path = os.path.join(scratch, "receipt.json")
         action = ("-Action", "Start", "-InstallStartup") if enabled else ("-Action", "Disable")
         command = [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper,
                    *action, "-ReceiptPath", receipt_path, "-TimeoutSeconds", "30"]
@@ -698,8 +707,15 @@ def _set_admin_mode(root, enabled: bool, timeout: float) -> Tuple[bool, str]:
             return False, "Admin mode was not changed: PowerShell could not run (%s)." % _short(error)
         receipt = _read_receipt(receipt_path)
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        # Remove only the receipt, then the folder if it is empty: never a tree this call did not make.
+        for remove, target in ((os.remove, receipt_path), (os.rmdir, scratch)):
+            try:
+                remove(target)
+            except OSError:
+                pass
 
+    if receipt.get("unreadable"):
+        return False, "Admin mode change could not be verified: %s" % _short(receipt.get("error"))
     if "elevation not granted" in (receipt.get("steps") or []):
         return False, "The administrator prompt was cancelled; nothing changed."
     if completed.returncode != 0:

@@ -45,7 +45,7 @@ function Grant-SameAccount([string]$Path, [string]$UserSid) {
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $acl = [IO.Directory]::GetAccessControl($item.FullName, [Security.AccessControl.AccessControlSections]::Access)
     foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-        if ($rule.IdentityReference -eq $user -and $rule.AccessControlType -eq 'Allow' -and
+        if ($rule.IdentityReference -eq $user -and $rule.AccessControlType -eq 'Allow' -and -not $rule.IsInherited -and
             ($rule.FileSystemRights -band $full) -eq $full -and $rule.InheritanceFlags -eq $inherit -and
             $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None) { return }
     }

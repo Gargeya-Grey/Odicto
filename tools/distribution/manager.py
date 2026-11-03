@@ -268,7 +268,9 @@ def _with_token_user(dacl: str, sid: str, canonical: Callable[[str], str] = lamb
     for index, ace in enumerate(aces):
         fields = ace[1:-1].split(";")
         flags = {fields[1][at:at + 2] for at in range(0, len(fields[1]), 2)} if len(fields) > 1 else set()
-        if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and "IO" not in flags
+        # Only an explicit grant that reaches every descendant counts: an inherited one (ID) can
+        # vanish with the parent's list, and NP stops at the first level.
+        if (len(fields) >= 6 and fields[0] == "A" and {"OI", "CI"} <= flags and not {"IO", "ID", "NP"} & flags
                 and fields[2].upper() in {"FA", "0X1F01FF"} and canonical(fields[5]) == sid):
             return None
         if position is None and not (fields[0].upper() in {"D", "OD", "XD"} and "ID" not in flags):
@@ -388,6 +390,10 @@ def _grant_token_user(path: Path, *, create: bool = False, exist_ok: bool = Fals
             raise ctypes.WinError(code)
 
         with_descriptor(f"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)(A;OICI;FA;;;{sid})", create_directory)
+
+    # A junction (or any reparse point) would repair its target's list, not this folder's.
+    if getattr(os.lstat(path), "st_file_attributes", 0) & 0x400:
+        raise DistributionError(f"Private directory {path.name} is a link; it was preserved")
 
     updated = _with_token_user(read_dacl(), sid, canonical)
     if updated is None:

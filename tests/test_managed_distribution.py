@@ -616,7 +616,6 @@ class TestPrivateDirectoryPolicy(unittest.TestCase):
 
     def test_existing_effective_grant_is_left_unchanged(self):
         for dacl in ("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-111-222-333-1001)",
-                     "D:AI(A;OICIID;FA;;;S-1-5-21-111-222-333-1001)(A;OICIID;FA;;;SY)",
                      "D:P(A;OICI;0x1f01ff;;;S-1-5-21-111-222-333-1001)",
                      "D:NO_ACCESS_CONTROL"):
             with self.subTest(dacl=dacl):
@@ -640,6 +639,13 @@ class TestPrivateDirectoryPolicy(unittest.TestCase):
                          "D:AI(A;OICI;FA;;;%s)(D;OICIID;FR;;;AN)(A;OICIID;FA;;;SY)" % user)
         self.assertEqual(dist._with_token_user("D:P(OD;CI;0x4;00000000-0000-0000-0000-000000000001;;AN)", user),
                          "D:P(OD;CI;0x4;00000000-0000-0000-0000-000000000001;;AN)(A;OICI;FA;;;%s)" % user)
+
+    def test_inherited_or_non_propagating_grant_does_not_count(self):
+        user = self.USER
+        self.assertEqual(dist._with_token_user("D:AI(A;OICIID;FA;;;%s)(A;OICIID;FA;;;SY)" % user, user),
+                         "D:AI(A;OICI;FA;;;%s)(A;OICIID;FA;;;%s)(A;OICIID;FA;;;SY)" % (user, user))
+        self.assertEqual(dist._with_token_user("D:P(A;OICINP;FA;;;%s)" % user, user),
+                         "D:P(A;OICI;FA;;;%s)(A;OICINP;FA;;;%s)" % (user, user))
 
     def test_existing_grant_is_not_claimed_as_effective_access_past_denies(self):
         # Deny entries are not modelled (CREATOR OWNER, logon and deny-only groups). The policy only
@@ -709,6 +715,22 @@ class TestWindowsPrivateDirectoryAcl(unittest.TestCase):
     def assert_private_with_foreign_deny(self, user, dacl):
         self.assertIn(self.grant(user), dacl)
         self.assertIn(";AN)", dacl)
+
+    def test_junction_is_refused_instead_of_repairing_its_target(self):
+        import _winapi
+        import os
+        with tempfile.TemporaryDirectory() as temporary:
+            target, link = Path(temporary) / "target", Path(temporary) / "data"
+            target.mkdir()
+            _winapi.CreateJunction(str(target), str(link))
+            try:
+                with self.assertRaises(dist.DistributionError):
+                    dist.private_directory(link, exist_ok=True)
+                _, dacl = _windows_dacls(target)
+            finally:
+                os.rmdir(link)
+        user = _windows_dacls(Path(temporary).parent)[0]
+        self.assertNotIn(self.grant(user), dacl)
 
     def test_existing_directory_with_an_inherited_deny_stays_canonical(self):
         import os
