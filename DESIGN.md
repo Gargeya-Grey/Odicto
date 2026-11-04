@@ -68,10 +68,10 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
    background block or an underline.
 5. **Colour is one dial.** Everything is derived from a hue `--h` and a chroma factor `--k`
    at fixed *lightness*. Fixed lightness is the strategy for keeping contrast and depth steady
-   across themes. Only hue and saturation move. That is why a user can pick a colour and the
-   page stays readable. `tests/test_theme.py` checks page contrast for the presets and eight
-   custom colours (red, green, blue, yellow, white, black, grey, a rose); it does not prove
-   every possible colour.
+   across themes. Only hue and saturation move. That is the intent: a picked colour should keep
+   the page readable. `tests/test_theme.py` checks modelled page contrast for the presets and
+   eight custom colours (red, green, blue, yellow, white, black, grey, a rose); it does not
+   prove every possible colour or any real display.
    Status colours (amber, soft red, moon blue) and the logo do **not** move, because they
    carry meaning that must not change with taste.
 6. **Status is never colour alone.** OK is a filled dot, warning a hollow ring, error a
@@ -95,7 +95,7 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
    `fixed` layers on top. A message that appears must not push the content the user is
    reading. Menus live on `<body>` so no panel can clip them.
 10. **Hit areas are larger than the drawing.** The switch is drawn 40×24 but clickable 52×40;
-    a swatch is drawn 38×16 but clickable 42×28; buttons are 40 high, inputs 44. Fingers and
+    a swatch is drawn 38×16 but clickable 42×28; base buttons are 40 high (small ones 32), inputs 44. Fingers and
     cursors are imprecise, and generous targets feel *calmer*.
 11. **Hover is a veil, not a colour.** Hover is `4 %` of the text colour laid over whatever is
     underneath. It works on glass, on wells and on the rail without a custom colour for each.
@@ -111,11 +111,14 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
     edges can be slightly soft. On the web, 1 px lines and 2 px stems are whole. Blur is a bug,
     not a style.
 14. **Time, not frames.** The HUD's entry, exit and size springs are functions of real elapsed
-    time with exact end values, so they look the same at 30 or 144 fps. The voice and the
-    stem's state clock advance by the frame time capped at 50 ms, so a stalled frame pauses
-    them briefly instead of making them leap.
-15. **Leave the way you came, in reverse.** The HUD opens seed → stem → bud → tip → words and
-    closes words → tip → bud → stem → seed (the stages overlap; section 4.8 gives each start).
+    time with exact end values, so they look the same at 30 or 144 fps. The voice envelope and
+    the stem's state clock advance by the frame time capped at 50 ms, so a stalled frame
+    pauses them briefly instead of making them leap. Effects driven straight by the wall clock
+    (the idle first pixel's pulse, the Work wave, the shimmer, the bead, the dots) keep time
+    with it, so after a stall they are simply where the clock says.
+15. **Leave the way you came, in reverse.** The HUD opens seed → stem → bud, then the words
+    begin to fade in just before the tip finishes forming, and it closes words → tip → bud →
+    stem → seed (the stages overlap; section 4.8 gives each start).
     Reverse order makes the exit feel like the same motion played back, which feels
     intentional and calm. An exit that starts mid-entry never grows first.
 16. **Idle is quiet.** When nothing moves, the work drops to a minimum: the HUD slows to a
@@ -330,8 +333,18 @@ Prompt       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z
 System       <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>
 ```
 
-  The tile icons on the how-to cards, the chevrons and the check are drawn in the same style;
-  copy them from `assets/setup_template.html` when you need them.
+  The remaining icons, all in the same style (`viewBox="0 0 24 24"`):
+
+```
+Dictate tile        the Speech mic above (16 px, stroke 1.7)
+Ask AI tile         the AI answers sparkle above
+Live tile           <path d="M2 12h3l3-8 4 16 3-8h7"/>
+Meter row chevron   <path d="m9 18 6-6-6-6"/>                        16 px
+External link       <path d="M7 17 17 7M8 7h9v9"/>                   rail footer link, 14 px
+Result check        <path d="M5 13l4 4L19 7"/>                       stroke 2.6, drawn by `check-draw`
+Select chevron      <path d="m6 9 6 6 6-6"/>                         16 px, stroke 2, drawn by script
+Option check        <path d="M20 6 9 17l-5-5"/>                      16 px, stroke 2.2, drawn by script
+```
 
 ### 2.8 Logo
 
@@ -458,7 +471,8 @@ function moveNavPill(instant) {
 }
 ```
 
-- Every page switch slides the pill (320 ms). They all go through `showView()`: a nav click, a
+- Every page switch slides the pill over `--t-slow` (320 ms at Full motion, 120 ms Reduced,
+  none Off). They all go through `showView()`: a nav click, a
   Home meter row, an in-page link such as "Connections", or a change of the URL hash. First
   paint, resize and font load **snap** it.
   Call `moveNavPill(true)` again when `document.fonts.ready` resolves.
@@ -673,8 +687,10 @@ an 18 px **radio** ring. Hint 12.5 `--muted`. Footer meta 12 px with a status do
 18 px radio mark on the left, title (15/500) + description (12.5 `--muted`).
 Hover `--hover`. Checked `--accent-soft` background. At the far right a cloud engine whose key
 field is empty shows an amber **"Needs a key"** chip, so the problem is visible at the moment
-of choosing. The check reads the field as it is now: a saved key (shown as a mask) and a key
-typed but not yet saved both clear the chip. Like the provider cards, only the chosen row is
+of choosing. The check reads the field as it is when the chip is refreshed: a saved key (shown
+as a mask) and a key typed but not yet saved both clear it. The chip is refreshed when the
+engine is chosen or the Speech state is rebuilt; typing in the key field does not refresh it
+by itself. Like the provider cards, only the chosen row is
 in the tab order. Choosing an engine reveals only that engine's fields and hides the
 "Fallback for the cloud engine" note when Whisper itself is chosen.
 
@@ -714,7 +730,8 @@ faint for muted, hollow ring for warn).
 @keyframes check-draw { to { stroke-dashoffset: 0; } }
 ```
 
-`err` = 13 % danger tint, and the tag **shakes**:
+`err` = 13 % danger tint. When the server reports the failure, the tag also **shakes** (a
+timeout or an unreachable server turns it red without the shake; see 3.20):
 
 ```css
 @keyframes shake { 20%, 60% { transform: translateX(-3px); } 40%, 80% { transform: translateX(3px); } }  /* 360ms */
@@ -724,7 +741,7 @@ faint for muted, hollow ring for warn).
 
 ### 3.14 Keycaps
 
-Show a chord as little keys: `Ctrl + \``.
+Show a chord as little keys side by side: [Ctrl] [`] (the `+` here is only notation).
 
 - `kbd`: min-width 26, height 26, padding `0 8px`, radius 7, `--well` fill, mono 11.5 / 500,
   `box-shadow: inset 0 1px 0 var(--rim), 0 1px 0 rgb(0 0 0 / .4)` (light top, dark bottom edge = a key).
@@ -791,7 +808,8 @@ Saving restarts Odicto, and the real HUD reads the values.
 .swatch .sw-stem { fill: oklch(0.86 calc(0.105 * var(--sk)) var(--sh)); }
 .swatch:hover { transform: translateY(-1px); }                               /* 120ms */
 .swatch { all:unset; box-sizing:border-box; position:relative; display:grid; place-items:center;
-  width:42px; height:28px; border-radius:8px; cursor:pointer; transition:transform 120ms var(--ease); }
+  width:42px; height:28px; border-radius:8px; cursor:pointer; transition:transform var(--t-fast) var(--ease); }
+.swatch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }   /* `all:unset` removed the default */
 .swatch.selected::after { content:''; position:absolute; left:50%; bottom:-3px; width:14px; height:2px; margin-left:-7px;
   background: var(--accent); box-shadow: 0 0 7px var(--glow); border-radius:2px; }   /* glowing stem UNDER the chosen one */
 ```
@@ -822,10 +840,14 @@ All "floating" surfaces share one recipe:
   dot. Shown after two failed status polls. Message: the setup page closed; run `setup.bat`.
 - **Dialog** (expanded prompt editor): full-screen scrim `#000` at 55 % with `blur(6px)`
   (fade 180 ms), panel `min(1100px, 100%) × min(860px, 100%)`, padding 18, radius 20, `--float`.
-- **Stacking order**, low to high (`.app` is its own stacking context through
-  `isolation: isolate`): ground light and grain 0 · nav items, main column, segment buttons,
-  hero leaf 1 · rail 20 · save bar 70 · dialog scrim 90 · toasts 95 · offline banner 99 · select
-  menu 200. So a toast shows above an open dialog, and the offline banner above both.
+- **Stacking order.** `.app` is its own stacking context (`isolation: isolate`). Inside it:
+  ground light and grain 0 · the main column (`.main`, z-index 1, itself a stacking context) ·
+  the rail 20. The save bar (70) and the dialog scrim (90) live **inside** `.main`, so their
+  numbers only order them against each other; the rail, a sibling at 20, paints above both
+  (the save bar is centred on the main column, so it never meets the rail). Outside `.app`, on
+  `<body>`: toasts 95 · offline banner 99 · select menu 200. A toast therefore shows above an
+  open dialog, and the menu above everything. Inside a view, nav items, segment buttons and the
+  hero leaf use z-index 1 to sit above their own backgrounds.
 
 ### 3.18 Misc
 
@@ -875,9 +897,12 @@ These details are where the page feels finished. Each has a *reason*; keep the r
 2. As the user holds keys, the **keycaps appear live**, one by one, each with the small
    `key-in` rise. So the user sees their chord form.
 3. Capture ends when every key is released after a main key was pressed (modifiers alone do
-   not end it), and the new chord stays. A fixed **6 s** deadline from the start of capture
-   also ends it, even while keys are held: it keeps the chord if a main key was pressed and
-   restores the old chord if not. Starting another capture cancels the first.
+   not end it), and the new chord stays. Only the first main key is tracked. A **6 s**
+   deadline from the start of capture also ends it, even while keys are held: it keeps the
+   chord if a main key was pressed and restores the old chord if not. Starting another capture
+   cancels the first. Rough edge: the deadline belongs to the button, not to one capture, so
+   finishing a capture and pressing the same **Change** again within 6 s lets the first
+   deadline end the second capture early.
 4. `Esc` is a valid key to bind, so it is captured like any other.
 5. Polish also has **Disable** (tertiary): it clears the chord and shows "Not set".
 - Why: a settings page that asks users to *type* "ctrl+shift+grave" is hostile. Showing the
@@ -913,7 +938,9 @@ These details are where the page feels finished. Each has a *reason*; keep the r
   Gemini key", which jumps to Connections and **focuses that field** after 60 ms.
 - Model history appears as chips (mono) for the providers that keep one (Groq does not). Click a
   chip to use it. The "×" removes it. A successful connection test quietly *remembers* the model
-  as a new chip. The new chip raises the save bar and is stored when the user hits Save.
+  as a new chip, but only when the tested model is not empty and not already in the history.
+  A new chip raises the save bar and is stored when the user hits Save; the list does not
+  re-sort (the model is inserted just before "Custom…").
 
 **Test connection**
 - Button disables; a `Testing` tag with a spinner appears; a neutral line says what is happening.
@@ -929,18 +956,23 @@ is visible from anywhere. Values that change play `swap-in`.
 Examples: "2 of 4 keys / Groq, Gemini", "Gemini / needs a key", "Ctrl + ` / Long ride".
 
 **Model pickers**
-- The first option of each AI answers model list is **"Backend default (the actual model
-  name)"**, so an empty choice still tells the truth about what will run (the Polish list
-  differs; see below). The last option is "Custom…", which
-  reveals a plain text field below and focuses it. A saved id the list does not know opens as Custom.
+- The first option of the four generated AI answers lists (Meta, OpenRouter, Gemini, Ollama) is
+  **"Backend default (the actual model name)"**, so an empty choice still tells the truth about
+  what will run (the Polish list differs; see below). The last option is "Custom…", which
+  reveals a plain text field below and focuses it. A saved id the list does not know opens as
+  Custom. Groq's chat model is not one of these lists: it is a plain text field with a native
+  suggestion list (no default option, no Custom).
 - Lists put the newest first (OpenRouter by release date; the other lists show the most recently
-  added model first). OpenRouter shows a human name; the id is a tooltip in the AI answers list
-  and a small second line in the Polish list. The search matches both name and id.
+  added model first). OpenRouter shows a human name when the catalog has one (otherwise the id
+  itself); the id is a tooltip in the AI answers list, and a small second line in the Polish
+  list only when the name differs from the id. The search matches both name and id.
 - The catalog loads in the background (`/openrouter-models`); the lists quietly rebuild when it
   arrives. Until then, the page works with what it has.
 - **OpenRouter's reasoning list filters itself to what the chosen model allows** (the Meta and
   Gemini lists are fixed). A note under it says why in one sentence ("This model requires thinking. Allowed: low, medium…").
-  A mandatory-thinking model changes the first option to "Fastest allowed (low)".
+  A mandatory-thinking model changes the first option to its lightest allowed effort (for
+  example "Fastest allowed (low)"). While the catalog has no entry for the chosen model, the
+  list shows every option unfiltered.
 - Polish has its own list whose first option is "Use AI answers model", with a live summary line:
   "Follows AI answers: …" or "Polish uses …". A small chip names the provider it borrows.
 - Gemini's Smart / Verbatim: the switch flips a small chip in the row title (`Smart` accent,
@@ -952,8 +984,9 @@ name ("Ocean" or `#3A7BD5`), moves the glowing marker, and raises the save bar. 
 applied to the real HUD until Save restarts Odicto (the HUD reads its style once, at start).
 
 **The page's own lifecycle**: the page says goodbye (`/bye`) when its tab closes, and starts a
-fresh status check the moment the tab becomes visible, so a returning user gets the current
-answer within one round trip (the previous text stays on screen until it arrives). Canvases
+fresh status check the moment the tab becomes visible. The previous text stays on screen until
+an answer arrives (a request already in flight goes first, and a failed request brings no new
+answer). Canvases
 wait for the font, up to 2.5 s, before their first frame, so the label width is normally
 measured with the right letters; if the font is slower than that, they start with the fallback.
 
@@ -1036,7 +1069,8 @@ number in this section.
   shadow, glow) is smooth; everything that is "data" is crisp. That contrast is the look.
 - **Length follows the words.** The pill's width follows its label (voice room + label +
   insets), and when the label changes the width *springs* to the new size. In normal use it
-  neither jumps nor overshoots (the exact snap rule is in 4.9).
+  does not jump, and a spring that starts from rest does not overshoot (the exact snap rule
+  is in 4.9).
 
 ### 4.1 Anatomy
 
@@ -1050,7 +1084,8 @@ number in this section.
 ```
 
 Left to right: a **soft pointed tip** (drooping slightly), the **pixel voice** (5 rows by 23
-columns), an 8 px gap, the **stem** (2 px bar with halo), 12 px gap, the **label**, 18 px
+columns), a gap to the **stem** (2 px bar with halo; its centre is 8 px from the nearest cell
+edge, so about 7 px of air sit beside the bar), 12 px from the stem to the **label**, 18 px
 inset, then a fully round right end.
 
 The voice room is **84 px measured from the stem's centre to the leaf's left edge**. Inside it
@@ -1128,7 +1163,7 @@ the leaf settles it is cached and only rebuilt when the shape changes.
 ```
 r  = min(h/2, w/2)                     the round right end
 tf = tip openness, 0 (bud) to 1 (full leaf)
-ee = r + (min(58, 0.4·w) − r)·tf       how far the pointed end reaches in from the left edge
+ee = r + max(0, min(58, 0.4·w) − r)·tf  how far the pointed end reaches in from the left edge
 ty = y + h·(0.5 + droop·tf)            the point sits a little below centre (droop 0.06; error 0.11)
 rr = 4·tf                              the tiny rounded point;   k = 0.5523 (circle-arc constant)
 lerp(a, b) = a + (b − a)·tf
@@ -1143,14 +1178,25 @@ path: move (x+ee, y) → line (x+w−r, y) → arc (top right) → line (x+w, y+
 
 ### 4.4 Pixel voice
 
-Five rows by 23 columns of **2 px squares**, pitch 3 px across, 4 px between rows. They sit
-left of the stem, the first cell starting 8 px from the stem's centre.
+Five rows by 23 columns of **2 px squares**, pitch 3 px across, 4 px from one row's centre to
+the next (a 2 px gap at 1x). They sit left of the stem, the first cell's right edge 8 px from
+the stem's centre.
 
 - Rows converge toward the tip like parallel veins. For a cell `d` px from the stem's centre,
   `s = smoothstep((d − 24) / 58)`: the rows stay parallel for the first 24 px, then close up.
   Row pitch is `4 × (1 − 0.62·s)` px, but never less than the cell size plus one device pixel, so
   neighbours never touch. The centre line sinks by `droop × height × tipOpen × s`. Every cell
-  edge snaps to a **whole device pixel** (crisp at any DPI).
+  edge snaps to a **whole device pixel** (crisp at any DPI). In device pixels, with `dpr` the
+  screen scale:
+
+```
+cell    = max(1, floor(2·dpr))                         every cell has this size
+x_dev   = round((stem − 8 − 3·(j+1) + 1)·dpr)          column j, counted from the stem
+d       = stem − x_dev/dpr − 1                         then s = smoothstep((d − 24) / 58)
+pitch   = max(cell + 1, round(4·(1 − 0.62·s)·dpr))
+mid     = floor((cy + tipDrop)·dpr − cell/2 + 0.5)
+y_dev   = mid + (i − 2)·pitch                          rows i = 0..4
+```
 - Rows are drawn **without antialiasing**. Neighbours always keep at least 1 device pixel apart.
 - Row 0 is the top row and shows the **highest** frequency band. Five bands come from the recorder.
 - Alpha falls with distance from the stem: `1 - 0.62 × (j / 23)`.
@@ -1252,9 +1298,9 @@ all with `ease(0.2, 0, 0, 1)`:
 | `content` | 0.42 | 0.30 | words and voice fade in |
 | `fade` | | | 1.0 |
 
-Story: **a seed rises, a stem grows, a bud opens into a leaf, the tip forms, the words appear.**
-The stages overlap: the words start to fade in (at 0.42) before the tip has finished forming
-(it runs from 0.50 to 0.82).
+Story: **a seed rises, a stem grows, a bud opens into a leaf, and the words fade in as the tip
+forms.** The stages overlap: the words start (at 0.42) just before the tip begins to form
+(0.50 to 0.82).
 
 Exit is **0.5 s**, the same parts **in reverse order**, each as `1 − accel(seg)` with
 `accel = cubic-bezier(0.3, 0, 1, 1)`. The one exception is `fade`, which is linear (`1 − seg`):
@@ -1287,7 +1333,8 @@ When the label changes ("Listening" → "Transcribing") the pill does not jump.
 - The tip droop eases over **0.5 s** after a state change.
 - A "Done" pill holds for about **1200 ms counted from delivery**, then exits. The exit waits
   until processing is idle (the clipboard restore, `PASTE_DELAY_SECONDS`, default 1 s, can still
-  be running), so a slow paste keeps Done up longer. It never leaves early.
+  be running), so a slow paste keeps Done up longer. It does not leave early, unless a new
+  recording or another state replaces it first.
 
 ### 4.10 Caption card (Live, F7)
 
@@ -1394,10 +1441,12 @@ To rebuild this look in another stack:
 9. Custom select as a fixed layer on `<body>`, 6 px gap, up/down aware, 120 ms entry.
 10. Status marks by **shape** (dot, ring, diamond).
 11. Floating layers share the `--float` recipe; save bar rises 16 px; toasts live 7 s.
-12. One easing curve. Three durations. Three motion levels.
+12. One easing curve and three base durations (the looping bars, the spinner and the HUD exit
+    are the listed exceptions, see 1.2). Three motion levels.
 13. HUD: 36 px leaf, 84 px of room for the pixel voice (5×23 of 2 px squares), 2 px stem with
     halo, 13 px label.
-    Entry in the order seed → stem → bud → tip → words (0.62 s). Exit in reverse (0.5 s).
+    Entry seed → stem → bud, with the words fading in as the tip forms (0.62 s, overlapping
+    stages; see 4.8). Exit in reverse (0.5 s).
     Shimmer, dots, bead, check and seed as in section 4.
 14. Snap everything small to device pixels. Run animation at 16 ms only when something moves.
 
