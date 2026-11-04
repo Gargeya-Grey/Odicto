@@ -37,6 +37,8 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
+from theme import DEFAULT_THEME, FOREST, Palette, hud_palette, parse_theme
+
 # --------------------------------------------------------------------------- layout
 LEAF_H = 36
 STEM_H = 32
@@ -66,11 +68,13 @@ ENTER_S = 0.62
 LEAVE_S = 0.5
 LABEL_PX = 13
 
-JADE = (142, 220, 187)
-MOON = (178, 214, 244)
-WARN = (242, 194, 122)
-DANGER = (242, 163, 155)
-INK = (231, 229, 223)
+# Forest's colours (theme.FOREST holds them). WARN, DANGER, INK and MOON are the same in every
+# theme; JADE is the Forest accent, and a theme's accent is palette.jade.
+JADE = FOREST.jade
+MOON = FOREST.moon
+WARN = FOREST.warn
+DANGER = FOREST.danger
+INK = FOREST.ink
 
 _TIP_ROUND = 4.0            # radius of the soft tip
 _MAX_COLS = (VOICE_W - STEM_GAP - 6) // PITCH   # 23 pixel columns per row
@@ -119,16 +123,23 @@ class HudStyle:
     edge: str = "rim"
     shape: str = "leaf"
     size: str = "1x"
+    theme: str = DEFAULT_THEME   # a preset name or a lower-case #rrggbb (theme.parse_theme)
 
     def __post_init__(self) -> None:
         for name, choices in HUD_STYLE_CHOICES.items():
             value = getattr(self, name)
             if value not in choices:
                 raise ValueError(f"HudStyle.{name} must be one of {choices}, got {value!r}")
+        if parse_theme(self.theme) != self.theme:
+            raise ValueError(f"HudStyle.theme must be a preset or #rrggbb, got {self.theme!r}")
 
     @property
     def scale(self) -> float:
         return HUD_SIZE_SCALE[self.size]
+
+    @property
+    def palette(self) -> Palette:
+        return hud_palette(self.theme)
 
 
 def pixel_ratio(device_dpr: float, style: HudStyle) -> float:
@@ -449,14 +460,14 @@ def _qc(c: tuple[int, int, int], a: float = 1.0) -> QColor:
     return QColor(c[0], c[1], c[2], int(_clamp(a) * 255.0 + 0.5))
 
 
-def _accent(stem: Stem, ai: bool) -> tuple[int, int, int]:
+def _accent(stem: Stem, ai: bool, pal: Palette = FOREST) -> tuple[int, int, int]:
     if stem is Stem.NOTICE:
-        return WARN
+        return pal.warn
     if stem is Stem.ERROR:
-        return DANGER
+        return pal.danger
     if stem is Stem.DONE:
-        return JADE
-    return MOON if ai else JADE
+        return pal.jade
+    return pal.moon if ai else pal.jade
 
 
 def _lcg(seed: int):
@@ -657,9 +668,6 @@ def _build_shadow(geo: LeafGeometry, shape: str, reg: _Region, dpr: float) -> QI
 
 
 # --------------------------------------------------------------------------- surface layers
-_VEIN = (205, 245, 222)
-
-
 def _vein_y(i: float, d: float, geo: LeafGeometry) -> float:
     s, tip_y = _row_shift(d, geo)
     return (i - (ROWS - 1) / 2.0) * ROW_PITCH * (1.0 - 0.62 * s) + tip_y
@@ -670,15 +678,16 @@ def _outer_y(sign: int, d: float, geo: LeafGeometry) -> float:
     return sign * 12.5 * (1.0 - 0.8 * s) + geo.droop * geo.h * geo.tip * s
 
 
-def _vein_pen(geo: LeafGeometry, alpha: float, fall: float, width: float, dmax: float) -> QPen:
+def _vein_pen(geo: LeafGeometry, alpha: float, fall: float, width: float, dmax: float,
+              pal: Palette = FOREST) -> QPen:
     """Alpha falls linearly with distance d from the stem: alpha * (1 - fall * d / dmax).
 
     One gradient pen per vein replaces ~200 per-segment pens; a rebuild runs on every
     frame of the entry and of a width change.
     """
     g = QLinearGradient(geo.stem_x, 0.0, geo.stem_x - dmax, 0.0)
-    g.setColorAt(0.0, _qc(_VEIN, alpha))
-    g.setColorAt(1.0, _qc(_VEIN, alpha * (1.0 - fall)))
+    g.setColorAt(0.0, _qc(pal.vein, alpha))
+    g.setColorAt(1.0, _qc(pal.vein, alpha * (1.0 - fall)))
     return QPen(QBrush(g), width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                 Qt.PenJoinStyle.RoundJoin)
 
@@ -690,7 +699,7 @@ def _polyline(points: Sequence[QPointF]) -> QPainterPath:
     return path
 
 
-def _draw_veins(q: QPainter, geo: LeafGeometry) -> None:
+def _draw_veins(q: QPainter, geo: LeafGeometry, pal: Palette = FOREST) -> None:
     """Five parallel veins that bend into the tip, two edge veins and a few cross veins."""
     dmax, n = VOICE_W - 2.0, 24
     sx, cy = geo.stem_x, geo.cy
@@ -698,9 +707,9 @@ def _draw_veins(q: QPainter, geo: LeafGeometry) -> None:
     q.setBrush(Qt.BrushStyle.NoBrush)
     for i in range(ROWS):
         mid = i == (ROWS - 1) // 2
-        q.setPen(_vein_pen(geo, 0.2 if mid else 0.12, 0.7, 0.9 if mid else 0.6, dmax))
+        q.setPen(_vein_pen(geo, 0.2 if mid else 0.12, 0.7, 0.9 if mid else 0.6, dmax, pal))
         q.drawPath(_polyline([QPointF(sx - d, cy + _vein_y(i, d, geo)) for d in ds]))
-    q.setPen(_vein_pen(geo, 0.07, 0.6, 0.5, dmax))
+    q.setPen(_vein_pen(geo, 0.07, 0.6, 0.5, dmax, pal))
     for sign in (-1, 1):
         q.drawPath(_polyline([QPointF(sx - d, cy + _outer_y(sign, d, geo)) for d in ds]))
     cross = QPainterPath()
@@ -721,13 +730,14 @@ def _vertical(top: float, h: float, stops: Sequence[tuple[float, QColor]]) -> QL
     return g
 
 
-def _under_layer(q: QPainter, geo: LeafGeometry, tint: Optional[str]) -> None:
+def _under_layer(q: QPainter, geo: LeafGeometry, tint: Optional[str],
+                 pal: Palette = FOREST) -> None:
     box = QRectF(geo.left - 1, geo.top - 1, geo.w + 2, geo.h + 2)
-    q.fillRect(box, _vertical(geo.top, geo.h, [(0.0, QColor(27, 64, 46, 227)),
-                                               (1.0, QColor(9, 31, 22, 240))]))
+    q.fillRect(box, _vertical(geo.top, geo.h, [(0.0, _qc(pal.surface_top, 227 / 255)),
+                                               (1.0, _qc(pal.surface_bottom, 240 / 255))]))
     cool = QLinearGradient(geo.left, 0.0, geo.stem_x, 0.0)   # the tip is cooler and darker
-    cool.setColorAt(0.0, QColor(3, 18, 24, 107))
-    cool.setColorAt(1.0, QColor(3, 18, 24, 0))
+    cool.setColorAt(0.0, _qc(pal.cool, 107 / 255))
+    cool.setColorAt(1.0, _qc(pal.cool, 0.0))
     q.fillRect(QRectF(box.left(), box.top(), geo.stem_x - box.left(), box.height()), cool)
     if tint:
         q.fillRect(box, QColor(130, 95, 20, 15) if tint == "notice" else QColor(120, 45, 45, 15))
@@ -749,24 +759,25 @@ def grain_strength(texture: str) -> float:
     return 1.0 if texture == "veins" else PLAIN_GRAIN
 
 
-def _over_layer(q: QPainter, geo: LeafGeometry, texture: str, dpr: float) -> None:
+def _over_layer(q: QPainter, geo: LeafGeometry, texture: str, dpr: float,
+                pal: Palette = FOREST) -> None:
     box = QRectF(geo.left - 1, geo.top - 1, geo.w + 2, geo.h + 2)
     if texture == "veins":
-        _draw_veins(q, geo)
+        _draw_veins(q, geo, pal)
     q.setOpacity(grain_strength(texture))
     q.drawTiledPixmap(box, _grain_tile(dpr))
     q.setOpacity(1.0)
-    q.fillRect(box, _vertical(geo.top, geo.h, [(0.0, QColor(225, 255, 238, 22)),
-                                               (0.38, QColor(225, 255, 238, 0)),
+    q.fillRect(box, _vertical(geo.top, geo.h, [(0.0, _qc(pal.sheen, 22 / 255)),
+                                               (0.38, _qc(pal.sheen, 0.0)),
                                                (0.7, QColor(0, 0, 0, 0)),
                                                (1.0, QColor(0, 0, 0, 51))]))   # sheen above, shade below
 
 
-def _rim(q: QPainter, geo: LeafGeometry, shape: str, edge: str) -> None:
+def _rim(q: QPainter, geo: LeafGeometry, shape: str, edge: str, pal: Palette = FOREST) -> None:
     ra = 0.18 if edge == "rim" else 0.07
-    rim = _vertical(geo.top, geo.h, [(0.0, _qc((215, 250, 230), ra)),
-                                     (0.55, _qc((215, 250, 230), ra * 0.3)),
-                                     (1.0, _qc((215, 250, 230), ra * 0.12))])
+    rim = _vertical(geo.top, geo.h, [(0.0, _qc(pal.rim, ra)),
+                                     (0.55, _qc(pal.rim, ra * 0.3)),
+                                     (1.0, _qc(pal.rim, ra * 0.12))])
     inner = replace(geo, left=geo.left + 0.5, top=geo.top + 0.5, w=geo.w - 1, h=geo.h - 1)
     q.setPen(QPen(QBrush(rim), 1.0))
     q.setBrush(Qt.BrushStyle.NoBrush)
@@ -788,9 +799,10 @@ def _build_body(geo: LeafGeometry, style: HudStyle, tint: Optional[str],
     local = _local(geo, reg)
     coverage = _coverage(leaf_path(local, style.shape), reg.w_dev, reg.h_dev, dpr)
     layers = []
-    for paint in (lambda q: _under_layer(q, local, tint),
+    pal = style.palette
+    for paint in (lambda q: _under_layer(q, local, tint, pal),
                   lambda q: _pool_layer(q, local, col),
-                  lambda q: _over_layer(q, local, style.texture, dpr)):
+                  lambda q: _over_layer(q, local, style.texture, dpr, pal)):
         img = _new_image(reg.w_dev, reg.h_dev, dpr)
         q = _begin(img)
         paint(q)
@@ -798,7 +810,7 @@ def _build_body(geo: LeafGeometry, style: HudStyle, tint: Optional[str],
         q.end()
         layers.append(img)
     q = _begin(layers[2])
-    _rim(q, local, style.shape, style.edge)   # the rim is the top layer
+    _rim(q, local, style.shape, style.edge, pal)   # the rim is the top layer
     q.end()
     return layers
 
@@ -846,7 +858,8 @@ class LeafPainter:
             return
         dpr = pixel_ratio(p.device().devicePixelRatioF(), style)
         geo = self._geometry(frame, style, dpr)
-        col = _accent(frame.stem, frame.ai)
+        pal = style.palette
+        col = _accent(frame.stem, frame.ai, pal)
         p.save()
         p.scale(style.scale, style.scale)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -861,8 +874,8 @@ class LeafPainter:
             p.setOpacity(base * o.fade * o.content)
             self._paint_content(p, frame, geo, style, col, dpr, settled)
             p.setOpacity(base * o.fade)
-        self._paint_stem(p, frame, geo, col)
-        self._paint_seed(p, frame, geo)
+        self._paint_stem(p, frame, geo, col, pal)
+        self._paint_seed(p, frame, geo, pal)
         p.restore()
 
     def paint_card(self, p: QPainter, rect: QRectF, style: HudStyle, opacity: float) -> None:
@@ -938,7 +951,7 @@ class LeafPainter:
         if clip:
             p.setClipPath(leaf_path(geo, style.shape))
         self._paint_voice(p, frame, geo, style, col, dpr)
-        self._paint_label(p, frame, geo, col, dpr)
+        self._paint_label(p, frame, geo, col, dpr, style.palette)
         p.restore()
 
     def _voice_cells(self, geo: LeafGeometry, dpr: float) -> list[tuple[int, int, QRectF]]:
@@ -989,7 +1002,7 @@ class LeafPainter:
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
     def _paint_label(self, p: QPainter, frame: LeafFrame, geo: LeafGeometry,
-                     col: tuple[int, int, int], dpr: float) -> None:
+                     col: tuple[int, int, int], dpr: float, pal: Palette = FOREST) -> None:
         stem, now = frame.stem, frame.now
         x = _snap(geo.stem_x + TEXT_GAP - (1.0 - frame.opening.content) * 4.0, dpr)
         base = _snap(geo.cy + 4.5, dpr)
@@ -1002,17 +1015,17 @@ class LeafPainter:
         p.drawText(QPointF(x, base), frame.label)
         word_w = self._text_width(frame.label)
         if stem is Stem.WORK:
-            self._paint_shimmer(p, frame.label, x, base, word_w, now, col)
+            self._paint_shimmer(p, frame.label, x, base, word_w, now, col, pal)
         elif stem is Stem.LISTEN:
             self._paint_dots(p, x + word_w, base, now, col, dpr)
 
     def _paint_shimmer(self, p: QPainter, label: str, x: float, base: float, word_w: float,
-                       now: float, col: tuple[int, int, int]) -> None:
+                       now: float, col: tuple[int, int, int], pal: Palette = FOREST) -> None:
         span = word_w + 50.0
         at = ((now * 0.6) % 1.5) / 1.5 * span - 25.0 + x
         g = QLinearGradient(at - 18.0, 0.0, at + 18.0, 0.0)
         g.setColorAt(0.0, _qc(col, 0.0))
-        g.setColorAt(0.5, QColor(240, 255, 248, 255))
+        g.setColorAt(0.5, _qc(pal.glint))
         g.setColorAt(1.0, _qc(col, 0.0))
         p.setPen(QPen(QBrush(g), 1.0))
         p.drawText(QPointF(x, base), label)
@@ -1030,7 +1043,7 @@ class LeafPainter:
 
     # ------------------------------------------------------------------ stem and seed
     def _paint_stem(self, p: QPainter, frame: LeafFrame, geo: LeafGeometry,
-                    col: tuple[int, int, int]) -> None:
+                    col: tuple[int, int, int], pal: Palette = FOREST) -> None:
         stem, x, cy = frame.stem, geo.stem_x, geo.cy
         grow = frame.opening.grow
         since = frame.since_state
@@ -1049,12 +1062,12 @@ class LeafPainter:
         if stem is Stem.NOTICE:
             self._stem_bang(p, x, top, wd, hh, col)
         elif stem is Stem.WORK:
-            self._stem_bead(p, x, top, wd, hh, frame.now, col)
+            self._stem_bead(p, x, top, wd, hh, frame.now, col, pal)
         else:
             p.setBrush(_qc(col, 0.95 * (1.0 - morph) if glyph else 0.94))
             p.drawRoundedRect(QRectF(x - wd / 2, top, wd, hh), wd / 2, wd / 2)
             if not glyph:
-                p.setBrush(QColor(244, 255, 250, 128))
+                p.setBrush(_qc(pal.stem_hi, 128 / 255))
                 p.drawRect(QRectF(x - 0.5, top + 3.0, 1.0, max(0.0, hh - 6.0)))
             else:
                 self._stem_glyph(p, stem, x, cy, since, col)
@@ -1068,11 +1081,11 @@ class LeafPainter:
 
     @staticmethod
     def _stem_bead(p: QPainter, x: float, top: float, wd: float, hh: float, now: float,
-                   col: tuple[int, int, int]) -> None:
+                   col: tuple[int, int, int], pal: Palette = FOREST) -> None:
         p.setBrush(_qc(col, 0.45))
         p.drawRoundedRect(QRectF(x - wd / 2, top, wd, hh), wd / 2, wd / 2)
         by = top + 3.0 + (hh - 10.0) * (0.5 + 0.5 * math.sin(now * math.pi * 1.4))
-        p.setBrush(QColor(238, 255, 248, 242))
+        p.setBrush(_qc(pal.bead, 242 / 255))
         p.drawRoundedRect(QRectF(x - wd / 2, by, wd, 5.0), wd / 2, wd / 2)
 
     @staticmethod
@@ -1104,7 +1117,8 @@ class LeafPainter:
                       Qt.PenJoinStyle.RoundJoin))
         p.drawPath(path)
 
-    def _paint_seed(self, p: QPainter, frame: LeafFrame, geo: LeafGeometry) -> None:
+    def _paint_seed(self, p: QPainter, frame: LeafFrame, geo: LeafGeometry,
+                    pal: Palette = FOREST) -> None:
         """Done: the leaf lets a seed go."""
         if frame.stem is not Stem.DONE:
             return
@@ -1115,12 +1129,12 @@ class LeafPainter:
         sx = geo.stem_x + math.sin(prog * 6.0) * 1.5
         a = (1.0 - prog * prog) * min(1.0, prog * 8.0)
         g = QRadialGradient(QPointF(sx, y), 6.0)
-        g.setColorAt(0.0, _qc(JADE, 0.45 * a))
-        g.setColorAt(1.0, _qc(JADE, 0.0))
+        g.setColorAt(0.0, _qc(pal.jade, 0.45 * a))
+        g.setColorAt(1.0, _qc(pal.jade, 0.0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(g)
         p.drawRect(QRectF(sx - 6.0, y - 6.0, 12.0, 12.0))
-        p.setBrush(_qc((240, 255, 248), a))
+        p.setBrush(_qc(pal.glint, a))
         p.drawEllipse(QPointF(sx, y), 1.3, 1.3)
 
     # ------------------------------------------------------------------ caption card
@@ -1128,11 +1142,11 @@ class LeafPainter:
                      dpr: float) -> tuple[QImage, QImage, _Region]:
         reg = _Region.around(rect.x(), rect.y(), rect.width(), rect.height(), _SHADOW_MARGIN, dpr)
         local = QRectF(rect.x() - reg.ox, rect.y() - reg.oy, rect.width(), rect.height())
-        key = (dpr, style.size, style.edge, round(local.x(), 3), round(local.y(), 3),
+        key = (dpr, style.size, style.edge, style.theme, round(local.x(), 3), round(local.y(), 3),
                round(local.width(), 3), reg.w_dev, reg.h_dev)
         if self._card is None or self._card[0] != key:
             self._card = (key, reg, _build_card_shadow(local, reg, dpr),
-                          _build_card_surface(local, style.edge, reg, dpr))
+                          _build_card_surface(local, style.edge, reg, dpr, style.palette))
         return self._card[2], self._card[3], self._card[1]
 
 
@@ -1140,16 +1154,17 @@ def _build_card_shadow(local: QRectF, reg: _Region, dpr: float) -> QImage:
     return _gaussian_shadow(_card_path(local, 0.0, 4.0), reg, dpr, 7.0, 0.4)
 
 
-def _build_card_surface(local: QRectF, edge: str, reg: _Region, dpr: float) -> QImage:
+def _build_card_surface(local: QRectF, edge: str, reg: _Region, dpr: float,
+                        pal: Palette = FOREST) -> QImage:
     img = _new_image(reg.w_dev, reg.h_dev, dpr)
     q = _begin(img)
-    q.fillRect(local, _vertical(local.top(), local.height(), [(0.0, QColor(24, 58, 42, 230)),
-                                                              (1.0, QColor(10, 32, 23, 240))]))
+    q.fillRect(local, _vertical(local.top(), local.height(), [(0.0, _qc(pal.card_top, 230 / 255)),
+                                                              (1.0, _qc(pal.card_bottom, 240 / 255))]))
     q.drawTiledPixmap(local, _grain_tile(dpr))
-    q.fillRect(local, _vertical(local.top(), local.height(), [(0.0, QColor(225, 255, 238, 18)),
-                                                              (0.3, QColor(225, 255, 238, 0))]))
+    q.fillRect(local, _vertical(local.top(), local.height(), [(0.0, _qc(pal.sheen, 18 / 255)),
+                                                              (0.3, _qc(pal.sheen, 0.0))]))
     _mask(q, _coverage(_card_path(local), reg.w_dev, reg.h_dev, dpr))
-    q.setPen(QPen(_qc((215, 250, 230), 0.15 if edge == "rim" else 0.06), 1.0))
+    q.setPen(QPen(_qc(pal.rim, 0.15 if edge == "rim" else 0.06), 1.0))
     q.setBrush(Qt.BrushStyle.NoBrush)
     q.drawPath(_card_path(local.adjusted(0.5, 0.5, -0.5, -0.5)))
     q.end()

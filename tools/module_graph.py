@@ -36,6 +36,7 @@ APP_MODULES = [
     "typer",
     "indicator",
     "hud_leaf",
+    "theme",
     "openrouter_catalog",
     "setup_web",
     "platforms",

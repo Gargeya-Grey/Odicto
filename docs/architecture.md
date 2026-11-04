@@ -277,6 +277,7 @@ The Home hero and the Appearance preview draw the leaf with one painter (the `le
 | `app/config.py` | `.env` loading, `ENV_DEFAULTS`, cascade resolvers, validation, hotkey parsing, prompt resolution | `Config`, `ENV_DEFAULTS`, `parse_hold_hotkey`, `validate_hotkey_pair`, `config_warnings`, `prompt_live_path` |
 | `app/indicator.py` | PySide6 always-on-top, click-through HUD widget. Owns what the painter does not: state and stem, clock and 60 fps ticks, label width spring, voice envelope, F7 caption text, window | `DictationIndicator`, `GuiState`, `status_label` |
 | `app/hud_leaf.py` | The leaf HUD painter. Pure: no widget, no timer, no config. Entry and exit timelines, voice envelope, geometry, shadow, body, voice, label, AI mark, caption card | `LeafPainter`, `LeafFrame`, `HudStyle`, `VoiceEnvelope`, `Stem`, `STEM_FOR_ORB`, `label_font`, `label_width`, `enter_opening`, `leave_opening` |
+| `app/theme.py` | The `THEME_COLOR` maths. No Qt. Presets, OKLab/OKLCH with a gamut clamp that lowers chroma, `hud_palette` (the leaf colours of a theme) and `page_theme` (`--h`, `--k` for the setup page). Forest is today's constants, not a computed colour | `parse_theme`, `hud_palette`, `page_theme`, `theme_hue_k`, `PRESETS`, `FOREST`, `Palette` |
 | `app/refiner.py` | LLM clients and the refine call, conversation history, provider ping | `TextRefiner`, `test_provider`, `openrouter_effort_for_model`, `build_system_prompt_with_context` |
 | `app/setup_web.py` | Loopback setup page server; reads/writes `.env` and `prompt.txt` atomically | `run_server`, `_page`, `merge_env`, `validate_provider_requirements` |
 | `app/transcriber.py` | Whisper, Gemini Live, and batch Groq / OpenRouter speech | `WhisperTranscriber`, `CloudTranscriber`, `GeminiTranscriber`, `GeminiLiveSession`, `float32_to_wav_bytes` |
@@ -326,6 +327,7 @@ graph LR
     odicto --> platforms
     odicto --> setup_web
     config --> paths
+    config --> theme
     transcriber --> config
     refiner --> config
     refiner --> openrouter_catalog
@@ -338,12 +340,14 @@ graph LR
     indicator --> paths
     indicator --> platforms
     indicator --> typer
+    hud_leaf --> theme
     openrouter_catalog --> config
     setup_web --> config
     setup_web --> openrouter_catalog
     setup_web --> paths
     setup_web --> platforms
     setup_web --> refiner
+    setup_web --> theme
 ```
 <!-- END GENERATED: module-graph -->
 
@@ -634,6 +638,7 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 | add a hotkey | `ENV_DEFAULTS`, `config.validate_hotkey_pair`, `main._match_active_chord` and `_bind_hotkeys` |
 | change the HUD look | `app/hud_leaf.py` (shape, colours, shadow, voice pixels, label, AI mark, caption card, entry and exit curves). The widget's `_Theme` colours must equal the setup page tokens (`TestBrandLook`), and the painter's must equal `_Theme` (`tests/test_hud_leaf.py`). No test covers pixels: render each state offscreen and check it by eye (engineering notes §3.5) |
 | change when the HUD moves: state, timing, window | `app/indicator.py` (`_transition_to`, `_on_tick`, `_is_static`, the label width spring, `_canvas_size`, the caption text) |
+| change a theme colour or add a preset (`THEME_COLOR`) | `app/theme.py` (`PRESETS`, `hud_palette`, `page_theme`). The setup page repeats the maths in the `THEME` block of `assets/setup_template.html` (`THEME_PRESETS`, `THEME_FOREST`, the matrices), and `tests/test_theme.py` keeps the two equal. The page seeds `--h` and `--k` in `setup_web._theme_tokens`; the Colour panel is in the Appearance view. The painter reads colours only from `HudStyle.palette`, so a new HUD colour is a new `Palette` field plus its row in `THEME_FOREST` (the preview) |
 | add or change a HUD style choice (`HUD_WAVEFORM`, `HUD_TEXTURE`, `HUD_EDGE`, `HUD_SHAPE`, `HUD_SIZE`) | `app/hud_leaf.py` (`HUD_STYLE_CHOICES`, `HudStyle`) and `app/config.py` (`HUD_CHOICES`, `ENV_DEFAULTS`), `.env.example`, and the setup page's Appearance view in `assets/setup_template.html` (its buttons, and the preview's `LEAF_*` tables, which `tests/test_leaf_preview_parity.py` keeps equal to the painter). The widget reads them once, in `DictationIndicator.__init__` |
 | change the setup page | `assets/setup_template.html` for markup/CSS/JS; `app/setup_web.py` only for tokens and handlers |
 | change what the AI is told | `prompt.txt` (private, gitignored); the shipped default is `prompt.txt.example` **and** `DEFAULT_SYSTEM_PROMPT` — keep both in sync |
@@ -678,8 +683,8 @@ These are known, chosen limits — not oversights:
   `cuda_is_safe_to_load`'s docstring claimed tests used it, and none did.
 - **HUD paint has no automated coverage** (no pixel tests — Qt rendering differs per platform),
   so painting changes are verified by eye. The tests cover what the widget gives the painter.
-- **`hud_leaf.py` stays pure.** It imports Qt, numpy and the standard library only, and holds no
-  clock. `indicator.py` imports it, never the other way round (`tests/test_hud_leaf.py` checks).
+- **`hud_leaf.py` stays pure.** It imports Qt, numpy, the standard library and `theme` (no Qt there
+  either), and holds no clock. `indicator.py` imports it, never the other way round (`tests/test_hud_leaf.py` checks).
 - **`app/platforms/macos.py` and `app/platforms/linux.py` cannot be imported on Windows.** Their only
   real gate is the 3-OS CI job.
 

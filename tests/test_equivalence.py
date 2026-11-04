@@ -85,24 +85,30 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # golden. Every state changed by the same lines and nothing else (compare output kept in the hand-back). A behaviour proof
 # (IDs, form fields and values, data and aria attributes, button labels, visible text) found no difference except the
 # hero canvas and the nav item titles; the script text changed only by the hero painter.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
- 'provider_meta': '998b16d0269690072377823b46c8ebbb030a0f70570178b60a371cdb52df4c69',
- 'provider_openrouter': '2b85633745e4fbe4d153fc245d189f8bab5e7ee77f734f4252c3f302ec619a01',
- 'provider_gemini': 'ca9a841f74690ebdb99db86ea34ac222909683d8f290ea3dc74adb06fe9bece7',
- 'provider_ollama': '2eb14c672476067bade8e3d40b115d55acf76fc8488702c19a448bc3d5ac2702',
- 'provider_none': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
- 'provider_groq': 'edf0e08b77f31417b124e2ece3f813300db2e83aec4c5a9195550e6f0e78ef6e',
- 'polish_enabled': 'b4b9c850984cdc19f4a1dcd642626971c21708b9f09f21ab94e9ede6887687b8',
- 'history_and_custom': '1373c396a7f092b04531f3782c0a27a3e92657519fdf8abec47f2b75e9810795',
- 'hotkey_short': 'da643867493d9fd819527240ae84b9a26ee41415bc9bfc4ff70cc745944b9c76',
- 'stt_gemini': '210a849140cd1ae949bc75474f1db3b5590e7f2e4396b929e36d7214fc19ef20',
- 'prompt_from_file': 'cf25dbf9e03590646b5e8b0af15f91b2b7ac0319cda673d086531df5964491ca',
- 'prompt_from_inline_env': 'c8604267d4206fded8da8d6349ca641b853c71231daf94d75df2fe050a8530b5',
- 'msg_ok': 'eb1fbe1ccb1d8f1639ab972cccd0622b5cb815f929f5ccffb3e55e13a5c86ce7',
- 'msg_err': 'ec904d9678199e2c030c565b2fb97cb615824a546f6815ebee8e559f98f6bb8a',
- 'msg_neutral': '155fde14bae476e059a528d47af45ba0b1fed3feedc252f446d88fc7a629960f',
- 'admin_on': 'a2f027ddc0be480da655eba6b609b886b79705047fed74ae49d69eb2b7cda958',
- 'admin_unavailable': '4254a4fe2040d8f621427b638fcc1cf8888638f2441bfa73062c514b7cf028ea'}
+# 2026-11-04, THEME_COLOR: the page follows the theme colour. The server seeds --h and --k, the Appearance view gained a
+# Colour panel (swatches and a custom colour), and the preview paints with the theme's palette (the THEME maths block).
+# Before rebasing, the previous template reproduced every old golden. Every state changed by the same lines and nothing
+# else (compare output kept in the hand-back).
+# Review fix, same day: a grey custom colour (chroma under 0.02) takes Graphite's hue, so it gets no random tint.
+# Every state changed by the same 2 lines of the THEME maths block and nothing else.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
+ 'provider_meta': '3e2a2c8a72f282099a866ea630e94b7bdd7a54e61284ab35c2881ad35bb6c554',
+ 'provider_openrouter': '4f259e12d0b1795a45d299a10b4b4d1db28adaa45c6a96157b8d255d883c62ec',
+ 'provider_gemini': '85bcb14e144580bf031b8a1d6396ca298b7ddb0982561298f1a792e21d87dbc8',
+ 'provider_ollama': '04af83aa07d19505f4adc445cfc1926d61c39f3192b8ee6bbb84e536a9137551',
+ 'provider_none': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
+ 'provider_groq': 'd0a9f48d50b1916210d0d5e70acf4f81df7219efa105ea172916319d9bda2608',
+ 'polish_enabled': '1cb85b395d4228f688cf208b3458e7c8446a1ac35dbcbcb2d6d645a29cbcd823',
+ 'history_and_custom': '151428aad799bc99b948234e5823429ed27734661ef8941808c91e75754b8180',
+ 'hotkey_short': '1b129f59fad3c9da97fc34b8eaf6e01a63c948c2c3fe049e937ca5a3c6fdd7ae',
+ 'stt_gemini': 'd67e86132f5e83cecb3287b7caf5589dbebf97c3f853dc56a26ae56fc79412c3',
+ 'prompt_from_file': '7fbc1ac538fc384e2c9594efe61925120011624cb79e8e29cf21031a85e935d0',
+ 'prompt_from_inline_env': 'b17e4555f310160bbe28515bf0cd7325bbc59aff25c4bf4bbe1c797087274430',
+ 'msg_ok': '3df4b71349a7ec463baaf361861d2a29b4751074825949ce2466cba968fcf493',
+ 'msg_err': '7ea363c6055f27637e4bb187eb81824f0d559bb758bfb0e63e1f7dff3ac4c5d3',
+ 'msg_neutral': '01ae673695fe52a2ba3dff8da427f1b53ee57a8f73f22504c5c7a87aad93e868',
+ 'admin_on': '26841c9c12a997045e59a1f42836590d237d7ab6665cb0e0965eb9a90c030dc8',
+ 'admin_unavailable': '4655b1bfa68eca81652fd274f3cc71353b89d0d45c4491258df3a8851ed27fae'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

@@ -4,6 +4,7 @@ import unicodedata
 from typing import Literal, Tuple
 from dotenv import load_dotenv
 from paths import ROOT, DATA_ROOT
+from theme import PRESETS as THEME_PRESETS, parse_theme
 
 # Load environment variables from .env file (override system env vars so the
 # project's .env takes precedence over Windows user/system environment).
@@ -86,6 +87,25 @@ def _env_choice(name: str) -> str:
         )
         return default
     return value
+
+
+def _env_theme(name: str) -> str:
+    """THEME_COLOR: a preset name or #rrggbb, stored lower case. Blank uses the default.
+
+    Anything else warns once (naming the key and the allowed values) and uses the default.
+    """
+    default = ENV_DEFAULTS[name]
+    raw = os.getenv(name, default)
+    if not str(raw).strip():
+        return default
+    theme = parse_theme(raw)
+    if theme is None:
+        _warn_config(
+            f"{name}={raw!r} is not one of {', '.join(THEME_PRESETS)} or a #rrggbb colour; "
+            f"using default {default!r}"
+        )
+        return default
+    return theme
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +205,7 @@ ENV_DEFAULTS: dict[str, str] = {
     "HUD_EDGE": "rim",
     "HUD_SHAPE": "leaf",
     "HUD_SIZE": "1x",
+    "THEME_COLOR": "forest",   # forest | ocean | plum | ember | graphite | #rrggbb (app/theme.py)
     "MIN_HOLD_MS": "80",
     "RETRIGGER_COOLDOWN_MS": "120",
     # Terminal text injection
@@ -628,6 +649,8 @@ class Config:
     HUD_EDGE: str = _env_choice("HUD_EDGE")
     HUD_SHAPE: str = _env_choice("HUD_SHAPE")
     HUD_SIZE: str = _env_choice("HUD_SIZE")
+    # The colour of the HUD and the setup page: a preset name or #rrggbb (see app/theme.py).
+    THEME_COLOR: str = _env_theme("THEME_COLOR")
     # Minimum hold time (ms) before a recording is accepted — filters accidental taps
     MIN_HOLD_MS: int = _env_int("MIN_HOLD_MS")
     # Debounce between consecutive capture cycles (ms)
@@ -1325,6 +1348,7 @@ class Config:
         add("Timing", "Visual HUD edge", cls.HUD_EDGE, _source_of("HUD_EDGE"))
         add("Timing", "Visual HUD shape", cls.HUD_SHAPE, _source_of("HUD_SHAPE"))
         add("Timing", "Visual HUD size", cls.HUD_SIZE, _source_of("HUD_SIZE"))
+        add("Timing", "Visual HUD colour", cls.THEME_COLOR, _source_of("THEME_COLOR"))
         add("Timing", "Min hold (ms)", cls.MIN_HOLD_MS, _source_of("MIN_HOLD_MS"))
         add("Timing", "Retrigger cooldown (ms)", cls.RETRIGGER_COOLDOWN_MS, _source_of("RETRIGGER_COOLDOWN_MS"))
         add("Timing", "Type in terminal", cls.TYPE_IN_TERMINAL, _source_of("TYPE_IN_TERMINAL"))
