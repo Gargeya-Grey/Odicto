@@ -4,6 +4,23 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.4.0] - 2026-11-04
+
+### Added
+
+- Setup has an **Appearance** page with a live preview of the pill. Choose its waveform (Reach or Stream, `HUD_WAVEFORM`), texture (Veins, or Plain: no veins and a faint grain, `HUD_TEXTURE`), edge (Light rim or Soft, `HUD_EDGE`) and shape (Leaf or Capsule, `HUD_SHAPE`).
+- Pill size on Appearance: 1x, 1.3x or 1.5x (`HUD_SIZE`). The whole pill grows; its place on the screen stays.
+- Theme colour on Appearance: Forest, Ocean, Plum, Ember, Graphite or any custom colour (`THEME_COLOR`). It colours the pill and the setup page. Brightness stays the same, so text stays readable. Warning and error colours do not change.
+
+### Changed
+
+- The pill is now a small leaf. A glowing stem shows the state, and five rows of pixels show your voice.
+- The setup page has a new look: glass panels, a glowing stem that marks the selected item, and a warning mark that is a ring, not only a colour.
+
+### Fixed
+
+- When F7 live captions fail, the pill says "Captions off". Before any captions appear, the card above it says why and that your text still arrives. For a rejected Gemini key, the card names the service that still makes your text (Groq, OpenRouter or local Whisper). The old label, "Live off · Gemini key rejected", did not say that the text still arrives.
+
 ## [1.3.0] - 2026-11-04
 
 ### Added
