@@ -180,6 +180,10 @@ supplied it) with:
   otherwise Whisper. A cloud choice with no key, and any speech error, falls
   back to Whisper. First Whisper load downloads model weights (~75MB for
   `tiny.en`) only when Whisper is the active or fallback backend.
+- **HUD style:** four keys choose how the HUD leaf looks: `HUD_WAVEFORM=reach|stream`,
+  `HUD_TEXTURE=veins|plain`, `HUD_EDGE=rim|soft`, `HUD_SHAPE=leaf|capsule` (the first value of
+  each is the default). A blank or unknown value uses the default. The widget reads them once at
+  start. The painter is `app/hud_leaf.py`; the state, clock and window are `app/indicator.py`.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,
