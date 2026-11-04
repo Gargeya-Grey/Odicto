@@ -71,24 +71,26 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # for the HUD_WAVEFORM, HUD_TEXTURE, HUD_EDGE and HUD_SHAPE keys. Before rebasing, the previous
 # template reproduced every old golden, and each new page differed from its old page by
 # inserted lines only (no line removed or changed), the same 465 lines in every state.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '08fd9654e23fcfa51507c8108982585332c2b610197eb0132dc3ca6c11b3c964',
- 'provider_meta': 'd3e0529cd0f84e6e24835aa2f88f21664347e1727e768af555aa3cfd7db49df4',
- 'provider_openrouter': 'd2242cc13ce9dd227067b63a21d2c45a0c1de44287c3a1dbe2bf12f09a747d1d',
- 'provider_gemini': '87cc450882638135ff9c1f7d69964bb908fcab1be2ba2d198462b75952956e0e',
- 'provider_ollama': '9ec105ca7e4a4dd51f2da4077ccba12125496432fad432c800e6939cfe14e3e9',
- 'provider_none': '08fd9654e23fcfa51507c8108982585332c2b610197eb0132dc3ca6c11b3c964',
- 'provider_groq': '3e56d14dee1cffc6a0474e0fa7b7e69186933f0ae84cf561e7db196d022d53c2',
- 'polish_enabled': '5791514004a606dd4da433a7a4a40b8f84a7a24803d3ddbd0b4d996b0e323324',
- 'history_and_custom': 'ba5b3788e3785be5397dda63ccfa7e0815cdc618be8d4d60da30ac934682c305',
- 'hotkey_short': '8688d60dfb02d186955bcf2aa5bdfee1986d311776c2c3afe8c8198b9bcccd9f',
- 'stt_gemini': '0d4dc23d292fd1c432d401e11893e312188c2a87e624d13a9a27b0b165316b39',
- 'prompt_from_file': '08a08bb53e182712b50494d6a45353a163fa8a39b243ffcbf713a3a34e9c3390',
- 'prompt_from_inline_env': '65d1173f36e0816f1abbc59a76d3981e93930f5e36de8261b4137941483e3239',
- 'msg_ok': 'fe96fef1a596b282dfb8e858c62fa06dd1751926f023adcd978f174fd011a10b',
- 'msg_err': 'a13705603594d783e361551aceada29b4e89265830a3a0d9057f4e55504f312e',
- 'msg_neutral': 'b569df3d86c5410db0fe306492e7190f77292298d326b5ad3d4dff0d8177999a',
- 'admin_on': '09f30663e99de8c7cea15cbfebc888d068f9f6b6f313f638444590f422b81090',
- 'admin_unavailable': '8d1af07cbbd9685ea8c1a8ddc4012ec1c6a5572c47dc668e5c7b00282847ce2b'}
+# Review fixes, same day: Plain keeps the grain, a still preview follows a new pixel ratio,
+# and two comments. Every state changed by the same 4 lines and nothing else.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
+ 'provider_meta': '509ba66da7de5a140dae0c496f3cc1391c1bbda9109c495327d3088eb131886b',
+ 'provider_openrouter': '26a0db5e58e02cc51f8d3461350c8d8198484dc61bec519361a895adfbe4c5e6',
+ 'provider_gemini': '0f6634ff1a41ee546d19489005ce26088f9d90ed756a084a21998e64d62081b6',
+ 'provider_ollama': 'c213b63eb12d65e402c02841aa49ccca95e6173e9756af16c4751a71ab19623e',
+ 'provider_none': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
+ 'provider_groq': 'f46210833875b872e5b5d1b89ff21252804c0e6b6f75a450562829cd8a5b0b62',
+ 'polish_enabled': '555f0dcd95da58a4ad2f92254b9294902c5f9834398682b570bde7036d885bf0',
+ 'history_and_custom': '9d5cbb9a09414a6b394f6752a9b437e3eaae009f370d20aacb78f35c30927c99',
+ 'hotkey_short': 'e877300f32f87f17fefdbce31a74a697f2365fe92433d44d54dfe3bb01977d5d',
+ 'stt_gemini': '424ffd537a6adcd50fc7338af3793a26cc035de20171a5a9b1e063c7fd84de6b',
+ 'prompt_from_file': 'bf06f69c550f391538545becd586cc97331a66c9f932827661c8b245695c065a',
+ 'prompt_from_inline_env': 'ef7d9468a0078ee713f19b1d33fa192963d95ca809a112aa47dc28fb799b1f69',
+ 'msg_ok': '46228cdd4ab171d694e301014f538f039acb8df7e3b7af341b250193a8da571e',
+ 'msg_err': '338473b41313d3ba933dff53f7a01122f629232d89ca17ee47d18b340f2af0cd',
+ 'msg_neutral': 'dc95a0e06483fd48997518ebe1dcbeb54b4fd55757e65fe5cf6dcc8eb453e242',
+ 'admin_on': 'd46866c7a5435ed3c9adeec526e083f084fd63f4e98fbfdd9b72f8694a52c45d',
+ 'admin_unavailable': '6016178a298fd6da4abbe6deee79b7e1d4240e63fb66b513fdd02c0004e02ce3'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

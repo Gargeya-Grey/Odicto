@@ -120,11 +120,13 @@ class TestAppearancePage(_Roots):
         self.assertIn(
             "const LEAF_C = {jade:[142,220,187], warn:[242,194,122], danger:[242,163,155], ink:[231,229,223]};", page)
 
-    def test_preview_stops_when_hidden_or_motion_reduced(self) -> None:
+    def test_the_preview_script_holds_its_stop_and_reduced_motion_checks(self) -> None:
+        """Source checks only: the gate has no browser to run the preview script."""
         page = setup_web._page()
         self.assertIn("(prefers-reduced-motion: reduce)", page)
         self.assertIn("CURRENT_VIEW === 'appearance' && !document.hidden && !LEAF.still", page)
         self.assertIn("cancelAnimationFrame(LEAF.raf)", page)
+        self.assertIn("window.addEventListener('resize', leafPreviewSync)", page)
 
 
 class TestAppearanceSave(_Roots):

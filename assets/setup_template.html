@@ -1256,7 +1256,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                     </button>
                     <button type="button" class="gear__HUD_TEXTURE_1_SEL__" data-value="plain" aria-pressed="__HUD_TEXTURE_1_ARIA__">
                       <span class="gear-name">Plain</span>
-                      <span class="gear-hint">no texture</span>
+                      <span class="gear-hint">no veins</span>
                     </button>
                   </div>
                 </div>
@@ -3083,7 +3083,7 @@ function leafSurface(ctx, inst, geo, col) {
   pool.addColorStop(0, leafRgba(col, 0.08 + (LEAF.still ? 0 : 0.07 * inst.level))); pool.addColorStop(1, leafRgba(col, 0));
   ctx.fillStyle = pool; ctx.fillRect(X, Y, W, H);
   leafVeins(ctx, geo);
-  if (LEAF.opt.tex === 'veins') { ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); }
+  ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); // grain on every texture, as the HUD draws it
   g = ctx.createLinearGradient(0, top, 0, top + h);
   g.addColorStop(0, 'rgba(225,255,238,0.085)'); g.addColorStop(0.38, 'rgba(225,255,238,0)'); g.addColorStop(0.7, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.2)');
   ctx.fillStyle = g; ctx.fillRect(X, Y, W, H); ctx.restore(); // waxy sheen above, shade below
@@ -3186,7 +3186,7 @@ function leafDraw(ctx, inst, now, cx, bottom) {
 }
 
 // ---- loop and controls
-function leafIsStill() {
+function leafIsStill() { // the page's Reduced level only shortens transitions (the --t-* times); Off is its still mode
   var media = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   return !!media || document.documentElement.getAttribute('data-motion') === 'off';
 }
@@ -3274,6 +3274,7 @@ function initLeafPreview() {
     })(segs[i]);
   }
   document.addEventListener('visibilitychange', leafPreviewSync);
+  window.addEventListener('resize', leafPreviewSync); // a still frame follows a new device pixel ratio
   if (window.matchMedia) {
     var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
     if (mq.addEventListener) mq.addEventListener('change', leafPreviewSync);
