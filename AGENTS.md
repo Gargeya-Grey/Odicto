@@ -147,7 +147,12 @@ supplied it) with:
   in the HUD. Stop remains PROCESSING through finalization. It returns when the
   first final after the end of speech arrives (the service sends the whole utterance
   as one final), or after ~2.5s without one. A final or draft skips batch STT
-  (`docs/engineering-notes.md`, "F7 stop wait"). F7 leaves its final text on the clipboard outside terminals; no
+  (`docs/engineering-notes.md`, "F7 stop wait").
+  When the Live call fails while you speak, the leaf says "Captions off" and, with no captions
+  on the card yet, the card says why and that the text still arrives. A rejected
+  Gemini key names the service that makes the text, `Config.live_key_rejected_stt_provider()`
+  (Groq, OpenRouter or local Whisper; Gemini gives way to local Whisper), the same call
+  `_run_stt` makes. F7 leaves its final text on the clipboard outside terminals; no
   caret worker, tail replacement or delayed clipboard restoration remains.
   Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).
@@ -183,8 +188,10 @@ supplied it) with:
 - **HUD style:** four keys choose how the HUD leaf looks: `HUD_WAVEFORM=reach|stream`,
   `HUD_TEXTURE=veins|plain`, `HUD_EDGE=rim|soft`, `HUD_SHAPE=leaf|capsule` (the first value of
   each is the default). A blank or unknown value uses the default. The widget reads them once at
-  start. The painter is `app/hud_leaf.py`; the state, clock and window are `app/indicator.py`.
-  The setup page's Appearance view sets the four keys, with a live preview of the leaf.
+  start. `plain` draws no veins and keeps a faint grain: 40 % of the Veins grain strength
+  (`hud_leaf.PLAIN_GRAIN`). The painter is `app/hud_leaf.py`; the state, clock and window are
+  `app/indicator.py`. The setup page's Appearance view sets the four keys, with a live preview
+  of the leaf.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,

@@ -1256,7 +1256,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                     </button>
                     <button type="button" class="gear__HUD_TEXTURE_1_SEL__" data-value="plain" aria-pressed="__HUD_TEXTURE_1_ARIA__">
                       <span class="gear-name">Plain</span>
-                      <span class="gear-hint">no veins</span>
+                      <span class="gear-hint">no veins, faint grain</span>
                     </button>
                   </div>
                 </div>
@@ -2924,6 +2924,7 @@ const LEAF_K = {H:36, STEM_H:32, STEM_W:2, VOICE_W:84, STEM_GAP:8, TIP:58, TEXT_
 const LEAF_C = {jade:[142,220,187], warn:[242,194,122], danger:[242,163,155], ink:[231,229,223]};
 const LEAF_VIEW = {W:300, H:96, ZOOM:1.5, BOTTOM:70};
 const LEAF_TIME = {ENTER:0.62, LISTEN:3, WORK:1.2, DONE:1.2, EXIT:0.5, GAP:0.5};
+const LEAF_GRAIN_PLAIN = 0.4;
 const LEAF_FONT = '500 13px "Instrument Sans", system-ui, sans-serif';
 const LEAF_WORDS = {listen:'Listening', work:'Transcribing', done:'Done'};
 const LEAF_KEYS = {HUD_WAVEFORM:'wave', HUD_TEXTURE:'tex', HUD_EDGE:'edge', HUD_SHAPE:'shape'};
@@ -3083,7 +3084,8 @@ function leafSurface(ctx, inst, geo, col) {
   pool.addColorStop(0, leafRgba(col, 0.08 + (LEAF.still ? 0 : 0.07 * inst.level))); pool.addColorStop(1, leafRgba(col, 0));
   ctx.fillStyle = pool; ctx.fillRect(X, Y, W, H);
   leafVeins(ctx, geo);
-  ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); // grain on every texture, as the HUD draws it
+  var fade = ctx.globalAlpha; ctx.globalAlpha = fade * (LEAF.opt.tex === 'plain' ? LEAF_GRAIN_PLAIN : 1); // Plain keeps a faint grain, as the HUD draws it
+  ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); ctx.globalAlpha = fade;
   g = ctx.createLinearGradient(0, top, 0, top + h);
   g.addColorStop(0, 'rgba(225,255,238,0.085)'); g.addColorStop(0.38, 'rgba(225,255,238,0)'); g.addColorStop(0.7, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.2)');
   ctx.fillStyle = g; ctx.fillRect(X, Y, W, H); ctx.restore(); // waxy sheen above, shade below

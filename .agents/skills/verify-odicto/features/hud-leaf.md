@@ -14,6 +14,9 @@ clock and the window. Four keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`,
 - Voice rows: the highest band lights the top row. A broken recorder reads as silence.
 - Error tip droop; Done check and seed; a finished frame repaints at 4 FPS, recording never does.
 - F7: caption card above the leaf; the leaf's bottom edge does not move when captions come or go.
+- F7 captions fail (a rejected Gemini key, or the Live call fails): the leaf says "Captions off".
+  A card with no captions says the cause and that the text still arrives, naming the speech
+  service for a rejected key. Captions that came before the error stay.
 - Style keys: values and defaults are in `AGENTS.md` ("HUD style").
 
 ## How to get to it (user POV)

@@ -182,6 +182,22 @@ the stem timeline is past `_DROOP_S`. `_is_static` drops a finished leaf to the 
 only when nothing moves: the entry and its vein sweep, the stem's check, cross and seed, both
 springs and the voice have all ended.
 
+The grain is one 128 px noise tile drawn over the body. `HUD_TEXTURE=plain` draws no veins and
+draws that tile at `PLAIN_GRAIN` (0.4) of the Veins strength, through `grain_strength(texture)`,
+so the owner's "slightly nano textured, but not so much" is one named number. The setup preview
+holds the same number (`LEAF_GRAIN_PLAIN`), and the parity test keeps the two equal. The caption
+card keeps its full grain.
+
+When the F7 Live call fails while recording, the app sets `last_status` to `live_key_rejected`
+or `live_unavailable`. The leaf label is "Captions off" for both: the leaf names the state, and
+the caption card carries the cause and what still happens (`live_failure_message`). The owner
+was confused by the old "Live off" label because it did not say that the text still arrives. For a
+rejected key the card names the service that makes the text. That name comes from
+`Config.live_key_rejected_stt_provider()`, which `_run_stt` also uses to choose its path (Gemini
+gives way to local Whisper, because a batch call with the same key fails too), so the message and
+the pipeline cannot disagree. Captions already on the card stay, and the message shows only when
+the card has no caption text.
+
 Three things in the widget look odd and are on purpose:
 
 - **`_glyph_fade` is the stem's timeline** (0 to 1 over `_STEM_SETTLE_S`), kept under the name

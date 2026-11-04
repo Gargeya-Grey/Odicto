@@ -47,7 +47,9 @@ GATE = {
     # Plus 41 for the leaf HUD: the painter (28), voice bands (6) and the HUD_* keys (7): 1076.
     # Plus 32 for the HUD widget on the leaf painter (test_hud_motion, 54 to 86): 1108.
     # Plus 20 for the setup page Appearance view (15) and its parity with the painter (5): 1128.
-    "floor": 1128,
+    # Plus 3 for the Plain texture's faint grain (painter 2, preview parity 1): 1131.
+    # Plus 10 for the F7 failure message on the caption card (9) and its service rule (1): 1141.
+    "floor": 1141,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

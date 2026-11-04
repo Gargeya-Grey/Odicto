@@ -510,7 +510,7 @@ class TestReliability(unittest.TestCase):
                 self.assertIsNone(app.last_status)
                 app._on_live_error(rejected, 3)
                 self.assertEqual(app.last_status, expected)
-                self.assertIn("Live off", status_label(GuiState.RECORDING, False, app.last_status))
+                self.assertEqual("Captions off", status_label(GuiState.RECORDING, False, app.last_status))
         app = app_fixture()
         app._on_live_error(True, 3)  # stop was pressed: not live any more
         self.assertIsNone(app.last_status)
@@ -546,7 +546,7 @@ class TestReliability(unittest.TestCase):
             session._thread.join(2)
         self.assertEqual(app.last_status, "live_key_rejected")  # while still recording
         self.assertEqual(status_label(GuiState.RECORDING, False, app.last_status),
-                         "Live off · Gemini key rejected")
+                         "Captions off")
         session.stop(timeout=0)
         self.assertTrue(session.auth_rejected)
         app.live_active = False
@@ -571,6 +571,21 @@ class TestReliability(unittest.TestCase):
         app.transcriber.transcribe.assert_called_once()
         paste.assert_called_once()
         self.assertEqual(app.last_status, "success")
+
+    def test_rejected_live_key_is_served_by_the_provider_the_hud_names(self):
+        for effective in ("whisper", "groq", "openrouter", "gemini"):
+            with self.subTest(provider=effective):
+                app = app_fixture()
+                app.transcriber.local_fallback.return_value = "local words"
+                with patch.object(Config, "effective_stt_provider", return_value=effective), \
+                        patch.object(Config, "effective_live_stt_provider", return_value="gemini"), \
+                        patch("main.paste_text"):
+                    named = Config.live_key_rejected_stt_provider()
+                    app.process_and_paste(np.zeros(10), False, live=True, live_key_rejected=True)
+                # Only Gemini's batch call is skipped, and local Whisper serves in its place.
+                self.assertEqual(named, "whisper" if effective == "gemini" else effective)
+                self.assertEqual(app.transcriber.transcribe.called, effective != "gemini")
+                self.assertEqual(app.transcriber.local_fallback.called, effective == "gemini")
 
     def test_rejected_live_key_skips_a_gemini_batch_retry(self):
         app = app_fixture()

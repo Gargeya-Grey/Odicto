@@ -13,6 +13,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -264,6 +265,24 @@ class TestPixelGrid(unittest.TestCase):
         self.assertLessEqual(max(alphas), 16)
         self.assertGreater(max(alphas), 0)
         self.assertEqual(hl._grain_base().pixelColor(5, 9), img.pixelColor(5, 9))
+
+    def test_plain_grain_is_forty_percent_of_the_veins_grain(self):
+        self.assertEqual(hl.grain_strength("veins"), 1.0)
+        self.assertAlmostEqual(hl.grain_strength("plain"), 0.4 * hl.grain_strength("veins"))
+        with self.assertRaises(ValueError):
+            hl.grain_strength("nope")
+
+    def test_the_surface_draws_the_grain_at_the_texture_strength(self):
+        geo = hl.leaf_geometry(_frame())
+        for texture in hl.HUD_STYLE_CHOICES["texture"]:
+            drawn, q = [], MagicMock()
+            q.setOpacity.side_effect = lambda a: drawn.append(("opacity", a))
+            q.drawTiledPixmap.side_effect = lambda *a: drawn.append(("grain",))
+            hl._over_layer(q, geo, texture, 1.0)
+            at = drawn.index(("grain",))
+            self.assertEqual(drawn[at - 1], ("opacity", hl.grain_strength(texture)), texture)
+            self.assertEqual(drawn[-1], ("opacity", 1.0), texture)
+            self.assertEqual(texture == "veins", q.drawPath.called, texture)
 
 
 class TestRender(unittest.TestCase):
