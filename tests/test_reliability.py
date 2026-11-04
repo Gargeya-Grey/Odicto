@@ -678,13 +678,13 @@ class TestReliability(unittest.TestCase):
                 "refiner.threading.Event", ExpiringEvent
             ):
                 self.assertEqual(refiner.polish("raw words"), "raw words")
-                self.assertEqual(deadlines, [2.0], "polish waits at most 2 s for short text")
+                self.assertEqual(deadlines, [10.0], "polish waits at most 10 s for short text")
                 self.assertEqual(refiner.last_notice, "polish_fallback")
                 self.assertTrue(entered.wait(5), "the request must be in flight")
                 workers.extend(t for t in threading.enumerate() if t.name == "odicto-polish")
                 self.assertTrue(workers, "the timed-out request stays in flight")
                 self.assertEqual(refiner.polish("next capture"), "next capture")
-                self.assertEqual(deadlines, [2.0], "an overlapping polish must not start or wait")
+                self.assertEqual(deadlines, [10.0], "an overlapping polish must not start or wait")
                 refiner.client.chat.completions.create.assert_called_once()
         finally:
             release.set()
@@ -765,7 +765,7 @@ class TestReliability(unittest.TestCase):
             self.assertEqual(refiner.polish("hello world"), "Hello world.")
         kwargs = client.client.interactions.create.call_args.kwargs
         self.assertEqual(kwargs["model"], "polish/model")
-        self.assertEqual(kwargs["timeout"], 2.0)
+        self.assertEqual(kwargs["timeout"], 10.0)
         self.assertNotIn("previous_interaction_id", kwargs)
         self.assertEqual(client._last_interaction_id, "earlier-conversation")
 

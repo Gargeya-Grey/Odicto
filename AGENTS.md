@@ -341,7 +341,9 @@ CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must b
   `STT_DEADLINE_SECONDS` (20) and `LLM_DEADLINE_SECONDS` (30) are wall-clock limits per stage,
   `CANCEL_HOTKEY` (`esc`; cancels PROCESSING, never suppressed, blank disables),
   `LOG_TRANSCRIPTS` (`false`; `dictation.log` holds lengths and timings, never text),
-  `POLISH_MAX_CHARS` (1200; polish is skipped above it, 0 = no limit). Polish wait scales with length.
+  `POLISH_MAX_CHARS` (1200; polish is skipped above it, 0 = no limit). Polish waits 4 s plus 1 s per
+  100 characters, at least 10 s, capped at `LLM_DEADLINE_SECONDS`. OpenRouter polish sends the lowest reasoning effort
+  the model allows, not `OPENROUTER_REASONING_EFFORT` (measured: Haiku 3.0 s at high, 1.1 s at none).
 - **Clipboard:** `platforms/clipboard.py` snapshots every format (Windows: all HGLOBAL formats;
   macOS: NSPasteboard items; Linux: text, and a non-text clipboard falls back to typing).
   Restore is synchronous: `paste_text` holds the clipboard lock, waits `PASTE_DELAY_SECONDS`,

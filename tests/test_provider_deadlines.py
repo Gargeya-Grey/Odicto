@@ -22,7 +22,7 @@ class TestProviderDeadlines(unittest.TestCase):
         self.assertEqual(client.create_interaction("question", 10, system_instruction="test"), "answer")
         self.assertEqual(client.client.interactions.create.call_args.kwargs.get("timeout"), 30.0)
 
-    def test_explicit_polish_timeout_stays_two_seconds(self):
+    def test_explicit_polish_timeout_reaches_the_request(self):
         client = self.client()
         client.create_interaction("words", 10, system_instruction="test", timeout=2.0)
         self.assertEqual(client.client.interactions.create.call_args.kwargs.get("timeout"), 2.0)

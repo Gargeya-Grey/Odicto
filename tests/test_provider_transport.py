@@ -603,8 +603,8 @@ class TestAIBudget(unittest.TestCase):
 class TestPolishSizing(unittest.TestCase):
     def test_polish_wait_scales_with_length_and_is_capped(self):
         with patch.object(Config, "LLM_DEADLINE_SECONDS", 30.0):
-            self.assertEqual(refiner.polish_wait_seconds("short"), 2.0)
-            self.assertAlmostEqual(refiner.polish_wait_seconds("x" * 1000), 5.0)
+            self.assertEqual(refiner.polish_wait_seconds("short"), 10.0)
+            self.assertAlmostEqual(refiner.polish_wait_seconds("x" * 1000), 14.0)
         with patch.object(Config, "LLM_DEADLINE_SECONDS", 4.0):
             self.assertEqual(refiner.polish_wait_seconds("x" * 5000), 4.0)
 
@@ -622,11 +622,11 @@ class TestPolishSizing(unittest.TestCase):
         text = "word " * 200
         with patch.object(Config, "POLISH_MAX_CHARS", 0), patch.object(Config, "LLM_DEADLINE_SECONDS", 30.0):
             self.assertEqual(r.polish(text), "Hello world. ")
-        _assert_full_timeout(self, r.client.chat.completions.create.call_args.kwargs["timeout"], read=5.0)
+        _assert_full_timeout(self, r.client.chat.completions.create.call_args.kwargs["timeout"], read=14.0)
 
     def test_polish_waits_scaled_time_not_two_seconds(self):
         r = refiner_fixture()
-        text = "y" * 750  # 1 + 750/250 = 4 s
+        text = "y" * 750  # 4 + 750/100 = 11.5 s
         waits = []
         real_event = threading.Event
 
@@ -640,7 +640,42 @@ class TestPolishSizing(unittest.TestCase):
         ), patch("refiner.threading.Event", RecordingEvent):
             self.assertEqual(r.polish(text), "Hello world.")
         # Thread.start() also waits on an Event (timeout None); ignore it.
-        self.assertEqual([w for w in waits if w is not None], [4.0])
+        self.assertEqual([w for w in waits if w is not None], [11.5])
+
+    def test_openrouter_polish_skips_reasoning_even_when_ai_effort_is_high(self):
+        # Measured 2026-11-04: Haiku at effort=high took 3.0 s (105 reasoning
+        # tokens), at none 1.1 s. Polish is a minimal edit; thinking only adds delay.
+        r = refiner_fixture("openrouter")
+        with patch.object(Config, "openrouter_reasoning_effort", return_value="high"), patch(
+            "refiner.clamp_openrouter_effort", side_effect=lambda model, effort: effort
+        ):
+            self.assertEqual(r.polish("words"), "Hello world.")
+        body = r.client.chat.completions.create.call_args.kwargs["extra_body"]
+        self.assertEqual(body["reasoning"]["effort"], "none")
+
+    def test_openrouter_polish_retries_a_mandatory_reasoning_model_at_low(self):
+        r = refiner_fixture("openrouter")
+        r.model = "z-ai/glm-test-mandatory"
+        ok = r.client.chat.completions.create.return_value
+        r.client.chat.completions.create.side_effect = [RuntimeError("Reasoning is mandatory"), ok]
+        try:
+            with patch("refiner.clamp_openrouter_effort", side_effect=lambda model, effort: effort):
+                self.assertEqual(r.polish("words"), "Hello world.")
+        finally:
+            refiner.reset_openrouter_effort_cache()
+        efforts = [c.kwargs["extra_body"]["reasoning"]["effort"]
+                   for c in r.client.chat.completions.create.call_args_list]
+        self.assertEqual(efforts, ["none", "low"])
+
+    def test_polish_retry_does_not_lower_the_effort_of_ai_answers(self):
+        # The cached "low" is a floor for a mandatory model, never a ceiling.
+        try:
+            refiner._remember_openrouter_effort("z-ai/glm-test-mandatory", "low")
+            with patch("refiner.clamp_openrouter_effort", side_effect=lambda model, effort: effort):
+                self.assertEqual(refiner.openrouter_effort_for_model("z-ai/glm-test-mandatory", "high"), "high")
+                self.assertEqual(refiner.openrouter_effort_for_model("z-ai/glm-test-mandatory", "none"), "low")
+        finally:
+            refiner.reset_openrouter_effort_cache()
 
 
 class TestTranscriptLogging(unittest.TestCase):
