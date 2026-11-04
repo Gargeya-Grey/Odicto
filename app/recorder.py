@@ -32,6 +32,15 @@ class AudioRecorder:
     # Peak (full scale 1.0) below which a whole second of input is a dead endpoint.
     # About 33 steps of 16-bit audio; room noise on any real mic is higher.
     DEAD_PEAK: float = 1e-3
+    # HUD voice bands: log-spaced from BANDS_LO_HZ to BANDS_HI_HZ. Band power in dB maps
+    # BANDS_FLOOR_DB..BANDS_CEIL_DB to 0..1. Speech carries less energy higher up, so each
+    # band above the lowest gains BANDS_TILT_DB; without it a fricative never lights the top row.
+    # First calibration, before any real-microphone tuning.
+    BANDS_LO_HZ: float = 90.0
+    BANDS_HI_HZ: float = 6000.0
+    BANDS_FLOOR_DB: float = -60.0
+    BANDS_CEIL_DB: float = -22.0
+    BANDS_TILT_DB: float = 2.0
 
     def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0) -> None:
         """Initializes the audio recorder and opens the persistent input stream.
@@ -380,6 +389,29 @@ class AudioRecorder:
         # Speech is often quiet in float32; a modest gain keeps peaks readable.
         levels = np.clip(rms * 5.5, 0.0, 1.0)
         return levels.astype(np.float32).tolist()
+
+    def get_bands(self, n: int = 5) -> list:
+        """Spectral band levels of the newest callback block, lowest band first, each 0..1."""
+        n = max(1, int(n))
+        with self._lock:
+            if not self.recording or not self.audio_data:
+                return [0.0] * n
+            block = np.asarray(self.audio_data[-1], dtype=np.float32).reshape(-1)
+        if block.size < 2:
+            return [0.0] * n
+        window = np.hanning(block.size)
+        spectrum = np.abs(np.fft.rfft(block * window)) ** 2
+        # One-sided spectrum scaled so a sine of amplitude A reads A**2 / 2 in its band.
+        spectrum *= 2.0 / (block.size * float(np.sum(window * window)))
+        freqs = np.fft.rfftfreq(block.size, 1.0 / self.sample_rate)
+        top = min(self.BANDS_HI_HZ, self.sample_rate / 2.0)
+        edges = np.geomspace(self.BANDS_LO_HZ, top, n + 1)
+        band = np.searchsorted(edges, freqs, side="right") - 1
+        inside = (band >= 0) & (band < n)
+        power = np.bincount(band[inside], weights=spectrum[inside], minlength=n)
+        db = 10.0 * np.log10(power + 1e-12) + self.BANDS_TILT_DB * np.arange(n)
+        levels = (db - self.BANDS_FLOOR_DB) / (self.BANDS_CEIL_DB - self.BANDS_FLOOR_DB)
+        return np.clip(levels, 0.0, 1.0).astype(np.float32).tolist()
 
     def add_chunk_listener(self, fn: Callable[[np.ndarray], None]) -> None:
         """Register a live-audio consumer (called from the input callback)."""

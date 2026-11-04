@@ -150,26 +150,62 @@ difference is a condition, they are different behaviours that happen to look ali
 
 ### 3.5 HUD paint: one design, checked by eye — no pixel gate
 
-The pill follows the Odicto Mobile voice bubble (in the Odicto-Mobile repository:
-`apps/mobile/src/voice.css`, `VoiceControlView.kt`): one status disc (`orb_kind`), one content painter, one spinner. The
-colours in `_Theme` must equal the setup page's CSS tokens; `TestBrandLook` checks that, so the
-desktop pill, the setup page and the phone cannot drift apart silently.
+The HUD is the "leaf": a stem, a leaf body whose five vein rows show the voice, and a short
+label. `app/hud_leaf.py` paints it. `LeafPainter.paint(p, LeafFrame, HudStyle)` draws the
+shadow, the body, the voice, the label and the AI mark in one call. The module is pure: no
+widget, no timer, no config. `app/indicator.py` owns the rest: the state and the stem it maps
+to (`orb_kind`, `STEM_FOR_ORB`), the clock, the label width spring, the voice envelope, the F7
+caption text and the window. The four `HUD_*` keys choose the style (`HudStyle`); the widget
+reads them once.
+
+The pill no longer mirrors the Odicto Mobile voice bubble. The phone app is unchanged. The
+shared colour tokens stay equal: `_Theme` must equal the setup page's CSS tokens
+(`TestBrandLook`), and the painter's colours must equal `_Theme` (`tests/test_hud_leaf.py`),
+so the desktop HUD, the setup page and the phone cannot drift apart silently.
 
 **No test paints pixels.** A pixel-hash gate is not a viable substitute — Qt renders differently
 per platform, so the gate would fail on CI for reasons unrelated to the change. The tests pin
-what can be pinned without pixels: widths, the size spring (frame-rate independent, no
-overshoot from rest, settles exactly), the easing curves, the disc map, the waveform smoothing, and that a
-finished frame goes static. Check a look change by rendering the widget offscreen
-(`QT_QPA_PLATFORM=offscreen`, `hud.render(QImage)`) and looking at each state.
+what can be pinned without pixels: what the widget hands the painter (the stem for every state
+and status, the AI mark, the style, the label font, the label width), the entry and exit
+timelines (an exit that starts in the entry never grows), the label width spring (frame-rate
+independent, no overshoot, settles exactly, no window resize per frame), the voice rows (the
+highest band lights the top row; a broken recorder reads as silence), the tip droop, and that a
+finished frame goes static. Check a look change by rendering the real widget offscreen
+(`QT_QPA_PLATFORM=offscreen`, `hud.grab()`; add `QT_SCALE_FACTOR=2` for a 2x screen) and looking
+at each state. `tools/hud_snapshots.py` renders the painter alone.
 
 Every animation rate is per second (`_on_tick` measures `dt`, capped at `_DT_MAX`). A rate per
 tick would run slower whenever the timer is late. Each animated value must still reach its end
-value **exactly** (`min(1.0, …)`, the spring's snap, `pop_scale(1.0) == 1.0`): `_is_static`
-drops a finished pill to the 250 ms tick only when nothing moves.
+value **exactly**: `enter_opening(ENTER_S) == OPEN`, `leave_opening(LEAVE_S).fade == 0`, the
+spring's snap, the stem timeline's `min(1.0, …)`, and the tip droop, which equals its goal once
+the stem timeline is past `_DROOP_S`. `_is_static` drops a finished leaf to the 250 ms tick
+only when nothing moves: the entry and its vein sweep, the stem's check, cross and seed, both
+springs and the voice have all ended.
 
-The shadow layers cost about 40 % of a frame. A settled capsule (open, no drop, both springs
-done) draws them once into `_shadow_cache` and blits the pixmap; a capsule that changes size
-draws them live, because each frame would miss the cache anyway.
+Three things in the widget look odd and are on purpose:
+
+- **`_glyph_fade` is the stem's timeline** (0 to 1 over `_STEM_SETTLE_S`), kept under the name
+  of the old status disc cross-fade because `tests/test_resource_use.py` sets it. A stem change
+  restarts it. The painter's `since_state` and the droop ease both read it, so one number says
+  "this stem is finished".
+- **`_h_tw` is the layout height spring.** Its share between the compact and the live height is
+  the caption card's fade, so the card comes and goes at the same speed as the window grows.
+- **The widget holds no shadow cache.** The painter keeps its settled layers, keyed by the
+  geometry. A frame that is not fully open, or whose size moves, builds its layers fresh, so a
+  stale layer is never shown.
+
+The label text changes at once and the leaf's width eases to fit. While the leaf is still
+narrower than the new word, the painter clips the word to the leaf (it reveals as the leaf
+widens). The widget does not hold the width back until the word has faded in, as the old pill
+did.
+
+The window is a fixed canvas. It holds the leaf, the painter's shadow (up to 28 px on every
+side, so `_BLEED` is 32, a multiple of 4) and the entry rise. In the live layout it also holds
+the card above the leaf. The window grows upward: the leaf's bottom edge keeps its screen
+position (`_BOTTOM_GAP`), so the leaf never jumps when captions come or go.
+
+`time.monotonic()` ticks every 15.6 ms on some Windows builds. A test that needs time to pass
+sleeps 30 ms, or passes an explicit `now`.
 
 ### 3.6 Consolidating the `apply_window_exstyles` no-ops — rejected
 

@@ -272,7 +272,8 @@ save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page
 |---|---|---|
 | `app/main.py` | Process entry, orchestration, `DictationApp` state machine, hotkey handlers, pipeline | `DictationApp`, `acquire/release_single_instance_lock`, `ensure_can_bind_hotkeys` |
 | `app/config.py` | `.env` loading, `ENV_DEFAULTS`, cascade resolvers, validation, hotkey parsing, prompt resolution | `Config`, `ENV_DEFAULTS`, `parse_hold_hotkey`, `validate_hotkey_pair`, `config_warnings`, `prompt_live_path` |
-| `app/indicator.py` | PySide6 always-on-top, click-through HUD: glyph, label, chips, waveform, 60 fps ticks | `DictationIndicator`, `GuiState`, `status_label` |
+| `app/indicator.py` | PySide6 always-on-top, click-through HUD widget. Owns what the painter does not: state and stem, clock and 60 fps ticks, label width spring, voice envelope, F7 caption text, window | `DictationIndicator`, `GuiState`, `status_label` |
+| `app/hud_leaf.py` | The leaf HUD painter. Pure: no widget, no timer, no config. Entry and exit timelines, voice envelope, geometry, shadow, body, voice, label, AI mark, caption card | `LeafPainter`, `LeafFrame`, `HudStyle`, `VoiceEnvelope`, `Stem`, `STEM_FOR_ORB`, `label_font`, `label_width`, `enter_opening`, `leave_opening` |
 | `app/refiner.py` | LLM clients and the refine call, conversation history, provider ping | `TextRefiner`, `test_provider`, `openrouter_effort_for_model`, `build_system_prompt_with_context` |
 | `app/setup_web.py` | Loopback setup page server; reads/writes `.env` and `prompt.txt` atomically | `run_server`, `_page`, `merge_env`, `validate_provider_requirements` |
 | `app/transcriber.py` | Whisper, Gemini Live, and batch Groq / OpenRouter speech | `WhisperTranscriber`, `CloudTranscriber`, `GeminiTranscriber`, `GeminiLiveSession`, `float32_to_wav_bytes` |
@@ -329,6 +330,8 @@ graph LR
     typer --> config
     typer --> platforms
     indicator --> app_state
+    indicator --> config
+    indicator --> hud_leaf
     indicator --> paths
     indicator --> platforms
     indicator --> typer
@@ -464,12 +467,15 @@ stateDiagram-v2
 
 `AppState` (main) drives `GuiState` (indicator). The HUD polls the app on a 60 fps tick and
 maps state plus `last_status` into `BOOTING / RECORDING / PROCESSING / SUCCESS / ERROR /
-RESET / HIDDEN`. The pill shows Done when the paste key is sent (PROCESSING with
+RESET / HIDDEN`. The leaf shows Done when the paste key is sent (PROCESSING with
 `paste_delivered is True` maps to SUCCESS), and the clipboard wait still blocks the next
-capture. Auto-hide starts only at IDLE: Done stays about 1.2 s in total, an error 1.5 s. The
-capsule width fits the words on screen; it enters and leaves as a droplet (entry on
-`ease_standard`, cubic-bezier(0.2, 0, 0, 1); exit on `ease_accelerate`, and shorter), and a size
-change follows the critically damped `_Spring`. Every animation rate is per second.
+capture. Auto-hide starts only at IDLE: Done stays about 1.2 s in total, an error 1.5 s. Each
+tick the widget builds one `LeafFrame` (stem, AI mark, label, label width, opening, voice,
+droop) and `hud_leaf.LeafPainter` draws all of it. The state maps to a stem
+(`orb_kind` then `STEM_FOR_ORB`). The leaf grows from a seed on entry (`enter_opening`, 0.62 s)
+and closes in reverse on exit (`leave_opening`, 0.5 s, shorter). The label width follows the
+critically damped `_Spring`. With F7 captions, a card sits above the leaf and the window grows
+upward, so the leaf stays put. Every animation rate is per second.
 
 ## 7. Single instance — the invariant that keeps typing sane
 
@@ -623,7 +629,9 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 | add an LLM provider | `app/config.py` (`ENV_DEFAULTS` + one row in `_MODEL_ATTR`), `app/refiner.py` (`TextRefiner.__init__` + `refine` + `test_provider`), `app/setup_web.py` (`EDITABLE_KEYS`, the page, `validate_provider_requirements`), `.env.example` |
 | add a speech provider | `app/config.py` (`ENV_DEFAULTS`, `normalize_stt_provider`, `effective_stt_provider`), `app/transcriber.py`, `main.initialize_app`, `app/setup_web.py`, `assets/setup_template.html`, `.env.example` |
 | add a hotkey | `ENV_DEFAULTS`, `config.validate_hotkey_pair`, `main._match_active_chord` and `_bind_hotkeys` |
-| change the HUD look | `app/indicator.py` (`_Theme`, the status disc, chips, waveform). `_Theme` colours must equal the setup page tokens (`TestBrandLook`). No test covers pixels: render each state offscreen and check it by eye (engineering notes §3.5) |
+| change the HUD look | `app/hud_leaf.py` (shape, colours, shadow, voice pixels, label, AI mark, caption card, entry and exit curves). The widget's `_Theme` colours must equal the setup page tokens (`TestBrandLook`), and the painter's must equal `_Theme` (`tests/test_hud_leaf.py`). No test covers pixels: render each state offscreen and check it by eye (engineering notes §3.5) |
+| change when the HUD moves: state, timing, window | `app/indicator.py` (`_transition_to`, `_on_tick`, `_is_static`, the label width spring, `_canvas_size`, the caption text) |
+| add or change a HUD style choice (`HUD_WAVEFORM`, `HUD_TEXTURE`, `HUD_EDGE`, `HUD_SHAPE`) | `app/hud_leaf.py` (`HUD_STYLE_CHOICES`, `HudStyle`) and `app/config.py` (`HUD_CHOICES`, `ENV_DEFAULTS`), `.env.example`. The widget reads them once, in `DictationIndicator.__init__` |
 | change the setup page | `assets/setup_template.html` for markup/CSS/JS; `app/setup_web.py` only for tokens and handlers |
 | change what the AI is told | `prompt.txt` (private, gitignored); the shipped default is `prompt.txt.example` **and** `DEFAULT_SYSTEM_PROMPT` — keep both in sync |
 | change paste behaviour | `typer.paste_text` and the clipboard helpers |
@@ -666,7 +674,9 @@ These are known, chosen limits — not oversights:
 - **`transcriber.build_transcriber` and `cuda_is_safe_to_load` were deleted** as dead code;
   `cuda_is_safe_to_load`'s docstring claimed tests used it, and none did.
 - **HUD paint has no automated coverage** (no pixel tests — Qt rendering differs per platform),
-  so painting changes are verified by eye.
+  so painting changes are verified by eye. The tests cover what the widget gives the painter.
+- **`hud_leaf.py` stays pure.** It imports Qt, numpy and the standard library only, and holds no
+  clock. `indicator.py` imports it, never the other way round (`tests/test_hud_leaf.py` checks).
 - **`app/platforms/macos.py` and `app/platforms/linux.py` cannot be imported on Windows.** Their only
   real gate is the 3-OS CI job.
 

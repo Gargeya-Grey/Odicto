@@ -35,6 +35,7 @@ APP_MODULES = [
     "refiner",
     "typer",
     "indicator",
+    "hud_leaf",
     "openrouter_catalog",
     "setup_web",
     "platforms",

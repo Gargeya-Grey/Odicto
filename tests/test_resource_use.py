@@ -461,8 +461,7 @@ def _settle(hud) -> None:
         tween.snap(tween.b)
     hud._phase = "open"
     hud._phase_t0 = time.monotonic() - 10
-    hud._content_fade = hud._glyph_fade = hud._check_progress = 1.0
-    hud._resize_hold = None
+    hud._glyph_fade = 1.0
     hud._on_tick()
 
 
@@ -526,7 +525,7 @@ class TestHudRestsWhenIdle(unittest.TestCase):
         try:
             hud._sync_from_app()
             _settle(hud)
-            hud._glyph_fade = 0.2  # a cross-fade in progress
+            hud._glyph_fade = 0.2  # a stem change in progress
             hud._on_tick()
             self.assertEqual(hud._tick.interval(), 16)
         finally:
