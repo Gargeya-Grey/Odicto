@@ -125,8 +125,11 @@ class _UpdateSteps:
     def __init__(self) -> None:
         self.open = False
 
+    last = ""
+
     def __call__(self, name: str) -> None:
         self.end(" done")
+        self.last = name
         print(f"  {_UPDATE_STEPS.get(name, name):<28}...", end="", flush=True)
         self.open = True
 
@@ -142,7 +145,7 @@ def _update_result(before: dict | None, after: dict | None) -> str:
         return f"Odicto {version[1:]} is up to date."
     return (f"\nOdicto {version[1:]} is ready.\n"
             f"  What's new: https://github.com/{REPOSITORY}/releases/tag/{version}\n"
-            "  Start it:   odicto start   (if it is running: odicto restart)")
+            "  Start it:   odicto start")
 
 
 def latest_release(fetch: Callable = download) -> Release:
@@ -577,9 +580,9 @@ class Manager:
         # Tool output goes to the log: a user sees steps, not package lists or Qt warnings.
         log = self.update_log.open("a", encoding="utf-8", errors="replace")
         quiet = {"stdout": log, "stderr": subprocess.STDOUT}
-        log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} install {directory.name}\n")
-        log.flush()
         try:
+            log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} install {directory.name}\n")
+            log.flush()
             self._install_steps(uv, lock, python, directory, environment, quiet)
         finally:
             log.close()
@@ -827,7 +830,10 @@ runpy.run_path(str(script), run_name='__main__')
                     except Exception as error:
                         if before is None:
                             raise
-                        print(f"Update deferred ({type(error).__name__}); keeping {before['version']}.", file=sys.stderr)
+                        detail = (f" Details: {self.update_log}"
+                                  if isinstance(error, subprocess.CalledProcessError) else "")
+                        print(f"Update deferred ({type(error).__name__}); keeping {before['version']}.{detail}",
+                              file=sys.stderr)
                 current = self.active()
                 if current is None:
                     raise DistributionError("No active release; run install first")
@@ -1438,19 +1444,33 @@ def main(argv=None) -> int:
             else:
                 before = manager.active()
                 steps = _UpdateSteps()
-                if args.command == "update":
-                    manager.progress = steps
+                manager.progress = steps
                 try:
                     record = manager.update()
-                except Exception:
-                    if args.command == "update":
+                except BusyError:
+                    pending = manager.home / "pending.json"
+                    if args.command != "update" or not pending.exists():
                         steps.end(" failed")
-                        kept = f"Odicto {before['version'][1:]} still works. " if before else ""
-                        print(f"The update did not finish. {kept}Details: {manager.update_log}",
-                              file=sys.stderr)
-                    raise
-                if args.command == "update":
+                        raise
+                    # Staged and checked; a running Odicto holds the lock, so it switches at next start.
                     steps.end(" done")
+                    version = manager._read_json(pending).get("version", "")
+                    print(f"\nOdicto {version[1:]} is ready. Odicto or its setup page is open, so it switches"
+                          f" to the new version the next time it starts:\n  odicto restart")
+                    return 0
+                except Exception:
+                    failed_step = steps.last
+                    steps.end(" failed")
+                    kept = f"Odicto {before['version'][1:]} still works. " if before else ""
+                    where = (f" Details: {manager.update_log}"
+                             if failed_step in ("install", "verify") else "")
+                    if args.command == "update":
+                        print(f"The update did not finish. {kept}{where}".rstrip(), file=sys.stderr)
+                    elif where:
+                        print(f"Installation did not finish.{where}", file=sys.stderr)
+                    raise
+                steps.end(" done")
+                if args.command == "update":
                     print(_update_result(before, record))
                     return 0
                 if args.command == "install":

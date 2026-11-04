@@ -402,6 +402,29 @@ print('NATIVE DEPENDENCY PASS')
         self.assertIn(str(self.manager.update_log), err)
         self.assertEqual(self.manager.active()["version"], "v1.2.0")
 
+    def test_update_while_odicto_runs_says_it_is_ready_for_the_next_start(self):
+        self.initial()
+        self.add_release("v1.3.0")
+        with dist.file_lock(self.manager.data / "dictation.lock"):
+            code, out, err = self._update_output()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("failed", out)
+        self.assertIn("Odicto 1.3.0 is ready.", out)
+        self.assertIn("odicto restart", out)
+        self.assertEqual(self.manager.active()["version"], "v1.2.0")
+        self.assertTrue((self.manager.home / "pending.json").exists())
+
+    def test_a_failed_check_does_not_point_at_the_install_log(self):
+        self.initial()
+        def offline(url, maximum):
+            raise OSError("fixture: network is unreachable")
+        self.manager.fetch = offline
+        code, out, err = self._update_output()
+        self.assertNotEqual(code, 0)
+        self.assertIn("Checking for updates", out)
+        self.assertIn("failed", out)
+        self.assertNotIn("update.log", err)
+
     def test_settings_and_unknown_files_survive_update_and_rollback(self):
         old = self.initial()
         settings = self.manager.data / ".env"
