@@ -65,6 +65,7 @@ HUD_CHOICES: dict[str, tuple] = {
     "HUD_TEXTURE": ("veins", "plain"),
     "HUD_EDGE": ("rim", "soft"),
     "HUD_SHAPE": ("leaf", "capsule"),
+    "HUD_SIZE": ("1x", "1.3x", "1.5x"),
 }
 
 
@@ -183,6 +184,7 @@ ENV_DEFAULTS: dict[str, str] = {
     "HUD_TEXTURE": "veins",
     "HUD_EDGE": "rim",
     "HUD_SHAPE": "leaf",
+    "HUD_SIZE": "1x",
     "MIN_HOLD_MS": "80",
     "RETRIGGER_COOLDOWN_MS": "120",
     # Terminal text injection
@@ -625,6 +627,7 @@ class Config:
     HUD_TEXTURE: str = _env_choice("HUD_TEXTURE")
     HUD_EDGE: str = _env_choice("HUD_EDGE")
     HUD_SHAPE: str = _env_choice("HUD_SHAPE")
+    HUD_SIZE: str = _env_choice("HUD_SIZE")
     # Minimum hold time (ms) before a recording is accepted — filters accidental taps
     MIN_HOLD_MS: int = _env_int("MIN_HOLD_MS")
     # Debounce between consecutive capture cycles (ms)
@@ -1321,6 +1324,7 @@ class Config:
         add("Timing", "Visual HUD texture", cls.HUD_TEXTURE, _source_of("HUD_TEXTURE"))
         add("Timing", "Visual HUD edge", cls.HUD_EDGE, _source_of("HUD_EDGE"))
         add("Timing", "Visual HUD shape", cls.HUD_SHAPE, _source_of("HUD_SHAPE"))
+        add("Timing", "Visual HUD size", cls.HUD_SIZE, _source_of("HUD_SIZE"))
         add("Timing", "Min hold (ms)", cls.MIN_HOLD_MS, _source_of("MIN_HOLD_MS"))
         add("Timing", "Retrigger cooldown (ms)", cls.RETRIGGER_COOLDOWN_MS, _source_of("RETRIGGER_COOLDOWN_MS"))
         add("Timing", "Type in terminal", cls.TYPE_IN_TERMINAL, _source_of("TYPE_IN_TERMINAL"))

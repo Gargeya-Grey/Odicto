@@ -14,8 +14,9 @@ import config
 _CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "config.py"
 )
-_KEYS = ("HUD_WAVEFORM", "HUD_TEXTURE", "HUD_EDGE", "HUD_SHAPE")
-_DEFAULTS = {"HUD_WAVEFORM": "reach", "HUD_TEXTURE": "veins", "HUD_EDGE": "rim", "HUD_SHAPE": "leaf"}
+_KEYS = ("HUD_WAVEFORM", "HUD_TEXTURE", "HUD_EDGE", "HUD_SHAPE", "HUD_SIZE")
+_DEFAULTS = {"HUD_WAVEFORM": "reach", "HUD_TEXTURE": "veins", "HUD_EDGE": "rim", "HUD_SHAPE": "leaf",
+             "HUD_SIZE": "1x"}
 
 
 def _reload_with(env: dict):
@@ -44,12 +45,14 @@ class TestHudStyleConfig(unittest.TestCase):
         self.assertEqual(cfg.Config.CONFIG_WARNINGS, [])
 
     def test_value_is_stripped_and_lowercased(self) -> None:
-        cfg = _reload_with({"HUD_WAVEFORM": "  Stream ", "HUD_SHAPE": "CAPSULE", "HUD_EDGE": " Soft", "HUD_TEXTURE": "Plain "})
+        cfg = _reload_with({"HUD_WAVEFORM": "  Stream ", "HUD_SHAPE": "CAPSULE", "HUD_EDGE": " Soft", "HUD_TEXTURE": "Plain ",
+                            "HUD_SIZE": " 1.5X "})
         C = cfg.Config
         self.assertEqual(C.HUD_WAVEFORM, "stream")
         self.assertEqual(C.HUD_SHAPE, "capsule")
         self.assertEqual(C.HUD_EDGE, "soft")
         self.assertEqual(C.HUD_TEXTURE, "plain")
+        self.assertEqual(C.HUD_SIZE, "1.5x")
         self.assertEqual(C.CONFIG_WARNINGS, [])
 
     def test_blank_reads_as_default_without_warning(self) -> None:
@@ -68,9 +71,24 @@ class TestHudStyleConfig(unittest.TestCase):
                 self.assertIn(allowed, warnings[0])
             self.assertEqual(len(cfg.CONFIG_WARNINGS), 1)
 
+    def test_size_allows_exactly_the_three_scales(self) -> None:
+        self.assertEqual(config.HUD_CHOICES["HUD_SIZE"], ("1x", "1.3x", "1.5x"))
+        for value in ("1x", "1.3x", "1.5x"):
+            cfg = _reload_with({"HUD_SIZE": value})
+            self.assertEqual((cfg.Config.HUD_SIZE, cfg.Config.CONFIG_WARNINGS), (value, []))
+
+    def test_an_unknown_size_uses_one_x_with_one_warning(self) -> None:
+        for bad in ("2x", "1.4x", "big", "1,3x", "1.3", "0x"):
+            cfg = _reload_with({"HUD_SIZE": bad})
+            self.assertEqual(cfg.Config.HUD_SIZE, "1x", bad)
+            self.assertEqual(len(cfg.CONFIG_WARNINGS), 1, bad)
+            self.assertIn("HUD_SIZE", cfg.CONFIG_WARNINGS[0])
+            self.assertIn("1.3x", cfg.CONFIG_WARNINGS[0])
+
     def test_explain_lists_each_key(self) -> None:
         text = repr(config.Config.explain())
-        for label in ("Visual HUD waveform", "Visual HUD texture", "Visual HUD edge", "Visual HUD shape"):
+        for label in ("Visual HUD waveform", "Visual HUD texture", "Visual HUD edge", "Visual HUD shape",
+                      "Visual HUD size"):
             self.assertIn(label, text)
 
     def test_keys_are_not_in_import_snapshot(self) -> None:

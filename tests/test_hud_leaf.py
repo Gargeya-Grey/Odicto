@@ -13,6 +13,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+import unittest.mock
 from unittest.mock import MagicMock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -285,6 +286,99 @@ class TestPixelGrid(unittest.TestCase):
             self.assertEqual(texture == "veins", q.drawPath.called, texture)
 
 
+SIZES = tuple(hl.HUD_SIZE_SCALE)
+
+
+class TestSize(unittest.TestCase):
+    """HUD_SIZE: every geometry number stays in design pixels and the painter scales it."""
+
+    def test_the_size_is_a_style_choice_with_an_exact_scale(self):
+        self.assertEqual(hl.HUD_STYLE_CHOICES["size"], ("1x", "1.3x", "1.5x"))
+        self.assertEqual(hl.HudStyle().size, "1x")
+        self.assertEqual([hl.HudStyle(size=s).scale for s in SIZES], [1.0, 1.3, 1.5])
+        with self.assertRaises(ValueError):
+            hl.HudStyle(size="2x")
+
+    def test_the_pixel_ratio_is_the_device_ratio_times_the_scale(self):
+        for size, dpr in itertools.product(SIZES, DPRS):
+            self.assertEqual(hl.pixel_ratio(dpr, hl.HudStyle(size=size)),
+                             dpr * hl.HUD_SIZE_SCALE[size])
+
+    def test_voice_cells_land_on_whole_device_pixels_at_every_size_and_ratio(self):
+        geos = [hl.leaf_geometry(_frame(droop=d)) for d in (hl.DROOP, hl.DROOP_ERROR)]
+        geos.append(hl.LeafGeometry(40.3, 20.7, 250.9, 36.0, 124.37, 38.71, 1.0, hl.DROOP))
+        for size, dpr, geo in itertools.product(SIZES[1:], DPRS, geos):
+            style = hl.HudStyle(size=size)
+            ratio = hl.pixel_ratio(dpr, style)
+            dev = []
+            for _, _, r in hl.voice_cells(geo, ratio):
+                # design px -> widget px (x scale) -> device px (x dpr)
+                x0, y0 = r.x() * style.scale * dpr, r.y() * style.scale * dpr
+                w, h = r.width() * style.scale * dpr, r.height() * style.scale * dpr
+                for v in (x0, y0, w, h):
+                    self.assertAlmostEqual(v, round(v), delta=1e-6, msg=f"{size} dpr {dpr}")
+                dev.append((round(x0), round(y0), round(x0 + w), round(y0 + h)))
+            self.assertEqual(len({(c[2] - c[0], c[3] - c[1]) for c in dev}), 1)
+            for a, b in itertools.combinations(dev, 2):
+                apart = (a[2] + 1 <= b[0] or b[2] + 1 <= a[0] or a[3] + 1 <= b[1] or b[3] + 1 <= a[1])
+                self.assertTrue(apart, f"{size} dpr {dpr}: {a} and {b} touch or overlap")
+
+    def _recorded(self, size, dpr, painter=None):
+        """Paint a settled frame; return what the painter drew: (scale, ratio, point, image)."""
+        drawn = []
+
+        class Spy(QPainter):
+            def drawImage(self, *args):
+                t = self.worldTransform()
+                if len(args) == 2 and isinstance(args[1], QImage):
+                    drawn.append((t.m11(), t.m22(), args[0], args[1]))
+                return super().drawImage(*args)
+
+        style = hl.HudStyle(size=size)
+        img = QImage(round(520 * dpr), round(160 * dpr), QImage.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(dpr)
+        img.fill(0)
+        p = Spy(img)
+        try:
+            (painter or hl.LeafPainter(_font())).paint(p, _frame(), style)
+        finally:
+            p.end()
+        return drawn, img
+
+    def test_the_painter_scales_all_geometry_by_exactly_the_size(self):
+        for size, dpr in itertools.product(SIZES, DPRS):
+            drawn, _ = self._recorded(size, dpr)
+            scale = hl.HUD_SIZE_SCALE[size]
+            self.assertTrue(drawn, (size, dpr))
+            for m11, m22, at, image in drawn:
+                self.assertEqual((m11, m22), (scale, scale), (size, dpr))
+                # A layer image holds dpr x scale device pixels per design pixel, so under the
+                # scale it maps to the device 1:1 and starts on a whole device pixel.
+                self.assertEqual(image.devicePixelRatio(), dpr * scale)
+                for v in (at.x(), at.y()):
+                    self.assertAlmostEqual(v * scale * dpr, round(v * scale * dpr), delta=1e-6)
+
+    def test_the_voice_is_built_for_the_scaled_ratio(self):
+        seen = []
+        real = hl.voice_cells
+        for size, dpr in ((s, d) for s in SIZES for d in (1.0, 1.25, 2.0)):
+            with unittest.mock.patch.object(
+                    hl, "voice_cells", lambda geo, ratio: (seen.append(ratio), real(geo, ratio))[1]):
+                self._recorded(size, dpr)
+            self.assertEqual(seen[-1], dpr * hl.HUD_SIZE_SCALE[size], (size, dpr))
+
+    def test_layer_caches_key_on_the_size(self):
+        shared = hl.LeafPainter(_font())
+        for dpr in (1.0, 1.5):
+            self._recorded("1x", dpr, shared)
+            _, reused = self._recorded("1.3x", dpr, shared)
+            _, fresh = self._recorded("1.3x", dpr)
+            self.assertEqual(reused, fresh, f"a layer from another size was reused at dpr {dpr}")
+            _, back = self._recorded("1x", dpr, shared)
+            _, first = self._recorded("1x", dpr)
+            self.assertEqual(back, first, f"a layer from another size was reused at dpr {dpr}")
+
+
 class TestRender(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -306,7 +400,7 @@ class TestRender(unittest.TestCase):
 
     def test_every_stem_ai_style_and_ratio_paints(self):
         styles = [hl.HudStyle(*c) for c in itertools.product(*hl.HUD_STYLE_CHOICES.values())]
-        self.assertEqual(len(styles), 16)
+        self.assertEqual(len(styles), 48)
         voice = hl.VoiceEnvelope()
         for _ in range(30):
             voice.advance(0.016, [0.9, 0.6, 0.4, 0.8, 0.3])
@@ -316,10 +410,11 @@ class TestRender(unittest.TestCase):
                 lw = hl.label_width(self.metrics, label, ai, stem)
                 frame = _frame(stem, ai, label, label_w=lw, voice=voice,
                                droop=hl.DROOP_ERROR if stem is hl.Stem.ERROR else hl.DROOP)
-                img = self._image(dpr)
+                img = self._image(dpr, w=520, h=160)
                 self._paint(img, frame, style)
                 geo = hl.leaf_geometry(frame)
-                px = img.pixelColor(round(geo.stem_x * dpr), round(geo.cy * dpr))
+                px = img.pixelColor(round(geo.stem_x * style.scale * dpr),
+                                    round(geo.cy * style.scale * dpr))
                 self.assertGreater(px.alpha(), 0, (dpr, stem, ai, style))
 
     def test_animating_frames_paint_and_leave_no_residue(self):

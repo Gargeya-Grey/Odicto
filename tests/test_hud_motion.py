@@ -921,6 +921,134 @@ class TestStemAndAiMark(unittest.TestCase):
             _close(hud)
 
 
+class TestHudSize(unittest.TestCase):
+    """HUD_SIZE grows the window and the canvas; the bottom offset and the centre stay."""
+
+    def _sized(self, size, **attrs):
+        with patch.object(Config, "HUD_SIZE", size):
+            app, hud = _hud(**attrs)
+        _settle(hud)
+        return app, hud
+
+    def test_the_style_carries_the_configured_size(self):
+        for size in hl.HUD_SIZE_SCALE:
+            _, hud = self._sized(size)
+            try:
+                self.assertEqual(hud._style.size, size)
+                self.assertEqual(hud._scale, hl.HUD_SIZE_SCALE[size])
+            finally:
+                _close(hud)
+
+    def test_the_window_holds_the_scaled_leaf_and_its_shadow(self):
+        for size, scale in hl.HUD_SIZE_SCALE.items():
+            for live in (False, True):
+                app, hud = self._sized(size, state=AppState.RECORDING, live_active=live)
+                try:
+                    hud._sync_from_app()
+                    _settle(hud)
+                    hud._fit_canvas(shrink=True)
+                    inner_h = (_LIVE_H if live else _COMPACT_H) * scale
+                    inner_w = max(hl.leaf_width(hud._label_target),
+                                  hl.CARD_MIN_W if live else 0) * scale
+                    self.assertGreaterEqual(hud._bleed, 28 * scale, "the shadow reaches 28 design px")
+                    self.assertGreaterEqual(hud._canvas_w, inner_w + 2 * hud._bleed, (size, live))
+                    self.assertGreaterEqual(hud._canvas_h, inner_h + 2 * hud._bleed, (size, live))
+                    self.assertEqual((hud._canvas_w % 4, hud._canvas_h % 4), (0, 0))
+                    self.assertEqual((hud.width(), hud.height()), (hud._canvas_w, hud._canvas_h))
+                finally:
+                    _close(hud)
+
+    def test_a_larger_size_makes_a_larger_window(self):
+        sizes = []
+        for size in hl.HUD_SIZE_SCALE:
+            _, hud = self._sized(size, state=AppState.RECORDING, live_active=True)
+            try:
+                hud._sync_from_app()
+                _settle(hud)
+                hud._fit_canvas(shrink=True)
+                sizes.append((hud.width(), hud.height()))
+            finally:
+                _close(hud)
+        self.assertEqual(sizes, sorted(sizes))
+        self.assertEqual(len(set(sizes)), 3)
+
+    def test_the_bottom_offset_and_the_centre_do_not_change_with_the_size(self):
+        from PySide6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen().availableGeometry()
+        for size in hl.HUD_SIZE_SCALE:
+            for live in (False, True):
+                _, hud = self._sized(size, state=AppState.RECORDING, live_active=live)
+                try:
+                    hud._sync_from_app()
+                    _settle(hud)
+                    hud._fit_canvas(shrink=True)
+                    leaf_bottom = hud.y() + hud._canvas_h - hud._bleed
+                    self.assertEqual(leaf_bottom, screen.y() + screen.height() - 64, (size, live))
+                    self.assertLessEqual(abs(hud.x() + hud._canvas_w / 2 - (screen.x() + screen.width() / 2)), 0.5)
+                finally:
+                    _close(hud)
+
+    def test_the_frame_is_in_design_pixels(self):
+        for size, scale in hl.HUD_SIZE_SCALE.items():
+            _, hud = self._sized(size, state=AppState.RECORDING)
+            try:
+                hud._sync_from_app()
+                _settle(hud)
+                frame = hud._leaf_frame(time.monotonic())
+                self.assertAlmostEqual(frame.cx * scale, hud._canvas_w / 2.0, places=9)
+                self.assertAlmostEqual(frame.bottom * scale, hud._canvas_h - hud._bleed, places=9)
+            finally:
+                _close(hud)
+
+    def test_the_card_and_the_leaf_paint_inside_the_window_at_every_size(self):
+        from PySide6.QtGui import QImage
+        for size in hl.HUD_SIZE_SCALE:
+            app, hud = self._sized(size, state=AppState.RECORDING, live_active=True,
+                                   live_preview="Hello, this is a live caption long enough to need two rows.")
+            try:
+                hud._sync_from_app()
+                _settle(hud)
+                hud._fit_canvas(shrink=True)
+                for _ in range(120):
+                    hud._advance_caption(0.016)
+                image = hud.grab().toImage()
+                self.assertEqual((image.width(), image.height()), (hud.width(), hud.height()))
+                lit = [(x, y) for x in range(0, image.width(), 2) for y in range(0, image.height(), 2)
+                       if image.pixelColor(x, y).alpha() > 0]
+                self.assertTrue(lit, size)
+                # the shadow fades out before the window edge (a cut shadow shows a hard line)
+                for x, y in lit:
+                    self.assertTrue(2 <= x < image.width() - 2 and 2 <= y < image.height() - 2,
+                                    (size, x, y))
+            finally:
+                _close(hud)
+
+    def test_the_caption_scales_with_the_leaf(self):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage, QPainter
+        for size, scale in hl.HUD_SIZE_SCALE.items():
+            _, hud = self._sized(size, state=AppState.RECORDING, live_active=True)
+            try:
+                hud._sync_from_app()
+                rect = QRectF(10, 10, hud._card_width(), hl.CARD_H)
+                image = QImage(int((rect.width() + 20) * scale) + 4, int((hl.CARD_H + 20) * scale) + 4,
+                               QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(0)
+                p = QPainter(image)
+                hud._paint_caption(p, rect, 1.0)
+                p.end()
+                lit = [(x, y) for x in range(image.width()) for y in range(image.height())
+                       if image.pixelColor(x, y).alpha() > 0]
+                self.assertTrue(lit, size)
+                # the prompt text sits inside the card, scaled with it
+                self.assertGreaterEqual(min(y for _, y in lit), rect.top() * scale - 1)
+                self.assertLessEqual(max(y for _, y in lit), rect.bottom() * scale + 1)
+                self.assertGreaterEqual(min(x for x, _ in lit), (rect.left() + 18) * scale - 2)
+                self.assertLessEqual(max(x for x, _ in lit), rect.right() * scale)
+            finally:
+                _close(hud)
+
+
 class TestLeafStyle(unittest.TestCase):
     def test_every_config_choice_is_a_painter_style_with_the_same_default(self):
         import config
@@ -931,6 +1059,7 @@ class TestLeafStyle(unittest.TestCase):
         self.assertEqual(
             hl.HudStyle(),
             hl.HudStyle(**{f: config.ENV_DEFAULTS["HUD_" + f.upper()] for f in hl.HUD_STYLE_CHOICES}))
+        self.assertEqual(hl.HudStyle().size, config.ENV_DEFAULTS["HUD_SIZE"])
 
     def _spy(self, seen):
         class Spy(hl.LeafPainter):

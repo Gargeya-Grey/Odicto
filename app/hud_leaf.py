@@ -105,23 +105,37 @@ HUD_STYLE_CHOICES: dict[str, tuple[str, ...]] = {
     "texture": ("veins", "plain"),
     "edge": ("rim", "soft"),
     "shape": ("leaf", "capsule"),
+    "size": ("1x", "1.3x", "1.5x"),
 }
+HUD_SIZE_SCALE = {"1x": 1.0, "1.3x": 1.3, "1.5x": 1.5}
 
 
 @dataclass(frozen=True)
 class HudStyle:
-    """The four owner choices. The first value of each is the default."""
+    """The owner choices. The first value of each is the default."""
 
     waveform: str = "reach"
     texture: str = "veins"
     edge: str = "rim"
     shape: str = "leaf"
+    size: str = "1x"
 
     def __post_init__(self) -> None:
         for name, choices in HUD_STYLE_CHOICES.items():
             value = getattr(self, name)
             if value not in choices:
                 raise ValueError(f"HudStyle.{name} must be one of {choices}, got {value!r}")
+
+    @property
+    def scale(self) -> float:
+        return HUD_SIZE_SCALE[self.size]
+
+
+def pixel_ratio(device_dpr: float, style: HudStyle) -> float:
+    """Device pixels per design pixel. All geometry is in design pixels and the painter draws
+    under QPainter.scale(style.scale); every snap and every layer image uses this ratio, so
+    the pixel voice still lands on whole device pixels at any size."""
+    return device_dpr * style.scale
 
 
 # --------------------------------------------------------------------------- easing
@@ -826,13 +840,15 @@ class LeafPainter:
 
     # ------------------------------------------------------------------ public
     def paint(self, p: QPainter, frame: LeafFrame, style: HudStyle) -> None:
+        """Paint one frame. The frame is in design pixels; the style's size scales it."""
         o = frame.opening
         if o.fade <= 0.0:
             return
-        dpr = p.device().devicePixelRatioF()
+        dpr = pixel_ratio(p.device().devicePixelRatioF(), style)
         geo = self._geometry(frame, style, dpr)
         col = _accent(frame.stem, frame.ai)
         p.save()
+        p.scale(style.scale, style.scale)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         base = p.opacity()
@@ -852,9 +868,10 @@ class LeafPainter:
     def paint_card(self, p: QPainter, rect: QRectF, style: HudStyle, opacity: float) -> None:
         if opacity <= 0.0:
             return
-        dpr = p.device().devicePixelRatioF()
+        dpr = pixel_ratio(p.device().devicePixelRatioF(), style)
         shadow, surface, reg = self._card_images(rect, style, dpr)
         p.save()
+        p.scale(style.scale, style.scale)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setOpacity(p.opacity() * opacity)
         p.drawImage(QPointF(reg.ox, reg.oy), shadow)
@@ -878,7 +895,7 @@ class LeafPainter:
     def _paint_shadow(self, p: QPainter, geo: LeafGeometry, style: HudStyle, strength: float,
                       dpr: float, settled: bool) -> None:
         reg = _Region.around(geo.left, geo.top, geo.w, geo.h, _SHADOW_MARGIN, dpr)
-        key = (dpr, style.shape, _geo_key(_local(geo, reg)), reg.w_dev, reg.h_dev)
+        key = (dpr, style.size, style.shape, _geo_key(_local(geo, reg)), reg.w_dev, reg.h_dev)
         if self._shadow is not None and self._shadow[0] == key:
             img = self._shadow[2]
         else:
@@ -894,7 +911,7 @@ class LeafPainter:
                     col: tuple[int, int, int], dpr: float, settled: bool) -> None:
         reg = _Region.around(geo.left, geo.top, geo.w, geo.h, _BODY_MARGIN, dpr)
         tint = frame.stem.value if frame.stem in (Stem.NOTICE, Stem.ERROR) else None
-        key = (dpr, style, tint, col, _geo_key(_local(geo, reg)), reg.w_dev, reg.h_dev)
+        key = (dpr, style, tint, col, _geo_key(_local(geo, reg)), reg.w_dev, reg.h_dev)   # style holds the size
         if self._body is not None and self._body.key == key:
             body = self._body
         else:
@@ -1111,7 +1128,7 @@ class LeafPainter:
                      dpr: float) -> tuple[QImage, QImage, _Region]:
         reg = _Region.around(rect.x(), rect.y(), rect.width(), rect.height(), _SHADOW_MARGIN, dpr)
         local = QRectF(rect.x() - reg.ox, rect.y() - reg.oy, rect.width(), rect.height())
-        key = (dpr, style.edge, round(local.x(), 3), round(local.y(), 3),
+        key = (dpr, style.size, style.edge, round(local.x(), 3), round(local.y(), 3),
                round(local.width(), 3), reg.w_dev, reg.h_dev)
         if self._card is None or self._card[0] != key:
             self._card = (key, reg, _build_card_shadow(local, reg, dpr),

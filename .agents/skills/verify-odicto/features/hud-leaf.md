@@ -3,8 +3,8 @@
 The bottom-center HUD is a leaf: a stem, a leaf body whose five vein rows show the voice, and a
 short label (Listening, Transcribing, Thinking, Done, a notice, an error). F7 live captions sit
 in a card above the leaf. `app/hud_leaf.py` paints it; `app/indicator.py` owns the state, the
-clock and the window. Four keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`, `HUD_EDGE`,
-`HUD_SHAPE`. The setup page's Appearance view sets them and shows a live preview.
+clock and the window. Five keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`, `HUD_EDGE`,
+`HUD_SHAPE`, `HUD_SIZE`. The setup page's Appearance view sets them and shows a live preview.
 
 ## Sub-features
 
@@ -17,6 +17,10 @@ clock and the window. Four keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`,
 - F7 captions fail (a rejected Gemini key, or the Live call fails): the leaf says "Captions off".
   A card with no captions says the cause and that the text still arrives, naming the speech
   service for a rejected key. Captions that came before the error stay.
+- Plain texture: no veins and a faint grain (40 % of the Veins grain).
+- Size 1x, 1.3x, 1.5x: the whole HUD scales (leaf, voice, label, AI mark, card, shadow). The
+  window grows; the distance from the screen bottom and the centring stay. The voice pixels stay
+  whole device pixels at every size and display scale.
 - Style keys: values and defaults are in `AGENTS.md` ("HUD style").
 
 ## How to get to it (user POV)
@@ -44,6 +48,9 @@ The leaf needs eyes. Render the real widget, not the painter alone. Never start 
    mid-way, Listening raw, Listening AI, Transcribing, Thinking, Done (check and seed, then
    settled), a notice (Context cleared), an error label (Mic unavailable, and a long one), F7 with
    two caption lines and with none yet.
+   For a size, patch `Config.HUD_SIZE` to `"1.3x"` or `"1.5x"` before you make the widget, and
+   render Listening and an F7 card at 100 % and 200 %. Check that the voice cells are crisp and the
+   card text stays inside the card.
 4. Look at every image. Check: the label is whole and inside the leaf; the AI mark shows only for
    AI; the stem is a line, a check, a bang or a cross as the state says; the card is centred above
    the leaf with its text inside; nothing is cut at the window edge; the shadow is soft at 200 %.

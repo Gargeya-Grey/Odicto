@@ -185,13 +185,15 @@ supplied it) with:
   otherwise Whisper. A cloud choice with no key, and any speech error, falls
   back to Whisper. First Whisper load downloads model weights (~75MB for
   `tiny.en`) only when Whisper is the active or fallback backend.
-- **HUD style:** four keys choose how the HUD leaf looks: `HUD_WAVEFORM=reach|stream`,
-  `HUD_TEXTURE=veins|plain`, `HUD_EDGE=rim|soft`, `HUD_SHAPE=leaf|capsule` (the first value of
-  each is the default). A blank or unknown value uses the default. The widget reads them once at
-  start. `plain` draws no veins and keeps a faint grain: 40 % of the Veins grain strength
+- **HUD style:** five keys choose how the HUD leaf looks: `HUD_WAVEFORM=reach|stream`,
+  `HUD_TEXTURE=veins|plain`, `HUD_EDGE=rim|soft`, `HUD_SHAPE=leaf|capsule` and
+  `HUD_SIZE=1x|1.3x|1.5x` (the first value of each is the default). A blank or unknown value
+  uses the default, with one warning. The widget reads them once at start. `HUD_SIZE` scales
+  the whole HUD (leaf, pixel voice, label, AI mark, caption card, shadow); its distance from the
+  bottom of the screen and its centring stay. `plain` draws no veins and keeps a faint grain: 40 % of the Veins grain strength
   (`hud_leaf.PLAIN_GRAIN`). The painter is `app/hud_leaf.py`; the state, clock and window are
-  `app/indicator.py`. The setup page's Appearance view sets the four keys, with a live preview
-  of the leaf.
+  `app/indicator.py`. The setup page's Appearance view sets the five keys, with a live preview
+  of the leaf at the chosen size.
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,
