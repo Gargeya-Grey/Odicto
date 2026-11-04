@@ -147,7 +147,12 @@ supplied it) with:
   in the HUD. Stop remains PROCESSING through finalization. It returns when the
   first final after the end of speech arrives (the service sends the whole utterance
   as one final), or after ~2.5s without one. A final or draft skips batch STT
-  (`docs/engineering-notes.md`, "F7 stop wait"). F7 leaves its final text on the clipboard outside terminals; no
+  (`docs/engineering-notes.md`, "F7 stop wait").
+  When the Live call fails while you speak, the leaf says "Captions off" and, with no captions
+  on the card yet, the card says why and that the text still arrives. A rejected
+  Gemini key names the service that makes the text, `Config.live_key_rejected_stt_provider()`
+  (Groq, OpenRouter or local Whisper; Gemini gives way to local Whisper), the same call
+  `_run_stt` makes. F7 leaves its final text on the clipboard outside terminals; no
   caret worker, tail replacement or delayed clipboard restoration remains.
   Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).

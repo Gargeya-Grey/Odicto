@@ -1891,12 +1891,13 @@ class DictationApp:
         deadline.
         """
         seconds = Config.STT_DEADLINE_SECONDS
-        # Google refused the Live key. A batch call with the same key is refused too, so
-        # use the normal speech provider, and go straight to local Whisper if that is Gemini.
+        # Google refused the Live key. Config.live_key_rejected_stt_provider() names the
+        # provider that serves the text (the HUD says the same); a different name than the
+        # normal provider means a Gemini batch call, which the same key would fail.
         skip_cloud = False
         if live and live_key_rejected:
             live = False
-            skip_cloud = Config.effective_stt_provider() == "gemini"
+            skip_cloud = Config.live_key_rejected_stt_provider() != Config.effective_stt_provider()
         if live:
             primary = lambda: self._live_transcribe(  # noqa: E731
                 audio_source, allow_local_fallback=False)

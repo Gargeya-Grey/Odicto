@@ -883,6 +883,16 @@ class Config:
         return "whisper"
 
     @classmethod
+    def live_key_rejected_stt_provider(cls) -> str:
+        """Speech backend that makes the text when Google refused the Gemini Live key.
+
+        A batch call with the same key is refused too, so Gemini gives way to local Whisper.
+        The pipeline and the HUD's message both read this.
+        """
+        provider = cls.effective_stt_provider()
+        return "whisper" if provider == "gemini" else provider
+
+    @classmethod
     def effective_live_stt_provider(cls) -> str:
         """Speech backend for the F7 tap.
 

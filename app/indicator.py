@@ -321,11 +321,24 @@ ERROR_STATUS_LABELS = {
     "stt_timeout": "Speech timed out",
 }
 ERROR_STATUSES = ("error", "init_error", "preflight") + tuple(ERROR_STATUS_LABELS)
-# Shown while recording, when the F7 live captions cannot run.
+# Shown while recording, when the F7 live captions cannot run. The leaf says only that the
+# captions are off; the caption card says why and that the text still arrives.
 LIVE_FAILURE_LABELS = {
-    "live_key_rejected": "Live off · Gemini key rejected",
-    "live_unavailable": "Live off · see log",
+    "live_key_rejected": "Captions off",
+    "live_unavailable": "Captions off",
 }
+# What serves the text when the captions are off (Config.live_key_rejected_stt_provider).
+_SPEECH_SERVICE_NAMES = {"groq": "Groq", "openrouter": "OpenRouter", "whisper": "local Whisper"}
+
+
+def live_failure_message(status: Optional[str], provider: str) -> str:
+    """The caption card's text for a failed Live call; empty for any other status."""
+    if status == "live_key_rejected":
+        service = _SPEECH_SERVICE_NAMES.get(provider, _SPEECH_SERVICE_NAMES["whisper"])
+        return f"Gemini key rejected. Your text still goes through {service} when you tap F7."
+    if status == "live_unavailable":
+        return "Live captions failed. Your text still arrives when you tap F7."
+    return ""
 # Short reasons for "init_error" / "preflight" (app.status_detail holds the code).
 INIT_REASON_LABELS = {
     "mic": "Mic unavailable",
@@ -448,6 +461,7 @@ class DictationIndicator(QWidget):
         self._cap_visible_from = 0             # index of the first word on the older of the two read lines
         self._cap_scroll = 0.0                 # px the lines are still below their place
         self._cap_widths: dict[str, int] = {}
+        self._fail_text: tuple[Optional[str], str] = (None, "")   # (status, card message)
         self._voice = VoiceEnvelope()          # smoothed band levels; the painter reads it
         self._appear_target: float = 1.0
         # Timeline: hidden -> entering -> open -> leaving -> hidden. The window never
@@ -1105,6 +1119,29 @@ class DictationIndicator(QWidget):
             width = self._cap_widths[word] = self._fm_caption.horizontalAdvance(word)
         return width
 
+    def _live_failure_text(self) -> str:
+        status = getattr(self.app, "last_status", None)
+        if self._fail_text[0] != status:
+            message = live_failure_message(status, Config.live_key_rejected_stt_provider())
+            self._fail_text = (status, message)
+        return self._fail_text[1]
+
+    def _card_notice(self, room: int) -> list[str]:
+        """The muted lines for a card with no captions: why the captions are off, or the prompt.
+
+        One or two lines, wrapped to ``room``, centred as a block in the card's two caption rows.
+        What does not fit on the second line is elided.
+        """
+        text = self._live_failure_text() or "Speak, then tap F7 to insert"
+        words = text.split()
+        spans = wrap_words([self._word_width(w) for w in words], self._word_width(" "), room)
+        lines = [" ".join(words[a:b]) for a, b in spans[:_CAPTION_LINES]]
+        if len(spans) > _CAPTION_LINES:
+            lines[-1] = " ".join(words[spans[_CAPTION_LINES - 1][0]:])
+        lines = [self._fm_caption.elidedText(line, Qt.TextElideMode.ElideRight, room)
+                 for line in lines]
+        return lines
+
     def _reset_caption(self) -> None:
         self._cap_words, self._cap_lines, self._cap_fading = [], [], ""
         self._cap_shown = self._cap_fade = self._cap_scroll = 0.0
@@ -1277,9 +1314,10 @@ class DictationIndicator(QWidget):
             if self._is_live_layout():
                 p.setOpacity(opacity)
                 p.setPen(_Theme.muted)
-                text = self._fm_caption.elidedText("Speak, then tap F7 to insert",
-                                                   Qt.TextElideMode.ElideRight, room)
-                p.drawText(QPointF(self._snap(left), self._baseline(rect.center().y())), text)
+                lines = self._card_notice(room)
+                for index, text in enumerate(lines):
+                    row_cy = block.top() + ((_CAPTION_LINES - len(lines)) / 2.0 + index + 0.5) * _CAPTION_LINE
+                    p.drawText(QPointF(self._snap(left), self._baseline(row_cy)), text)
             p.restore()
             return
         slide = min(1.0, self._cap_scroll / _CAPTION_LINE)
