@@ -115,6 +115,39 @@ class Release:
         return cls(tag, matches[name], matches[name + ".sha256"])
 
 
+_UPDATE_STEPS = {"check": "Checking for updates", "download": "Downloading and verifying",
+                 "install": "Installing", "verify": "Checking that it works"}
+
+
+class _UpdateSteps:
+    """Prints one line per update step: the step name, then 'done' when the next one starts."""
+
+    def __init__(self) -> None:
+        self.open = False
+
+    last = ""
+
+    def __call__(self, name: str) -> None:
+        self.end(" done")
+        self.last = name
+        print(f"  {_UPDATE_STEPS.get(name, name):<28}...", end="", flush=True)
+        self.open = True
+
+    def end(self, word: str) -> None:
+        if self.open:
+            print(word, flush=True)
+            self.open = False
+
+
+def _update_result(before: dict | None, after: dict | None) -> str:
+    version = (after or {}).get("version", "")
+    if before and before.get("version") == version:
+        return f"Odicto {version[1:]} is up to date."
+    return (f"\nOdicto {version[1:]} is ready.\n"
+            f"  What's new: https://github.com/{REPOSITORY}/releases/tag/{version}\n"
+            "  Start it:   odicto start")
+
+
 def latest_release(fetch: Callable = download) -> Release:
     try:
         metadata = json.loads(fetch(RELEASE_API, 2 * 1024 * 1024))
@@ -432,6 +465,9 @@ class Manager:
         self.marker = self.home / ".odicto-managed.json"
         self.fetch = fetch
         self.installer = installer or self._install_dependencies
+        # Called with a step name ("check", "download", "install", "verify"); the CLI prints it.
+        self.progress: Callable[[str], None] = lambda step: None
+        self.update_log = self.data / "update.log"
 
     # Migration runs where only the manager is known to be importable (see bootstrap).
     private_directory = staticmethod(private_directory)
@@ -540,10 +576,24 @@ class Manager:
         if not lock.is_file():
             raise DistributionError("This release has no hash-locked dependency file")
         python = directory / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        self.update_log.parent.mkdir(parents=True, exist_ok=True)
+        # Tool output goes to the log: a user sees steps, not package lists or Qt warnings.
+        log = self.update_log.open("a", encoding="utf-8", errors="replace")
+        quiet = {"stdout": log, "stderr": subprocess.STDOUT}
+        try:
+            log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} install {directory.name}\n")
+            log.flush()
+            self._install_steps(uv, lock, python, directory, environment, quiet)
+        finally:
+            log.close()
+
+    def _install_steps(self, uv: str, lock: Path, python: Path, directory: Path, environment: dict,
+                       quiet: dict) -> None:
         subprocess.run([uv, "venv", "--python", "3.12", str(directory / ".venv")], check=True,
-                       cwd=directory, env=environment, timeout=600)
+                       cwd=directory, env=environment, timeout=600, **quiet)
         subprocess.run([uv, "pip", "sync", "--python", str(python), "--require-hashes", str(lock)],
-                       check=True, cwd=directory, env=environment, timeout=1200)
+                       check=True, cwd=directory, env=environment, timeout=1200, **quiet)
+        self.progress("verify")
         smoke_environment = dict(environment, QT_QPA_PLATFORM="offscreen")
         subprocess.run([str(python), "-I", "-c",
                         "import sys; sys.path.insert(0, sys.argv[1]); "
@@ -553,7 +603,7 @@ class Manager:
                         "app=QApplication([]); label=QLabel('Odicto staged health check'); "
                         "label.resize(240,48); assert not label.grab().isNull()",
                         str(directory / "app")],
-                       check=True, cwd=directory, env=smoke_environment, timeout=120)
+                       check=True, cwd=directory, env=smoke_environment, timeout=120, **quiet)
         result = subprocess.run([str(python), str(directory / "odicto.py"), "version"],
                                 check=True, cwd=directory, env=environment, timeout=30,
                                 capture_output=True, text=True)
@@ -561,6 +611,7 @@ class Manager:
             raise DistributionError("Staged release did not report its expected version")
 
     def stage(self, release: Release) -> dict:
+        self.progress("download")
         contents, digest = verified_archive(release, self.fetch)
         directory = self.releases / f"{release.tag}-{digest[:12]}-{uuid.uuid4().hex[:8]}"
         private_directory(directory)
@@ -574,6 +625,7 @@ class Manager:
             if (capabilities.get("schema") != 1 or capabilities.get("stable_data_root") is not True
                     or capabilities.get("setup_writer_lock") is not True):
                 raise DistributionError("Release does not support coordinated managed updates")
+            self.progress("install")
             self.installer(directory, self.environment())
             atomic_json(directory / ".odicto-ready.json", record)
             atomic_json(self.home / "pending.json", record)
@@ -640,6 +692,7 @@ class Manager:
         if (not force_check and current and (marker.get("automatic_updates") is False
                 or isinstance(last_check, (int, float)) and 0 <= now - last_check < CHECK_INTERVAL)):
             return current
+        self.progress("check")
         release = latest_release(self.fetch)
         marker["last_check"] = now
         atomic_json(self.marker, marker)
@@ -777,7 +830,10 @@ runpy.run_path(str(script), run_name='__main__')
                     except Exception as error:
                         if before is None:
                             raise
-                        print(f"Update deferred ({type(error).__name__}); keeping {before['version']}.", file=sys.stderr)
+                        detail = (f" Details: {self.update_log}"
+                                  if isinstance(error, subprocess.CalledProcessError) else "")
+                        print(f"Update deferred ({type(error).__name__}); keeping {before['version']}.{detail}",
+                              file=sys.stderr)
                 current = self.active()
                 if current is None:
                     raise DistributionError("No active release; run install first")
@@ -1190,6 +1246,7 @@ Default shortcuts (change them in 'odicto setup'):
 
 Good to know:
   'odicto' with no command is the same as 'odicto start'.
+  Change the indicator's size, colour and look on the Appearance page of 'odicto setup'.
   Settings and keys are kept when Odicto updates.
   If your shell says 'odicto' is not found, run it by its full path:
     {command}
@@ -1289,11 +1346,12 @@ def main(argv=None) -> int:
         guide_home = default_home()  # a broken --home is reported by the real parse below
     # No abbreviations here: `odicto stop --h` would otherwise be an ambiguous --help/--home
     # before the application parser sees it. Each command's own parser keeps its own rules.
-    parser = _Parser(prog="odicto", usage="odicto [--home HOME] <command> [options]",
-                     description=_guide(guide_home), allow_abbrev=False,
+    # The guide lists everything a user needs; the -h and --home rows would only add noise.
+    parser = _Parser(prog="odicto", usage="odicto <command> [options]",
+                     description=_guide(guide_home), allow_abbrev=False, add_help=False,
                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--home", type=Path, default=default_home(),
-                        help="managed Odicto folder (advanced; the default is right for most users)")
+    parser.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
+    parser.add_argument("--home", type=Path, default=default_home(), help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>", prog="odicto",
                                 help=argparse.SUPPRESS)
     summaries = {
@@ -1384,7 +1442,37 @@ def main(argv=None) -> int:
             elif args.command == "stage":
                 print(json.dumps(manager.stage(latest_release(manager.fetch)), indent=2))
             else:
-                record = manager.update()
+                before = manager.active()
+                steps = _UpdateSteps()
+                manager.progress = steps
+                try:
+                    record = manager.update()
+                except BusyError:
+                    pending = manager.home / "pending.json"
+                    if args.command != "update" or not pending.exists():
+                        steps.end(" failed")
+                        raise
+                    # Staged and checked; a running Odicto holds the lock, so it switches at next start.
+                    steps.end(" done")
+                    version = manager._read_json(pending).get("version", "")
+                    print(f"\nOdicto {version[1:]} is ready. Odicto or its setup page is open, so it switches"
+                          f" to the new version the next time it starts:\n  odicto restart")
+                    return 0
+                except Exception:
+                    failed_step = steps.last
+                    steps.end(" failed")
+                    kept = f"Odicto {before['version'][1:]} still works. " if before else ""
+                    where = (f" Details: {manager.update_log}"
+                             if failed_step in ("install", "verify") else "")
+                    if args.command == "update":
+                        print(f"The update did not finish. {kept}{where}".rstrip(), file=sys.stderr)
+                    elif where:
+                        print(f"Installation did not finish.{where}", file=sys.stderr)
+                    raise
+                steps.end(" done")
+                if args.command == "update":
+                    print(_update_result(before, record))
+                    return 0
                 if args.command == "install":
                     manager.initialize_settings(record)
                     manager.install_launchers()

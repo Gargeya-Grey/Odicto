@@ -54,7 +54,9 @@ GATE = {
     # Plus 57 for THEME_COLOR: colour maths, palette and HUD painter, config key, page parity and contrast (43),
     # the setup page Colour panel and its save (14): 1235.
     # Plus 4 for the review fixes: a grey custom colour (3) and the page maths run in Node (1): 1239.
-    "floor": 1239,
+    # Plus 4 for the update screen: tool output in update.log, steps and result, up to date, failure: 1243.
+    # Plus 3 for its review fixes: an update while Odicto runs, a failed check, the help rows: 1246.
+    "floor": 1246,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

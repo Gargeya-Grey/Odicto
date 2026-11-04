@@ -75,6 +75,13 @@ class TestCliHelp(unittest.TestCase):
             self.assertIn(text, out)
         self.assertNotIn("admin-task", out)
 
+    def test_the_guide_has_no_rows_for_advanced_flags(self):
+        code, out, _ = run_main("--help")
+        self.assertEqual(code, 0)
+        self.assertNotIn("--home", out)
+        self.assertNotIn("show this help message", out)
+        self.assertIn("Appearance", out)
+
     def test_help_for_each_command_never_builds_or_runs_anything(self):
         app_commands = ("setup", "start", "restart", "stop", "status", "wait-ready", "config",
                         "version", "autostart", "remove-autostart")

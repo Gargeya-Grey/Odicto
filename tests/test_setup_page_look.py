@@ -163,10 +163,10 @@ class TestPageContrast(unittest.TestCase):
             self.assertRegex(root, r"--%s:\s*%s;" % (name, value))
 
     def test_the_logo_never_follows_the_theme(self) -> None:
-        for name in ("logo-leaf", "logo-stem", "logo-glow"):
-            match = re.search(r"--%s:\s*([^;]+);" % name, root_block())
-            self.assertIsNotNone(match, name)
-            self.assertNotIn("var(--", match.group(1), name)
+        # The owner's Odicto mark keeps its own green (#8edcbb) in every theme.
+        match = re.search(r"--logo-stem:\s*([^;]+);", root_block())
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1).strip(), "#8edcbb")
 
     def test_every_oklch_token_has_a_hex_fallback(self) -> None:
         block = SOURCE[SOURCE.index("@supports not (color: oklch"):]
@@ -237,8 +237,9 @@ class TestPageShell(unittest.TestCase):
 
     def test_the_brand_row_keeps_the_version_label(self) -> None:
         self.assertIn('<span class="brand-ver" title="Odicto version">v__APP_VERSION__</span>', SOURCE)
-        self.assertIn("var(--logo-leaf)", SOURCE)
-        self.assertIn("var(--logo-stem)", SOURCE)
+        # The rail shows the original Odicto mark (assets/odicto-mark.svg), not a leaf.
+        self.assertIn('<svg class="brand-mark" viewBox="18 18 72 72"', SOURCE)
+        self.assertIn('<line x1="65.00" y1="54.00" x2="83.00" y2="54.00"/>', SOURCE)
 
 
 if __name__ == "__main__":
