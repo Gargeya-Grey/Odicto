@@ -456,6 +456,10 @@ class DictationIndicator(QWidget):
         self._phase: str = "hidden"
         self._phase_t0: float = 0.0
         self._enter_at: float = 0.0            # when the last entry began (read during the exit)
+        # Entry-clock time already gone when this entry began: 0 from hidden; when a show
+        # resumes a closing leaf, the time since its first entry, so the vein sweep never
+        # plays twice. The painter's since_enter is now - (_phase_t0 - _entry_offset).
+        self._entry_offset: float = 0.0
         self._enter_base: Optional[hl.Opening] = None  # set when a show resumes a closing leaf
         self._leave_base: hl.Opening = hl.OPEN  # the opening the exit started from
         # The stem (hud_leaf.Stem) the state maps to, and its timeline: 0..1 over
@@ -663,8 +667,9 @@ class DictationIndicator(QWidget):
     def _canvas_size(label_w: float, h: float) -> tuple[int, int]:
         """Window size that holds the leaf (and the card) with the painter's shadow around it.
 
-        Sizes round up to a multiple of 4 px, so the centre falls on a whole
-        device pixel at 1x, 1.25x, 1.5x and 2x.
+        Sizes round up to a multiple of 4 px, so the centre falls on a whole device pixel
+        at 1x, 1.5x and 2x. At 1.25x it can fall on a half pixel; the painter snaps the
+        stem and the label to whole device pixels, so nothing blurs.
         """
         inner = hl.leaf_width(label_w)
         if h > _COMPACT_H:
@@ -731,8 +736,10 @@ class DictationIndicator(QWidget):
         if self._phase in ("hidden", "leaving"):
             if self._phase == "leaving":
                 self._enter_base = self._opening(now)
+                self._entry_offset = now - self._enter_at
             else:
                 self._enter_base = None
+                self._entry_offset = 0.0
                 self._glyph_fade = 0.0
                 self._droop_from = self._droop_goal()
                 self._w_tw.snap(self._label_target)
@@ -751,7 +758,7 @@ class DictationIndicator(QWidget):
         if self._phase in ("hidden", "leaving"):
             return
         self._leave_base = self._opening(now)
-        self._enter_at = self._phase_t0
+        self._enter_at = self._phase_t0 - self._entry_offset
         self._enter_base = None
         self._phase, self._phase_t0 = "leaving", now
 
@@ -1005,7 +1012,7 @@ class DictationIndicator(QWidget):
         return (
             self._phase == "open"
             and self.gui_state in (GuiState.SUCCESS, GuiState.ERROR, GuiState.RESET)
-            and now - self._phase_t0 >= _SWEEP_END_S
+            and now - self._phase_t0 + self._entry_offset >= _SWEEP_END_S
             and self._glyph_fade >= 1.0
             and self._w_tw.done(now)
             and self._h_tw.done(now)
@@ -1205,7 +1212,10 @@ class DictationIndicator(QWidget):
         """Everything the painter needs for this instant."""
         state = self._vis_state()
         use_llm = bool(getattr(self.app, "use_llm", False))
-        entered = self._phase_t0 if self._phase in ("entering", "open") else self._enter_at
+        if self._phase in ("entering", "open"):
+            entered = self._phase_t0 - self._entry_offset
+        else:
+            entered = self._enter_at
         return LeafFrame(
             cx=self._canvas_w / 2.0,
             bottom=float(self._canvas_h - _BLEED),

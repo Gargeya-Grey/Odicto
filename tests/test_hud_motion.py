@@ -416,6 +416,20 @@ class TestHudDeliverySync(unittest.TestCase):
         finally:
             _close(hud)
 
+    def test_a_show_during_the_exit_does_not_play_the_vein_sweep_again(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            now = time.monotonic()
+            hud._begin_leave(now)
+            hud._begin_show(now + 0.15)
+            for t in (0.0, 0.2, 0.4, 0.6):
+                frame = hud._leaf_frame(now + 0.15 + t)
+                self.assertGreaterEqual(frame.since_enter, 1.1 * hl.ENTER_S, t)  # past the sweep
+        finally:
+            _close(hud)
+
 
 class TestLiveCaption(unittest.TestCase):
     """F7 captions: wrapped, revealed smoothly, never wider than the card."""
