@@ -81,6 +81,11 @@ review card. Use **Copy** when you want the edited version, or **Dismiss**.
 Add names, brands and technical terms to your personal vocabulary on **Speech**
 to supply spelling hints to transcription and Polish.
 
+On **Appearance**, choose how the indicator looks: its size (1x, 1.3x or 1.5x),
+its theme colour (five presets or your own colour, which also colours Setup), and
+its waveform, texture, edge and shape. A live preview shows each choice. The
+indicator changes when Save restarts Odicto.
+
 ## Everyday commands
 
 | Command | What it does |
