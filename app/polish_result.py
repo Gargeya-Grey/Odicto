@@ -33,7 +33,7 @@ class PolishResultDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
-        help_text = QLabel(explanation or "Review the edit, then copy it when ready. Your document has not been changed.")
+        help_text = QLabel(explanation or "Copy the text when ready. Nothing was inserted.")
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
         self.original = None

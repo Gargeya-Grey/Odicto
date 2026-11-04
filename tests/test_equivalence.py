@@ -93,24 +93,26 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # Every state changed by the same 2 lines of the THEME maths block and nothing else.
 # 2026-11-04, 1.4.1: the rail shows the original Odicto mark again, in its own green (#8edcbb), not the leaf.
 # Every state changed by the same logo lines (brand SVG, its size, the logo tokens) and nothing else.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'e1df4150f3e6d00e8b102618667f506a95858c98bb1148ffd953a818d1340a64',
- 'provider_meta': '13cf18a376be78274bad0eaa3b9fcee269363b2acb6a1fe908dedeb9cf0856be',
- 'provider_openrouter': '062dcdc57d9cc0dd428499cdef4a3a92150ac97065f1bb59e791f0667c717816',
- 'provider_gemini': 'e3b226163a223e21154c442caea62df83887395a2668ed5114e8f4eceba6f8b5',
- 'provider_ollama': '7ecadf4dc11218031dfd15bf75638a035f342ccc474f49684c13804741a65faf',
- 'provider_none': 'e1df4150f3e6d00e8b102618667f506a95858c98bb1148ffd953a818d1340a64',
- 'provider_groq': '09dd657a3d3a45f6efb70310415667fdc582f093edda058d08b12b110161c723',
- 'polish_enabled': '5414cbb528cd20d302396c6244afe451b1170cd7080d84a1f6ed51b1f1916d27',
- 'history_and_custom': '66a0c0580b5d18c43c40189a5e18954e23cf3cf1222e5ea4c2c991413fdd64dd',
- 'hotkey_short': '0a0933c5b7457c78b3530a597ae57323d1a2ae49253820f635bad5b36e3e8eae',
- 'stt_gemini': '554da50d24e7971c1b9e5ed85ef6840aa3aeab51e8e476d308e0269a75a5c6b3',
- 'prompt_from_file': '17c02ddcd06a16c1ebeaa8bf93dfd05a9d0c450c31b18ea408c329e80b7d743a',
- 'prompt_from_inline_env': 'd1c98bf1e36cd89a8807e9099a72a228504fb4f9b0e4a03db80f8500ba9e1304',
- 'msg_ok': 'f6bf71483a0f1316674d3c951aaf428fae77d3304d5f29108cab55ecd08a635d',
- 'msg_err': '2fb3120e58a8101692ab1852bbf8a90ab5be6b22903beb50ee08a4d62fd25815',
- 'msg_neutral': '2e40fa7299dff5456bc93349aebe3d47917c3a2223cdd7e2c47b8d457f31a36c',
- 'admin_on': '497b6b781437ddd84b31f39b374cc8d9c32dd1d02191845710b4fdf637297804',
- 'admin_unavailable': 'd475555f890fcec21d3d4d5e4a324fa542d4f82094cafb56175ff6c8f3d86107'}
+# 2026-11-04, 1.4.3: the Polish row says the polished text replaces the selection (Ctrl+Z undoes it), not
+# that a review window opens. With only that sentence reverted, every state reproduced its old golden.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '5c478e756460aca1b9246ba929758751b31e69efdc078d3adbb1bf21d5bc959f',
+ 'provider_meta': 'feed29495d2a48b95b7cafbcf51b42c8b868145e2fee2069f6e80669dcc604f3',
+ 'provider_openrouter': 'f1d583a4087eb640a4a9567aad12d6e6d4aac2d6bbe5265a6821675f25818aa8',
+ 'provider_gemini': 'c549cde218f6c631c03bcec5109e7b9c46610579badf27a8390b1f5735a283f0',
+ 'provider_ollama': '0f043ed55f715826283da0dbf915bbbfaa54c03c8d435a7aab9e1d04250aea3d',
+ 'provider_none': '5c478e756460aca1b9246ba929758751b31e69efdc078d3adbb1bf21d5bc959f',
+ 'provider_groq': '7a615b25cb23dba8b0a399a2b614d0f87631c4ecaa80af2bd878f74bb000a8ae',
+ 'polish_enabled': 'fbe0cb5d57c29b09e6379571ecf72cc9a210961d968406d7f032b59aecbbd852',
+ 'history_and_custom': '94476e681e2d966979929e7f9e64cd6407b8c7dab8ac9ad83808d7de11f5569e',
+ 'hotkey_short': '39194e5d87b80271a0b138c312ca690c1415000bf328dfe9692bf5c86d50284b',
+ 'stt_gemini': 'bafe6d68a2736b251594d76024783d7c55141cec761393a10903a244a3fb9f51',
+ 'prompt_from_file': '6d16db28ebdcc85fde6aee008af675ae646a721a1253dd8ae058d6e12abd2285',
+ 'prompt_from_inline_env': 'ab91d71a405b128451f4674ff445aeeabc80f354e515c4205c8d87d905ea2fa2',
+ 'msg_ok': '45e7184de8461183bee9627bad93ecc9e3e8fdbefc9f0f1c3d899fbdbb930402',
+ 'msg_err': '36003b1c842adafd3de41b234d9b939c1fdb0ff47ed51773dfdf410977600d5d',
+ 'msg_neutral': '3d3c3a75d268d4a2fdc67ac8447fee287922f834812f8d7076d175aedb06842b',
+ 'admin_on': 'd1af8eda2f89dd855ed049d391cbb9e13419426f7c5685c9940e10e95239b25f',
+ 'admin_unavailable': '1aa7bcdf2622225763a7ca381b776cf5b67ba824dbe6d3d497c0b025b9364108'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

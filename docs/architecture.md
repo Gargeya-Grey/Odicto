@@ -446,9 +446,13 @@ must not be reintroduced.
 Selection polish uses `POLISH_HOTKEY` (default F8), without recording. Raw and live
 transcription never calls polish. `POLISH_DICTATION` is retained as an ignored legacy key.
 `_start_polish_selection` reserves PROCESSING, then a worker copies the selection, calls
-`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), and shows a review window with explicit Copy and Dismiss controls. Copy-based probes
-cannot establish field identity, so selection polish never injects input into the editor.
-Empty selections, terminals, unknown targets, cancellation and failures do not show a result. The lifecycle
+`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), then replaces the
+selection in place with `paste_text` (owner decision, 4 Nov 2026: no review step; Ctrl+Z
+undoes the paste). Before the paste it reads the selection again and pastes only when the
+window and the selected text are unchanged. A copy-based probe cannot establish field
+identity: an editor that copies the current line when nothing is selected gets the polished
+line inserted, and Ctrl+Z undoes it. Empty selections, terminals, unknown targets,
+cancellation and failures insert nothing. The lifecycle
 and cycle gates reject late results. The refiner has no AI memory or image context here.
 Foreground identity is HWND on Windows, active window ID on X11 and frontmost application
 PID on macOS. Copy-based checks cannot prove field identity or detect every selection move.

@@ -50,42 +50,111 @@ class TestSelectionPolish(unittest.TestCase):
         paste.assert_not_called()
         self.assertEqual(app.state, AppState.IDLE)
 
-    def test_selected_text_is_polished_for_explicit_review_without_input(self):
+    def test_selected_text_is_replaced_in_place_with_one_undoable_paste(self):
+        # Owner decision 2026-11-04: polish replaces the selection; Ctrl+Z undoes it.
         app = self.fixture()
         with patch("main.get_selected_text", return_value="These words is wrong.") as selection, patch("main.paste_text") as paste:
             app._polish_selection()
         app.refiner.polish.assert_called_once_with("These words is wrong.")
-        selection.assert_called_once_with(timeout=0.35)
-        paste.assert_not_called()
-        app.indicator.show_polish_result.assert_called_once_with("These words is wrong.", "These words are corrected.")
+        self.assertEqual(selection.call_count, 2, "read before the model call and again before replacing")
+        paste.assert_called_once_with("These words are corrected.")
+        self.assertNotIn("show_polish_result", [c[0] for c in app.indicator.method_calls])
         app.recorder.start.assert_not_called()
         app.transcriber.transcribe.assert_not_called()
+        self.assertEqual(app.last_status, "polished")
         self.assertEqual(app.state, AppState.IDLE)
 
-    def test_changed_selection_preserves_both_texts(self):
+    def test_changed_selection_keeps_document_untouched(self):
         app = self.fixture()
         with patch("main.get_selected_text", side_effect=["original selection", "different selection"]), patch("main.paste_text") as paste:
             app._polish_selection()
         app.refiner.polish.assert_called_once_with("original selection")
         paste.assert_not_called()
+        self.assertEqual(app.last_status, "polish_target")
 
     def test_focus_change_during_model_call_keeps_document_untouched(self):
         app = self.fixture()
         self.focus.side_effect = [42, 42, 99]
-        with patch("main.get_selected_text", return_value="original selection"), patch("main.paste_text") as paste:
+        with patch("main.get_selected_text", return_value="original selection") as selection, patch("main.paste_text") as paste:
             app._polish_selection()
         app.refiner.polish.assert_called_once_with("original selection")
         paste.assert_not_called()
-        self.assertEqual(app.last_status, "polish_ready")
+        self.assertEqual(selection.call_count, 1, "no second copy into another window")
+        self.assertEqual(app.last_status, "polish_target")
 
-    def test_copy_line_or_same_text_in_another_field_can_never_insert(self):
-        for copied in ("the current unselected line", "identical text in two fields"):
-            with self.subTest(copied=copied):
-                app = self.fixture()
-                with patch("main.get_selected_text", return_value=copied), patch("main.paste_text") as paste:
-                    app._polish_selection()
-                paste.assert_not_called()
-                app.indicator.show_polish_result.assert_called_once_with(copied, "These words are corrected.")
+    def test_hud_says_polished_at_delivery_and_after(self):
+        app = self.fixture()
+        seen = []
+        def paste(text):
+            import typer
+            typer._DELIVERY.callback()  # what paste_text does once the text is in
+            seen.append((app.last_status, app.paste_delivered))
+        with patch("main.get_selected_text", return_value="These words is wrong."), patch(
+            "main.paste_text", side_effect=paste
+        ), patch.object(app, "_paste_restore_failed", return_value=False):
+            app._polish_selection()
+        self.assertEqual(seen, [("polished", True)])
+        self.assertEqual(app.last_status, "polished")
+
+    def test_lost_clipboard_restore_is_reported(self):
+        app = self.fixture()
+        with patch("main.get_selected_text", return_value="These words is wrong."), patch(
+            "main.paste_text"
+        ), patch.object(app, "_paste_restore_failed", return_value=True):
+            app._polish_selection()
+        self.assertEqual(app.last_status, "clipboard_not_restored")
+
+    def test_cancel_during_second_selection_read_inserts_nothing(self):
+        app = self.fixture()
+        def read(timeout):
+            if read.calls:
+                app._cycle.cancel.set()
+            read.calls += 1
+            return "original selection"
+        read.calls = 0
+        with patch("main.get_selected_text", side_effect=read), patch("main.paste_text") as paste:
+            app._polish_selection()
+        paste.assert_not_called()
+        self.assertEqual(app.last_status, "cancelled")
+
+    def test_shutdown_before_the_paste_inserts_nothing(self):
+        app = self.fixture()
+        def read(timeout):
+            if read.calls:
+                app._closing.set()
+            read.calls += 1
+            return "original selection"
+        read.calls = 0
+        with patch("main.get_selected_text", side_effect=read), patch("main.paste_text") as paste:
+            app._polish_selection()
+        paste.assert_not_called()
+
+    def test_shutdown_after_the_model_sends_no_second_copy(self):
+        app = self.fixture()
+        app.refiner.polish.side_effect = lambda text: (app._closing.set(), "polished")[1]
+        with patch("main.get_selected_text", return_value="original selection") as selection, patch(
+            "main.paste_text"
+        ) as paste:
+            app._polish_selection()
+        self.assertEqual(selection.call_count, 1)
+        paste.assert_not_called()
+
+    def test_focus_change_after_second_read_inserts_nothing(self):
+        app = self.fixture()
+        self.focus.side_effect = [42, 42, 42, 99]
+        with patch("main.get_selected_text", return_value="original selection"), patch("main.paste_text") as paste:
+            app._polish_selection()
+        paste.assert_not_called()
+        self.assertEqual(app.last_status, "polish_target")
+
+    def test_failed_paste_reports_an_error_not_success(self):
+        app = self.fixture()
+        with patch("main.get_selected_text", return_value="These words is wrong."), patch(
+            "main.paste_text", side_effect=RuntimeError("blocked")
+        ):
+            app._polish_selection()
+        self.assertEqual(app.last_status, "polish_fallback")
+        self.assertEqual(app.state, AppState.IDLE)
 
     def test_terminal_selection_is_not_polished_or_typed(self):
         app = self.fixture()

@@ -4,6 +4,13 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.4.3] - 2026-11-04
+
+### Changed
+
+- Polish (F8) now replaces the selected text in place. No review window opens. Press Ctrl+Z to get the original back. Polish replaces the text only when the same window and the same selection are still there when the result arrives; otherwise your text stays as it was and the pill says "Selection changed - text kept". The pill says "Polished" when it is done.
+- Live captions (F7) are easier to read: slightly larger, medium weight, the newest line at full strength and the older line stronger than before.
+
 ## [1.4.2] - 2026-11-04
 
 ### Fixed

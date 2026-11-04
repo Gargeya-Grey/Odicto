@@ -1564,17 +1564,39 @@ class DictationApp:
             if result == text:
                 self.last_status = "polish_unchanged"
                 return
-            # Copy-based probes do not prove control identity or selection boundaries.
-            # Keep the document untouched and let the user review/copy explicitly.
+            # Replace the selection in place (owner decision 2026-11-04; Ctrl+Z undoes
+            # the paste). Same window and the same selected text as before the model
+            # call, or the document stays untouched. A copy-based probe cannot tell a
+            # real selection from an editor's copy-the-line-when-empty, so F8 with no
+            # selection in such an editor inserts the polished line; Ctrl+Z undoes it.
+            with self.state_lock:
+                if cycle.cancel.is_set() or self._cycle is not cycle:
+                    raise _Abort("cancelled")
+            if self._closing.is_set():
+                return  # no copy chord into the target after shutdown began
+            if (platforms.foreground_window_id() != target
+                    or get_selected_text(timeout=0.35) != text
+                    or platforms.foreground_window_id() != target):
+                self.last_status = "polish_target"
+                return
             with self._lifecycle_lock:
                 if self._closing.is_set():
                     return
                 with self.state_lock:
                     if cycle.cancel.is_set() or self._cycle is not cycle:
                         raise _Abort("cancelled")
-                if self.indicator is not None:
-                    self.indicator.show_polish_result(text, result)
-                self.last_status = "polish_ready"
+                    cycle.pasting = True
+                def delivered() -> None:
+                    self.last_status = "polished"
+                    self._on_paste_delivered()
+
+                with delivery_callback(delivered):
+                    paste_text(result)
+                restore_lost = self._paste_restore_failed()
+            if restore_lost:
+                # The text was replaced, but the previous clipboard is gone: say so.
+                print("Warning: the previous clipboard could not be restored.", flush=True)
+            self.last_status = "clipboard_not_restored" if restore_lost else "polished"
         except _Abort as stop:
             self.last_status = stop.status
         except Exception as error:
