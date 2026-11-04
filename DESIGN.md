@@ -29,6 +29,10 @@ This file has two layers. Keep them apart when you apply it:
   principles, tuned by eye. Reuse them to match Odicto exactly. When you build something the
   spec does not cover, derive it from the principles. Do not copy a number into a place where
   its reason does not hold.
+- **"Never" and "always" are shorthand.** Each such rule has its reason next to it. Where a
+  recipe below shows a documented exception (for example the nav pill eases its own size, the
+  looping bars use `ease-in-out`), the recipe is the exception and the rule still holds
+  everywhere else.
 
 ### 1.1 The feeling
 
@@ -47,7 +51,9 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
    eye expects, so the panel reads as a physical object without a heavy outline. A full border
    would flatten it and make it look like a form.
    *Applying it:* give any new raised thing the same top rim and the same shadow family.
-   Never box it with a 1 px border on all four sides.
+   Never box it with a visible outline. (Floating layers such as menus, toasts and dialogs
+   add a faint 1 px inset hairline, `--line`, so they separate from busy content behind
+   them. It is a whisper, not a frame.)
 2. **Inputs are dug in, panels are lifted.** Every field is a dark **well** (inset shadow and a
    faint light line under it). Panels sit above the canvas, wells sit below the panel. The user
    learns "dark and sunken means I can type or choose here".
@@ -61,8 +67,11 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
    swatch, and as the HUD's stem. When you need a "current" marker, use a stem, not a
    background block or an underline.
 5. **Colour is one dial.** Everything is derived from a hue `--h` and a chroma factor `--k`
-   at fixed *lightness*. Fixed lightness keeps contrast and depth the same in every theme. Only
-   hue and saturation move. That is why a user can pick any colour and nothing breaks.
+   at fixed *lightness*. Fixed lightness is the strategy for keeping contrast and depth steady
+   across themes. Only hue and saturation move. That is why a user can pick a colour and the
+   page stays readable. `tests/test_theme.py` checks page contrast for the presets and eight
+   custom colours (red, green, blue, yellow, white, black, grey, a rose); it does not prove
+   every possible colour.
    Status colours (amber, soft red, moon blue) and the logo do **not** move, because they
    carry meaning that must not change with taste.
 6. **Status is never colour alone.** OK is a filled dot, warning a hollow ring, error a
@@ -74,10 +83,14 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
    short shake). The curve is one: fast start, long soft landing (`0.2, 0, 0, 1`). The
    base durations are three: 120, 180, 320 ms (plus two one-offs: 420 ms for a whole-page
    change, 360 ms for the check and the shake). Short enough that the user never waits for it.
-8. **Things that change size or place move with `transform` and `opacity`.** These are cheap
-   and smooth. The segmented knob slides with `translateX`, not `left`. The nav pill slides
-   with `translate` (it also eases its own width and height, which affects nothing else). Content
-in the page flow never animates its size, so the page never jitters.
+   Deliberate exceptions: the looping status bars use `ease-in-out`, the spinner and the HUD
+   shimmer loop linearly, and the HUD exit uses an accelerate curve (`0.3, 0, 1, 1`) because
+   leaving should speed up.
+8. **Things that change size or place move with `transform` and `opacity`.** These do not
+   re-lay out the page (that is the intent; this file does not measure it). The segmented knob
+   slides with `translateX`, not `left`. The nav pill slides with `translate` (it also eases its
+   own width and height; it is out of flow, so nothing else moves). Content in the page flow
+   does not animate its size, so the page does not shift under the reader.
 9. **Floating things never move the page.** The save bar, toasts, menus and dialogs are
    `fixed` layers on top. A message that appears must not push the content the user is
    reading. Menus live on `<body>` so no panel can clip them.
@@ -91,18 +104,24 @@ in the page flow never animates its size, so the page never jitters.
 12. **Nested corners are concentric.** An inner radius is the outer radius minus the gap: the
     segmented control is radius 12 with 3 px padding, so its knob is radius 9. Copy this
     arithmetic whenever you put a rounded thing inside a rounded thing.
-13. **Pixels land on pixels.** In the HUD, every small mark (voice squares, dots, the stem,
-    the text baseline) snaps to whole *device* pixels, so it is crisp on any screen. On the
-    web, 1 px lines and 2 px stems are always whole. Blur is a bug, not a style.
-14. **Time, not frames.** Every HUD animation is a function of elapsed seconds, with exact end
-    values, so it looks the same at 30 or 144 fps, and a stalled frame never makes it jump.
+13. **Pixels land on pixels.** In the HUD, the small data marks (voice squares, counting dots,
+    the AI glyph) have every edge on a whole *device* pixel, so they are crisp on any screen.
+    The stem's position and the text baseline are snapped to the device grid too, so they do
+    not shimmer between frames; the stem itself is antialiased, so at a fractional scale its
+    edges can be slightly soft. On the web, 1 px lines and 2 px stems are whole. Blur is a bug,
+    not a style.
+14. **Time, not frames.** The HUD's entry, exit and size springs are functions of real elapsed
+    time with exact end values, so they look the same at 30 or 144 fps. The voice and the
+    stem's state clock advance by the frame time capped at 50 ms, so a stalled frame pauses
+    them briefly instead of making them leap.
 15. **Leave the way you came, in reverse.** The HUD opens seed → stem → bud → tip → words and
-    closes words → tip → bud → stem → seed. Reverse order makes the exit feel like the same
-    motion played back, which feels intentional and calm. An exit that starts mid-entry never
-    grows first.
-16. **Idle is silent.** When nothing moves, nothing redraws: the HUD drops to a 250 ms tick
-    on a finished frame, the canvases stop when the tab is hidden, polling slows to once a
-    minute. Efficient is part of calm.
+    closes words → tip → bud → stem → seed (the stages overlap; section 4.8 gives each start).
+    Reverse order makes the exit feel like the same motion played back, which feels
+    intentional and calm. An exit that starts mid-entry never grows first.
+16. **Idle is quiet.** When nothing moves, the work drops to a minimum: the HUD slows to a
+    250 ms tick on a finished frame (it still repaints from cached images, four times a
+    second), the canvases stop when the tab is hidden, polling slows to once a minute.
+    Efficient is part of calm.
 17. **The user controls the motion.** Full, Reduced, Off, and the system setting all work.
     Nothing important is conveyed by motion alone.
 18. **Plain words, short, human.** See section 7.
@@ -117,7 +136,7 @@ in the page flow never animates its size, so the page never jitters.
 | Stem = 2 px, accent, soft halo | Copy for a new feature (follow section 7) |
 | Status shapes (dot / ring / diamond) | Number of columns in a new grid |
 | Inputs are wells; one primary per area | Order of new settings pages |
-| Never animate layout properties | Extra theme presets (add a hue, keep `k` and lightness) |
+| Never animate in-flow layout (the out-of-flow nav pill's own box is the one exception) | Extra theme presets (add a hue, keep `k` and lightness) |
 | HUD snaps to device pixels; time-based motion | HUD copy for a new status (keep it to 1–3 short words) |
 
 ### 1.4 Quick checks for any new thing you build
@@ -176,7 +195,9 @@ Colour is built from two inputs:
 - `--h` hue in degrees.
 - `--k` chroma factor (1 = full colour, 0.12 = nearly grey).
 
-All tokens are `oklch(L calc(C * var(--k)) var(--h))`. Lightness is fixed. Hue and chroma move.
+The themed tokens are `oklch(L calc(C * var(--k)) var(--h))`. Lightness is fixed. Hue and chroma
+move. Exceptions: `--on-action` (fixed chroma 0.01, hue still follows `--h`), the fixed colours
+below (logo, warn, danger, moon) and the derived tokens (`color-mix`, shadows).
 The server writes `--h` and `--k` into the page (no green flash on first paint).
 
 ```css
@@ -285,7 +306,7 @@ Three motion levels, saved in `localStorage` as `odicto-setup-motion`:
 |---|---|
 | **Full** (default) | as written |
 | **Reduced** | `html[data-motion="reduced"]`: `--t-fast 60ms`, `--t-med 90ms`, `--t-slow 120ms` |
-| **Off** | `html[data-motion="off"]`: `animation: none` and `transition: none` on everything; canvases draw one still frame |
+| **Off** | `html[data-motion="off"]`: `animation: none` and `transition: none` on everything; canvases draw one still frame. Side effect to know: the "Connected" check mark is drawn by an animation, so with Off (and with the system reduced-motion setting) it stays undrawn; the word "Connected" and the accent tint carry the result |
 
 `prefers-reduced-motion: reduce` also kills all animation and transition.
 
@@ -294,8 +315,23 @@ Three motion levels, saved in `localStorage` as `odicto-setup-motion`:
 - Inline SVG, `viewBox="0 0 24 24"`, `fill: none; stroke: currentColor; stroke-linecap: round;
   stroke-linejoin: round`. Default 18 px, stroke 1.75.
 - Nav icons 17 px, stroke 1.6, opacity 0.9. Tile icons 16 px, stroke 1.7. Chevron rows 16 px.
-- Style is Lucide-like (thin, rounded). Nav set: home, key, sparkle, mic, pencil, keyboard,
-  leaf, document, sliders.
+- Style is Lucide-like (thin, rounded). The nav set, in nav order, with the exact shapes (each
+  sits inside `<svg class="i" viewBox="0 0 24 24">`):
+
+```
+Home         <path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/>
+Connections  <path d="M2.6 17.4A2 2 0 0 0 2 18.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r="1"/>
+AI answers   <path d="M9.9 15.5A2 2 0 0 0 8.5 14l-6.1-1.6a.5.5 0 0 1 0-1L8.5 10A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0L14 8.5a2 2 0 0 0 1.5 1.4l6.1 1.6a.5.5 0 0 1 0 1L15.5 14a2 2 0 0 0-1.4 1.5l-1.6 6.1a.5.5 0 0 1-1 0z"/>
+Speech       <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>
+Polish       <path d="m4 20 4-1 12-12-3-3L5 16z"/>
+Shortcuts    <rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M8 16h8"/>
+Appearance   <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.6 5.3-7"/>
+Prompt       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>
+System       <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>
+```
+
+  The tile icons on the how-to cards, the chevrons and the check are drawn in the same style;
+  copy them from `assets/setup_template.html` when you need them.
 
 ### 2.8 Logo
 
@@ -332,11 +368,17 @@ Favicon: the same mark on a `#1b1d20` rounded square (`rx=20`, `viewBox="12 12 8
 └───────────────────────────────┴──── floating save bar (bottom) ──────┘
 ```
 
+- Reset: `* { box-sizing: border-box; }`. Every width and padding in this file assumes it.
+  `body` has margin 0 and `min-height: 100vh`; `html` takes the `--canvas` background.
 - `.app` is a 2-column grid: `248px  minmax(0,1fr)`. `min-height: 100vh`. `isolation: isolate`.
 - **Ground light** (`.app::before`): 760 px tall, two radial gradients of the accent at
   6 % (`900×520 at 62% -12%`) and 5 % (`700×500 at 100% 0%`). It scrolls away with the page.
 - **Grain** (`.app::after`): fixed, full screen, SVG `feTurbulence` noise
   (`baseFrequency 0.9`, 2 octaves, 160 px tile), `opacity 0.045`, `mix-blend-mode: overlay`.
+  The tile is the `--grain` token, an inline SVG: a 160×160 `feTurbulence` (`fractalNoise`,
+  `stitchTiles="stitch"`) passed through an `feColorMatrix` that makes every fleck white and keeps
+  55 % of its alpha (`0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0`). The same token also
+  covers the glass surfaces (`.group`, `.hero`, `.howto-card`) at `opacity 0.05`, also `overlay`.
 - **Rail**: sticky, full height, `--rail` fill, right edge `inset -1px 0 0 var(--line)`,
   padding `26px 18px 22px`, gap 22 px, scrollbar hidden.
 - **Under 900 px** the rail shrinks to 64 px and keeps icons only. Labels stay for screen
@@ -383,6 +425,8 @@ Items sit 2 px apart. Icon is 17 px.
 item. It **slides** from the old item to the new one.
 
 ```css
+.nav { position: relative; display: flex; flex-direction: column; gap: 2px; }  /* the pill is placed against this */
+.nav-item { position: relative; z-index: 1; }                                 /* items sit above the pill */
 .nav-pill {
   position: absolute; left: 0; top: 0; width: 100%; height: 40px;
   border-radius: 10px;
@@ -414,7 +458,9 @@ function moveNavPill(instant) {
 }
 ```
 
-- Only a click slides the pill (320 ms). First load, resize and font load **snap** it.
+- Every page switch slides the pill (320 ms). They all go through `showView()`: a nav click, a
+  Home meter row, an in-page link such as "Connections", or a change of the URL hash. First
+  paint, resize and font load **snap** it.
   Call `moveNavPill(true)` again when `document.fonts.ready` resolves.
 - **Attention dot** (`.nav-dot`, 5 px, transparent by default). A `warn` dot is 7 px with a
   1.5 px amber ring (hollow). Use it on items that need action.
@@ -495,9 +541,10 @@ and two lines of text ("Running" / the microphone name).
 
 ### 3.7 Buttons
 
-All buttons: height 40, padding `0 18px`, radius 12, gap 8, 14 px, weight 500. Transition on
+Every base `.btn`: height 40, padding `0 18px`, radius 12, gap 8, 14 px, weight 500. Transition on
 `transform, background-color, box-shadow, filter, color` at 120 ms. **Press = `scale(0.98)`.**
-Disabled = opacity 0.4, default cursor.
+Disabled = opacity 0.4, default cursor. Segmented-control buttons, theme swatches, keycaps and
+the Small variant are sized separately.
 
 | Kind | Look | Hover |
 |---|---|---|
@@ -506,10 +553,12 @@ Disabled = opacity 0.4, default cursor.
 | **Tertiary** (ghost) | padding `0 14px`, text `--muted` | text → `--text`, background `--hover` |
 | **Danger** | text `--danger`; hairline `35 %` danger | background 10 % danger |
 | **Small** (`.small`) | height 32, padding `0 12px`, 13 px, radius 10 | same as its kind |
-| **Recording** (`.recording`) | text `--warn`, hairline 50 % warn. Label becomes "Press keys…" | |
+| **Recording** (`.recording`) | text `--warn`, hairline 50 % warn. Label becomes "Press keys..." | |
 
 - **One primary per area at most.** Save is the primary. "Start Odicto" is a small primary.
-- A busy button shows a 13 px spinner then the word ("◌ Starting").
+- A busy **Start** or **Save** button disables itself and shows a 13 px spinner then the word
+  ("◌ Starting", "◌ Saving"). **Test connection** disables its button and puts the spinner in
+  the result tag beside it (section 3.13).
 
 ```css
 .spinner { width:13px; height:13px; border-radius:50%;
@@ -541,14 +590,18 @@ input:focus { outline: none; box-shadow: var(--well-in), var(--halo); }   /* 2px
 A 52 × 40 hit area holding a **40 × 24 track**.
 
 ```css
-.switch-track { width:40px; height:24px; border-radius:999px; background:var(--well); box-shadow:var(--well-in); }
+.switch { position:relative; display:inline-grid; place-items:center; width:52px; height:40px; }
+.switch input { position:absolute; inset:0; opacity:0; margin:0; }     /* covers the whole hit area */
+.switch-track { position:relative; width:40px; height:24px; border-radius:999px;
+  background:var(--well); box-shadow:var(--well-in); pointer-events:none; }
 .switch-track::before {                      /* the "on" layer fades in */
+  content:''; position:absolute;
   inset:0; border-radius:inherit;
   background: linear-gradient(180deg, var(--action-hi), var(--action));
   box-shadow: inset 0 0 0 1px var(--sel-line), 0 0 12px -2px var(--glow);
   opacity:0; transition: opacity 180ms var(--ease);
 }
-.switch-thumb { top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+.switch-thumb { position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
   background: var(--muted); transition: transform 180ms var(--ease), background-color 180ms var(--ease); }
 :checked + .switch-track::before { opacity:1; }
 :checked + .switch-track .switch-thumb { transform: translateX(16px); background: var(--on-action); }
@@ -618,9 +671,10 @@ an 18 px **radio** ring. Hint 12.5 `--muted`. Footer meta 12 px with a status do
 
 **Choice row** (speech engine list): full-width row, min-height 64, padding `12px 18px`,
 18 px radio mark on the left, title (15/500) + description (12.5 `--muted`).
-Hover `--hover`. Checked `--accent-soft` background. At the far right a cloud engine with no
-saved key shows an amber **"Needs a key"** chip (nothing is shown when the key exists), so the
-problem is visible at the moment of choosing. Like the provider cards, only the chosen row is
+Hover `--hover`. Checked `--accent-soft` background. At the far right a cloud engine whose key
+field is empty shows an amber **"Needs a key"** chip, so the problem is visible at the moment
+of choosing. The check reads the field as it is now: a saved key (shown as a mask) and a key
+typed but not yet saved both clear the chip. Like the provider cards, only the chosen row is
 in the tab order. Choosing an engine reveals only that engine's fields and hides the
 "Fallback for the cloud engine" note when Whisper itself is chosen.
 
@@ -675,10 +729,12 @@ Show a chord as little keys: `Ctrl + \``.
 - `kbd`: min-width 26, height 26, padding `0 8px`, radius 7, `--well` fill, mono 11.5 / 500,
   `box-shadow: inset 0 1px 0 var(--rim), 0 1px 0 rgb(0 0 0 / .4)` (light top, dark bottom edge = a key).
 - Symbol-only keys (e.g. `` ` ``): 15 px, weight 600.
-- Gap 5 px. Between keys a `+` in 12 px `--faint`. Name map: `ctrl→Ctrl`, `grave→\``, arrows → `↑↓←→`, `f6→F6`.
+- Gap 5 px. No separator is drawn between caps: the stylesheet has a `.plus` style (12 px
+  `--faint`) but the keycap renderer does not use it. Plain-text summaries, such as the Home
+  meters, write the chord in words ("Ctrl + `"). Name map: `ctrl→Ctrl`, `grave→\``, arrows → `↑↓←→`, `f6→F6`.
 - Each key plays `key-in` (180 ms, from `opacity 0; translateY(3px)`).
 - An empty chord shows a muted "Not set" chip.
-- **Change** flow: secondary small button → label "Press keys…" + `.recording` (amber).
+- **Change** flow: secondary small button → label "Press keys..." + `.recording` (amber).
 
 ### 3.15 Home: hero and how-to cards
 
@@ -697,7 +753,7 @@ description. Dictate / Ask AI / Live.
 
 ### 3.16 Appearance page
 
-The page the owner loves most. In order:
+The page where the look itself is chosen. In order:
 
 1. **Preview** (section "Preview", note "Updates as you choose").
    `.leaf-stage`: radius 18, padding `16px 12px 4px`, content bottom-aligned and centred,
@@ -734,7 +790,9 @@ Saving restarts Odicto, and the real HUD reads the values.
 .swatch .sw-body { fill: oklch(0.34 calc(0.055 * var(--sk)) var(--sh)); }   /* per-swatch --sh hue, --sk k */
 .swatch .sw-stem { fill: oklch(0.86 calc(0.105 * var(--sk)) var(--sh)); }
 .swatch:hover { transform: translateY(-1px); }                               /* 120ms */
-.swatch.selected::after { content:''; left:50%; bottom:-3px; width:14px; height:2px; margin-left:-7px;
+.swatch { all:unset; box-sizing:border-box; position:relative; display:grid; place-items:center;
+  width:42px; height:28px; border-radius:8px; cursor:pointer; transition:transform 120ms var(--ease); }
+.swatch.selected::after { content:''; position:absolute; left:50%; bottom:-3px; width:14px; height:2px; margin-left:-7px;
   background: var(--accent); box-shadow: 0 0 7px var(--glow); border-radius:2px; }   /* glowing stem UNDER the chosen one */
 ```
 
@@ -758,11 +816,16 @@ All "floating" surfaces share one recipe:
 - **Toasts**: top-right, 20 px from the edges, width `min(380px, 100vw - 40px)`, 8 px gap.
   Radius 12, padding `12px 14px`, 13/18. A leading dot: info = `--moon`, ok = accent glow,
   error = red diamond. Enter 180 ms from `opacity 0; translateY(-6px)`. After **7 s** the toast
-  fades and lifts `-4px` over 200 ms, then is removed.
+  fades and lifts `-4px` over `--t-med` (180 ms); the element is removed 200 ms after the fade
+  starts.
 - **Offline banner**: bottom centre, max-width 640, radius 12, amber 35 % hairline, hollow amber
   dot. Shown after two failed status polls. Message: the setup page closed; run `setup.bat`.
 - **Dialog** (expanded prompt editor): full-screen scrim `#000` at 55 % with `blur(6px)`
   (fade 180 ms), panel `min(1100px, 100%) × min(860px, 100%)`, padding 18, radius 20, `--float`.
+- **Stacking order**, low to high (`.app` is its own stacking context through
+  `isolation: isolate`): ground light and grain 0 · nav items, main column, segment buttons,
+  hero leaf 1 · rail 20 · save bar 70 · dialog scrim 90 · toasts 95 · offline banner 99 · select
+  menu 200. So a toast shows above an open dialog, and the offline banner above both.
 
 ### 3.18 Misc
 
@@ -806,11 +869,15 @@ These details are where the page feels finished. Each has a *reason*; keep the r
   OpenRouter speech) use the browser's native `datalist`, which is not themed.
 
 **Hotkey capture ("Change")**
-1. Press **Change**. The button turns amber and says "Press keys…". The keycaps **empty**.
+1. Press **Change**. The button turns amber and says "Press keys..." (three plain dots). The
+   chord is cleared, so the keycap area shows the muted "Not set" chip until the first key
+   goes down.
 2. As the user holds keys, the **keycaps appear live**, one by one, each with the small
    `key-in` rise. So the user sees their chord form.
-3. When every key is released, capture ends and the new chord stays. Pressing nothing for
-   **6 s** cancels and restores the old chord. Starting another capture cancels the first.
+3. Capture ends when every key is released after a main key was pressed (modifiers alone do
+   not end it), and the new chord stays. A fixed **6 s** deadline from the start of capture
+   also ends it, even while keys are held: it keeps the chord if a main key was pressed and
+   restores the old chord if not. Starting another capture cancels the first.
 4. `Esc` is a valid key to bind, so it is captured like any other.
 5. Polish also has **Disable** (tertiary): it clears the chord and shows "Not set".
 - Why: a settings page that asks users to *type* "ctrl+shift+grave" is hostile. Showing the
@@ -837,20 +904,23 @@ These details are where the page feels finished. Each has a *reason*; keep the r
 - Only the chosen card is in the tab order (roving `tabindex`). Arrow keys move *and* choose,
   wrapping at the ends, like native radios.
 - Each card's footer dot reflects its key: green dot "key saved" or hollow amber ring "no key".
+  It reads the key field as it is now, so a key typed but not yet saved already counts.
   Ollama always shows "no key needed"; None says "no AI replies".
 - Choosing a provider shows only **its** model fields (`field-card`, 180 ms `page-in`) and
   hides the rest. **None** hides the whole Model and Options area and shows a quiet notice, and
   disables "Test connection". The page never shows fields that cannot matter.
 - If the chosen provider lacks a key, the Model heading shows an inline accent link, "Add a
   Gemini key", which jumps to Connections and **focuses that field** after 60 ms.
-- Model history appears as chips (mono). Click a chip to use it. The "×" removes it. A
-  successful connection test quietly *remembers* the model as a new chip.
+- Model history appears as chips (mono) for the providers that keep one (Groq does not). Click a
+  chip to use it. The "×" removes it. A successful connection test quietly *remembers* the model
+  as a new chip. The new chip raises the save bar and is stored when the user hits Save.
 
 **Test connection**
 - Button disables; a `Testing` tag with a spinner appears; a neutral line says what is happening.
 - Success: tag turns accent with the check **drawing itself**, and a toast confirms.
-- Failure: tag turns soft red and **shakes once**, and the reason prints in plain words below.
-  A 30 s timeout and a "server not reachable" case have their own wording.
+- Failure reported by the server: the tag turns soft red and **shakes once**, and the reason
+  prints in plain words below. A 30 s timeout and a "server not reachable" case have their own
+  wording and turn the tag red **without** the shake.
 
 **Home "Your setup" meters** summarise every page in one line each. They use the same
 tone vocabulary as the status marks (`ok` accent dot, `warn` hollow ring, `info` blue,
@@ -859,16 +929,17 @@ is visible from anywhere. Values that change play `swap-in`.
 Examples: "2 of 4 keys / Groq, Gemini", "Gemini / needs a key", "Ctrl + ` / Long ride".
 
 **Model pickers**
-- The first option of every model list is **"Backend default (the actual model name)"**, so an
-  empty choice still tells the truth about what will run. The last option is "Custom…", which
+- The first option of each AI answers model list is **"Backend default (the actual model
+  name)"**, so an empty choice still tells the truth about what will run (the Polish list
+  differs; see below). The last option is "Custom…", which
   reveals a plain text field below and focuses it. A saved id the list does not know opens as Custom.
 - Lists put the newest first (OpenRouter by release date; the other lists show the most recently
-  added model first). OpenRouter shows a
-  **human name with the id as a small second line**; the search matches both.
+  added model first). OpenRouter shows a human name; the id is a tooltip in the AI answers list
+  and a small second line in the Polish list. The search matches both name and id.
 - The catalog loads in the background (`/openrouter-models`); the lists quietly rebuild when it
   arrives. Until then, the page works with what it has.
-- **Reasoning / thinking effort lists filter themselves to what the chosen model allows.** A
-  note under them says why in one sentence ("This model requires thinking. Allowed: low, medium…").
+- **OpenRouter's reasoning list filters itself to what the chosen model allows** (the Meta and
+  Gemini lists are fixed). A note under it says why in one sentence ("This model requires thinking. Allowed: low, medium…").
   A mandatory-thinking model changes the first option to "Fastest allowed (low)".
 - Polish has its own list whose first option is "Use AI answers model", with a live summary line:
   "Follows AI answers: …" or "Polish uses …". A small chip names the provider it borrows.
@@ -880,10 +951,11 @@ page at once, so the whole page recolours as the user chooses, repaints the prev
 name ("Ocean" or `#3A7BD5`), moves the glowing marker, and raises the save bar. Nothing is
 applied to the real HUD until Save restarts Odicto (the HUD reads its style once, at start).
 
-**The page's own lifecycle**: the page says goodbye (`/bye`) when its tab closes, and checks
-status again the moment the tab becomes visible, so a returning user never sees stale
-"Running". Canvases wait for the font (up to 2.5 s) before their first frame, so the label width
-is measured with the right letters.
+**The page's own lifecycle**: the page says goodbye (`/bye`) when its tab closes, and starts a
+fresh status check the moment the tab becomes visible, so a returning user gets the current
+answer within one round trip (the previous text stays on screen until it arrives). Canvases
+wait for the font, up to 2.5 s, before their first frame, so the label width is normally
+measured with the right letters; if the font is slower than that, they start with the fallback.
 
 **Ollama download**: a log box (mono, scrolls) streams progress. The button reads
 `Download local model` → `Downloading…` → `Download complete` or `Download failed - retry`.
@@ -921,8 +993,9 @@ section label always sits 12 px above its panel and is *visually closer to the p
 previous one*. This "near/far" spacing alone tells the reader what belongs together.
 
 Row anatomy: title (15/500) over a one-line description (12.5, muted). Controls on the right,
-vertically centred. If a row has an input or segmented control it goes **under** the title
-(`.row.block`) at full width, never squeezed beside it.
+vertically centred. If a row has a wide input or a segmented control it goes **under** the title
+(`.row.block`) at full width, never squeezed beside it. A short field (for example "Longest
+answer", a 140 px number box) may sit beside the title like any other control.
 
 ---
 
@@ -961,8 +1034,9 @@ number in this section.
 - **Crisp over smooth where it matters.** The pixel voice is drawn *without* antialiasing and
   snapped to device pixels. It is meant to look like tiny lit cells. Everything soft (body,
   shadow, glow) is smooth; everything that is "data" is crisp. That contrast is the look.
-- **Length follows the words.** The pill is exactly as wide as its label, and when the label
-  changes the width *springs* to the new size. It never snaps and never overshoots.
+- **Length follows the words.** The pill's width follows its label (voice room + label +
+  insets), and when the label changes the width *springs* to the new size. In normal use it
+  neither jumps nor overshoots (the exact snap rule is in 4.9).
 
 ### 4.1 Anatomy
 
@@ -972,19 +1046,23 @@ number in this section.
    ╭─────────────────────────────────────────────────────╮
   <  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ pixel voice   │ stem   Listening ▪▪▪  )
    ╰─────────────────────────────────────────────────────╯
-   tip (left)               voice (84px)  gap   label     inset (right, round)
+   tip (left)   voice room 84 px (cells 68 px)   stem   12   label    inset (right, round)
 ```
 
-Left to right: a **soft pointed tip** (drooping slightly), **84 px of pixel voice** (5 rows),
-an 8 px gap, the **stem** (2 px bar with halo), 12 px gap, the **label**, 18 px inset, then a
-fully round right end.
+Left to right: a **soft pointed tip** (drooping slightly), the **pixel voice** (5 rows by 23
+columns), an 8 px gap, the **stem** (2 px bar with halo), 12 px gap, the **label**, 18 px
+inset, then a fully round right end.
+
+The voice room is **84 px measured from the stem's centre to the leaf's left edge**. Inside it
+the first cell starts 8 px from the stem's centre, the 23 columns (pitch 3 px, cell 2 px) span
+68 px, and the last ~8 px are the tip end.
 
 | Constant | Value |
 |---|---|
 | Leaf height | 36 |
 | Stem height / width | 32 / 2.0 |
-| Voice width | 84 |
-| Stem gap (voice to stem) | 8 |
+| Voice room (stem centre to left edge) | 84 |
+| Stem gap (stem centre to first voice cell) | 8 |
 | Tip length | 58 (capped at 40 % of width) |
 | Text gap (stem to label) | 12 |
 | Right inset | 18 |
@@ -995,7 +1073,8 @@ fully round right end.
 | Tip droop | 0.06 (error 0.11) × height |
 | Tip soft-round radius | 4 |
 
-Width = `84 + 12 + labelWidth + 18`.
+Width = `84 + 12 + labelWidth + 18` (voice room from the stem's centre, stem to label, the
+label, right inset). The pill grows and shrinks with its label.
 
 ### 4.2 Palette (Forest; other themes recolour via OKLCH)
 
@@ -1043,19 +1122,41 @@ the leaf settles it is cached and only rebuilt when the shape changes.
    `0.054` at 55 %, `0.0216` at the bottom. In **Soft** edge, the base alpha is `0.07` instead of `0.18`.
 
 **Shape "capsule"** is a plain rounded rectangle (no tip, radius = half height).
-**Shape "leaf"** has a bezier tip that opens from a bud.
+**Shape "leaf"** has a bezier tip that opens from a bud. The outline, for a box `x, y, w, h`
+(the leaf's left, top, width and height at this moment):
+
+```
+r  = min(h/2, w/2)                     the round right end
+tf = tip openness, 0 (bud) to 1 (full leaf)
+ee = r + (min(58, 0.4·w) − r)·tf       how far the pointed end reaches in from the left edge
+ty = y + h·(0.5 + droop·tf)            the point sits a little below centre (droop 0.06; error 0.11)
+rr = 4·tf                              the tiny rounded point;   k = 0.5523 (circle-arc constant)
+lerp(a, b) = a + (b − a)·tf
+b1 = lerp((x+ee−ee·k, y+h), (x+ee·0.62, y+h))
+b0 = lerp((x, ty+(y+h−ty)·k), (x+ee·0.3, ty+(y+h−ty)·0.5))
+t0 = lerp((x, ty−(ty−y)·k), (x+ee·0.3, ty−(ty−y)·0.5))
+t1 = lerp((x+ee−ee·k, y), (x+ee·0.62, y))
+path: move (x+ee, y) → line (x+w−r, y) → arc (top right) → line (x+w, y+h−r) → arc (bottom right)
+      → line (x+ee, y+h) → cubic b1, b0 to (x+rr, ty+0.45·rr)
+      → quad via (x−rr, ty) to (x+rr, ty−0.45·rr) → cubic t0, t1 to (x+ee, y) → close
+```
 
 ### 4.4 Pixel voice
 
 Five rows by 23 columns of **2 px squares**, pitch 3 px across, 4 px between rows. They sit
-left of the stem, starting 8 px away.
+left of the stem, the first cell starting 8 px from the stem's centre.
 
-- Rows converge toward the tip like parallel veins: spacing shrinks by up to 62 % and the
-  centre line droops with the tip. Every cell edge snaps to a **whole device pixel** (crisp at any DPI).
+- Rows converge toward the tip like parallel veins. For a cell `d` px from the stem's centre,
+  `s = smoothstep((d − 24) / 58)`: the rows stay parallel for the first 24 px, then close up.
+  Row pitch is `4 × (1 − 0.62·s)` px, but never less than the cell size plus one device pixel, so
+  neighbours never touch. The centre line sinks by `droop × height × tipOpen × s`. Every cell
+  edge snaps to a **whole device pixel** (crisp at any DPI).
 - Rows are drawn **without antialiasing**. Neighbours always keep at least 1 device pixel apart.
 - Row 0 is the top row and shows the **highest** frequency band. Five bands come from the recorder.
 - Alpha falls with distance from the stem: `1 - 0.62 × (j / 23)`.
-- **Reach** mode: row `i` lights columns up to `rows[i] × 23` (a bar that reaches left with loudness).
+- **Reach** mode: row `i` lights columns up to `rows[i] × 23`, and the last, partly reached cell
+  gets the fraction: `alpha = clamp(rows[i] × 23 − j) × fall(j)`, with `fall(j) = 1 − 0.62·(j / 23)`.
+  It reads as a bar that reaches left with loudness.
 - **Stream** mode: every column shows history (`hist[row][col] × 1.6`), newest at the stem,
   flowing left. History shifts every **45 ms**, 24 columns.
 - **Idle in Listening**: when silent, the first pixel of each row pulses:
@@ -1072,15 +1173,19 @@ left of the stem, starting 8 px away.
 
 | State | Label | Stem | Accent | Extra |
 |---|---|---|---|---|
-| Starting (boot) | "Starting" | work | jade | |
+| Starting (boot) | "Starting" | work | jade | the Work effects below |
 | **Listening** | "Listening" | listen | jade (moon with AI) | 3 **dots** after the word; voice live |
 | **Transcribing** / **Thinking** (AI) | "Transcribing" / "Thinking" | work | jade (moon with AI) | label **shimmer**, stem **bead**, voice wave |
-| Polishing / Finalizing | "Polishing" / "Finalizing" | work | | |
+| Polishing / Finalizing | "Polishing" / "Finalizing" | work | jade (moon with AI) | the Work effects below |
 | **Done** | "Done" | done | jade | stem shrinks to a **check**; a **seed** floats up |
 | Done with a caveat | e.g. "AI failed · raw text", "Mic gap · check text" | notice | amber | "!" stem; amber tint |
 | Error / nothing inserted | "No speech", "Cancelled", "Speech timed out", "Mic unavailable", "Failed" … | error | soft red | cross stem; droop 0.11; red tint |
 | Context cleared | "Context cleared" | notice | amber | |
 | Live captions off | "Captions off" | listen | | card explains |
+
+The label shimmer, the stem bead and the travelling voice wave belong to the **Work stem**, not
+to a word. Every state that uses it (Starting, Transcribing, Thinking, Polishing, Finalizing)
+gets all three.
 
 Label ink: `ink` at **0.78** alpha while Listening/Working; **0.92** for the rest. Notice label =
 `warn`; error label = `danger`.
@@ -1148,9 +1253,11 @@ all with `ease(0.2, 0, 0, 1)`:
 | `fade` | | | 1.0 |
 
 Story: **a seed rises, a stem grows, a bud opens into a leaf, the tip forms, the words appear.**
+The stages overlap: the words start to fade in (at 0.42) before the tip has finished forming
+(it runs from 0.50 to 0.82).
 
 Exit is **0.5 s**, the same parts **in reverse order**, each as `1 − accel(seg)` with
-`accel = cubic-bezier(0.3, 0, 1, 1)`:
+`accel = cubic-bezier(0.3, 0, 1, 1)`. The one exception is `fade`, which is linear (`1 − seg`):
 
 | Part | Start | Span |
 |---|---|---|
@@ -1160,7 +1267,7 @@ Exit is **0.5 s**, the same parts **in reverse order**, each as `1 − accel(seg
 | `open_h` | 0.14 | 0.14 |
 | `grow` | 0.22 | 0.10 |
 | `rise` | 0.26 | 0.14 |
-| `fade` | 0.30 | 0.10 (gone by 0.40; the window is fully done at 0.5) |
+| `fade` | 0.30 | 0.10, **linear**; gone by 0.40; the window is fully done at 0.5 |
 
 Every part takes `min(current, exit curve)`, so an exit that starts mid-entry never grows. A
 show during an exit resumes from the larger of the two. Every animated value **reaches its end
@@ -1172,10 +1279,15 @@ When the label changes ("Listening" → "Transcribing") the pill does not jump.
 
 - Width and height follow a **critically damped spring**, `ω = 20.5` (within 1 % in about 0.33 s).
   It is solved in closed form, so a 16 ms tick and a 250 ms jump land on the same value. It
-  keeps velocity if retargeted mid-flight, and snaps when within 0.05 px.
+  keeps velocity if retargeted mid-flight. It snaps to the target only when the distance is
+  under 0.05 px **and** the speed is under 2 px/s. A critically damped spring from rest never
+  overshoots; a retarget that keeps velocity can carry it slightly past a nearby new target
+  before it settles.
 - The stem's state timeline is **1.4 s**: morph 0.28 s, glyph to 0.38 s, seed to 1.32 s.
 - The tip droop eases over **0.5 s** after a state change.
-- A "Done" pill holds for **1200 ms**, then exits.
+- A "Done" pill holds for about **1200 ms counted from delivery**, then exits. The exit waits
+  until processing is idle (the clipboard restore, `PASTE_DELAY_SECONDS`, default 1 s, can still
+  be running), so a slow paste keeps Done up longer. It never leaves early.
 
 ### 4.10 Caption card (Live, F7)
 
@@ -1210,8 +1322,8 @@ A glass card **above** the leaf while live captions run.
   gap and centring stay.
 - Paint tick **16 ms** while animating, **250 ms** when a frame is static (e.g. a standing error).
   `dt` is capped at 50 ms.
-- Pixel crispness: the stem x, label baseline, voice cells, AI glyph and dots all snap to
-  **device pixels**. Body, shadow and card are cached images, rebuilt only when geometry changes;
+- Pixel crispness: the stem's x and the label baseline are snapped to the **device grid**; voice
+  cells, the AI glyph and the dots also have each edge on a whole device pixel. Body, shadow and card are cached images, rebuilt only when geometry changes;
   a settled frame is a few blits.
 - Label font hinting is `PreferVerticalHinting` so paint and measurement agree.
 - Tray: the Odicto mark as icon, tooltip "Odicto", menu `Setup…` and `Quit Odicto`. If the
@@ -1226,7 +1338,7 @@ A glass card **above** the leaf while live captions run.
 | App not ready | "Starting" (work stem) stays until ready |
 | Recording starts | leaf opens (or morphs if already open); voice is cleared first |
 | Processing | label becomes "Transcribing" / "Thinking" (AI); the pill springs to the new width |
-| Text delivered | **Done shows at the moment of delivery**, while the clipboard restore still finishes; total hold about **1.2 s** |
+| Text delivered | **Done shows at the moment of delivery**, while the clipboard restore still finishes. It stays about **1.2 s from delivery**; the exit waits until processing is idle, so a slow paste keeps it up longer |
 | Done becomes a caveat | e.g. "AI timed out · raw text": it keeps the open leaf and just eases the width and recolours; the hold restarts at 1.2 s |
 | Same Done reaches idle | **no replay** of the check; the leaf stays one leaf |
 | Error | holds **1.5 s**, then exits |
@@ -1241,9 +1353,12 @@ changes what it says. That keeps quick back-to-back actions calm instead of flic
 ### 4.12 The web port of the leaf
 
 The setup page draws the same leaf on `<canvas>` (hero and preview) with a JS port of the painter.
-Constants `LEAF_K`, `LEAF_C`, `LEAF_TIME` mirror the Python values; a parity test keeps them equal.
+The sizes (`LEAF_K`), the colours (`LEAF_C`) and the entry and exit times in `LEAF_TIME` mirror
+the Python values, and `tests/test_leaf_preview_parity.py` keeps them equal. The other
+`LEAF_TIME` entries (how long the demo loop holds Listening, Transcribing, Done and the gap)
+belong to the preview only; the real HUD follows the real pipeline.
 The loop pauses when the tab is hidden or the page is not Home / Appearance. The Qt painter is
-the reference; the canvas copy is faithful but not identical in three small ways:
+the reference; the canvas copy is faithful but not identical. Known differences:
 
 - **Shadow**: canvas `shadowBlur` is twice the Gaussian σ, so blur 16 / offset 5 / alpha 0.5 and
   blur 3 / offset 1 / alpha 0.32 give the same σ 8 and σ 1.5 as the Qt shadow.
@@ -1253,6 +1368,14 @@ the reference; the canvas copy is faithful but not identical in three small ways
   word, never by motion alone.
 - It draws only four states (Listening, Transcribing, Done and the exit). Notice, error and the
   AI mark exist only in the real HUD.
+- **Label width**: the canvas eases the width over 320 ms (`ease`); Qt uses the critically
+  damped spring of 4.9.
+- **Voice envelope**: rows attack 30 ms and release 160 ms in the canvas, 25 ms and 140 ms in
+  Qt. The overall level matches (30 ms and 200 ms).
+- **Voice cells**: the canvas snaps each cell's origin but keeps the 2 px logical size. Qt gives
+  every cell the same whole-device size and keeps at least one device pixel between rows.
+- **Tip point**: the small rounded point uses a quadratic control point 0.35 × the radius left
+  of the box in the canvas, and 1 × the radius in Qt.
 
 ---
 
@@ -1272,7 +1395,8 @@ To rebuild this look in another stack:
 10. Status marks by **shape** (dot, ring, diamond).
 11. Floating layers share the `--float` recipe; save bar rises 16 px; toasts live 7 s.
 12. One easing curve. Three durations. Three motion levels.
-13. HUD: 36 px leaf, 84 px pixel voice (5×23 of 2 px squares), 2 px stem with halo, 13 px label.
+13. HUD: 36 px leaf, 84 px of room for the pixel voice (5×23 of 2 px squares), 2 px stem with
+    halo, 13 px label.
     Entry in the order seed → stem → bud → tip → words (0.62 s). Exit in reverse (0.5 s).
     Shimmer, dots, bead, check and seed as in section 4.
 14. Snap everything small to device pixels. Run animation at 16 ms only when something moves.
@@ -1283,7 +1407,7 @@ To rebuild this look in another stack:
 |---|---|
 | Change the whole product by changing `--h` and `--k` | Hard-code a green |
 | Use shape (dot, ring, diamond) plus text for status | Use colour alone |
-| Animate `transform` and `opacity` | Animate `left`, `width` of the knob, or layout |
+| Animate `transform` and `opacity` | Animate `left`, the knob's `width`, or in-flow layout |
 | Keep one primary button per area | Add a second filled button |
 | Let the logo, `warn`, `danger`, `moon` stay fixed | Theme the status colours |
 | Give each raised surface a top rim | Use a plain border |
@@ -1336,7 +1460,8 @@ glass group. Give it a Home "meter" row if it has a state worth summarising. Pag
 the standard 420 ms `page-in`.
 
 **A new floating message** → use the `--float` recipe (rim + hairline inset + shadow), a leading
-status mark by shape, 13/18 text, 7 s life, fade out 200 ms. Never push the page.
+status mark by shape, 13/18 text, 7 s life, a 180 ms fade (removed 200 ms after it starts).
+Never push the page.
 
 **A new status or tone** → pick from the four fixed marks (dot, ring, diamond, blue dot) and
 four fixed colours. Do not invent a fifth colour. If it needs a new meaning, change the text, not the hue.
