@@ -368,15 +368,22 @@ class TestSize(unittest.TestCase):
             self.assertEqual(seen[-1], dpr * hl.HUD_SIZE_SCALE[size], (size, dpr))
 
     def test_layer_caches_key_on_the_size(self):
+        # Compare the layer images, not the whole frame: macOS glyph rasterisation can differ
+        # by a pixel between two painters, and the label is not a cached layer.
+        def layers(drawn):
+            return [(image.devicePixelRatio(), image) for *_, image in drawn]
+
         shared = hl.LeafPainter(_font())
         for dpr in (1.0, 1.5):
             self._recorded("1x", dpr, shared)
-            _, reused = self._recorded("1.3x", dpr, shared)
-            _, fresh = self._recorded("1.3x", dpr)
-            self.assertEqual(reused, fresh, f"a layer from another size was reused at dpr {dpr}")
-            _, back = self._recorded("1x", dpr, shared)
-            _, first = self._recorded("1x", dpr)
-            self.assertEqual(back, first, f"a layer from another size was reused at dpr {dpr}")
+            reused, _ = self._recorded("1.3x", dpr, shared)
+            fresh, _ = self._recorded("1.3x", dpr)
+            self.assertEqual(layers(reused), layers(fresh),
+                             f"a layer from another size was reused at dpr {dpr}")
+            back, _ = self._recorded("1x", dpr, shared)
+            first, _ = self._recorded("1x", dpr)
+            self.assertEqual(layers(back), layers(first),
+                             f"a layer from another size was reused at dpr {dpr}")
 
 
 class TestRender(unittest.TestCase):
