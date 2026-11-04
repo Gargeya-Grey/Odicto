@@ -264,9 +264,12 @@ graph TD
 
 Application source lives in `app/`; root Python files are small launchers.
 `assets/setup_template.html` holds the setup page markup that used to be an f-string
-inside `setup_web.py`. It renders the "Quiet Console" dashboard: a left rail nav over five
-views (Overview status meters, AI, Speech, Controls, Prompt), one form with a sticky
-save/test dock, and `__TOKEN__` placeholders filled one-pass by `setup_web._page()`.
+inside `setup_web.py`. The page is in the leaf language: a dark canvas with a soft top light and
+grain, a rail with the logo, a running card of five pixel bars and the nav (icons only below 900 px),
+and translucent glass panels. Nine views (Home, Connections, AI answers, Speech, Polish, Shortcuts,
+Appearance, Prompt, System), one form with a floating save bar, and `__TOKEN__` placeholders filled
+one-pass by `setup_web._page()`. Every colour is a token (`--h` and `--k` are the only theme inputs).
+The Home hero and the Appearance preview draw the leaf with one painter (the `leaf*` functions).
 
 | Module | Responsibility | Public API other modules call |
 |---|---|---|
