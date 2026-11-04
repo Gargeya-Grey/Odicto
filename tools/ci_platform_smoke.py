@@ -107,15 +107,29 @@ def setup_http(root: Path, evidence: Path) -> None:
             "browser_opened": False, "process_stopped": process.poll() is not None}), encoding="utf-8")
 
 
+def fetch_fixture(url: str, digest: str, attempts: int = 4, sleep=time.sleep, opener=None) -> bytes:
+    """Download the pinned public fixture. A network error or timeout is retried (a CI VM
+    timed out once on 4 Nov 2026); a wrong checksum is never retried."""
+    opener = opener or urllib.request.urlopen
+    for attempt in range(1, attempts + 1):
+        try:
+            with opener(url, timeout=30) as response:
+                audio = response.read(2_000_001)
+            break
+        except OSError:  # URLError, TimeoutError and socket errors are all OSError
+            if attempt == attempts:
+                raise
+            sleep(5 * attempt)
+    if len(audio) > 2_000_000 or hashlib.sha256(audio).hexdigest() != digest:
+        raise RuntimeError("Public speech fixture failed its pinned checksum")
+    return audio
+
+
 def speech_decode() -> dict:
     url = "https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac"
     digest = "63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715"
     fixture = Path(os.environ["RUNNER_TEMP"]) / "odicto-public-speech-fixture.flac"
-    with urllib.request.urlopen(url, timeout=30) as response:
-        audio = response.read(2_000_001)
-    if len(audio) > 2_000_000 or hashlib.sha256(audio).hexdigest() != digest:
-        raise RuntimeError("Public speech fixture failed its pinned checksum")
-    fixture.write_bytes(audio)
+    fixture.write_bytes(fetch_fixture(url, digest))
     from config import Config
     from transcriber import WhisperTranscriber
     with patch.object(Config, "WHISPER_DEVICE", "cpu"), patch.object(Config, "WHISPER_MODEL_SIZE", "tiny.en"):

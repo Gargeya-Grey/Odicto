@@ -105,5 +105,39 @@ class TestReleasePlatformGate(unittest.TestCase):
             smoke.validate_platform("ubuntu-26.10-vm", dict(report, os_release={"ID": "ubuntu", "VERSION_ID": "26.04"}))
 
 
+class TestSpeechFixtureFetch(unittest.TestCase):
+    """A network blip must not fail CI; a changed fixture must."""
+
+    def opener(self, outcomes):
+        import contextlib, io
+        calls = []
+        def open_(url, timeout):
+            calls.append(url)
+            outcome = outcomes[len(calls) - 1]
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return contextlib.closing(io.BytesIO(outcome))
+        return open_, calls
+
+    def test_timeout_is_retried(self):
+        import hashlib
+        data = b"fixture"
+        open_, calls = self.opener([TimeoutError("read timed out"), OSError("reset"), data])
+        got = smoke.fetch_fixture("u", hashlib.sha256(data).hexdigest(), sleep=lambda s: None, opener=open_)
+        self.assertEqual((data, 3), (got, len(calls)))
+
+    def test_retries_are_bounded(self):
+        open_, calls = self.opener([TimeoutError("t")] * 4)
+        with self.assertRaises(TimeoutError):
+            smoke.fetch_fixture("u", "0" * 64, sleep=lambda s: None, opener=open_)
+        self.assertEqual(4, len(calls))
+
+    def test_wrong_checksum_is_not_retried(self):
+        open_, calls = self.opener([b"changed", b"changed"])
+        with self.assertRaises(RuntimeError):
+            smoke.fetch_fixture("u", "0" * 64, sleep=lambda s: None, opener=open_)
+        self.assertEqual(1, len(calls))
+
+
 if __name__ == "__main__":
     unittest.main()
