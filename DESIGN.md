@@ -117,7 +117,7 @@ the organic part. Hairlines, pixel grids and exact snapping for the precise part
     (the idle first pixel's pulse, the Work wave, the shimmer, the bead, the dots) keep time
     with it, so after a stall they are simply where the clock says.
 15. **Leave the way you came, in reverse.** The HUD opens seed → stem → bud, then the words
-    begin to fade in just before the tip finishes forming, and it closes words → tip → bud →
+    begin to fade in just before the tip starts to form, and it closes words → tip → bud →
     stem → seed (the stages overlap; section 4.8 gives each start).
     Reverse order makes the exit feel like the same motion played back, which feels
     intentional and calm. An exit that starts mid-entry never grows first.
@@ -341,7 +341,7 @@ Ask AI tile         the AI answers sparkle above
 Live tile           <path d="M2 12h3l3-8 4 16 3-8h7"/>
 Meter row chevron   <path d="m9 18 6-6-6-6"/>                        16 px
 External link       <path d="M7 17 17 7M8 7h9v9"/>                   rail footer link, 14 px
-Result check        <path d="M5 13l4 4L19 7"/>                       stroke 2.6, drawn by `check-draw`
+Result check        <path d="M5 13l4 4L19 7"/>                       14 px, stroke 2.6, drawn by `check-draw`
 Select chevron      <path d="m6 9 6 6 6-6"/>                         16 px, stroke 2, drawn by script
 Option check        <path d="M20 6 9 17l-5-5"/>                      16 px, stroke 2.2, drawn by script
 ```
@@ -586,9 +586,10 @@ the Small variant are sized separately.
 input[type=text], input[type=password], textarea {
   height: 44px; padding: 0 14px; border: 0; border-radius: 12px;
   background: var(--well); box-shadow: var(--well-in);   /* dark, inset, with a light line below */
-  transition: box-shadow 120ms var(--ease);
+  transition: box-shadow var(--t-fast) var(--ease);
 }
-input:focus { outline: none; box-shadow: var(--well-in), var(--halo); }   /* 2px accent + 5px soft accent ring */
+input[type=text]:focus, input[type=password]:focus, textarea:focus
+  { outline: none; box-shadow: var(--well-in), var(--halo); }   /* 2px accent + 5px soft accent ring */
 ```
 
 - Placeholder `--faint`. Read-only text `--muted`.
@@ -613,10 +614,10 @@ A 52 × 40 hit area holding a **40 × 24 track**.
   inset:0; border-radius:inherit;
   background: linear-gradient(180deg, var(--action-hi), var(--action));
   box-shadow: inset 0 0 0 1px var(--sel-line), 0 0 12px -2px var(--glow);
-  opacity:0; transition: opacity 180ms var(--ease);
+  opacity:0; transition: opacity var(--t-med) var(--ease);
 }
 .switch-thumb { position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
-  background: var(--muted); transition: transform 180ms var(--ease), background-color 180ms var(--ease); }
+  background: var(--muted); transition: transform var(--t-med) var(--ease), background-color var(--t-med) var(--ease); }
 :checked + .switch-track::before { opacity:1; }
 :checked + .switch-track .switch-thumb { transform: translateX(16px); background: var(--on-action); }
 :focus-visible + .switch-track { box-shadow: var(--well-in), var(--halo); }
@@ -731,7 +732,8 @@ faint for muted, hollow ring for warn).
 ```
 
 `err` = 13 % danger tint. When the server reports the failure, the tag also **shakes** (a
-timeout or an unreachable server turns it red without the shake; see 3.20):
+timeout, an unreachable server or an unexpected non-JSON answer turns it red without the
+shake; see 3.20):
 
 ```css
 @keyframes shake { 20%, 60% { transform: translateX(-3px); } 40%, 80% { transform: translateX(3px); } }  /* 360ms */
@@ -846,7 +848,7 @@ All "floating" surfaces share one recipe:
   numbers only order them against each other; the rail, a sibling at 20, paints above both
   (the save bar is centred on the main column, so it never meets the rail). Outside `.app`, on
   `<body>`: toasts 95 · offline banner 99 · select menu 200. A toast therefore shows above an
-  open dialog, and the menu above everything. Inside a view, nav items, segment buttons and the
+  open dialog, and the menu above everything. Nav items (in the rail), segment buttons and the
   hero leaf use z-index 1 to sit above their own backgrounds.
 
 ### 3.18 Misc
@@ -896,7 +898,7 @@ These details are where the page feels finished. Each has a *reason*; keep the r
    goes down.
 2. As the user holds keys, the **keycaps appear live**, one by one, each with the small
    `key-in` rise. So the user sees their chord form.
-3. Capture ends when every key is released after a main key was pressed (modifiers alone do
+3. Capture ends when every tracked key is released after a main key was pressed (modifiers alone do
    not end it), and the new chord stays. Only the first main key is tracked. A **6 s**
    deadline from the start of capture also ends it, even while keys are held: it keeps the
    chord if a main key was pressed and restores the old chord if not. Starting another capture
@@ -940,7 +942,8 @@ These details are where the page feels finished. Each has a *reason*; keep the r
   chip to use it. The "×" removes it. A successful connection test quietly *remembers* the model
   as a new chip, but only when the tested model is not empty and not already in the history.
   A new chip raises the save bar and is stored when the user hits Save; the list does not
-  re-sort (the model is inserted just before "Custom…").
+  re-sort: a model that is not yet an option is inserted just before "Custom...", and one the
+  list already has stays in its place.
 
 **Test connection**
 - Button disables; a `Testing` tag with a spinner appears; a neutral line says what is happening.
@@ -958,7 +961,7 @@ Examples: "2 of 4 keys / Groq, Gemini", "Gemini / needs a key", "Ctrl + ` / Long
 **Model pickers**
 - The first option of the four generated AI answers lists (Meta, OpenRouter, Gemini, Ollama) is
   **"Backend default (the actual model name)"**, so an empty choice still tells the truth about
-  what will run (the Polish list differs; see below). The last option is "Custom…", which
+  what will run (the Polish list differs; see below). The last option is "Custom...", which
   reveals a plain text field below and focuses it. A saved id the list does not know opens as
   Custom. Groq's chat model is not one of these lists: it is a plain text field with a native
   suggestion list (no default option, no Custom).
@@ -1187,7 +1190,8 @@ the stem's centre.
   Row pitch is `4 × (1 − 0.62·s)` px, but never less than the cell size plus one device pixel, so
   neighbours never touch. The centre line sinks by `droop × height × tipOpen × s`. Every cell
   edge snaps to a **whole device pixel** (crisp at any DPI). In device pixels, with `dpr` the
-  screen scale:
+  device pixel ratio **multiplied by the HUD size** (1, 1.3 or 1.5; `pixel_ratio()` in the
+  painter), and `round(v)` meaning `floor(v + 0.5)` (halves go up, not to even):
 
 ```
 cell    = max(1, floor(2·dpr))                         every cell has this size
