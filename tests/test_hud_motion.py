@@ -2,13 +2,19 @@
 
 Done shows on the frame the text is delivered; the clipboard wait and
 PROCESSING still run until the restore finishes.
+
+The widget (indicator.DictationIndicator) owns the state, the clock and the window. The look
+is hud_leaf.LeafPainter (tests/test_hud_leaf.py). These tests check what the widget feeds the
+painter and when it repaints. They never compare pixels (docs/engineering-notes.md, 3.5).
 """
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import io
 import math
 import os
-import threading
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -17,26 +23,24 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 
+import hud_leaf as hl
 import typer
 from app_state import AppState
 from config import Config
 from indicator import (
     GuiState,
-    _FIT_SLACK,
-    _GAP_ORB_TEXT,
-    _GAP_TEXT_CHIP,
-    _GAP_WAVE_TEXT,
-    _INSET_R,
-    _ORB,
-    _ORB_INSET,
-    _RECORDING_WAVE_W,
-    _RESIZE_AFTER_TEXT_S,
+    _BLEED,
+    _CAPTION_PAD,
+    _COMPACT_H,
+    _DT_MAX,
+    _LIVE_H,
+    _STEM_SETTLE_S,
     cubic_bezier,
-    fit_pill_width,
-    fit_recording_width,
 )
 from tests.test_clipboard_safety import ClipboardSafetyBase
 from tests.test_reliability import app_fixture
+
+FIELDS = tuple(f.name for f in dataclasses.fields(hl.Opening))
 
 
 def _qt_app():
@@ -69,6 +73,16 @@ def _close(hud) -> None:
     hud.close()
 
 
+def _settle(hud) -> None:
+    """Jump to the end of every animation, the way real time would."""
+    for tween in (hud._w_tw, hud._h_tw):
+        tween.snap(tween.b)
+    hud._phase = "open"
+    hud._phase_t0 = time.monotonic() - 10.0
+    hud._glyph_fade = 1.0
+    hud._voice.clear()
+
+
 class TestCubicBezier(unittest.TestCase):
     """The one easing primitive: CSS cubic-bezier(x1, y1, x2, y2)."""
 
@@ -89,52 +103,61 @@ class TestCubicBezier(unittest.TestCase):
         self.assertEqual(curve(1.5), 1.0)
 
 
-class TestPillWidth(unittest.TestCase):
-    def test_pure_fit_grows_with_text_and_chip(self):
-        self.assertLess(fit_pill_width(40), fit_pill_width(160))
-        self.assertLess(fit_pill_width(160), fit_pill_width(160, chip_w=24))
-        chrome = _ORB_INSET + _ORB + _GAP_ORB_TEXT + _INSET_R
-        self.assertGreaterEqual(fit_pill_width(160), chrome + 160)
-        self.assertGreaterEqual(fit_pill_width(160, 24), chrome + 160 + _GAP_TEXT_CHIP + 24)
+class TestLeafWidth(unittest.TestCase):
+    """The window and the label width follow the painter's own fit."""
 
-    def test_short_label_is_narrower_and_long_label_is_not_clipped(self):
-        from PySide6.QtGui import QFontMetrics
+    def test_the_target_label_width_is_the_painters_fit(self):
+        from PySide6.QtGui import QFontMetricsF
 
-        _, hud = _hud()
+        app, hud = _hud(state=AppState.PROCESSING, use_llm=True)
         try:
-            done = hud._target_width("Done")
-            long_label = "Clipboard not restored"
-            long_w = hud._target_width(long_label)
-            self.assertLess(done, long_w)
-            text_w = QFontMetrics(hud._font).horizontalAdvance(long_label)
-            text_room = long_w - (_ORB_INSET + _ORB + _GAP_ORB_TEXT) - _INSET_R
-            self.assertGreaterEqual(text_room, text_w)
-            # The AI chip is reserved only when it is shown.
-            self.assertGreater(hud._target_width("Transcribing", "AI"),
-                               hud._target_width("Transcribing"))
+            hud._sync_from_app()
+            metrics = QFontMetricsF(hud._font)
+            with_ai = metrics.horizontalAdvance("Thinking") + 24.0   # the AI glyph and its gap
+            self.assertAlmostEqual(hud._label_target, with_ai, places=6)
+            app.use_llm = False
+            hud._sync_from_app()  # "Transcribing", no AI mark
+            self.assertAlmostEqual(hud._label_target, metrics.horizontalAdvance("Transcribing"),
+                                   places=6)
         finally:
             _close(hud)
 
-    def test_listening_width_hugs_the_waveform_and_the_word(self):
-        from PySide6.QtGui import QFontMetrics
+    def test_listening_reserves_room_for_the_dots(self):
+        from PySide6.QtGui import QFontMetricsF
 
-        app, hud = _hud(state=AppState.RECORDING)
+        _, hud = _hud(state=AppState.RECORDING)
         try:
             hud._sync_from_app()
-            text_w = QFontMetrics(hud._font).horizontalAdvance("Listening")
-            fit = fit_recording_width(text_w)
-            chrome = (_ORB_INSET + _ORB + _GAP_ORB_TEXT + _RECORDING_WAVE_W + _GAP_WAVE_TEXT
-                      + _INSET_R + _FIT_SLACK)
-            # No reserved width: the capsule is the disc, the waveform, the word, and the insets.
-            self.assertEqual(fit, int(math.ceil(chrome + text_w)))
-            narrow = fit_recording_width(1.0)
-            self.assertLess(narrow, 252)
-            self.assertEqual(hud._pill_w, fit)
-            hud._phase = "hidden"
-            hud._pill_w = 10
-            hud._sync_geometry()
-            self.assertEqual(hud._w_tw.b, float(fit))
-            self.assertIsNone(hud._resize_hold)
+            word = QFontMetricsF(hud._font).horizontalAdvance("Listening")
+            self.assertAlmostEqual(hud._label_target, word + 17.0, places=6)
+        finally:
+            _close(hud)
+
+    def test_a_long_label_is_wider_than_a_short_one(self):
+        app, hud = _hud()
+        try:
+            hud.gui_state = GuiState.SUCCESS
+            done = hud._layout_target()[0]
+            app.last_status = "clipboard_not_restored"
+            self.assertGreater(hud._layout_target()[0], done + 40.0)
+        finally:
+            _close(hud)
+
+    def test_the_window_covers_the_leaf_the_card_and_the_shadow(self):
+        app, hud = _hud(state=AppState.PROCESSING, use_llm=True)
+        try:
+            hud._sync_from_app()
+            self.assertEqual(hud._canvas_w % 4, 0)
+            self.assertEqual(hud._canvas_h % 4, 0)
+            self.assertGreaterEqual(hud._canvas_w, hl.leaf_width(hud._label_target) + 2 * _BLEED)
+            self.assertGreaterEqual(hud._canvas_h, _COMPACT_H + 2 * _BLEED)
+            self.assertEqual(_BLEED, 32)  # the painter's shadow reaches 28 px; 12 px of rise
+            app.state = AppState.RECORDING
+            app.live_active = True
+            hud._sync_from_app()
+            self.assertGreaterEqual(hud._canvas_w, hl.CARD_MIN_W + 2 * _BLEED)
+            self.assertGreaterEqual(hud._canvas_h, _LIVE_H + 2 * _BLEED)
+            self.assertEqual(_LIVE_H, 100)  # leaf 36 + gap 6 + card 58
         finally:
             _close(hud)
 
@@ -281,52 +304,52 @@ class TestHudDeliverySync(unittest.TestCase):
         app, hud = _hud(state=AppState.PROCESSING, paste_delivered=True, last_status="success")
         try:
             hud._sync_from_app()
-            hud._phase = "open"
-            hud._w_tw.snap(hud._pill_w)
-            hud._h_tw.snap(hud._pill_h)
-            done_w = hud._pill_w
-            canvas_before = hud._canvas_w
-            app.state = AppState.IDLE
-            app.last_status = "clipboard_not_restored"
-            hud._sync_from_app()
-            self.assertGreater(hud._pill_w, done_w)
-            # Canvas grew once, up front, to hold the target.
-            self.assertGreaterEqual(hud._canvas_w, hud._pill_w + 2 * hud._pad)
-            self.assertGreaterEqual(hud._canvas_w, canvas_before)
-            # The painted width stays put until the new words are in, then 0.3 ms.
-            self.assertEqual(hud._w_tw.b, float(done_w))
-            hud._content_fade = 1.0
-            hud._release_resize(0.0)
-            self.assertEqual(hud._w_tw.b, float(done_w))
-            hud._release_resize(hud._text_in_at + _RESIZE_AFTER_TEXT_S)
-            self.assertEqual(hud._w_tw.b, float(hud._pill_w))
-            self.assertFalse(hud._w_tw.done(hud._w_tw.t0))
+            _settle(hud)
+            done_w = hud._label_target
+            resizes = []
+            real = hud.setFixedSize
+            with patch.object(hud, "setFixedSize",
+                              side_effect=lambda *a: resizes.append(a) or real(*a)):
+                app.state = AppState.IDLE
+                app.last_status = "clipboard_not_restored"
+                hud._sync_from_app()
+                self.assertGreater(hud._label_target, done_w)
+                # The window grew once, up front, to hold the target.
+                self.assertEqual(len(resizes), 1)
+                self.assertGreaterEqual(hud._canvas_w,
+                                        hl.leaf_width(hud._label_target) + 2 * _BLEED)
+                self.assertEqual(hud._w_tw.b, hud._label_target)
+                start = time.monotonic()
+                values = [hud._w_tw.value(start + i * 0.016) for i in range(60)]
+                for _ in range(30):
+                    hud._on_tick()
+                self.assertEqual(len(resizes), 1, "the window resized again while the width eased")
+            self.assertGreaterEqual(values[0], done_w)
+            self.assertLess(values[0], hud._label_target)
+            self.assertEqual(values, sorted(values))                  # one smooth move
+            self.assertLessEqual(max(values), hud._label_target)      # no overshoot
+            self.assertEqual(values[-1], hud._label_target)           # and it ends exactly
         finally:
             _close(hud)
 
     def test_a_label_change_with_no_state_change_is_not_clipped(self):
         """F7 stop: 'Finalizing', then the app clears last_status and the label is 'Transcribing'."""
-        from PySide6.QtGui import QFontMetrics
+        from PySide6.QtGui import QFontMetricsF
 
         app, hud = _hud(state=AppState.PROCESSING, last_status="finalizing")
         try:
             hud._sync_from_app()
-            hud._phase = "open"
-            hud._content_fade = 1.0  # the words of 'Finalizing' are fully in
-            hud._w_tw.snap(hud._pill_w)
-            hud._h_tw.snap(hud._pill_h)
-            finalizing_w = hud._pill_w
+            _settle(hud)
+            finalizing_w = hud._label_target
             app.last_status = None  # process_and_paste starts: same state, longer word
-            need = fit_pill_width(QFontMetrics(hud._font).horizontalAdvance("Transcribing"))
-            self.assertGreater(need, finalizing_w, "the premise: the longer word needs a wider pill")
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
-                hud._on_tick()  # the width starts moving a frame later, once the words are in
-                time.sleep(0.01)
-                if hud._pill_w >= need and hud._w_tw.b == float(hud._pill_w):
-                    break
-            self.assertGreaterEqual(hud._pill_w, need, "the label was clipped")
-            self.assertEqual(hud._w_tw.b, float(hud._pill_w))  # and the painted width is on its way
+            need = QFontMetricsF(hud._font).horizontalAdvance("Transcribing")
+            self.assertGreater(need, finalizing_w, "the premise: the longer word needs a wider label")
+            hud._on_tick()  # one tick refits the label
+            self.assertAlmostEqual(hud._label_target, need, places=6)
+            frame = hud._leaf_frame(time.monotonic() + 2.0)  # after the spring has settled
+            self.assertEqual(frame.label, "Transcribing")
+            self.assertEqual(frame.label_w, hud._label_target)
+            self.assertGreaterEqual(frame.label_w, need)
         finally:
             _close(hud)
 
@@ -334,23 +357,87 @@ class TestHudDeliverySync(unittest.TestCase):
         app, hud = _hud(state=AppState.RECORDING)
         try:
             hud._sync_from_app()
-            hud._phase = "open"
+            _settle(hud)
             hud._do_hide()
             self.assertEqual(hud._phase, "leaving")
-            hud._advance_phase(hud._phase_t0 + 10.0)
+            self.assertTrue(hud.isVisible(), "the exit must play on screen")
+            start = hud._phase_t0
+            self.assertEqual(hud._opening(start), hl.OPEN)
+            self.assertLess(hud._opening(start + 0.2).open_h, 1.0)
+            self.assertEqual(hud._opening(start + 0.2).content, 0.0)
+            end = start + hl.LEAVE_S + 0.01
+            hud._advance_phase(end)
             self.assertEqual(hud._phase, "hidden")
-            self.assertEqual(hud._appear, 0.0)
+            self.assertEqual(hud._opening(end).fade, 0.0)
+            self.assertFalse(hud.isVisible())
+        finally:
+            _close(hud)
+
+    def test_a_hide_during_the_entry_starts_from_the_current_opening_and_never_grows(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            now = time.monotonic()
+            hud._phase, hud._phase_t0 = "entering", now - 0.3
+            base = hud._opening(now)
+            self.assertNotEqual(base, hl.OPEN)
+            self.assertGreater(base.open_h, 0.0)
+            hud._begin_leave(now)
+            self.assertEqual(hud._phase, "leaving")
+            self.assertEqual(hud._opening(now), base)
+            for i in range(0, 130):
+                o = hud._opening(now + i * 0.004)
+                for name in FIELDS:
+                    self.assertLessEqual(getattr(o, name), getattr(base, name), (i, name))
+            self.assertEqual(hud._opening(now + hl.LEAVE_S).fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_a_show_during_the_exit_opens_again_from_where_the_exit_is(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            now = time.monotonic()
+            hud._begin_leave(now)
+            later = now + 0.08
+            closing = hud._opening(later)
+            self.assertLess(closing.tip, 1.0)
+            hud._begin_show(later)
+            self.assertEqual(hud._phase, "entering")
+            self.assertEqual(hud._opening(later), closing)  # no jump at the turn
+            previous = closing
+            for i in range(1, 60):
+                o = hud._opening(later + i * 0.012)
+                for name in FIELDS:
+                    self.assertGreaterEqual(getattr(o, name), getattr(previous, name), (i, name))
+                previous = o
+            self.assertEqual(hud._opening(later + hl.ENTER_S), hl.OPEN)
         finally:
             _close(hud)
 
 
 class TestLiveCaption(unittest.TestCase):
-    """F7 captions: wrapped, revealed smoothly, never wider than the pill."""
+    """F7 captions: wrapped, revealed smoothly, never wider than the card."""
 
     def _live(self, preview=""):
         app, hud = _hud(state=AppState.RECORDING, live_active=True, live_preview=preview)
         hud._sync_from_app()
         return app, hud
+
+    def _card_image(self, hud):
+        """The caption painted alone into a card-sized image: (image, card rect)."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        rect = QRectF(16, 16, hud._card_width(), hl.CARD_H)
+        image = QImage(int(rect.width()) + 32, hl.CARD_H + 32,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        hud._paint_caption(painter, rect, 1.0)
+        painter.end()
+        return image, rect
 
     def test_wrap_words_breaks_greedily_and_keeps_long_words_whole(self):
         from indicator import wrap_words
@@ -401,8 +488,8 @@ class TestLiveCaption(unittest.TestCase):
         finally:
             _close(hud)
 
-    def test_lines_fit_the_pill_and_a_new_line_slides_up(self):
-        from indicator import _CAPTION_LINE, _CAPTION_LINES, _CAPTION_PAD
+    def test_lines_fit_the_card_and_a_new_line_slides_up(self):
+        from indicator import _CAPTION_LINE, _CAPTION_LINES
         from PySide6.QtGui import QFontMetrics
         text = " ".join(f"word{i}" for i in range(60))
         _, hud = self._live(text)
@@ -416,14 +503,22 @@ class TestLiveCaption(unittest.TestCase):
                 metrics = QFontMetrics(hud._font_caption)
                 for line in hud._cap_lines:
                     self.assertLessEqual(metrics.horizontalAdvance(line),
-                                         hud._pill_w - 2 * _CAPTION_PAD, line)
+                                         hud._card_width() - 2 * _CAPTION_PAD, line)
             self.assertTrue(slid, "no line ever slid up")
             self.assertEqual(hud._cap_scroll, 0.0, "the slide did not settle")
             self.assertTrue(hud._cap_lines[-1].endswith("word59"))
         finally:
             _close(hud)
 
-    def _settle(self, hud, frames=1500):
+    def test_the_caption_room_is_the_cards_inner_width(self):
+        _, hud = self._live("hello")
+        try:
+            self.assertEqual(hud._card_width(), 420.0)   # a short label: the card keeps its minimum
+            self.assertEqual(hud._caption_room(), 420.0 - 2 * _CAPTION_PAD - 4)
+        finally:
+            _close(hud)
+
+    def _settle_caption(self, hud, frames=1500):
         for _ in range(frames):
             hud._advance_caption(0.016)
 
@@ -440,7 +535,7 @@ class TestLiveCaption(unittest.TestCase):
                 hud._advance_caption(0.016)
                 if hud._cap_last_first is not None:
                     seen.append(hud._cap_last_first)
-                if hud._cap_scroll > previous + 5.0:  # a slide jumps by a whole row (21 px)
+                if hud._cap_scroll > previous + 5.0:  # a slide jumps by a whole row
                     slides += 1
                 previous = hud._cap_scroll
             self.assertEqual(seen, sorted(seen), "the newest line moved back")
@@ -451,28 +546,21 @@ class TestLiveCaption(unittest.TestCase):
         finally:
             _close(hud)
 
-    def test_a_word_wider_than_the_pill_shows_its_end_and_stays_inside(self):
-        from indicator import _CAPTION_PAD
-        from PySide6.QtCore import QRectF
-        from PySide6.QtGui import QImage, QPainter
+    def test_a_word_wider_than_the_card_shows_its_end_and_stays_inside(self):
         long_word = "a" * 20 + "".join(chr(ord("b") + i % 20) for i in range(160)) + "END"
         for revealed in (True, False):  # fully shown, then mid fade-in
             with self.subTest(revealed=revealed):
                 _, hud = self._live(f"short words then {long_word}")
                 try:
-                    self._settle(hud, 400)
+                    self._settle_caption(hud, 400)
                     if not revealed:
                         hud._cap_shown = 3.5
                         hud._advance_caption(0.0)
                         hud._cap_shown = 3.5
                         hud._advance_caption(0.0)
-                    image = QImage(hud._canvas_w, hud._canvas_h, QImage.Format.Format_ARGB32_Premultiplied)
-                    image.fill(0)
-                    painter = QPainter(image)
-                    pill = QRectF(16, 16, hud._pill_w, hud._pill_h)
-                    hud._paint_caption(painter, pill, 0.0)
-                    painter.end()
-                    low, high = 16 + _CAPTION_PAD - 2, 16 + hud._pill_w - _CAPTION_PAD + 2
+                    image, rect = self._card_image(hud)
+                    low = rect.left() + _CAPTION_PAD - 2
+                    high = rect.right() - _CAPTION_PAD + 2
                     columns = [x for x in range(image.width())
                                if any(image.pixelColor(x, y).alpha() for y in range(image.height()))]
                     self.assertTrue(columns, "nothing was painted")
@@ -487,7 +575,7 @@ class TestLiveCaption(unittest.TestCase):
         words = [f"word{i}" for i in range(120)]
         app, hud = self._live(" ".join(words))
         try:
-            self._settle(hud)
+            self._settle_caption(hud)
             self.assertEqual(hud._cap_shown, 120.0)
             self.assertGreater(hud._cap_visible_from, 60)
             revised = list(words)
@@ -513,7 +601,7 @@ class TestLiveCaption(unittest.TestCase):
         words = [f"word{i}" for i in range(120)]
         app, hud = self._live(" ".join(words))
         try:
-            self._settle(hud)
+            self._settle_caption(hud)
             spans = self._lines_of(hud, words)
             leaving, read = spans[-3][0], spans[-2][0]
             self.assertEqual(hud._cap_visible_from, read)
@@ -538,7 +626,7 @@ class TestLiveCaption(unittest.TestCase):
             with self.subTest(edit=edit):
                 app, hud = self._live(" ".join(words))
                 try:
-                    self._settle(hud)
+                    self._settle_caption(hud)
                     edited = list(words)
                     if edit == "insert":
                         edited.insert(3, "INSERTED")
@@ -558,7 +646,7 @@ class TestLiveCaption(unittest.TestCase):
         words = [f"word{i}" for i in range(120)]
         app, hud = self._live(" ".join(words))
         try:
-            self._settle(hud)
+            self._settle_caption(hud)
             for drop in range(1, 12):
                 app.live_preview = " ".join(words[drop:])
                 hud._advance_caption(0.001)
@@ -583,11 +671,12 @@ class TestLiveCaption(unittest.TestCase):
         long_word = "".join(chr(ord("a") + i % 26) for i in range(200)) + "THE_END"
         _, hud = self._live(f"before {long_word} following")
         try:
-            self._settle(hud, 600)
-            image = QImage(hud._canvas_w, hud._canvas_h, QImage.Format.Format_ARGB32_Premultiplied)
+            self._settle_caption(hud, 600)
+            image = QImage(int(hud._card_width()) + 32, hl.CARD_H + 32,
+                           QImage.Format.Format_ARGB32_Premultiplied)
             image.fill(0)
             painter = Spy(image)
-            hud._paint_caption(painter, QRectF(16, 16, hud._pill_w, hud._pill_h), 0.0)
+            hud._paint_caption(painter, QRectF(16, 16, hud._card_width(), hl.CARD_H), 1.0)
             painter.end()
             self.assertEqual(hud._cap_lines[-2][-7:], "THE_END")  # the oversized word is the older row
             self.assertTrue(any(text.endswith("THE_END") for text in drawn), drawn)
@@ -599,11 +688,11 @@ class TestLiveCaption(unittest.TestCase):
         words = [f"word{i}" for i in range(120)]
         app, hud = self._live(" ".join(words))
         try:
-            self._settle(hud)
+            self._settle_caption(hud)
             app.live_preview = " ".join(words[10:] + ["word120", "word121"])  # slid by ten
             hud._advance_caption(0.016)
             self.assertGreater(hud._cap_shown, 105.0, "the caption started over when the head slid")
-            self._settle(hud, 200)
+            self._settle_caption(hud, 200)
             self.assertTrue(hud._cap_lines[-1].endswith("word121"))
         finally:
             _close(hud)
@@ -632,26 +721,673 @@ class TestLiveCaption(unittest.TestCase):
         finally:
             _close(hud)
 
-    def test_a_frame_with_captions_paints_without_error(self):
-        from PySide6.QtGui import QImage, QPainter
-        from PySide6.QtCore import QRectF
+    def test_a_card_with_captions_paints_text_inside_the_card(self):
         _, hud = self._live("Hello, this is a longer live caption that needs two rows to be read well.")
         try:
+            self._settle_caption(hud, 200)
+            image, rect = self._card_image(hud)
+            lit = [(x, y) for x in range(image.width()) for y in range(image.height())
+                   if image.pixelColor(x, y).alpha() > 0]
+            self.assertGreater(len(lit), 50, "nothing was painted")
+            self.assertGreaterEqual(min(y for _, y in lit), rect.top())
+            self.assertLessEqual(max(y for _, y in lit), rect.bottom())
+        finally:
+            _close(hud)
+
+    def test_with_no_words_yet_the_card_asks_for_speech(self):
+        drawn = []
+        from PySide6.QtGui import QPainter
+
+        class Spy(QPainter):
+            def drawText(self, *args):
+                if len(args) == 2 and isinstance(args[1], str):
+                    drawn.append(args[1])
+                return super().drawText(*args)
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage
+        _, hud = self._live("")
+        try:
+            image = QImage(500, 100, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            painter = Spy(image)
+            hud._paint_caption(painter, QRectF(16, 16, hud._card_width(), hl.CARD_H), 1.0)
+            painter.end()
+            self.assertEqual(drawn, ["Speak, then tap F7 to insert"])
+        finally:
+            _close(hud)
+
+
+class TestLiveLayout(unittest.TestCase):
+    """The card sits above the leaf; the leaf stays where it is."""
+
+    def test_the_card_is_above_the_leaf_and_the_leaf_does_not_move(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            frame = hud._leaf_frame(time.monotonic())
+            leaf_bottom_compact = hud.y() + frame.bottom
+            window_h_compact = hud._canvas_h
+            self.assertEqual(hud._pill_h, _COMPACT_H)
+
+            app.live_active = True
+            app.live_preview = "so the plan for next week is to ship the new pill first"
+            hud._sync_from_app()
+            self.assertEqual(hud._pill_h, _LIVE_H)
+            _settle(hud)
+            frame = hud._leaf_frame(time.monotonic())
+            self.assertGreater(hud._canvas_h, window_h_compact)   # the window grew upward
+            self.assertEqual(hud.y() + frame.bottom, leaf_bottom_compact)  # the leaf did not move
+            geo = hl.leaf_geometry(frame)
+            rect = hl.card_rect(geo, 1.0, 1.0)
+            self.assertLess(rect.bottom(), geo.top)                       # above the leaf
+            self.assertEqual(geo.top - rect.bottom(), hl.CARD_GAP)
+            self.assertAlmostEqual(rect.center().x(), hud._canvas_w / 2.0, delta=1.0)  # centred
+            self.assertGreaterEqual(rect.top(), 28.0)                     # room for the card's shadow
+            self.assertLessEqual(rect.right() + 28.0, hud._canvas_w)
+
+            app.live_active = False
+            app.live_preview = ""
+            hud._sync_from_app()
+            self.assertEqual(hud._pill_h, _COMPACT_H)
+            _settle(hud)
+            hud._on_tick()   # the window shrinks once the card has gone
+            self.assertEqual(hud._canvas_h, window_h_compact)
+            frame = hud._leaf_frame(time.monotonic())
+            self.assertEqual(hud.y() + frame.bottom, leaf_bottom_compact)
+        finally:
+            _close(hud)
+
+    def test_the_card_fades_in_with_the_height_spring(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            now = time.monotonic()
+            self.assertEqual(hud._card_progress(now), 0.0)
+            app.live_active = True
+            hud._sync_from_app()
+            values = [hud._card_progress(now + i * 0.016) for i in range(60)]
+            self.assertEqual(values, sorted(values))
+            self.assertLess(values[1], 1.0)
+            self.assertEqual(values[-1], 1.0)
+        finally:
+            _close(hud)
+
+    def test_a_frame_with_captions_paints_the_card_and_its_words(self):
+        app, hud = _hud(state=AppState.RECORDING, live_active=True,
+                        live_preview="Hello, this is a longer live caption that needs two rows.")
+        try:
+            hud._sync_from_app()
+            _settle(hud)
             for _ in range(200):
                 hud._advance_caption(0.016)
-            image = QImage(hud._canvas_w, hud._canvas_h, QImage.Format.Format_ARGB32_Premultiplied)
-            image.fill(0)
-            painter = QPainter(image)
-            hud._paint_caption(painter, QRectF(16, 16, hud._pill_w, hud._pill_h), 0.0)
-            painter.end()
-            self.assertTrue(any(image.pixelColor(x, y).alpha() for x in range(0, image.width(), 3)
-                                for y in range(60, image.height(), 3)), "nothing was painted")
+            image = hud.grab().toImage()
+            rect = hl.card_rect(hl.leaf_geometry(hud._leaf_frame(time.monotonic())), 1.0, 1.0)
+            inside = [(x, y) for x in range(int(rect.left()) + 4, int(rect.right()) - 4)
+                      for y in range(int(rect.top()) + 4, int(rect.bottom()) - 4)]
+            solid = sum(1 for x, y in inside if image.pixelColor(x, y).alpha() > 200)
+            self.assertGreater(solid, 0.9 * len(inside), "the card surface is missing")
+            bright = sum(1 for x, y in inside if image.pixelColor(x, y).red() > 150)
+            self.assertGreater(bright, 40, "no caption text on the card")
+        finally:
+            _close(hud)
+
+
+class TestStemAndAiMark(unittest.TestCase):
+    """State to stem and AI mark, as the painter receives them."""
+
+    def test_every_state_and_status_maps_to_a_stem(self):
+        from indicator import (ERROR_STATUS_LABELS, ERROR_STATUSES, SUCCESS_NOTICE_LABELS,
+                               SUCCESS_STATUSES, orb_kind)
+
+        for state in GuiState:
+            if state is GuiState.HIDDEN:
+                continue
+            statuses = [None, "unknown_status"]
+            if state is GuiState.SUCCESS:
+                statuses += list(SUCCESS_STATUSES) + list(SUCCESS_NOTICE_LABELS)
+            if state is GuiState.ERROR:
+                statuses += list(ERROR_STATUSES) + list(ERROR_STATUS_LABELS)
+            for status in statuses:
+                with self.subTest(state=state.name, status=status):
+                    self.assertIsInstance(hl.STEM_FOR_ORB[orb_kind(state, status)], hl.Stem)
+
+    def test_the_widget_picks_the_stem_from_the_state(self):
+        cases = [
+            (dict(state=AppState.RECORDING), hl.Stem.LISTEN),
+            (dict(state=AppState.PROCESSING), hl.Stem.WORK),
+            (dict(state=AppState.PROCESSING, paste_delivered=True, last_status="success"), hl.Stem.DONE),
+            (dict(state=AppState.PROCESSING, paste_delivered=True, last_status="ai_fallback"),
+             hl.Stem.NOTICE),
+            (dict(state=AppState.IDLE, last_status="empty"), hl.Stem.ERROR),
+        ]
+        for attrs, stem in cases:
+            with self.subTest(stem=stem.name):
+                _, hud = _hud(**attrs)
+                try:
+                    hud._sync_from_app()
+                    self.assertIs(hud._stem, stem)
+                    self.assertIs(hud._leaf_frame(time.monotonic()).stem, stem)
+                finally:
+                    _close(hud)
+
+    def test_the_ai_mark_is_on_only_for_recording_and_processing_with_ai(self):
+        expected = {GuiState.BOOTING: False, GuiState.RECORDING: True, GuiState.PROCESSING: True,
+                    GuiState.SUCCESS: False, GuiState.ERROR: False, GuiState.RESET: False}
+        for use_llm in (True, False):
+            for state, with_ai in expected.items():
+                with self.subTest(state=state.name, use_llm=use_llm):
+                    _, hud = _hud(use_llm=use_llm)
+                    try:
+                        hud.gui_state = state
+                        frame = hud._leaf_frame(time.monotonic())
+                        self.assertIs(frame.ai, use_llm and with_ai)
+                    finally:
+                        _close(hud)
+
+    def test_the_frame_carries_the_label_the_clock_and_the_window_geometry(self):
+        _, hud = _hud(state=AppState.RECORDING, use_llm=True)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            now = time.monotonic()
+            frame = hud._leaf_frame(now)
+            self.assertEqual(frame.label, "Listening")
+            self.assertIs(frame.voice, hud._voice)
+            self.assertEqual(frame.label_w, hud._label_target)
+            self.assertEqual(frame.cx, hud._canvas_w / 2.0)
+            self.assertEqual(frame.bottom, float(hud._canvas_h - _BLEED))
+            self.assertEqual(frame.opening, hl.OPEN)
+            self.assertEqual(frame.now, now)
+            self.assertGreaterEqual(frame.since_enter, 10.0)
+            self.assertEqual(frame.since_state, _STEM_SETTLE_S)
+        finally:
+            _close(hud)
+
+
+class TestLeafStyle(unittest.TestCase):
+    def test_every_config_choice_is_a_painter_style_with_the_same_default(self):
+        import config
+
+        self.assertEqual(
+            config.HUD_CHOICES,
+            {"HUD_" + field.upper(): values for field, values in hl.HUD_STYLE_CHOICES.items()})
+        self.assertEqual(
+            hl.HudStyle(),
+            hl.HudStyle(**{f: config.ENV_DEFAULTS["HUD_" + f.upper()] for f in hl.HUD_STYLE_CHOICES}))
+
+    def _spy(self, seen):
+        class Spy(hl.LeafPainter):
+            def paint(self, p, frame, style):
+                seen.append((frame, style))
+                super().paint(p, frame, style)
+
+        return Spy
+
+    def test_hud_shape_capsule_reaches_the_painter(self):
+        seen = []
+        with patch("indicator.LeafPainter", self._spy(seen)), \
+                patch.object(Config, "HUD_WAVEFORM", "reach"), \
+                patch.object(Config, "HUD_TEXTURE", "veins"), \
+                patch.object(Config, "HUD_EDGE", "rim"), \
+                patch.object(Config, "HUD_SHAPE", "capsule"):
+            _, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud._sync_from_app()
+                hud.grab()
+            finally:
+                _close(hud)
+        self.assertTrue(seen, "the painter was never called")
+        self.assertEqual(seen[-1][1], hl.HudStyle(shape="capsule"))
+
+    def test_all_four_choices_reach_the_painter(self):
+        seen = []
+        with patch("indicator.LeafPainter", self._spy(seen)), \
+                patch.object(Config, "HUD_WAVEFORM", "stream"), \
+                patch.object(Config, "HUD_TEXTURE", "plain"), \
+                patch.object(Config, "HUD_EDGE", "soft"), \
+                patch.object(Config, "HUD_SHAPE", "capsule"):
+            _, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud.grab()
+            finally:
+                _close(hud)
+        self.assertEqual(seen[-1][1], hl.HudStyle("stream", "plain", "soft", "capsule"))
+
+    def test_an_unknown_value_logs_one_line_and_uses_the_default_style(self):
+        seen = []
+        out = io.StringIO()
+        with patch("indicator.LeafPainter", self._spy(seen)), \
+                patch.object(Config, "HUD_WAVEFORM", "reach"), \
+                patch.object(Config, "HUD_TEXTURE", "veins"), \
+                patch.object(Config, "HUD_EDGE", "rim"), \
+                patch.object(Config, "HUD_SHAPE", "hexagon"), contextlib.redirect_stdout(out):
+            _, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud.grab()
+            finally:
+                _close(hud)
+        self.assertEqual(seen[-1][1], hl.HudStyle())
+        lines = [line for line in out.getvalue().splitlines() if "HUD style" in line]
+        self.assertEqual(len(lines), 1, out.getvalue())
+
+    def test_the_style_is_built_once(self):
+        seen = []
+        with patch("indicator.LeafPainter", self._spy(seen)):
+            _, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud.grab()
+                first = seen[-1][1]
+                hud.grab()
+                self.assertIs(seen[-1][1], first)
+            finally:
+                _close(hud)
+
+    def test_the_label_font_the_painter_gets_is_the_brand_family(self):
+        from indicator import BRAND_FONT_FAMILY
+
+        received = []
+
+        class Spy(hl.LeafPainter):
+            def __init__(self, font):
+                received.append(font)
+                super().__init__(font)
+
+        with patch("indicator.LeafPainter", Spy):
+            _, hud = _hud()
+            try:
+                self.assertEqual(len(received), 1)
+                self.assertEqual(received[0].family(), BRAND_FONT_FAMILY)
+                self.assertEqual(received[0].pixelSize(), hl.LABEL_PX)
+            finally:
+                _close(hud)
+
+
+class TestVoice(unittest.TestCase):
+    def _recording(self, bands=None, raises=None, recorder=True):
+        rec = MagicMock()
+        if raises is not None:
+            rec.get_bands.side_effect = raises
+        else:
+            rec.get_bands.side_effect = lambda n: list(bands)
+        app, hud = _hud(state=AppState.RECORDING, recorder=rec if recorder else None)
+        hud._sync_from_app()
+        return app, hud, rec
+
+    def test_a_high_band_only_lights_the_top_row(self):
+        _, hud, rec = self._recording([0.0, 0.0, 0.0, 0.0, 1.0])
+        try:
+            hud._advance_voice(0.05)
+            self.assertGreater(hud._voice.rows[0], 0.8)      # 1 - exp(-0.05 / 0.025) = 0.865
+            self.assertEqual(hud._voice.rows[1:], [0.0] * 4)
+            rec.get_bands.assert_called_with(5)
+        finally:
+            _close(hud)
+
+    def test_a_low_band_only_lights_the_bottom_row(self):
+        _, hud, _ = self._recording([1.0, 0.0, 0.0, 0.0, 0.0])
+        try:
+            hud._advance_voice(0.05)
+            self.assertGreater(hud._voice.rows[4], 0.8)
+            self.assertEqual(hud._voice.rows[:4], [0.0] * 4)
+        finally:
+            _close(hud)
+
+    def test_a_recorder_that_raises_reads_as_silence(self):
+        _, hud, _ = self._recording(raises=RuntimeError("stream gone"))
+        try:
+            hud._advance_voice(0.1)
+            self.assertEqual(hud._voice.rows, [0.0] * 5)
+            self.assertEqual(hud._voice.level, 0.0)
+        finally:
+            _close(hud)
+
+    def test_a_wrong_length_or_a_missing_recorder_reads_as_silence(self):
+        _, hud, _ = self._recording([1.0, 1.0, 1.0])
+        try:
+            hud._advance_voice(0.1)
+            self.assertEqual(hud._voice.rows, [0.0] * 5)
+        finally:
+            _close(hud)
+        _, hud, _ = self._recording([1.0] * 5, recorder=False)
+        try:
+            hud._advance_voice(0.1)
+            self.assertEqual(hud._voice.rows, [0.0] * 5)
+        finally:
+            _close(hud)
+        _, hud = _hud(state=AppState.RECORDING)   # a MagicMock recorder: not five numbers
+        try:
+            hud.app.recorder = MagicMock()
+            hud._sync_from_app()
+            hud._advance_voice(0.1)
+            self.assertEqual(hud._voice.rows, [0.0] * 5)
+        finally:
+            _close(hud)
+
+    def test_out_of_range_bands_are_clamped(self):
+        _, hud, _ = self._recording([7.0, -3.0, 0.0, 0.0, 0.0])
+        try:
+            hud._advance_voice(1.0)
+            self.assertLessEqual(max(hud._voice.rows), 1.0)
+            self.assertGreaterEqual(min(hud._voice.rows), 0.0)
+        finally:
+            _close(hud)
+
+    def test_outside_recording_the_voice_decays_to_exact_rest_and_a_new_recording_clears_it(self):
+        app, hud, _ = self._recording([0.0, 0.2, 0.5, 0.8, 1.0])
+        try:
+            for _ in range(10):
+                hud._advance_voice(0.05)
+            self.assertGreater(hud._voice.level, 0.1)
+            app.state = AppState.PROCESSING
+            hud._sync_from_app()
+            hud._advance_voice(0.05)
+            self.assertGreater(hud._voice.rows[0], 0.0)   # decaying, not gone
+            for _ in range(200):
+                hud._advance_voice(0.05)
+            self.assertEqual(hud._voice.rows, [0.0] * 5)  # exactly at rest
+            self.assertEqual(hud._voice.level, 0.0)
+            hud._voice.rows = [0.9] * 5
+            hud._voice.level = 0.9
+            app.state = AppState.RECORDING
+            hud._sync_from_app()
+            self.assertEqual(hud._voice.rows, [0.0] * 5)  # a new recording starts clean
+            self.assertEqual(hud._voice.level, 0.0)
+        finally:
+            _close(hud)
+
+    def test_a_stalled_tick_never_jumps_the_voice(self):
+        _, hud, _ = self._recording([1.0] * 5)
+        try:
+            hud._last_tick = time.monotonic() - 5.0     # the timer stalled for 5 s
+            hud._on_tick()
+            ceiling = 1.0 - math.exp(-_DT_MAX / 0.025)  # one capped step
+            self.assertLessEqual(hud._voice.rows[0], ceiling + 1e-9)
+        finally:
+            _close(hud)
+
+
+class TestStemClock(unittest.TestCase):
+    """The stem timeline restarts when the stem changes, whatever caused it."""
+
+    def _open_done(self):
+        app, hud = _hud(state=AppState.PROCESSING, paste_delivered=True, last_status="success")
+        hud._sync_from_app()
+        _settle(hud)
+        self.assertIs(hud._stem_now(), hl.Stem.DONE)
+        return app, hud
+
+    def test_the_clock_restarts_only_when_the_stem_changes(self):
+        app, hud = _hud(state=AppState.PROCESSING)
+        try:
+            hud._sync_from_app()
+            hud._glyph_fade = 0.6
+            hud._stem_now()
+            self.assertEqual(hud._glyph_fade, 0.6)    # BOOTING and PROCESSING share the stem
+            app.state = AppState.RECORDING
+            hud._sync_from_app()
+            self.assertIs(hud._stem, hl.Stem.LISTEN)
+            self.assertEqual(hud._glyph_fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_reset_flash_restarts_the_clock_from_done(self):
+        _, hud = self._open_done()
+        try:
+            hud._do_flash_reset()
+            self.assertIs(hud._stem_now(), hl.Stem.NOTICE)
+            self.assertEqual(hud._glyph_fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_a_notice_set_while_processing_still_restarts_the_clock(self):
+        app, hud = self._open_done()
+        try:
+            app.last_status = "ai_fallback"  # main sets it before IDLE, with no notify
+            self.assertIs(hud._stem_now(), hl.Stem.NOTICE)
+            self.assertEqual(hud._glyph_fade, 0.0)
+        finally:
+            _close(hud)
+
+    def test_the_clock_reaches_the_end_exactly_and_is_frame_rate_independent(self):
+        results = {}
+        for fps in (30, 120):
+            _, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud._sync_from_app()
+                for _ in range(fps // 5):     # 0.2 s
+                    hud._advance_stem(1.0 / fps)
+                results[fps] = hud._glyph_fade
+                for _ in range(fps * 3):
+                    hud._advance_stem(1.0 / fps)
+                self.assertEqual(hud._glyph_fade, 1.0)
+                self.assertEqual(hud._leaf_frame(time.monotonic()).since_state, _STEM_SETTLE_S)
+            finally:
+                _close(hud)
+        self.assertAlmostEqual(results[30], results[120], places=9)
+        self.assertAlmostEqual(results[30], 0.2 / _STEM_SETTLE_S, places=9)
+
+    def test_waking_from_the_slow_tick_does_not_count_the_wait(self):
+        _, hud = _hud()
+        try:
+            hud._tick.setInterval(250)
+            hud._last_tick = 0.0
+            hud._wake_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+            self.assertIsNone(hud._last_tick)  # the next tick steps one nominal frame
+        finally:
+            _close(hud)
+
+
+class TestErrorDroop(unittest.TestCase):
+    def _droop_after(self, hud, fps, seconds):
+        for _ in range(round(fps * seconds)):
+            hud._advance_stem(1.0 / fps)
+        return hud._droop_now()
+
+    def test_the_leaf_droops_for_an_error_and_comes_back_exactly(self):
+        mid = {}
+        for fps in (30, 120):
+            app, hud = _hud(state=AppState.RECORDING)
+            try:
+                hud._sync_from_app()
+                _settle(hud)
+                self.assertEqual(hud._droop_now(), hl.DROOP)
+                app.state = AppState.IDLE
+                app.last_status = "empty"
+                hud._sync_from_app()
+                self.assertIs(hud._stem, hl.Stem.ERROR)
+                self.assertEqual(hud._droop_now(), hl.DROOP)       # starts where it was
+                mid[fps] = self._droop_after(hud, fps, 0.2)
+                self.assertGreater(mid[fps], hl.DROOP)
+                self.assertLess(mid[fps], hl.DROOP_ERROR)
+                self.assertEqual(self._droop_after(hud, fps, 3.0), hl.DROOP_ERROR)
+                self.assertEqual(hud._leaf_frame(time.monotonic()).droop, hl.DROOP_ERROR)
+
+                app.state = AppState.RECORDING
+                app.last_status = None
+                hud._sync_from_app()
+                self.assertIs(hud._stem, hl.Stem.LISTEN)
+                self.assertEqual(hud._droop_now(), hl.DROOP_ERROR)   # continuous at the turn
+                self.assertEqual(self._droop_after(hud, fps, 3.0), hl.DROOP)
+            finally:
+                _close(hud)
+        self.assertAlmostEqual(mid[30], mid[120], places=9)
+
+    def test_a_change_in_the_middle_of_the_ease_continues_from_where_it_is(self):
+        app, hud = _hud(state=AppState.RECORDING)
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            app.state = AppState.IDLE
+            app.last_status = "empty"
+            hud._sync_from_app()
+            partway = self._droop_after(hud, 60, 0.15)
+            app.state = AppState.RECORDING
+            app.last_status = None
+            hud._sync_from_app()
+            self.assertEqual(hud._droop_now(), partway)
+            self.assertEqual(self._droop_after(hud, 60, 3.0), hl.DROOP)
+        finally:
+            _close(hud)
+
+    def test_a_fresh_entry_starts_at_the_droop_of_its_stem(self):
+        app, hud = _hud(state=AppState.IDLE, last_status="empty")
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            self.assertEqual(hud._droop_now(), hl.DROOP_ERROR)
+            hud._do_hide()
+            hud._advance_phase(hud._phase_t0 + 10.0)
+            self.assertEqual(hud._phase, "hidden")
+            app.last_status = None
+            app.state = AppState.RECORDING
+            hud._sync_from_app()
+            self.assertEqual(hud._phase, "entering")
+            self.assertEqual(hud._droop_now(), hl.DROOP)
+        finally:
+            _close(hud)
+
+
+class TestTick(unittest.TestCase):
+    def _cases(self):
+        return {
+            "Done": dict(state=AppState.PROCESSING, paste_delivered=True, last_status="success"),
+            "Notice": dict(state=AppState.PROCESSING, paste_delivered=True, last_status="ai_fallback"),
+            "Error": dict(state=AppState.IDLE, last_status="empty"),
+        }
+
+    def test_a_settled_done_notice_or_error_uses_the_slow_tick(self):
+        for name, attrs in self._cases().items():
+            with self.subTest(name=name):
+                _, hud = _hud(**attrs)
+                try:
+                    hud._sync_from_app()
+                    self.assertEqual(hud._tick.interval(), 16)   # the entry animates
+                    _settle(hud)
+                    hud._on_tick()
+                    self.assertEqual(hud._tick.interval(), 250)
+                    hud._glyph_fade = 0.2     # the stem is still drawing its check or cross
+                    hud._on_tick()
+                    self.assertEqual(hud._tick.interval(), 16)
+                finally:
+                    _close(hud)
+
+    def test_a_reset_notice_settles_to_the_slow_tick_too(self):
+        _, hud = _hud()
+        try:
+            hud._do_flash_reset()
+            _settle(hud)
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 250)
+        finally:
+            _close(hud)
+
+    def test_recording_and_processing_never_use_the_slow_tick(self):
+        for name, attrs in (("Listening", dict(state=AppState.RECORDING)),
+                            ("Working", dict(state=AppState.PROCESSING))):
+            with self.subTest(name=name):
+                _, hud = _hud(**attrs)
+                try:
+                    hud._sync_from_app()
+                    _settle(hud)
+                    hud._on_tick()
+                    self.assertEqual(hud._tick.interval(), 16)
+                finally:
+                    _close(hud)
+
+    def test_a_done_leaf_keeps_the_fast_tick_until_the_seed_has_gone(self):
+        _, hud = _hud(**self._cases()["Done"])
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            hud._glyph_fade = 0.9
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+            hud._glyph_fade = 1.0
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 250)
+        finally:
+            _close(hud)
+
+    def test_a_voice_that_is_still_fading_keeps_the_fast_tick(self):
+        _, hud = _hud(**self._cases()["Error"])
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            hud._voice.rows = [0.3] * 5
+            hud._voice.level = 0.3
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+        finally:
+            _close(hud)
+
+    def test_the_entry_keeps_the_fast_tick_until_the_vein_sweep_is_over(self):
+        _, hud = _hud(**self._cases()["Error"])
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            hud._phase_t0 = time.monotonic() - hl.ENTER_S * 1.05
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 16)
+            hud._phase_t0 = time.monotonic() - hl.ENTER_S * 1.2
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 250)
+        finally:
+            _close(hud)
+
+    def test_the_slow_frames_are_identical_to_the_fast_ones(self):
+        _, hud = _hud(**self._cases()["Error"])
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            hud._on_tick()
+            self.assertEqual(hud._tick.interval(), 250)
+            first = hud.grab().toImage()
+            for _ in range(40):  # what the 60 FPS timer would have drawn meanwhile
+                hud._on_tick()
+            second = hud.grab().toImage()
+            self.assertEqual(first, second)
+        finally:
+            _close(hud)
+
+
+class TestPainterCaches(unittest.TestCase):
+    """The painter caches the settled layers; the widget must never serve a stale one."""
+
+    def test_a_settled_leaf_repaints_without_rebuilding_and_a_moving_one_never_reuses(self):
+        _, hud = _hud(state=AppState.IDLE, last_status="empty")
+        try:
+            hud._sync_from_app()
+            _settle(hud)
+            with patch.object(hl, "_build_shadow", wraps=hl._build_shadow) as build:
+                hud.grab()
+                built = build.call_count
+                self.assertGreaterEqual(built, 1)
+                hud.grab()
+                hud.grab()
+                self.assertEqual(build.call_count, built, "a settled frame was rebuilt")
+
+                hud._w_tw.to(hud._label_target + 60, time.monotonic())   # a width change in flight
+                for _ in range(3):
+                    time.sleep(0.03)   # the Windows clock ticks every 15.6 ms
+                    hud.grab()
+                self.assertGreaterEqual(build.call_count, built + 3,
+                                        "a moving frame reused a stale layer")
+
+                _settle(hud)   # the move ends; the new size is built once and then reused
+                hud.grab()
+                again = build.call_count
+                hud.grab()
+                self.assertEqual(build.call_count, again)
         finally:
             _close(hud)
 
 
 class TestBrandLook(unittest.TestCase):
-    """The pill shares the Odicto Mobile / setup page tokens and font."""
+    """The leaf shares the Odicto Mobile / setup page tokens and font."""
 
     def test_brand_font_loads_from_the_install_root(self):
         import tempfile
@@ -664,13 +1400,13 @@ class TestBrandLook(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty:
             self.assertIsNone(load_brand_font(Path(empty)))  # missing file: system face
 
-    def test_the_pill_paints_with_the_brand_font(self):
+    def test_the_caption_paints_with_the_brand_font(self):
         from indicator import BRAND_FONT_FAMILY
 
         _, hud = _hud()
         try:
             self.assertEqual(hud._font.family(), BRAND_FONT_FAMILY)
-            self.assertEqual(hud._font_chip.family(), BRAND_FONT_FAMILY)
+            self.assertEqual(hud._font_caption.family(), BRAND_FONT_FAMILY)
         finally:
             _close(hud)
 
@@ -690,17 +1426,6 @@ class TestBrandLook(unittest.TestCase):
         for token, colour in pairs.items():
             self.assertEqual(colour.name(), tokens[token].lower(), token)
 
-    def test_each_state_has_the_phone_disc(self):
-        from indicator import orb_kind
-
-        self.assertEqual(orb_kind(GuiState.RECORDING), "listen")
-        self.assertEqual(orb_kind(GuiState.BOOTING), "wait")
-        self.assertEqual(orb_kind(GuiState.PROCESSING), "wait")
-        self.assertEqual(orb_kind(GuiState.SUCCESS, "success"), "done")
-        self.assertEqual(orb_kind(GuiState.SUCCESS, "clipboard_not_restored"), "notice")
-        self.assertEqual(orb_kind(GuiState.ERROR, "empty"), "error")
-        self.assertEqual(orb_kind(GuiState.RESET), "reset")
-
 
 class TestMotionCurves(unittest.TestCase):
     def test_brand_easing_decelerates_and_exit_easing_accelerates(self):
@@ -717,19 +1442,8 @@ class TestMotionCurves(unittest.TestCase):
         self.assertLess(ease_accelerate(0.25), 0.2)     # an exit starts gently, ends fast
 
     def test_exit_is_shorter_than_entry_and_both_are_brief(self):
-        from indicator import _ENTER_S, _LEAVE_S
-
-        self.assertLess(_LEAVE_S, _ENTER_S)
-        self.assertLessEqual(_ENTER_S, 0.4)
-
-    def test_disc_pop_overshoots_once_and_ends_exactly_at_rest(self):
-        from indicator import _POP_FROM, pop_scale
-
-        self.assertAlmostEqual(pop_scale(0.0), _POP_FROM)
-        peak = max(pop_scale(i / 200) for i in range(201))
-        self.assertGreater(peak, 1.0)
-        self.assertLess(peak, 1.03)  # a soft overshoot, not a bounce
-        self.assertEqual(pop_scale(1.0), 1.0)
+        self.assertLess(hl.LEAVE_S, hl.ENTER_S)
+        self.assertLessEqual(hl.ENTER_S, 0.7)
 
 
 class TestSizeSpring(unittest.TestCase):
@@ -767,126 +1481,6 @@ class TestSizeSpring(unittest.TestCase):
         self.assertEqual(s.value(0.1), before)               # no jump at the retarget
         self.assertGreater(s.value(0.116), before)           # momentum carries on briefly
         self.assertFalse(s.done(0.1))
-
-
-class TestWaveform(unittest.TestCase):
-    def _recording_hud(self, level):
-        recorder = MagicMock()
-        recorder.get_waveform.side_effect = lambda n: [level] * n
-        app, hud = _hud(state=AppState.RECORDING, recorder=recorder)
-        hud._sync_from_app()
-        return app, hud
-
-    def test_voice_rises_fast_and_falls_slowly(self):
-        app, hud = self._recording_hud(0.5)
-        try:
-            hud._advance_wave(0.05)
-            rise = hud._level
-            self.assertGreater(rise, 0.8 * min(1.0, 0.75 ** 0.7))  # most of the way in 50 ms
-            app.recorder.get_waveform.side_effect = lambda n: [0.0] * n
-            hud._advance_wave(0.05)
-            self.assertGreater(hud._level, 0.5 * rise)  # release is slower than attack
-        finally:
-            _close(hud)
-
-    def test_smoothing_is_the_same_at_any_frame_interval(self):
-        _, one = self._recording_hud(0.4)
-        _, three = self._recording_hud(0.4)
-        try:
-            one._advance_wave(0.048)
-            for _ in range(3):
-                three._advance_wave(0.016)
-            self.assertAlmostEqual(one._level, three._level, places=9)
-            for a, b in zip(one._bars, three._bars):
-                self.assertAlmostEqual(a, b, places=9)
-        finally:
-            _close(one)
-            _close(three)
-
-    def test_centre_bars_move_more_than_end_bars(self):
-        _, hud = self._recording_hud(0.6)
-        try:
-            for _ in range(20):
-                hud._advance_wave(0.016)
-            mid = len(hud._bars) // 2
-            self.assertGreater(hud._bars[mid], 2 * hud._bars[0])
-            self.assertAlmostEqual(hud._bars[0], hud._bars[-1])
-        finally:
-            _close(hud)
-
-    def test_a_broken_recorder_reads_as_silence(self):
-        recorder = MagicMock()
-        recorder.get_waveform.side_effect = RuntimeError("stream gone")
-        _, hud = _hud(state=AppState.RECORDING, recorder=recorder)
-        try:
-            hud._sync_from_app()
-            hud._advance_wave(0.1)
-            self.assertEqual(hud._level, 0.0)
-        finally:
-            _close(hud)
-
-
-class TestDiscCrossFade(unittest.TestCase):
-    """The disc cross-fades from the disc on screen, whatever changed it."""
-
-    def _open_done(self):
-        app, hud = _hud(state=AppState.PROCESSING, paste_delivered=True, last_status="success")
-        hud._sync_from_app()
-        hud._phase = "open"
-        hud._glyph_fade = 1.0
-        self.assertEqual(hud._orb_now(), "done")
-        return app, hud
-
-    def test_reset_flash_fades_from_done_not_a_stale_disc(self):
-        _, hud = self._open_done()
-        try:
-            hud._do_flash_reset()
-            self.assertEqual(hud._orb_now(), "reset")
-            self.assertEqual(hud._last_orb, "done")
-            self.assertEqual(hud._glyph_fade, 0.0)
-        finally:
-            _close(hud)
-
-    def test_a_notice_set_while_processing_still_cross_fades(self):
-        app, hud = self._open_done()
-        try:
-            app.last_status = "ai_fallback"  # main sets it before IDLE, with no notify
-            self.assertEqual(hud._orb_now(), "notice")
-            self.assertEqual(hud._last_orb, "done")
-            self.assertEqual(hud._glyph_fade, 0.0)
-        finally:
-            _close(hud)
-
-    def test_waking_from_the_slow_tick_does_not_count_the_wait(self):
-        _, hud = _hud()
-        try:
-            hud._tick.setInterval(250)
-            hud._last_tick = 0.0
-            hud._wake_tick()
-            self.assertEqual(hud._tick.interval(), 16)
-            self.assertIsNone(hud._last_tick)  # the next tick steps one nominal frame
-        finally:
-            _close(hud)
-
-
-class TestShadowCache(unittest.TestCase):
-    def test_a_settled_pill_draws_its_shadow_once_and_a_moving_one_never_caches(self):
-        app, hud = _hud(state=AppState.IDLE, last_status="empty")
-        try:
-            hud._sync_from_app()
-            hud._w_tw.to(hud._pill_w + 60, time.monotonic())  # a size change in progress
-            hud._phase = "open"
-            hud._resize_hold = None
-            hud.grab()
-            self.assertIsNone(hud._shadow_cache)
-            hud._w_tw.snap(hud._pill_w)
-            hud._h_tw.snap(hud._pill_h)
-            hud.grab()
-            first = hud._shadow_cache[1]
-            hud.grab()
-            self.assertIs(hud._shadow_cache[1], first)  # reused, not redrawn
-        finally:
-            _close(hud)
 
 
 if __name__ == "__main__":

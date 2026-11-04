@@ -1,21 +1,23 @@
 """
-Odicto floating status HUD — the Odicto Mobile voice bubble, at desktop size.
+Odicto floating status HUD: the "leaf".
 
-Design language (shared with Odicto Mobile and the setup page):
-  - Graphite capsule, 1 px hairline, soft neutral shadow; no coloured body wash
-  - Pale jade accent (#8EDCBB) for waveform, spinner, halo and chips only
-  - A status disc at the left end, the phone's disc language: jade action fill while
-    listening, a raised disc with a jade arc while working, pale jade / amber / soft
-    red with a dark glyph for done / done-with-notice / error
+The look is one pure painter, hud_leaf.LeafPainter. This module owns what the painter
+does not: the state (GuiState and the stem it maps to), the clock, the label width spring,
+the voice envelope, the F7 caption text and the window.
+
+  - Each tick the widget builds one hud_leaf.LeafFrame and the painter draws all of it.
+    With F7 live captions a card sits above the leaf; the window grows upward, so the
+    leaf's bottom edge never moves.
   - Instrument Sans (shipped in assets/fonts), Segoe UI Variable as fallback
-  - Motion: sizes follow a critically damped spring (no bounce); entries use
-    cubic-bezier(0.2, 0, 0, 1), exits accelerate and finish sooner than entries;
-    every rate is per second, so the look is the same at any frame interval
+  - Motion: the label width follows a critically damped spring (no bounce); the entry and
+    the exit are the painter's timelines; every rate is per second, so the look is the
+    same at any frame interval
   - Click-through, no focus steal, always on top, bottom-center
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import threading
 import os
@@ -40,18 +42,16 @@ from PySide6.QtGui import (
     QGuiApplication,
     QIcon,
     QPainter,
-    QPainterPath,
-    QPen,
-    QBrush,
-    QLinearGradient,
     QPaintEvent,
     QFontMetrics,
     QFontMetricsF,
     QPixmap,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
+import hud_leaf as hl
+from config import Config
+from hud_leaf import STEM_FOR_ORB, HudStyle, LeafFrame, LeafPainter, VoiceEnvelope
 from platforms import apply_window_exstyles
 from paths import ROOT
 
@@ -134,14 +134,11 @@ class GuiState(Enum):
 class _Theme:
     """Odicto Mobile tokens (Odicto-Mobile repo: apps/mobile/src/voice.css, VoiceControlView.kt).
 
-    The setup page carries the same values; TestBrandLook keeps the two equal.
+    The setup page carries the same values; TestBrandLook keeps the two equal, and
+    tests/test_hud_leaf.py keeps the painter's greens (hud_leaf.JADE, MOON, WARN, DANGER, INK)
+    equal to them. The widget itself uses ``text``, ``muted`` and ``action`` (the caption card
+    and the tray fallback icon); the rest are the shared tokens, kept so the three stay equal.
     """
-
-    # Capsule: the phone bubble (#212326) split into a faint top-to-bottom fall.
-    surface_top = QColor(0x26, 0x29, 0x2C, 247)
-    surface_bot = QColor(0x1D, 0x1F, 0x22, 247)
-    hairline = QColor(0xE7, 0xE5, 0xDF, 31)      # text colour at 12 %
-    top_light = QColor(255, 255, 255, 18)       # 1 px light along the top edge
 
     text = QColor(0xE7, 0xE5, 0xDF)
     muted = QColor(0xB2, 0xB5, 0xB5)
@@ -150,88 +147,39 @@ class _Theme:
     action_hi = QColor(0x2C, 0x78, 0x60)
     on_action = QColor(0xF4, 0xF6, 0xF1)
     raised = QColor(0x30, 0x34, 0x38)
-    ink = QColor(0x17, 0x19, 0x1C)              # dark glyph on a light disc
+    ink = QColor(0x17, 0x19, 0x1C)              # dark glyph on a light surface
     warn = QColor(0xF2, 0xC2, 0x7A)
     danger = QColor(0xF2, 0xA3, 0x9B)
 
-    chip_fill = QColor(0x8E, 0xDC, 0xBB, 33)    # jade tint, 13 %
-    chip_border = QColor(0x8E, 0xDC, 0xBB, 77)  # 30 %
-    disc_track = QColor(0xE7, 0xE5, 0xDF, 26)
 
+# Window. The leaf is drawn inside a fixed canvas. Outside the leaf (and the card) the
+# painter draws its shadow up to 28 px away, and the entry starts the leaf 12 px low.
+_BLEED = 32                 # canvas margin on every side (a multiple of 4)
+_BOTTOM_GAP = 64            # work area bottom to the leaf's bottom edge, as the pill had it
+_COMPACT_H = hl.LEAF_H
+_LIVE_H = hl.LEAF_H + hl.CARD_GAP + hl.CARD_H   # the leaf and the caption card above it
 
-# Compact layout: [ inset | disc | gap | (waveform | gap)? | label | (gap + chip)? | inset ]
-_COMPACT_H = 44
-_ORB = 30                                  # status disc diameter
-_ORB_INSET = (_COMPACT_H - _ORB) // 2      # 7: the disc is concentric with the capsule end
-_GAP_ORB_TEXT = 10
-_INSET_R = 16
-_GAP_TEXT_CHIP = 8
-_FIT_SLACK = 4.0           # absorbs paint-time metric rounding (HiDPI)
-_MIN_PILL_W = 96
-_CHIP_H = 20
-_CHIP_PAD_X = 8
-_RECORDING_BARS = 13
-_RECORDING_BAR_W = 2.0
-# A 4 px pitch lands bar edges on whole device pixels at 1.25x, 1.5x and 2x.
-_RECORDING_BAR_GAP = 2.0
-# The slot is the bars themselves, so Listening has no empty track beside them.
-_RECORDING_WAVE_W = (
-    _RECORDING_BARS * _RECORDING_BAR_W
-    + (_RECORDING_BARS - 1) * _RECORDING_BAR_GAP
-)
-_GAP_WAVE_TEXT = 12
-_WAVE_MIN_H = 3.0          # a silent bar is a dot, never gone
-_WAVE_MAX_H = 20.0
-# Live captions (F7): two wrapped lines under the status row, newest at the bottom.
-_CAPTION_PX = 15
-_CAPTION_LINE = 21         # line pitch
+# Live captions (F7): two wrapped lines on the card, newest at the bottom. The card is
+# drawn by the painter; the text is laid out here.
+_CAPTION_PX = 14
+_CAPTION_LINE = 20         # line pitch
 _CAPTION_LINES = 2
-_CAPTION_TOP_GAP = 4       # status row to the first caption row
-_CAPTION_BOTTOM = 10
-_CAPTION_PAD = 20          # left and right
+_CAPTION_PAD = 18          # left and right
+_CAPTION_ALPHA = 0.92      # the ink of the newest line
 _CAPTION_OLD_ALPHA = 0.55  # the older line recedes
 _CAPTION_WORDS_PER_S = 9.0 # at least this fast, so a chunk of words never lags behind speech
 _CAPTION_CATCHUP_S = 0.18  # a larger backlog is caught up faster: ~63 % of it in this time
 _CAPTION_SCROLL_TAU = 0.07 # a new line slides up into place
-_LIVE_MIN_W = 480
-_LIVE_H = _COMPACT_H + _CAPTION_TOP_GAP + _CAPTION_LINES * _CAPTION_LINE + _CAPTION_BOTTOM
-_PAD = 16                  # shadow bleed around the capsule (a multiple of 4)
-# (grow px, drop px, alpha): ten faint layers falling off, then a tight contact shadow.
-_SHADOW_LAYERS = tuple(
-    (i * 1.1, 1.5 + i * 0.6, int(16 * (1.0 - (i - 1) / 11.0) ** 1.6)) for i in range(10, 0, -1)
-) + ((0.0, 0.75, 34),)
 
-# Motion, in seconds. Entries ease with cubic-bezier(0.2, 0, 0, 1); exits accelerate.
-_RISE_S = 0.20             # droplet rises from below bottom-center
-_SPREAD_AT_S = 0.08        # spread overlaps the rise
-_SPREAD_S = 0.30           # droplet spreads left and right to the capsule
-# The capsule moves this long after the new words are fully in, so a shrink
-# cannot clip the longer label while that label is still on screen.
-_RESIZE_AFTER_TEXT_S = 0.0003
-_WORDS_OUT_S = 0.10        # exit: words fade first
-_COLLAPSE_AT_S = 0.04
-_COLLAPSE_S = 0.20         # exit: capsule contracts to the droplet
-_DROP_AT_S = _COLLAPSE_AT_S + _COLLAPSE_S - 0.04
-_DROP_S = 0.14             # exit: droplet drops and fades
-_ENTER_S = _SPREAD_AT_S + _SPREAD_S
-_LEAVE_S = _DROP_AT_S + _DROP_S
-_DROP_PX = 8.0
-_DROPLET_MIN = 0.8         # droplet diameter at the start of the rise / end of the drop
+# Motion, in seconds. The entry and the exit are hud_leaf.ENTER_S and LEAVE_S.
 _SIZE_OMEGA = 20.5         # size spring, critically damped: within 1 % in ~0.33 s
-_WORDS_IN_S = 0.18         # new words fade in (and rise _WORDS_RISE_PX)
-_WORDS_RISE_PX = 3.0
-_GLYPH_S = 0.30            # disc change: cross-fade in the first half, pop settles by the end
-_POP_FROM = 0.86           # the new disc starts at this scale
-_POP_OMEGA = 26.0
-_POP_ZETA = 0.7            # a small, single overshoot on the disc only
-_CHECK_S = 0.30            # check / cross stroke draws on
-_SPIN_REV_S = 1.0          # working arc: one turn per second, as on the phone
-_WAVE_ATTACK_S = 0.025     # level rises fast...
-_WAVE_RELEASE_S = 0.14     # ...and falls slowly
-_WAVE_IDLE_S = 0.12
+_STEM_SETTLE_S = 1.4       # the stem's timeline: morph 0.28 s, glyph to 0.38 s, seed to 1.32 s
+_DROOP_S = 0.5             # the tip droop eases over this long after a stem change
+_SWEEP_END_S = hl.ENTER_S * 1.1   # the painter's vein sweep lasts until here
+_VOICE_REST = 1e-3         # below this a fading voice is cleared (alpha under 1/255 per pixel)
 _DT_MAX = 0.05             # a stalled or slowed tick never jumps an animation
 _SUCCESS_HOLD_MS = 1200
-# Paint interval while the pill animates, and while it only holds a finished,
+# Paint interval while the leaf animates, and while it only holds a finished,
 # unchanging frame (a standing error such as "Mic unavailable").
 _ANIM_TICK_MS = 16
 _STATIC_TICK_MS = 250
@@ -264,34 +212,6 @@ ease_standard = cubic_bezier(0.2, 0.0, 0.0, 1.0)
 ease_accelerate = cubic_bezier(0.3, 0.0, 1.0, 1.0)
 
 
-def pop_scale(progress: float) -> float:
-    """Disc scale for a glyph change at ``progress`` (0..1 of _GLYPH_S): one soft overshoot.
-
-    The step response of an underdamped spring, so it rises past 1 once and
-    settles. Exactly 1.0 at progress >= 1, so a finished frame is static.
-    """
-    if progress >= 1.0:
-        return 1.0
-    t = max(0.0, progress) * _GLYPH_S
-    wd = _POP_OMEGA * math.sqrt(1.0 - _POP_ZETA * _POP_ZETA)
-    decay = math.exp(-_POP_ZETA * _POP_OMEGA * t)
-    resp = 1.0 - decay * (math.cos(wd * t) + (_POP_ZETA * _POP_OMEGA / wd) * math.sin(wd * t))
-    return _POP_FROM + (1.0 - _POP_FROM) * resp
-
-
-def fit_pill_width(text_w: float, chip_w: float = 0.0) -> int:
-    """Compact capsule width that shows ``text_w`` px of label (+ chip) unclipped."""
-    w = _ORB_INSET + _ORB + _GAP_ORB_TEXT + text_w + _INSET_R + _FIT_SLACK
-    if chip_w:
-        w += _GAP_TEXT_CHIP + chip_w
-    return max(_MIN_PILL_W, int(math.ceil(w)))
-
-
-def fit_recording_width(text_w: float, chip_w: float = 0.0) -> int:
-    """Recording capsule width: disc, waveform, label and chip. No reserved margin."""
-    return fit_pill_width(_RECORDING_WAVE_W + _GAP_WAVE_TEXT + text_w, chip_w)
-
-
 def wrap_words(widths: list[float], space: float, room: float) -> list[tuple[int, int]]:
     """Greedy word wrap: one ``(first, end)`` word range per line.
 
@@ -310,15 +230,6 @@ def wrap_words(widths: list[float], space: float, room: float) -> list[tuple[int
     if start < len(widths):
         lines.append((start, len(widths)))
     return lines
-
-
-def _wave_profile(n: int) -> list[float]:
-    """Centre weighting: the middle bar moves fully, the end bars about a third."""
-    c = (n - 1) / 2.0
-    return [0.35 + 0.65 * math.cos(math.pi / 2 * (i - c) / max(1.0, c)) ** 2 for i in range(n)]
-
-
-_WAVE_PROFILE = _wave_profile(_RECORDING_BARS)
 
 
 class _Spring:
@@ -455,7 +366,7 @@ def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[s
 
 
 def orb_kind(state: GuiState, last_status: Optional[str] = None) -> str:
-    """Which status disc a state shows (pure; the phone uses the same five)."""
+    """Which of the six kinds a state shows; hud_leaf.STEM_FOR_ORB maps each to a stem."""
     if state == GuiState.RECORDING:
         return "listen"
     if state in (GuiState.BOOTING, GuiState.PROCESSING):
@@ -470,11 +381,18 @@ def orb_kind(state: GuiState, last_status: Optional[str] = None) -> str:
 
 
 def _show_ai_chip(state: GuiState, use_llm: bool) -> bool:
+    """The AI mark (the pixel "AI" and the moon accent): recording and processing with AI."""
     return use_llm and state in (GuiState.RECORDING, GuiState.PROCESSING)
 
 
+def _opening_max(a: hl.Opening, b: hl.Opening) -> hl.Opening:
+    """Field by field, the larger of two openings (the entry that resumes a closing leaf)."""
+    return hl.Opening(**{f.name: max(getattr(a, f.name), getattr(b, f.name))
+                         for f in dataclasses.fields(hl.Opening)})
+
+
 class DictationIndicator(QWidget):
-    """Bottom-center always-on-top glass HUD for the dictation service."""
+    """Bottom-center always-on-top HUD for the dictation service."""
 
     # Thread-safe wake-ups from keyboard / worker threads
     _polish_result = Signal(str, str)
@@ -508,11 +426,17 @@ class DictationIndicator(QWidget):
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide_indicator)
-
-        # Animation clock (seconds, advanced by the real time between ticks)
-        self._t: float = 0.0
         self._last_tick: Optional[float] = None
-        self._bars: list[float] = [0.0] * _RECORDING_BARS
+
+        # The four style choices, read once. Config checks them; a bad one still must not
+        # stop the HUD.
+        try:
+            self._style = HudStyle(waveform=Config.HUD_WAVEFORM, texture=Config.HUD_TEXTURE,
+                                   edge=Config.HUD_EDGE, shape=Config.HUD_SHAPE)
+        except ValueError as e:
+            print(f"[HUD] HUD style not used, default leaf drawn: {e}", flush=True)
+            self._style = HudStyle()
+
         # Live caption: the words arrive in chunks; they are revealed smoothly.
         self._cap_words: list[str] = []
         self._cap_shown = 0.0                  # words revealed so far (the fraction fades one in)
@@ -524,40 +448,36 @@ class DictationIndicator(QWidget):
         self._cap_visible_from = 0             # index of the first word on the older of the two read lines
         self._cap_scroll = 0.0                 # px the lines are still below their place
         self._cap_widths: dict[str, int] = {}
-        self._level: float = 0.0   # smoothed voice envelope, drives the disc halo
-        self._appear: float = 0.0  # 0..1 shape opacity, derived from the phase timeline
+        self._voice = VoiceEnvelope()          # smoothed band levels; the painter reads it
         self._appear_target: float = 1.0
-        # Droplet timeline: hidden -> entering -> open -> leaving -> hidden.
-        # The window never scales; the painted shape does (scaling blurs layered HWNDs).
+        # Timeline: hidden -> entering -> open -> leaving -> hidden. The window never
+        # scales; the painter draws the leaf's opening (enter_opening / leave_opening).
+        # _phase_t0 is when the entry began (entering, open) or the exit began (leaving).
         self._phase: str = "hidden"
         self._phase_t0: float = 0.0
-        self._check_progress: float = 0.0
-        self._content_fade: float = 1.0
-        self._glyph_fade: float = 1.0  # 0..1 over _GLYPH_S: cross-fade, then the disc pop
-        self._last_orb: str = "wait"
-        self._shown_orb: str = "wait"
+        self._enter_at: float = 0.0            # when the last entry began (read during the exit)
+        self._enter_base: Optional[hl.Opening] = None  # set when a show resumes a closing leaf
+        self._leave_base: hl.Opening = hl.OPEN  # the opening the exit started from
+        # The stem (hud_leaf.Stem) the state maps to, and its timeline: 0..1 over
+        # _STEM_SETTLE_S, restarted whenever the stem changes. It is also the clock of the tip
+        # droop. (The name is from the old status disc; tests/test_resource_use.py sets it.)
+        self._stem: hl.Stem = hl.Stem.WORK
+        self._glyph_fade: float = 1.0
+        self._droop_from: float = hl.DROOP
         self._shown_state: GuiState = GuiState.BOOTING  # painted while leaving
         self._label_cache: str = ""
         self._dpr: float = 1.0          # device pixel ratio, read once per paint
-        # The shadow of a settled capsule, drawn once: (size key, pixmap).
-        self._shadow_cache: Optional[tuple[tuple[float, ...], QPixmap]] = None
         self._success_since: float = 0.0
-        self._resize_hold: Optional[tuple[float, float]] = None
-        self._text_in_at: Optional[float] = None
 
         # --- Geometry ---
-        self._pad = _PAD                # shadow bleed only (no glow halo)
-        self._pill_h = _COMPACT_H
-        self._radius = 22              # capsule ends; the live card keeps this corner
-        self._paint_radius = 22.0
-
-        # _pill_w/_pill_h are the layout target; the springs are what is painted.
-        self._pill_w = 170
+        # _label_target / _pill_h are the layout target; the springs are what is painted.
+        self._label_target: float = 90.0     # label width (hud_leaf.label_width)
         self._compact_h = _COMPACT_H
-        self._canvas_w = self._pill_w + self._pad * 2
-        self._canvas_h = self._pill_h + self._pad * 2
-        self._w_tw = _Spring(self._pill_w)
-        self._h_tw = _Spring(self._pill_h)
+        self._live_h = _LIVE_H
+        self._pill_h = self._compact_h       # leaf, or leaf and caption card
+        self._w_tw = _Spring(self._label_target)
+        self._h_tw = _Spring(self._pill_h)   # its share between compact and live is the card
+        self._canvas_w, self._canvas_h = self._canvas_size(self._label_target, self._pill_h)
 
         self._setup_window()
         self._setup_font()
@@ -574,6 +494,7 @@ class DictationIndicator(QWidget):
         self._tick.setInterval(_ANIM_TICK_MS)  # ~60 FPS
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
+        self._stem_now()
 
         self.last_app_state = getattr(app, "state", None)
         # Always paint during the entrance, then pause once hidden.
@@ -664,43 +585,21 @@ class DictationIndicator(QWidget):
             families = set(QFontDatabase.families())
             family = next((name for name in _FALLBACK_FAMILIES if name in families),
                           self.font().family())
-        # Pixel sizes: the label is 14 px on every DPI, like the setup page's body text.
-        self._font = QFont(family)
-        self._font.setPixelSize(14)
-        self._font.setWeight(QFont.Weight.Medium)
-        # Full hinting rounds advances and makes paint and fit metrics disagree.
-        self._font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
-        self._font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        # Pixel sizes: the label is 13 px on every DPI, like the setup page's body text.
+        self._font = hl.label_font(family)
+        self._painter = LeafPainter(self._font)
 
-        self._font_caption = QFont(self._font)
+        self._font_caption = QFont(family)
         self._font_caption.setPixelSize(_CAPTION_PX)
         self._font_caption.setWeight(QFont.Weight.Normal)
-
-        self._font_chip = QFont(family)
-        self._font_chip.setPixelSize(11)
-        self._font_chip.setWeight(QFont.Weight.DemiBold)
-        self._font_chip.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
-        self._font_chip.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        self._font_chip.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 104)
+        # Full hinting rounds advances and makes paint and fit metrics disagree.
+        self._font_caption.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+        self._font_caption.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
 
         # Metrics are fixed per font: build them once, not on every frame.
-        self._fm = QFontMetrics(self._font)
-        self._fm_chip = QFontMetrics(self._font_chip)
+        self._fm = QFontMetricsF(self._font)
         self._fm_caption = QFontMetrics(self._font_caption)
-        self._fmf_chip = QFontMetricsF(self._font_chip)
-        self._half_cap = {
-            id(f): QFontMetricsF(f).capHeight() * 0.5
-            for f in (self._font, self._font_chip, self._font_caption)
-        }
-
-    def _chip_width(self, label: str = "AI") -> float:
-        return float(self._fm_chip.horizontalAdvance(label) + _CHIP_PAD_X * 2)
-
-    def _target_width(self, label: str, chip_label: str = "", recording: bool = False) -> int:
-        """Width that fits ``label``, an optional chip and, when recording, the waveform."""
-        text_w = self._fm.horizontalAdvance(label)
-        chip_w = self._chip_width(chip_label) if chip_label else 0.0
-        return (fit_recording_width if recording else fit_pill_width)(text_w, chip_w)
+        self._half_cap = QFontMetricsF(self._font_caption).capHeight() * 0.5
 
     def _label_for(self, state: GuiState, use_llm: bool) -> str:
         """The label painted now. While leaving, the last shown label stays."""
@@ -715,95 +614,96 @@ class DictationIndicator(QWidget):
         """The state to draw: the last shown state while the exit plays."""
         return self._shown_state if self.gui_state == GuiState.HIDDEN else self.gui_state
 
-    def _orb_now(self) -> str:
-        """The disc to draw; it stays the last shown disc while the exit plays.
+    def _stem_now(self) -> hl.Stem:
+        """The stem to draw; it stays the last shown stem while the exit plays.
 
-        Any change of disc starts the cross-fade and pop here, whatever caused it: a
-        state change, the reset flash, or a notice status set while still processing.
-        From fully hidden, _begin_show cancels it: the droplet entrance is enough.
+        Any change of stem restarts its timeline, whatever caused it: a state change, the
+        reset flash, or a notice status set while still processing. The tip droop carries on
+        from where it is. From fully hidden, _begin_show restarts it anyway.
         """
         if self.gui_state != GuiState.HIDDEN:
-            kind = orb_kind(self.gui_state, getattr(self.app, "last_status", None))
-            if kind != self._shown_orb:
-                self._last_orb = self._shown_orb
-                self._shown_orb = kind
+            stem = STEM_FOR_ORB[orb_kind(self.gui_state, getattr(self.app, "last_status", None))]
+            if stem is not self._stem:
+                self._droop_from = self._droop_now()
+                self._stem = stem
                 self._glyph_fade = 0.0
                 self._wake_tick()
-        return self._shown_orb
+        return self._stem
 
-    def _chip_label(self, state: GuiState, use_llm: bool) -> str:
-        if state == GuiState.RECORDING and getattr(self.app, "live_active", False) is True:
-            return "Live"
-        return "AI" if _show_ai_chip(state, use_llm) else ""
+    def _droop_goal(self) -> float:
+        return hl.DROOP_ERROR if self._stem is hl.Stem.ERROR else hl.DROOP
+
+    def _droop_now(self) -> float:
+        """The tip droop: it eases from where it was to the stem's value over _DROOP_S.
+
+        A function of the stem's timeline, so it is the same at any frame rate and equals
+        the end value exactly once the timeline is past _DROOP_S.
+        """
+        goal = self._droop_goal()
+        k = min(1.0, self._glyph_fade) * _STEM_SETTLE_S / _DROOP_S
+        if k >= 1.0:
+            return goal
+        return self._droop_from + (goal - self._droop_from) * ease_standard(k)
 
     def _is_live_layout(self) -> bool:
         return (getattr(self.app, "live_active", False) is True or
                 (self.gui_state == GuiState.PROCESSING and bool(getattr(self.app, "live_preview", ""))))
 
-    def _layout_target(self) -> tuple[int, int]:
-        """(width, height) that fits what the current state shows."""
+    def _layout_target(self) -> tuple[float, float]:
+        """(label width, layout height) that fits what the current state shows."""
         state = self.gui_state
         use_llm = bool(getattr(self.app, "use_llm", False))
         label = self._label_for(state, use_llm)
-        chip = self._chip_label(state, use_llm)
-        w = self._target_width(label, chip, recording=state == GuiState.RECORDING)
-        h = self._compact_h
-        if self._is_live_layout():
-            w, h = max(w, _LIVE_MIN_W), _LIVE_H
-        return w, h
+        stem = STEM_FOR_ORB[orb_kind(state, getattr(self.app, "last_status", None))]
+        w = hl.label_width(self._fm, label, _show_ai_chip(state, use_llm), stem)
+        h = self._live_h if self._is_live_layout() else self._compact_h
+        return w, float(h)
 
-    def _sync_geometry(self) -> None:
-        """Retarget the capsule to the current words.
-
-        From hidden, the droplet opens at the new size. While the capsule is
-        already open, the painted size waits until the new words are fully in,
-        then starts 0.3 ms later, so a shrink cannot clip the longer label.
-        """
-        if self.gui_state == GuiState.HIDDEN:
-            return  # keep the shown size while the exit plays
-        w, h = self._layout_target()
-        if w == self._pill_w and h == self._pill_h:
-            return
-        self._pill_w, self._pill_h = w, h
-        # Grow the canvas once, before a grow animation; shrink happens after.
-        self._fit_canvas(w, h)
-        if self._phase == "hidden":
-            self._w_tw.snap(w)
-            self._h_tw.snap(h)
-            self._resize_hold = None
-            self._text_in_at = None
-        else:
-            self._resize_hold = (float(w), float(h))
-            self._text_in_at = None
-
-    def _release_resize(self, now: float) -> None:
-        """Start a held size change 0.3 ms after the new words are fully in."""
-        if self._resize_hold is None:
-            return
-        if self._content_fade < 1.0:
-            self._text_in_at = None
-            return
-        if self._text_in_at is None:
-            self._text_in_at = now
-            return
-        if now < self._text_in_at + _RESIZE_AFTER_TEXT_S:
-            return
-        w, h = self._resize_hold
-        self._w_tw.to(w, now)
-        self._h_tw.to(h, now)
-        self._resize_hold = None
-        self._text_in_at = None
-
-    def _fit_canvas(self, w: float, h: float, shrink: bool = False) -> None:
-        """Resize the window to hold a ``w`` x ``h`` capsule (one resize, not per frame).
+    @staticmethod
+    def _canvas_size(label_w: float, h: float) -> tuple[int, int]:
+        """Window size that holds the leaf (and the card) with the painter's shadow around it.
 
         Sizes round up to a multiple of 4 px, so the centre falls on a whole
         device pixel at 1x, 1.25x, 1.5x and 2x.
         """
-        cw = int(math.ceil(w)) + self._pad * 2
-        cw = -(-cw // 4) * 4
-        ch = int(math.ceil(h)) + self._pad * 2
-        ch = -(-ch // 4) * 4
+        inner = hl.leaf_width(label_w)
+        if h > _COMPACT_H:
+            inner = max(inner, float(hl.CARD_MIN_W))
+        cw = -(-(int(math.ceil(inner)) + _BLEED * 2) // 4) * 4
+        ch = -(-(int(math.ceil(h)) + _BLEED * 2) // 4) * 4
+        return cw, ch
+
+    def _sync_geometry(self) -> None:
+        """Retarget the label width and the layout height to the current state.
+
+        From hidden, the leaf opens at the new size. While it is open, the springs ease
+        the change; the window is resized once, up front, when it must grow, and once
+        more after the springs have settled when it can shrink.
+        """
+        if self.gui_state == GuiState.HIDDEN:
+            return  # keep the shown size while the exit plays
+        w, h = self._layout_target()
+        if w == self._label_target and h == self._pill_h:
+            return
+        now = time.monotonic()
+        hidden = self._phase == "hidden"
+        if w != self._label_target:
+            self._label_target = w
+            if hidden:
+                self._w_tw.snap(w)
+            else:
+                self._w_tw.to(w, now)
+        if h != self._pill_h:
+            self._pill_h = h
+            if hidden:
+                self._h_tw.snap(h)
+            else:
+                self._h_tw.to(h, now)
+        self._fit_canvas()
+
+    def _fit_canvas(self, shrink: bool = False) -> None:
+        """Resize the window to hold the target layout (one resize, not per frame)."""
+        cw, ch = self._canvas_size(self._label_target, self._pill_h)
         if not shrink:
             cw, ch = max(cw, self._canvas_w), max(ch, self._canvas_h)
         if (cw, ch) == (self._canvas_w, self._canvas_h):
@@ -812,49 +712,33 @@ class DictationIndicator(QWidget):
         self.setFixedSize(cw, ch)
         self._reposition_bottom_center()
 
-    def _frame(self, now: float) -> tuple[float, float, float, float, float]:
-        """Painted capsule for this instant: (width, height, drop px, shape alpha, words alpha)."""
-        W = self._w_tw.value(now)
-        H = self._h_tw.value(now)
-        d = float(self._compact_h)
-        el = now - self._phase_t0
-        if self._phase == "entering":
-            rise = ease_standard(el / _RISE_S)
-            spread_raw = max(0.0, min(1.0, (el - _SPREAD_AT_S) / _SPREAD_S))
-            spread = ease_standard(spread_raw)
-            size = d * (_DROPLET_MIN + (1.0 - _DROPLET_MIN) * rise)
-            words = ease_standard((spread_raw - 0.35) / 0.65)
-            return (size + (W - size) * spread, size + (H - size) * spread,
-                    (1.0 - rise) * _DROP_PX, rise, words)
+    def _opening(self, now: float) -> hl.Opening:
+        """How far the entry or the exit has come at ``now`` (the painter's timelines)."""
+        if self._phase in ("entering", "open"):
+            elapsed = now - self._phase_t0
+            opening = hl.enter_opening(elapsed)
+            base = self._enter_base
+            if base is not None:   # a show that resumed a closing leaf never goes back down
+                opening = dataclasses.replace(
+                    _opening_max(base, opening), fade=min(1.0, base.fade + max(0.0, elapsed) / 0.1))
+            return opening
         if self._phase == "leaving":
-            words = 1.0 - ease_accelerate(el / _WORDS_OUT_S)
-            collapse = ease_accelerate((el - _COLLAPSE_AT_S) / _COLLAPSE_S)
-            drop = ease_accelerate((el - _DROP_AT_S) / _DROP_S)
-            shrink = 1.0 - (1.0 - _DROPLET_MIN) * drop
-            return ((W + (d - W) * collapse) * shrink, (H + (d - H) * collapse) * shrink,
-                    drop * _DROP_PX, 1.0 - drop, words)
-        if self._phase == "open":
-            return W, H, 0.0, 1.0, 1.0
-        return W, H, 0.0, 0.0, 0.0
+            return hl.leave_opening(now - self._phase_t0, self._leave_base)
+        return hl.leave_opening(hl.LEAVE_S)
 
     def _begin_show(self, now: float) -> None:
-        """Play the droplet entrance from hidden; reopen in place if the exit is early."""
-        if self._phase == "leaving" and now - self._phase_t0 < _DROP_AT_S:
-            # Not yet a droplet: spring back out from the painted size.
-            w, h, _, _, _ = self._frame(now)
-            self._w_tw.snap(w)
-            self._h_tw.snap(h)
-            self._w_tw.to(self._pill_w, now)
-            self._h_tw.to(self._pill_h, now)
-            self._phase, self._phase_t0 = "open", now
-            self._content_fade = 0.0
-        elif self._phase in ("hidden", "leaving"):
-            self._w_tw.snap(self._pill_w)
-            self._h_tw.snap(self._pill_h)
-            self._fit_canvas(self._pill_w, self._pill_h, shrink=True)
+        """Play the entry from hidden; from an exit in progress, open again from where it is."""
+        if self._phase in ("hidden", "leaving"):
+            if self._phase == "leaving":
+                self._enter_base = self._opening(now)
+            else:
+                self._enter_base = None
+                self._glyph_fade = 0.0
+                self._droop_from = self._droop_goal()
+                self._w_tw.snap(self._label_target)
+                self._h_tw.snap(self._pill_h)
+                self._fit_canvas(shrink=True)
             self._phase, self._phase_t0 = "entering", now
-            self._content_fade = 1.0
-            self._glyph_fade = 1.0  # nothing to cross-fade from
         self._appear_target = 1.0
         self._reposition_bottom_center()
         self.setWindowOpacity(1.0)
@@ -863,49 +747,41 @@ class DictationIndicator(QWidget):
         self.raise_()
 
     def _begin_leave(self, now: float) -> None:
-        """Words fade, the capsule contracts to a droplet, the droplet drops and fades."""
+        """Play the exit from the opening on screen, so an exit in the entry never grows."""
         if self._phase in ("hidden", "leaving"):
             return
-        if self._phase == "entering":
-            w, h, _, _, _ = self._frame(now)
-            self._w_tw.snap(w)
-            self._h_tw.snap(h)
-        else:
-            self._w_tw.snap(self._w_tw.value(now))
-            self._h_tw.snap(self._h_tw.value(now))
+        self._leave_base = self._opening(now)
+        self._enter_at = self._phase_t0
+        self._enter_base = None
         self._phase, self._phase_t0 = "leaving", now
 
     def _advance_phase(self, now: float) -> None:
         el = now - self._phase_t0
         if self._phase == "entering":
-            self._appear = ease_standard(el / _RISE_S)
-            if el >= _ENTER_S:
+            if el >= hl.ENTER_S:
                 self._phase = "open"
+                self._enter_base = None
         elif self._phase == "open":
-            self._appear = 1.0
-            # Shrink the canvas once, after a shrink animation has finished.
-            if (self._resize_hold is None
-                    and self._w_tw.done(now) and self._h_tw.done(now)):
-                self._fit_canvas(self._pill_w, self._pill_h, shrink=True)
+            # Shrink the window once, after a shrink animation has finished.
+            if self._w_tw.done(now) and self._h_tw.done(now):
+                self._fit_canvas(shrink=True)
         elif self._phase == "leaving":
-            self._appear = 1.0 - ease_accelerate((el - _DROP_AT_S) / _DROP_S)
-            if el >= _LEAVE_S:
+            if el >= hl.LEAVE_S:
                 self._phase = "hidden"
-                self._appear = 0.0
                 if self.isVisible() and self.gui_state == GuiState.HIDDEN:
                     self.hide()
                 self._sync_tick()
-        else:
-            self._appear = 0.0
 
     def _reposition_bottom_center(self) -> None:
+        """Bottom-centre of the work area. The leaf's bottom edge keeps its screen position
+        whatever the window height is, so the window grows upward for the caption card."""
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             self.move(100, 100)
             return
         geo = screen.availableGeometry()
         x = geo.x() + (geo.width() - self._canvas_w) // 2
-        y = geo.y() + geo.height() - self._canvas_h - 48
+        y = geo.y() + geo.height() - _BOTTOM_GAP - (self._canvas_h - _BLEED)
         self.move(x, y)
 
     def _apply_win32_exstyles(self) -> None:
@@ -967,12 +843,9 @@ class DictationIndicator(QWidget):
         self._reset_flash.emit()
 
     def _do_flash_reset(self) -> None:
-        if self.gui_state != GuiState.RESET:
-            self._check_progress = 0.0
         self.gui_state = self._shown_state = GuiState.RESET
-        self._orb_now()  # cross-fades from the disc on screen, not a stale one
+        self._stem_now()  # restarts the stem's timeline from the stem on screen
         self._sync_geometry()
-        self._content_fade = 0.8
         self._begin_show(time.monotonic())
         self._hide_timer.start(1200)
         self._sync_tick()
@@ -1065,21 +938,14 @@ class DictationIndicator(QWidget):
         # Done shown at delivery stays put when the cycle reaches IDLE: no
         # replayed check, only an eased width change if a notice replaces it.
         kept_success = new_state == prev == GuiState.SUCCESS
-        shown_label = self._label_cache
         self.gui_state = self._shown_state = new_state
         self._sync_geometry()
-        self._orb_now()
-        if kept_success and self._label_cache != shown_label:
-            self._content_fade = 0.8
-        if not kept_success:
-            self._t = 0.0
-            if new_state in (GuiState.SUCCESS, GuiState.ERROR):
-                self._check_progress = 0.0
-            if new_state == GuiState.SUCCESS:
-                self._success_since = now
-            self._content_fade = 0.7 if new_state in (
-                GuiState.RECORDING, GuiState.PROCESSING) else 0.8
-        # The droplet plays only from hidden; an open capsule stays one capsule.
+        self._stem_now()
+        if new_state == GuiState.RECORDING and prev != GuiState.RECORDING:
+            self._voice.clear()   # a new recording starts with a clean voice
+        if new_state == GuiState.SUCCESS and not kept_success:
+            self._success_since = now
+        # The entry plays only from hidden; an open leaf stays one leaf.
         self._begin_show(now)
 
         last_status = getattr(self.app, "last_status", None)
@@ -1131,18 +997,19 @@ class DictationIndicator(QWidget):
     def _is_static(self, now: float) -> bool:
         """True when every following frame would be pixel-identical to this one.
 
-        Only a finished check, cross or notice qualifies: its glyph, words and
-        size have stopped moving and nothing in it is driven by the clock.
+        Only a finished check, cross or notice qualifies: the entry (and its vein sweep),
+        the stem's timeline (check, cross, seed), the width and height springs and the
+        voice have all stopped, and nothing in the frame is driven by the clock. The tip
+        droop is a function of the stem's timeline, so it has stopped too.
         """
         return (
             self._phase == "open"
             and self.gui_state in (GuiState.SUCCESS, GuiState.ERROR, GuiState.RESET)
-            and self._check_progress >= 1.0
+            and now - self._phase_t0 >= _SWEEP_END_S
             and self._glyph_fade >= 1.0
-            and self._content_fade >= 1.0
-            and self._resize_hold is None
             and self._w_tw.done(now)
             and self._h_tw.done(now)
+            and self._voice_peak() == 0.0
         )
 
     # ----------------------------------------------------------------- tick
@@ -1151,7 +1018,6 @@ class DictationIndicator(QWidget):
         # Real time since the last tick, capped so a stall never jumps an animation.
         dt = 0.016 if self._last_tick is None else min(max(now - self._last_tick, 0.0), _DT_MAX)
         self._last_tick = now
-        self._t += dt
 
         try:
             app_state = getattr(self.app, "state", None)
@@ -1162,33 +1028,67 @@ class DictationIndicator(QWidget):
 
         self._advance_phase(now)
         # The label can change with no state change (Finalizing -> Transcribing): refit
-        # the capsule, or the longer word is clipped. Equal size returns at once.
+        # the width, or the longer word is clipped. An equal target returns at once.
         if self._phase in ("entering", "open"):
             self._sync_geometry()
 
-        self._glyph_fade = min(1.0, self._glyph_fade + dt / _GLYPH_S)
-
-        if self._content_fade < 1.0:
-            self._content_fade = min(1.0, self._content_fade + dt / _WORDS_IN_S)
-        self._release_resize(now)
-
-        self._advance_wave(dt)
+        self._stem_now()
+        self._advance_stem(dt)
+        self._advance_voice(dt)
         self._advance_caption(dt)
-
-        if self.gui_state in (GuiState.SUCCESS, GuiState.ERROR, GuiState.RESET):
-            self._check_progress = min(1.0, self._check_progress + dt / _CHECK_S)
 
         if self._phase != "hidden" or self._appear_target > 0:
             self.update()
 
-        # A finished, unchanging pill (a standing "Mic unavailable") needs no
+        # A finished, unchanging leaf (a standing "Mic unavailable") needs no
         # 60 FPS repaint. Any app change or state change wakes the tick again.
         interval = _STATIC_TICK_MS if self._is_static(now) else _ANIM_TICK_MS
         if self._tick.interval() != interval:
             self._tick.setInterval(interval)
 
+    def _advance_stem(self, dt: float) -> None:
+        self._glyph_fade = min(1.0, self._glyph_fade + dt / _STEM_SETTLE_S)
+
+    def _advance_voice(self, dt: float) -> None:
+        """Feed the voice envelope the five spectral bands of the newest audio.
+
+        ``recorder.get_bands`` lists the lowest band first; row 0 is the top pixel row and
+        shows the highest band, so the list is reversed. A recorder that is missing,
+        raises or returns another length reads as silence, and so does anything outside
+        recording: the envelope then decays, and a voice too faint to see is cleared, so a
+        finished frame can go static.
+        """
+        bands = [0.0] * hl.ROWS
+        recorder = getattr(self.app, "recorder", None)
+        recording = self.gui_state == GuiState.RECORDING
+        if recorder is not None and recording:
+            try:
+                got = list(recorder.get_bands(hl.ROWS))
+                if len(got) == hl.ROWS:
+                    bands = list(reversed([max(0.0, min(1.0, float(x))) for x in got]))
+            except Exception:
+                bands = [0.0] * hl.ROWS
+        self._voice.advance(dt, bands)
+        peak = self._voice_peak()
+        if not recording and 0.0 < peak < _VOICE_REST:
+            self._voice.clear()
+
+    def _voice_peak(self) -> float:
+        """The largest value the painter could still show: the level, the rows, the history."""
+        v = self._voice
+        return max(v.level, *v.rows, *(x for column in v.hist for x in column))
+
+    def _card_width(self) -> float:
+        """Width of the caption card: its minimum, or the leaf's width when that is larger."""
+        return max(float(hl.CARD_MIN_W), hl.leaf_width(self._label_target))
+
     def _caption_room(self) -> float:
-        return float(self._pill_w - 2 * _CAPTION_PAD - 4)
+        return self._card_width() - 2 * _CAPTION_PAD - 4
+
+    def _card_progress(self, now: float) -> float:
+        """0 with the leaf alone, 1 with the caption card in: the height spring's share."""
+        span = float(self._live_h - self._compact_h)
+        return max(0.0, min(1.0, (self._h_tw.value(now) - self._compact_h) / span))
 
     def _word_width(self, word: str) -> int:
         width = self._cap_widths.get(word)
@@ -1285,7 +1185,7 @@ class DictationIndicator(QWidget):
         self._cap_fading, self._cap_fade = fading, fraction
         first = spans[-1][0] if spans else 0
         # A line is new when it starts at a word that was not on screen in the last frame.
-        # A line that merely moved (words dropped from the front, a wider pill) is not.
+        # A line that merely moved (words dropped from the front, a wider card) is not.
         if self._cap_prev_len is not None and first > 0 and first >= self._cap_prev_len:
             # Everything slides up. One row is all the painter shows, so a burst of
             # lines (a big backlog caught up) does not stack past it.
@@ -1296,46 +1196,36 @@ class DictationIndicator(QWidget):
         if self._cap_scroll < 0.05:
             self._cap_scroll = 0.0
 
-    def _advance_wave(self, dt: float) -> None:
-        """Smooth the voice envelope and the bars: fast attack, slow release.
-
-        ``recorder.get_waveform`` gives bucket RMS of the newest 64 ms block. The
-        buckets are shorter than a pitch period, so their mean is the honest
-        loudness; each bucket only adds a little texture to its bar.
-        """
-        n = len(self._bars)
-        raw: list[float] = []
-        recorder = getattr(self.app, "recorder", None)
-        if recorder is not None and self.gui_state == GuiState.RECORDING:
-            try:
-                raw = [max(0.0, min(1.0, float(x))) for x in recorder.get_waveform(n)]
-            except Exception:
-                raw = []
-        mean = sum(raw) / len(raw) if raw else 0.0
-        env = min(1.0, mean * 1.5) ** 0.7 if mean > 0.0 else 0.0
-
-        def follow(cur: float, target: float, rise_s: float, fall_s: float) -> float:
-            tau = rise_s if target > cur else fall_s
-            return cur + (target - cur) * (1.0 - math.exp(-dt / tau))
-
-        self._level = follow(self._level, env, _WAVE_ATTACK_S, _WAVE_RELEASE_S)
-        for i in range(n):
-            if raw:
-                ratio = min(1.6, raw[i] / (mean + 1e-4)) if i < len(raw) else 1.0
-                target = env * _WAVE_PROFILE[i % len(_WAVE_PROFILE)] * (0.7 + 0.3 * ratio / 1.6)
-                self._bars[i] = follow(self._bars[i], target, _WAVE_ATTACK_S, _WAVE_RELEASE_S)
-            else:
-                self._bars[i] = follow(self._bars[i], 0.0, _WAVE_IDLE_S, _WAVE_IDLE_S)
-
     # ----------------------------------------------------------------- paint
     def _snap(self, v: float) -> float:
-        """Round to a whole device pixel (crisp edges and baselines at any scale)."""
+        """Round to a whole device pixel (crisp baselines at any scale)."""
         return round(v * self._dpr) / self._dpr
+
+    def _leaf_frame(self, now: float) -> LeafFrame:
+        """Everything the painter needs for this instant."""
+        state = self._vis_state()
+        use_llm = bool(getattr(self.app, "use_llm", False))
+        entered = self._phase_t0 if self._phase in ("entering", "open") else self._enter_at
+        return LeafFrame(
+            cx=self._canvas_w / 2.0,
+            bottom=float(self._canvas_h - _BLEED),
+            label_w=self._w_tw.value(now),
+            opening=self._opening(now),
+            stem=self._stem,
+            ai=_show_ai_chip(state, use_llm),
+            label=self._label_for(state, use_llm),
+            since_state=min(1.0, self._glyph_fade) * _STEM_SETTLE_S,
+            since_enter=max(0.0, now - entered),
+            now=now,
+            voice=self._voice,
+            droop=self._droop_now(),
+        )
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         now = time.monotonic()
-        w, h, dy, alpha, words = self._frame(now)
-        if alpha <= 0.001:
+        frame = self._leaf_frame(now)
+        opening = frame.opening
+        if opening.fade <= 0.0:
             return
 
         self._dpr = self.devicePixelRatioF() or 1.0
@@ -1343,295 +1233,47 @@ class DictationIndicator(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        p.setOpacity(max(0.0, min(1.0, alpha)))
 
-        # The painted shape animates inside a fixed canvas: centered, bottom-aligned
-        # (the window never scales, so nothing blurs).
-        cx = self._canvas_w * 0.5
-        bottom = float(self._canvas_h - self._pad)
-        pill = QRectF(cx - w * 0.5, bottom - h + dy, w, h)
-        self._paint_radius = min(float(self._radius), h * 0.5, w * 0.5)
-
-        shape = QPainterPath()  # one capsule path per frame: fill, rim clip, content clip
-        shape.addRoundedRect(pill, self._paint_radius, self._paint_radius)
-        settled = (self._phase == "open" and dy == 0.0
-                   and self._w_tw.done(now) and self._h_tw.done(now))
-        self._paint_shadow(p, pill, settled)
-        self._paint_surface(p, pill, shape)
-        self._paint_border(p, pill)
-        self._paint_top_rim(p, pill, shape)
-
-        # Content rides the painted capsule: the disc sits in its left end and the
-        # words follow it, revealed by the capsule clip. Nothing stretches.
-        p.save()
-        p.setClipPath(shape)
-        self._paint_orb(p, pill, alpha)
-        content_alpha = alpha * ease_standard(self._content_fade) * words
-        if content_alpha > 0.001:
-            p.setOpacity(max(0.0, min(1.0, content_alpha)))
-            rise = (1.0 - min(words, ease_standard(self._content_fade))) * _WORDS_RISE_PX
-            self._paint_content(p, pill, rise)
-        p.restore()
-
+        # The caption card first, so the leaf's own shadow lies over its lower edge.
+        progress = self._card_progress(now)
+        if progress > 0.0:
+            rect = hl.card_rect(hl.leaf_geometry(frame), progress, self._dpr)
+            card_opacity = progress * opening.content * opening.fade
+            self._painter.paint_card(p, rect, self._style, card_opacity)
+            if card_opacity > 0.0:
+                self._paint_caption(p, rect, card_opacity)
+        self._painter.paint(p, frame, self._style)
         p.end()
 
-    def _row(self, pill: QRectF) -> tuple[float, float]:
-        """(row height, row centre y): the top 44 px row, or the droplet itself."""
-        row_h = min(pill.height(), float(self._compact_h))
-        return row_h, pill.top() + row_h * 0.5
+    def _baseline(self, cy: float) -> float:
+        """Baseline that centres capital letters on ``cy`` (the font box is not symmetric)."""
+        return self._snap(cy + self._half_cap)
 
-    def _paint_shadow(self, p: QPainter, pill: QRectF, settled: bool) -> None:
-        """Soft neutral drop: many faint layers stand in for a blur (few strong ones band).
+    def _paint_caption(self, p: QPainter, rect: QRectF, opacity: float = 1.0) -> None:
+        """Two caption rows inside the card, newest at the bottom.
 
-        The widest layer stays inside ``_PAD``: 11 px to the sides, 13 px below.
-        The layers are 40 % of a frame, so a settled capsule draws them once into a
-        pixmap and then only blits it; a capsule that changes size draws them live.
+        The older row recedes; a new row slides up. ``rect`` is the card the painter drew.
         """
-        if not settled:
-            self._shadow_layers(p, pill)
-            return
-        m = float(self._pad)
-        ox, oy = math.floor(pill.left()), math.floor(pill.top())
-        local = QRectF(m + pill.left() - ox, m + pill.top() - oy, pill.width(), pill.height())
-        key = (local.x(), local.y(), local.width(), local.height(), self._paint_radius, self._dpr)
-        if self._shadow_cache is None or self._shadow_cache[0] != key:
-            pm = QPixmap(int(math.ceil((local.right() + m) * self._dpr)),
-                         int(math.ceil((local.bottom() + m) * self._dpr)))
-            pm.setDevicePixelRatio(self._dpr)
-            pm.fill(Qt.GlobalColor.transparent)
-            sp = QPainter(pm)
-            sp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            self._shadow_layers(sp, local)
-            sp.end()
-            self._shadow_cache = (key, pm)
-        p.drawPixmap(QPointF(ox - m, oy - m), self._shadow_cache[1])
-
-    def _shadow_layers(self, p: QPainter, pill: QRectF) -> None:
-        for grow, dy, alpha in _SHADOW_LAYERS:
-            r = QRectF(pill).adjusted(-grow, dy - grow * 0.5, grow, dy + grow * 0.5)
-            path = QPainterPath()
-            path.addRoundedRect(r, self._paint_radius + grow, self._paint_radius + grow)
-            p.fillPath(path, QColor(0, 0, 0, alpha))
-
-    def _paint_surface(self, p: QPainter, pill: QRectF, shape: QPainterPath) -> None:
-        grad = QLinearGradient(pill.topLeft(), pill.bottomLeft())
-        grad.setColorAt(0.0, _Theme.surface_top)
-        grad.setColorAt(1.0, _Theme.surface_bot)
-        p.fillPath(shape, QBrush(grad))
-
-    def _paint_border(self, p: QPainter, pill: QRectF) -> None:
-        path = QPainterPath()
-        path.addRoundedRect(
-            pill.adjusted(0.5, 0.5, -0.5, -0.5), self._paint_radius, self._paint_radius
-        )
-        pen = QPen(_Theme.hairline)
-        pen.setWidthF(1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-
-    def _paint_top_rim(self, p: QPainter, pill: QRectF, shape: QPainterPath) -> None:
-        """Faint light along the top edge, faded at both ends."""
-        inset = self._paint_radius * 0.6
-        rim_w = pill.width() - inset * 2
-        if rim_w <= 0:
-            return
-        p.save()
-        p.setClipPath(shape, Qt.ClipOperation.IntersectClip)
-        rim = QRectF(pill.left() + inset, pill.top() + 1.0, rim_w, 1.0)
-        g = QLinearGradient(rim.left(), rim.top(), rim.right(), rim.top())
-        g.setColorAt(0.0, QColor(255, 255, 255, 0))
-        g.setColorAt(0.3, _Theme.top_light)
-        g.setColorAt(0.7, _Theme.top_light)
-        g.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillRect(rim, QBrush(g))
-        p.restore()
-
-    # ----------------------------------------------------------------- disc
-    def _paint_orb(self, p: QPainter, pill: QRectF, alpha: float) -> None:
-        """The status disc in the capsule's left end; cross-fades and pops on change."""
-        row_h, cy = self._row(pill)
-        cx = pill.left() + row_h * 0.5
-        base_r = _ORB * 0.5 * (row_h / float(self._compact_h))
-        kind = self._orb_now()
-        fade = min(1.0, self._glyph_fade * 2.0)  # the cross-fade takes the first half
-        if fade < 1.0 and self._last_orb != kind:
-            p.save()
-            p.setOpacity(alpha * (1.0 - fade))
-            self._draw_orb(p, self._last_orb, cx, cy, base_r, glyph=1.0)
-            p.restore()
-        p.save()
-        p.setOpacity(alpha * fade)
-        self._draw_orb(p, kind, cx, cy, base_r * pop_scale(self._glyph_fade),
-                       glyph=ease_standard(self._check_progress))
-        p.restore()
-
-    def _draw_orb(self, p: QPainter, kind: str, cx: float, cy: float, r: float,
-                  glyph: float) -> None:
-        if r <= 0.5:
-            return
-        p.setPen(Qt.PenStyle.NoPen)
-        if kind == "listen":
-            # The phone's listening disc: a jade halo that grows with the voice.
-            lvl = self._level
-            halo_r = r + 2.0 + 4.0 * lvl
-            halo = QRadialGradient(QPointF(cx, cy), halo_r + 3.0)
-            c0 = QColor(_Theme.accent)
-            c0.setAlpha(int(60 + 120 * lvl))
-            c1 = QColor(_Theme.accent)
-            c1.setAlpha(0)
-            halo.setColorAt(r * 0.6 / (halo_r + 3.0), c0)
-            halo.setColorAt(1.0, c1)
-            p.setBrush(QBrush(halo))
-            p.drawEllipse(QPointF(cx, cy), halo_r + 3.0, halo_r + 3.0)
-            disc_r = r - (1.0 - lvl) * 1.5 * (r / (_ORB * 0.5))
-            fill = QLinearGradient(QPointF(cx, cy - disc_r), QPointF(cx, cy + disc_r))
-            fill.setColorAt(0.0, _Theme.action_hi)
-            fill.setColorAt(1.0, _Theme.action)
-            p.setBrush(QBrush(fill))
-            p.drawEllipse(QPointF(cx, cy), disc_r, disc_r)
-            ring = QPen(QColor(_Theme.accent.red(), _Theme.accent.green(), _Theme.accent.blue(), 150))
-            ring.setWidthF(1.5)
-            p.setPen(ring)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QPointF(cx, cy), disc_r - 0.75, disc_r - 0.75)
-            self._draw_mic(p, cx, cy, disc_r / (_ORB * 0.5), _Theme.on_action)
-            return
-        fills = {"done": _Theme.accent, "notice": _Theme.warn, "error": _Theme.danger}
-        p.setBrush(fills.get(kind, _Theme.raised))
-        p.drawEllipse(QPointF(cx, cy), r, r)
-        scale = r / (_ORB * 0.5)
-        if kind in ("wait", "reset"):
-            edge = QPen(_Theme.hairline)
-            edge.setWidthF(1.0)
-            p.setPen(edge)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QPointF(cx, cy), r - 0.5, r - 0.5)
-        if kind == "wait":
-            self._draw_spinner(p, cx, cy, scale)
-        elif kind in ("done", "notice"):
-            self._draw_check(p, cx, cy, scale, _Theme.ink, glyph)
-        elif kind == "reset":
-            self._draw_check(p, cx, cy, scale, _Theme.accent, glyph)
-        elif kind == "error":
-            self._draw_error(p, cx, cy, scale, _Theme.ink, glyph)
-
-    def _draw_mic(self, p: QPainter, cx: float, cy: float, s: float, color: QColor) -> None:
-        """A small microphone: capsule head, cradle arc, stem."""
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(color)
-        head = QRectF(cx - 2.6 * s, cy - 6.2 * s, 5.2 * s, 8.4 * s)
-        p.drawRoundedRect(head, 2.6 * s, 2.6 * s)
-        pen = QPen(color)
-        pen.setWidthF(1.6 * s)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        rr = 5.0 * s
-        arc = QRectF(cx - rr, cy - 1.6 * s - rr, rr * 2, rr * 2)
-        p.drawArc(arc, int(-20 * 16), int(-140 * 16))
-        p.drawLine(QPointF(cx, cy + 3.4 * s), QPointF(cx, cy + 6.2 * s))
-
-    def _draw_spinner(self, p: QPainter, cx: float, cy: float, s: float) -> None:
-        """The phone's "wait" disc: a 270° jade arc, one turn per second, on a faint track."""
-        radius = 7.5 * s
-        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
-        track = QPen(_Theme.disc_track)
-        track.setWidthF(2.0 * s)
-        p.setPen(track)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(rect)
-        pen = QPen(_Theme.accent)
-        pen.setWidthF(2.0 * s)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        start = 90.0 - 360.0 * ((self._t / _SPIN_REV_S) % 1.0)
-        p.drawArc(rect, int(start * 16), int(-270 * 16))
-
-    def _draw_check(self, p: QPainter, cx: float, cy: float, s: float, color: QColor,
-                    t: float) -> None:
-        if t <= 0.0:
-            return
-        pen = QPen(color)
-        pen.setWidthF(2.0 * s)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p1 = QPointF(cx - 4.6 * s, cy + 0.2 * s)
-        p2 = QPointF(cx - 1.2 * s, cy + 3.6 * s)
-        p3 = QPointF(cx + 5.0 * s, cy - 3.6 * s)
-        path = QPainterPath()
-        path.moveTo(p1)
-        if t < 0.4:
-            u = t / 0.4
-            path.lineTo(QPointF(p1.x() + (p2.x() - p1.x()) * u, p1.y() + (p2.y() - p1.y()) * u))
-        else:
-            path.lineTo(p2)
-            u = (t - 0.4) / 0.6
-            path.lineTo(QPointF(p2.x() + (p3.x() - p2.x()) * u, p2.y() + (p3.y() - p2.y()) * u))
-        p.drawPath(path)
-
-    def _draw_error(self, p: QPainter, cx: float, cy: float, s: float, color: QColor,
-                    t: float) -> None:
-        if t <= 0.0:
-            return
-        pen = QPen(color)
-        pen.setWidthF(2.0 * s)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        k = 3.8 * s
-        a, b = min(1.0, t * 2.0), max(0.0, t * 2.0 - 1.0)
-        p.drawLine(QPointF(cx - k, cy - k), QPointF(cx - k + 2 * k * a, cy - k + 2 * k * a))
-        if b > 0.0:
-            p.drawLine(QPointF(cx + k, cy - k), QPointF(cx + k - 2 * k * b, cy - k + 2 * k * b))
-
-    # ----------------------------------------------------------------- words
-    def _paint_content(self, p: QPainter, pill: QRectF, rise: float) -> None:
-        """[ disc | (waveform)? | label | (chip)? ], then the live caption line."""
-        state = self._vis_state()
-        use_llm = bool(getattr(self.app, "use_llm", False))
-        _, cy = self._row(pill)
-        cy += rise
-        x = pill.left() + _ORB_INSET + _ORB + _GAP_ORB_TEXT
-        if state == GuiState.RECORDING:
-            self._draw_wave(p, x, cy)
-            x += _RECORDING_WAVE_W + _GAP_WAVE_TEXT
-
-        label = self._label_for(state, use_llm)
-        p.setFont(self._font)
-        p.setPen(_Theme.text)
-        p.drawText(QPointF(self._snap(x), self._baseline(self._font, cy)), label)
-
-        chip = self._chip_label(state, use_llm)
-        if chip:
-            chip_w = self._chip_width(chip)
-            self._draw_named_chip(p, pill.right() - _INSET_R - chip_w, cy, chip_w, chip)
-
-        if self._is_live_layout() and pill.height() > self._compact_h + 1:
-            self._paint_caption(p, pill, rise)
-
-    def _paint_caption(self, p: QPainter, pill: QRectF, rise: float) -> None:
-        """Two caption rows, newest at the bottom. The older row recedes; a new row slides up."""
-        top = pill.top() + self._compact_h + _CAPTION_TOP_GAP + rise
-        block = QRectF(pill.left(), top, pill.width(), _CAPTION_LINES * _CAPTION_LINE)
-        left = pill.left() + _CAPTION_PAD
-        room = int(pill.width() - 2 * _CAPTION_PAD)
+        block_h = _CAPTION_LINES * _CAPTION_LINE
+        block = QRectF(rect.left(), rect.top() + (rect.height() - block_h) / 2.0,
+                       rect.width(), block_h)
+        left = rect.left() + _CAPTION_PAD
+        room = int(rect.width() - 2 * _CAPTION_PAD)
         font = self._font_caption
-        base_opacity = p.opacity()
-        p.setFont(font)
         p.save()
+        p.setFont(font)
         p.setClipRect(block, Qt.ClipOperation.IntersectClip)
         if not self._cap_lines:
-            p.setPen(_Theme.muted)
-            text = self._fm_caption.elidedText("Speak, then tap F7 to insert", Qt.TextElideMode.ElideRight, room)
-            row_cy = block.top() + 1.5 * _CAPTION_LINE
-            p.drawText(QPointF(self._snap(left), self._baseline(font, row_cy)), text)
+            if self._is_live_layout():
+                p.setOpacity(opacity)
+                p.setPen(_Theme.muted)
+                text = self._fm_caption.elidedText("Speak, then tap F7 to insert",
+                                                   Qt.TextElideMode.ElideRight, room)
+                p.drawText(QPointF(self._snap(left), self._baseline(rect.center().y())), text)
             p.restore()
             return
         slide = min(1.0, self._cap_scroll / _CAPTION_LINE)
-        p.setPen(_Theme.text)
+        p.setPen(QColor(*hl.INK))
         count = len(self._cap_lines)
         for index, line in enumerate(self._cap_lines):
             row = index - count + 2  # the newest line is row 1; the one before it, row 0
@@ -1644,8 +1286,9 @@ class DictationIndicator(QWidget):
             if alpha <= 0.01 or row < -1:
                 continue
             row_cy = block.top() + (row + 0.5) * _CAPTION_LINE + self._cap_scroll
-            baseline = self._baseline(font, row_cy)
-            p.setOpacity(base_opacity * alpha)
+            baseline = self._baseline(row_cy)
+            ink = opacity * _CAPTION_ALPHA * alpha
+            p.setOpacity(ink)
             if row == 1 and self._cap_fading:
                 # The newest words are the ones that matter, so what does not fit loses its
                 # beginning. The fading word keeps its own room; a word wider than the whole
@@ -1662,7 +1305,7 @@ class DictationIndicator(QWidget):
                     lead = fm.horizontalAdvance(head + " ") if head else 0
                 if head:
                     p.drawText(QPointF(self._snap(left), baseline), head)
-                p.setOpacity(base_opacity * alpha * max(0.0, min(1.0, self._cap_fade)))
+                p.setOpacity(ink * max(0.0, min(1.0, self._cap_fade)))
                 p.drawText(QPointF(self._snap(left + lead), baseline), fade_text)
             else:
                 # A line wider than the row is one oversized word (the wrap sees to that), and
@@ -1670,42 +1313,3 @@ class DictationIndicator(QWidget):
                 p.drawText(QPointF(self._snap(left), baseline),
                            self._fm_caption.elidedText(line, Qt.TextElideMode.ElideLeft, room))
         p.restore()
-
-    def _baseline(self, font: QFont, cy: float) -> float:
-        """Baseline that centres capital letters on ``cy`` (the font box is not symmetric)."""
-        return self._snap(cy + self._half_cap[id(font)])
-
-    def _draw_named_chip(self, p: QPainter, x: float, cy: float, w: float, label: str) -> None:
-        """Jade tint chip, the setup page's selected-option look."""
-        rect = QRectF(x, cy - _CHIP_H * 0.5, w, _CHIP_H)
-        path = QPainterPath()
-        path.addRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), _CHIP_H * 0.5, _CHIP_H * 0.5)
-        p.fillPath(path, _Theme.chip_fill)
-        pen = QPen(_Theme.chip_border)
-        pen.setWidthF(1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-        p.setFont(self._font_chip)
-        p.setPen(_Theme.accent)
-        advance = self._fmf_chip.horizontalAdvance(label)
-        p.drawText(QPointF(self._snap(rect.center().x() - advance * 0.5),
-                           self._baseline(self._font_chip, cy)), label)
-
-    def _draw_wave(self, p: QPainter, x: float, cy: float) -> None:
-        """Jade bars mirrored on the centre line; a silent bar is a dot, never gone."""
-        p.setPen(Qt.PenStyle.NoPen)
-        breathe_on = self._level < 0.05
-        for i, v in enumerate(self._bars):
-            if breathe_on:
-                # Quiet breathing (0.4 Hz) says "still listening" during a pause.
-                v = max(v, 0.06 * _WAVE_PROFILE[i] * (0.5 + 0.5 * math.sin(
-                    2 * math.pi * 0.4 * self._t - i * 0.45)))
-            h = _WAVE_MIN_H + (_WAVE_MAX_H - _WAVE_MIN_H) * min(1.0, v)
-            h = max(_WAVE_MIN_H, self._snap(h))
-            bx = self._snap(x + i * (_RECORDING_BAR_W + _RECORDING_BAR_GAP))
-            c = QColor(_Theme.accent)
-            c.setAlphaF(0.5 + 0.5 * min(1.0, v * 1.5))
-            p.setBrush(c)
-            p.drawRoundedRect(QRectF(bx, cy - h * 0.5, _RECORDING_BAR_W, h),
-                              _RECORDING_BAR_W * 0.5, _RECORDING_BAR_W * 0.5)
