@@ -76,8 +76,11 @@ to PATH. Existing unrelated commands and shell profiles are left untouched.
 | `odicto setup` | Open Setup using the active release and stable settings |
 | `odicto start` | Check for updates when due, then invoke the active lifecycle CLI |
 | `odicto stop` | Stop through the active lifecycle CLI; never update first |
+| `odicto restart` | Stop, then start through the active lifecycle CLI; it does not check for updates |
+| `odicto config` / `odicto version` | Show the main resolved settings (keys show only as `<set>`) / the version |
 | `odicto status` | Show the managed active and previous release records |
 | `odicto run status` | Show the application's runtime status |
+| `odicto help [command]` | List every command, or show one command's help. `odicto COMMAND --help` is the same and never runs the command |
 | `odicto check` | Read the latest stable release tag without changing an install |
 | `odicto stage` | Download, verify, build and check a version without activating it |
 | `odicto update` | Apply a pending ready version or check for a newer stable release |
@@ -86,7 +89,7 @@ to PATH. Existing unrelated commands and shell profiles are left untouched.
 | `odicto auto-updates on` | Enable automatic update checks on subsequent launches |
 | `odicto autostart` | Enable one stable startup entry for this managed home |
 | `odicto remove-autostart` | Disable its owned startup entry |
-| `odicto admin on` / `odicto admin off` | Change Windows Admin mode with owner-approved UAC when required; leave dictation stopped |
+| `odicto admin on` / `odicto admin off` | Change Windows Admin mode with owner-approved UAC when required; when the mode changes, dictation is left stopped |
 | `odicto migrate --source "PATH" --check` | Inspect a source migration without applying it |
 | `odicto migrate --source "PATH"` | Apply or resume a stopped source installation's migration |
 
