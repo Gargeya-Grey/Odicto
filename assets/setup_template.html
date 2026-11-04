@@ -342,6 +342,14 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
 .gearbox.long .seg-knob { --i: 0; }
 .gearbox.short .seg-knob { --i: 1; }
 
+/* Appearance: live preview of the dictation pill */
+.leaf-stage {
+  display: flex; justify-content: center; align-items: flex-end; padding: 16px 12px 4px; overflow: hidden;
+  border-radius: var(--r-group); background: linear-gradient(180deg, #1a1d20, #0e1011);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.leaf-stage canvas { display: block; max-width: 100%; height: auto; }
+
 /* Custom select (app-drawn menu over a real select) */
 .cselect { position: relative; }
 .cselect > select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
@@ -658,6 +666,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
       <button type="button" class="nav-item" data-view="speech"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg><span class="nav-label">Speech</span><span class="nav-dot" id="nav_dot_speech"></span></button>
       <button type="button" class="nav-item" data-view="polish"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4-1 12-12-3-3L5 16z"/></svg><span class="nav-label">Polish</span></button>
       <button type="button" class="nav-item" data-view="controls"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M8 16h8"/></svg><span class="nav-label">Shortcuts</span><span class="nav-dot" id="nav_dot_controls"></span></button>
+      <button type="button" class="nav-item" data-view="appearance"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.6 5.3-7"/></svg><span class="nav-label">Appearance</span></button>
       <button type="button" class="nav-item" data-view="prompt"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg><span class="nav-label">Prompt</span><span class="nav-dot" id="nav_dot_prompt"></span></button>
       <button type="button" class="nav-item" data-view="system"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="nav-label">System</span><span class="nav-dot" id="nav_dot_system"></span></button>
     </nav>
@@ -1203,6 +1212,93 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
           </section>
         </section>
 
+        <!-- ========================================================= appearance -->
+        <section class="view" id="view-appearance" aria-labelledby="h_appearance">
+          <header class="page-head">
+            <h1 id="h_appearance">Appearance</h1>
+            <p>Choose how the dictation pill looks. Changes apply when you save.</p>
+          </header>
+
+          <section class="sect" aria-labelledby="h_appearance_preview">
+            <div class="sect-label"><h2 id="h_appearance_preview">Preview</h2><span class="sect-note">Updates as you choose</span></div>
+            <div class="leaf-stage"><canvas id="leaf_preview" width="450" height="144" role="img" aria-label="Preview of the dictation pill"></canvas></div>
+          </section>
+
+          <section class="sect" aria-labelledby="h_appearance_style">
+            <div class="sect-label"><h2 id="h_appearance_style">Pill</h2></div>
+            <ul class="group">
+              <li class="row block">
+                <div class="row-text"><h3>Waveform</h3><p>How your voice shows in the pill.</p></div>
+                <div class="gearbox">
+                  <input type="hidden" name="HUD_WAVEFORM" id="HUD_WAVEFORM" value="__HUD_WAVEFORM__">
+                  <div class="segmented hud-seg" role="group" aria-label="Waveform" data-hud-key="HUD_WAVEFORM" style="--n:2; --i:__HUD_WAVEFORM_I__">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HUD_WAVEFORM_0_SEL__" data-value="reach" aria-pressed="__HUD_WAVEFORM_0_ARIA__">
+                      <span class="gear-name">Reach</span>
+                      <span class="gear-hint">rows reach left with your voice</span>
+                    </button>
+                    <button type="button" class="gear__HUD_WAVEFORM_1_SEL__" data-value="stream" aria-pressed="__HUD_WAVEFORM_1_ARIA__">
+                      <span class="gear-name">Stream</span>
+                      <span class="gear-hint">your voice flows to the left over time</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="row-text"><h3>Texture</h3><p>The surface of the pill.</p></div>
+                <div class="gearbox">
+                  <input type="hidden" name="HUD_TEXTURE" id="HUD_TEXTURE" value="__HUD_TEXTURE__">
+                  <div class="segmented hud-seg" role="group" aria-label="Texture" data-hud-key="HUD_TEXTURE" style="--n:2; --i:__HUD_TEXTURE_I__">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HUD_TEXTURE_0_SEL__" data-value="veins" aria-pressed="__HUD_TEXTURE_0_ARIA__">
+                      <span class="gear-name">Veins</span>
+                      <span class="gear-hint">fine leaf veins</span>
+                    </button>
+                    <button type="button" class="gear__HUD_TEXTURE_1_SEL__" data-value="plain" aria-pressed="__HUD_TEXTURE_1_ARIA__">
+                      <span class="gear-name">Plain</span>
+                      <span class="gear-hint">no texture</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="row-text"><h3>Edge</h3><p>The outline of the pill.</p></div>
+                <div class="gearbox">
+                  <input type="hidden" name="HUD_EDGE" id="HUD_EDGE" value="__HUD_EDGE__">
+                  <div class="segmented hud-seg" role="group" aria-label="Edge" data-hud-key="HUD_EDGE" style="--n:2; --i:__HUD_EDGE_I__">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HUD_EDGE_0_SEL__" data-value="rim" aria-pressed="__HUD_EDGE_0_ARIA__">
+                      <span class="gear-name">Light rim</span>
+                      <span class="gear-hint">a thin light edge</span>
+                    </button>
+                    <button type="button" class="gear__HUD_EDGE_1_SEL__" data-value="soft" aria-pressed="__HUD_EDGE_1_ARIA__">
+                      <span class="gear-name">Soft</span>
+                      <span class="gear-hint">almost no edge</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="row-text"><h3>Shape</h3><p>The form of the pill.</p></div>
+                <div class="gearbox">
+                  <input type="hidden" name="HUD_SHAPE" id="HUD_SHAPE" value="__HUD_SHAPE__">
+                  <div class="segmented hud-seg" role="group" aria-label="Shape" data-hud-key="HUD_SHAPE" style="--n:2; --i:__HUD_SHAPE_I__">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HUD_SHAPE_0_SEL__" data-value="leaf" aria-pressed="__HUD_SHAPE_0_ARIA__">
+                      <span class="gear-name">Leaf</span>
+                      <span class="gear-hint">soft tip</span>
+                    </button>
+                    <button type="button" class="gear__HUD_SHAPE_1_SEL__" data-value="capsule" aria-pressed="__HUD_SHAPE_1_ARIA__">
+                      <span class="gear-name">Capsule</span>
+                      <span class="gear-hint">round ends</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </section>
+
         <!-- ============================================================ prompt -->
         <section class="view" id="view-prompt" aria-labelledby="h_prompt">
           <header class="page-head">
@@ -1387,6 +1483,7 @@ function showView(name) {
   }
   moveNavPill();
   if (name === 'prompt') setTimeout(syncPromptPanelHeight, 0);
+  leafPreviewSync();
   try { history.replaceState(null, '', '#' + name); } catch (e) {}
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
@@ -2820,6 +2917,373 @@ function initLifecycle() {
   });
 }
 
+// ----------------------------------------------------- appearance preview
+// A port of the approved leaf pill (voice, veins, surface, stem, label, seed) so a choice shows at once.
+// The constants below must stay equal to the Qt painter's (a parity test compares them).
+const LEAF_K = {H:36, STEM_H:32, STEM_W:2, VOICE_W:84, STEM_GAP:8, TIP:58, TEXT_GAP:12, RIGHT_INSET:18, ROWS:5, PIX:2, PITCH:3, ROW_PITCH:4, HIST:24};
+const LEAF_C = {jade:[142,220,187], warn:[242,194,122], danger:[242,163,155], ink:[231,229,223]};
+const LEAF_VIEW = {W:300, H:96, ZOOM:1.5, BOTTOM:70};
+const LEAF_TIME = {ENTER:0.62, LISTEN:3, WORK:1.2, DONE:1.2, EXIT:0.5, GAP:0.5};
+const LEAF_FONT = '500 13px "Instrument Sans", system-ui, sans-serif';
+const LEAF_WORDS = {listen:'Listening', work:'Transcribing', done:'Done'};
+const LEAF_KEYS = {HUD_WAVEFORM:'wave', HUD_TEXTURE:'tex', HUD_EDGE:'edge', HUD_SHAPE:'shape'};
+const LEAF = {ready:false, still:false, raf:0, opt:{wave:'reach', tex:'veins', edge:'rim', shape:'leaf'},
+  canvas:null, ctx:null, dpr:0, sc:1, inst:null, t0:0, last:0, cycle:-1, pattern:null};
+
+function leafBez(x1, y1, x2, y2) {
+  return function (t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    var lo = 0, hi = 1, u = t;
+    for (var i = 0; i < 24; i++) {
+      u = (lo + hi) / 2;
+      var x = 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u;
+      if (x < t) lo = u; else hi = u;
+    }
+    return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+  };
+}
+const LEAF_E = leafBez(0.2, 0, 0, 1), LEAF_A = leafBez(0.3, 0, 1, 1);
+function leafClamp(v, a, b) { return Math.max(a === undefined ? 0 : a, Math.min(b === undefined ? 1 : b, v)); }
+function leafSeg(t, a, d) { return leafClamp((t - a) / d); }
+function leafSmooth(x) { return x * x * (3 - 2 * x); }
+function leafRgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+function leafSnap(v) { return Math.round(v * LEAF.sc) / LEAF.sc; }
+function leafRng(seed) { return function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
+function leafNoise(t) { var x = Math.sin(t * 12.9898) * 43758.5453; return x - Math.floor(x); }
+function leafRound(p, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r);
+  p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath();
+}
+
+// ---- simulated voice
+const LEAF_SEEDS = [0, 1, 2, 3, 4].map(function (i) { return i * 23.7 + 5; });
+function leafSn(t, s) { return 0.5 + 0.25 * Math.sin(t * 2.1 + s) + 0.15 * Math.sin(t * 5.3 + s * 1.7) + 0.1 * Math.sin(t * 11.7 + s * 0.3); }
+function leafEnv(t) {
+  var c = ((t % 4.2) + 4.2) % 4.2;
+  if (c > 3.3) return 0.02 * leafNoise(t);
+  var syl = Math.sin(Math.PI * ((c * 4.3) % 1)), w = (Math.floor(c * 1.6) % 3 === 2) ? 0.35 : 1;
+  return leafClamp(Math.pow(Math.max(0, syl), 0.8) * w * (0.75 + 0.25 * Math.sin(t * 1.3)) + (leafNoise(t * 7.1) - 0.5) * 0.08);
+}
+function leafBands(inst, t) {
+  if (inst.state !== 'listen') return [0, 0, 0, 0, 0];
+  var tt = t + inst.phase, e = leafEnv(tt);
+  return LEAF_SEEDS.map(function (s) { return leafClamp(e * (0.25 + 0.95 * leafSn(tt, s))); });
+}
+function leafInst(phase) {
+  var hist = [];
+  for (var i = 0; i < LEAF_K.ROWS; i++) { var row = []; for (var j = 0; j < LEAF_K.HIST; j++) row.push(0); hist.push(row); }
+  return {state:'listen', enterAt:0, exitAt:null, stateAt:0, rows:[0, 0, 0, 0, 0], level:0, hist:hist, histT:0, tw:null, droop:0.06, phase:phase || 0};
+}
+function leafLabelWidth(ctx, inst) {
+  ctx.font = LEAF_FONT;
+  return ctx.measureText(LEAF_WORDS[inst.state]).width + (inst.state === 'listen' ? 17 : 0);
+}
+function leafTweenW(inst, now) { var t = inst.tw; return t.from + (t.to - t.from) * LEAF_E(leafSeg(now, t.at, 0.32)); }
+function leafStep(inst, now, dt) {
+  var b = leafBands(inst, now), avg = b.reduce(function (a, v) { return a + v; }, 0) / LEAF_K.ROWS;
+  if (LEAF.still) {
+    inst.rows = b; inst.level = avg;
+    for (var j = 0; j < LEAF_K.HIST; j++) { var bb = leafBands(inst, now - j * 0.045); for (var i = 0; i < LEAF_K.ROWS; i++) inst.hist[i][j] = bb[i]; }
+  } else {
+    var f = function (v, g, u, d) { return v + (g - v) * (1 - Math.exp(-dt / (g > v ? u : d))); };
+    inst.rows = inst.rows.map(function (v, i) { return f(v, b[i], 0.03, 0.16); });
+    inst.level = f(inst.level, avg, 0.03, 0.2);
+    inst.histT += dt;
+    if (inst.histT > 0.045) { inst.histT = 0; inst.hist = inst.hist.map(function (h, i) { return [inst.rows[i]].concat(h.slice(0, -1)); }); }
+  }
+  var w = leafLabelWidth(LEAF.ctx, inst);
+  if (!inst.tw || LEAF.still) inst.tw = {from:w, to:w, at:now};
+  else if (Math.abs(w - inst.tw.to) > 0.5) inst.tw = {from:leafTweenW(inst, now), to:w, at:now};
+}
+
+// ---- material
+function leafGrain(ctx) {
+  if (!LEAF.pattern) {
+    var c = document.createElement('canvas'); c.width = c.height = 128;
+    var g = c.getContext('2d'), id = g.createImageData(128, 128), r = leafRng(3);
+    for (var i = 0; i < id.data.length; i += 4) {
+      var v = r(), lite = v > 0.5;
+      id.data[i] = lite ? 215 : 0; id.data[i + 1] = lite ? 245 : 0; id.data[i + 2] = lite ? 225 : 0;
+      id.data[i + 3] = Math.floor(Math.abs(v - 0.5) * 2 * 16);
+    }
+    g.putImageData(id, 0, 0);
+    LEAF.pattern = ctx.createPattern(c, 'repeat');
+  }
+  return LEAF.pattern;
+}
+// The outline: a round label end on the right; on the left a bud that opens into a drooping leaf tip.
+function leafPath(p, x, y, w, h, tipF, droop) {
+  p.beginPath();
+  var r = Math.min(h / 2, w / 2);
+  if (LEAF.opt.shape === 'capsule') { leafRound(p, x, y, w, h, r); return; }
+  var Ee = r + Math.max(0, Math.min(LEAF_K.TIP, w * 0.4) - r) * tipF, ty = y + h * (0.5 + droop * tipF), k = 0.5523, rr = 4 * tipF;
+  var L = function (a, b) { return [a[0] + (b[0] - a[0]) * tipF, a[1] + (b[1] - a[1]) * tipF]; };
+  var b1 = L([x + Ee - Ee * k, y + h], [x + Ee * 0.62, y + h]), b0 = L([x, ty + (y + h - ty) * k], [x + Ee * 0.3, ty + (y + h - ty) * 0.5]);
+  var t0 = L([x, ty - (ty - y) * k], [x + Ee * 0.3, ty - (ty - y) * 0.5]), t1 = L([x + Ee - Ee * k, y], [x + Ee * 0.62, y]);
+  p.moveTo(x + Ee, y); p.lineTo(x + w - r, y); p.arcTo(x + w, y, x + w, y + r, r); p.lineTo(x + w, y + h - r); p.arcTo(x + w, y + h, x + w - r, y + h, r); p.lineTo(x + Ee, y + h);
+  p.bezierCurveTo(b1[0], b1[1], b0[0], b0[1], x + rr, ty + rr * 0.45);
+  if (rr > 0) p.quadraticCurveTo(x - rr * 0.35, ty, x + rr, ty - rr * 0.45);
+  p.bezierCurveTo(t0[0], t0[1], t1[0], t1[1], x + Ee, y); p.closePath();
+}
+// The five veins: level near the stem, then they bend together into the tip.
+function leafRowY(i, d, geo) {
+  var base = (i - (LEAF_K.ROWS - 1) / 2) * LEAF_K.ROW_PITCH, s = leafSmooth(leafClamp((d - 24) / (LEAF_K.VOICE_W - 26)));
+  var tipY = LEAF.opt.shape !== 'capsule' ? geo.droop * geo.h * geo.tipF : 0;
+  return base * (1 - 0.62 * s) + tipY * s;
+}
+function leafOuterY(sgn, d, geo) {
+  var s = leafSmooth(leafClamp((d - 10) / (LEAF_K.VOICE_W - 12)));
+  var tipY = LEAF.opt.shape !== 'capsule' ? geo.droop * geo.h * geo.tipF : 0;
+  return sgn * 12.5 * (1 - 0.8 * s) + tipY * s;
+}
+function leafVeins(ctx, geo) {
+  if (LEAF.opt.tex !== 'veins') return;
+  var dmax = LEAF_K.VOICE_W - 2, n = 24, i, s, d0, d1;
+  ctx.lineCap = 'round';
+  for (i = 0; i < LEAF_K.ROWS; i++) {
+    var mid = i === (LEAF_K.ROWS - 1) / 2;
+    for (s = 0; s < n; s++) {
+      d0 = 3 + s * (dmax - 3) / n; d1 = 3 + (s + 1) * (dmax - 3) / n;
+      ctx.strokeStyle = 'rgba(205,245,222,' + ((mid ? 0.2 : 0.12) * (1 - 0.7 * d0 / dmax)) + ')';
+      ctx.lineWidth = mid ? 0.9 : 0.6; ctx.beginPath();
+      ctx.moveTo(geo.stemX - d0, geo.cy + leafRowY(i, d0, geo)); ctx.lineTo(geo.stemX - d1, geo.cy + leafRowY(i, d1, geo)); ctx.stroke();
+    }
+  }
+  [-1, 1].forEach(function (sg) {
+    for (var q = 0; q < n; q++) {
+      var a0 = 3 + q * (dmax - 3) / n, a1 = 3 + (q + 1) * (dmax - 3) / n;
+      ctx.strokeStyle = 'rgba(205,245,222,' + (0.07 * (1 - 0.6 * a0 / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
+      ctx.moveTo(geo.stemX - a0, geo.cy + leafOuterY(sg, a0, geo)); ctx.lineTo(geo.stemX - a1, geo.cy + leafOuterY(sg, a1, geo)); ctx.stroke();
+    }
+  });
+  var r = leafRng(9);
+  for (var m = 0; m < 30; m++) {
+    var row = Math.floor(r() * (LEAF_K.ROWS - 1)), d = 5 + r() * (dmax - 14), dd = d + 2 + r() * 4;
+    ctx.strokeStyle = 'rgba(205,245,222,' + (0.07 * (1 - 0.6 * d / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
+    ctx.moveTo(geo.stemX - d, geo.cy + leafRowY(row, d, geo)); ctx.lineTo(geo.stemX - dd, geo.cy + leafRowY(row + 1, dd, geo)); ctx.stroke();
+  }
+}
+function leafShadow(ctx, geo, a) {
+  [[16, 5, 0.5], [3, 1, 0.32]].forEach(function (s) {
+    ctx.save(); ctx.translate(-4000, 0); leafPath(ctx, geo.left, geo.top, geo.w, geo.h, geo.tipF, geo.droop);
+    ctx.shadowColor = 'rgba(0,0,0,' + (s[2] * a) + ')'; ctx.shadowBlur = s[0] * LEAF.sc; ctx.shadowOffsetX = 4000 * LEAF.sc; ctx.shadowOffsetY = s[1] * LEAF.sc;
+    ctx.fillStyle = '#000'; ctx.fill(); ctx.restore();
+  });
+}
+function leafSurface(ctx, inst, geo, col) {
+  var left = geo.left, top = geo.top, w = geo.w, h = geo.h, stemX = geo.stemX, cy = geo.cy, X = left - 1, Y = top - 1, W = w + 2, H = h + 2;
+  ctx.save(); leafPath(ctx, left, top, w, h, geo.tipF, geo.droop); ctx.clip();
+  var g = ctx.createLinearGradient(0, top, 0, top + h);
+  g.addColorStop(0, 'rgba(27,64,46,0.89)'); g.addColorStop(1, 'rgba(9,31,22,0.94)'); ctx.fillStyle = g; ctx.fillRect(X, Y, W, H);
+  g = ctx.createLinearGradient(left, 0, stemX, 0); // the tip is cooler and darker
+  g.addColorStop(0, 'rgba(3,18,24,0.42)'); g.addColorStop(1, 'rgba(3,18,24,0)'); ctx.fillStyle = g; ctx.fillRect(X, Y, stemX - X, H);
+  var pc = stemX - 16, pool = ctx.createRadialGradient(pc, cy, 0, pc, cy, 52); // soft light on the voice side
+  pool.addColorStop(0, leafRgba(col, 0.08 + (LEAF.still ? 0 : 0.07 * inst.level))); pool.addColorStop(1, leafRgba(col, 0));
+  ctx.fillStyle = pool; ctx.fillRect(X, Y, W, H);
+  leafVeins(ctx, geo);
+  if (LEAF.opt.tex === 'veins') { ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); }
+  g = ctx.createLinearGradient(0, top, 0, top + h);
+  g.addColorStop(0, 'rgba(225,255,238,0.085)'); g.addColorStop(0.38, 'rgba(225,255,238,0)'); g.addColorStop(0.7, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.2)');
+  ctx.fillStyle = g; ctx.fillRect(X, Y, W, H); ctx.restore(); // waxy sheen above, shade below
+  var ra = LEAF.opt.edge === 'rim' ? 0.18 : 0.07;
+  g = ctx.createLinearGradient(0, top, 0, top + h);
+  g.addColorStop(0, 'rgba(215,250,230,' + ra + ')'); g.addColorStop(0.55, 'rgba(215,250,230,' + (ra * 0.3) + ')'); g.addColorStop(1, 'rgba(215,250,230,' + (ra * 0.12) + ')');
+  ctx.strokeStyle = g; ctx.lineWidth = 1; leafPath(ctx, left + 0.5, top + 0.5, w - 1, h - 1, geo.tipF, geo.droop); ctx.stroke();
+}
+
+// ---- content
+function leafVoice(ctx, inst, now, geo, t) {
+  var k = inst.state, col = LEAF_C.jade, rm = LEAF.still, maxpx = Math.floor((LEAF_K.VOICE_W - LEAF_K.STEM_GAP - 6) / LEAF_K.PITCH);
+  var sweepOn = !rm && inst.exitAt === null && t < 1.1, sweep = leafSeg(t, 0.6, 0.42) * (maxpx + 4) - 2; // sap fills the veins once as the leaf opens
+  for (var i = 0; i < LEAF_K.ROWS; i++) for (var j = 0; j < maxpx; j++) {
+    var x = leafSnap(geo.stemX - LEAF_K.STEM_GAP - (j + 1) * LEAF_K.PITCH + (LEAF_K.PITCH - LEAF_K.PIX)), d = geo.stemX - x - LEAF_K.PIX / 2;
+    var y = leafSnap(geo.cy + leafRowY(i, d, geo) - LEAF_K.PIX / 2), fall = 1 - 0.62 * (j / maxpx), a = 0;
+    if (k === 'listen' || k === 'done') {
+      if (LEAF.opt.wave === 'reach') a = leafClamp(inst.rows[i] * maxpx - j) * fall;
+      else a = leafClamp(inst.hist[i][j] * 1.6) * fall;
+      if (k === 'listen' && a < 0.02 && j === 0) a = rm ? 0.32 : 0.26 + 0.1 * Math.sin(now * 2.2 + i * 0.9);
+    } else if (k === 'work') {
+      if (rm) a = j < 2 ? 0.3 : 0;
+      else { var ph = ((now * 1.1 + i * 0.23 + j * 0.055) % 1), kk = (1 - ph) * maxpx; a = Math.max(0, 1 - Math.abs(j - kk) / 1.4) * 0.6 * fall; }
+    }
+    if (sweepOn && sweep > -2) a = Math.max(a, 0.6 * Math.exp(-((sweep - j) * (sweep - j)) / 2) * fall);
+    if (a > 0.01) { ctx.fillStyle = leafRgba(col, a); ctx.fillRect(x, y, LEAF_K.PIX, LEAF_K.PIX); }
+  }
+}
+function leafLabel(ctx, inst, now, geo, content) {
+  var k = inst.state, col = LEAF_C.jade, x = leafSnap(geo.stemX + LEAF_K.TEXT_GAP - (1 - content) * 4), base = leafSnap(geo.cy + 4.5);
+  ctx.textBaseline = 'alphabetic'; ctx.font = LEAF_FONT;
+  var word = LEAF_WORDS[k]; ctx.fillStyle = leafRgba(LEAF_C.ink, k === 'done' ? 0.92 : 0.78); ctx.fillText(word, x, base);
+  var ww = ctx.measureText(word).width;
+  if (k === 'work' && !LEAF.still) { // a light passes over the word
+    var span = ww + 50, p = ((now * 0.6) % 1.5) / 1.5 * span - 25 + x, g = ctx.createLinearGradient(p - 18, 0, p + 18, 0);
+    g.addColorStop(0, leafRgba(col, 0)); g.addColorStop(0.5, 'rgba(240,255,248,1)'); g.addColorStop(1, leafRgba(col, 0));
+    ctx.fillStyle = g; ctx.fillText(word, x, base);
+  }
+  if (k === 'listen') {
+    var dx = leafSnap(x + ww + 5), stp = LEAF.still ? 3 : Math.floor(now * 4) % 4;
+    for (var d = 0; d < 3; d++) { ctx.fillStyle = leafRgba(col, d < stp ? 0.8 : 0.22); ctx.fillRect(leafSnap(dx + d * 4), base - 2, 2, 2); }
+  }
+}
+function leafStem(ctx, inst, now, x, cy, grow, col) {
+  var k = inst.state, since = now - inst.stateAt, morph = LEAF_E(leafSeg(since, 0, 0.28)), rm = LEAF.still;
+  var glyph = k === 'done', full = LEAF_K.STEM_H * grow, wd = LEAF_K.STEM_W + (1 - grow) * 2.5, hh = Math.max(2.5, full * (glyph ? (1 - morph * 0.62) : 1)), top = cy - hh / 2;
+  var halo = (k === 'listen' && !rm) ? 0.5 + 0.5 * inst.level : 0.6;
+  for (var i = 2; i >= 1; i--) {
+    var g = i * 1.6; ctx.fillStyle = leafRgba(col, 0.12 * halo * (1 - i / 3));
+    ctx.beginPath(); leafRound(ctx, x - wd / 2 - g, top - g, wd + 2 * g, hh + 2 * g, (wd + 2 * g) / 2); ctx.fill();
+  }
+  if (k === 'work') {
+    ctx.fillStyle = leafRgba(col, 0.45); ctx.beginPath(); leafRound(ctx, x - wd / 2, top, wd, hh, wd / 2); ctx.fill();
+    var p = rm ? 0.5 : 0.5 + 0.5 * Math.sin(now * Math.PI * 1.4), by = top + 3 + (hh - 10) * p;
+    ctx.fillStyle = 'rgba(238,255,248,0.95)'; ctx.beginPath(); leafRound(ctx, x - wd / 2, by, wd, 5, wd / 2); ctx.fill();
+    return;
+  }
+  ctx.fillStyle = leafRgba(col, glyph ? 0.95 * (1 - morph) : 0.94); ctx.beginPath(); leafRound(ctx, x - wd / 2, top, wd, hh, wd / 2); ctx.fill();
+  if (!glyph) { ctx.fillStyle = 'rgba(244,255,250,0.5)'; ctx.fillRect(x - 0.5, top + 3, 1, Math.max(0, hh - 6)); return; }
+  ctx.strokeStyle = leafRgba(col, 0.98); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  var dr = rm ? 1 : LEAF_E(leafSeg(since, 0.08, 0.3)); // the check mark draws itself
+  var p0 = [x - 4.5, cy + 0.5], p1 = [x - 1.2, cy + 4], l1 = Math.hypot(3.3, 3.5), l2 = Math.hypot(6.2, 8.5), run = dr * (l1 + l2);
+  ctx.beginPath(); ctx.moveTo(p0[0], p0[1]);
+  if (run <= l1) { var q = run / l1; ctx.lineTo(p0[0] + 3.3 * q, p0[1] + 3.5 * q); }
+  else { ctx.lineTo(p1[0], p1[1]); var q2 = (run - l1) / l2; ctx.lineTo(p1[0] + 6.2 * q2, p1[1] - 8.5 * q2); }
+  ctx.stroke();
+}
+function leafSeed(ctx, inst, now, x, cy) {
+  if (inst.state !== 'done' || LEAF.still) return;
+  var p = leafSeg(now - inst.stateAt, 0.32, 1.0);
+  if (p <= 0 || p >= 1) return; // done: the leaf lets a seed go
+  var y = cy - 6 - LEAF_E(p) * 22, sx = x + Math.sin(p * 6) * 1.5, a = (1 - p * p) * Math.min(1, p * 8), g = ctx.createRadialGradient(sx, y, 0, sx, y, 6);
+  g.addColorStop(0, leafRgba(LEAF_C.jade, 0.45 * a)); g.addColorStop(1, leafRgba(LEAF_C.jade, 0));
+  ctx.fillStyle = g; ctx.fillRect(sx - 6, y - 6, 12, 12);
+  ctx.fillStyle = 'rgba(240,255,248,' + a + ')'; ctx.beginPath(); ctx.arc(sx, y, 1.3, 0, Math.PI * 2); ctx.fill();
+}
+function leafDraw(ctx, inst, now, cx, bottom) {
+  var col = LEAF_C.jade, t = (now - inst.enterAt) / LEAF_TIME.ENTER, A = LEAF_A, E = LEAF_E, seg = leafSeg;
+  var rise = E(seg(t, 0, 0.22)), grow = E(seg(t, 0.14, 0.2)), openH = E(seg(t, 0.26, 0.26)), openR = E(seg(t, 0.3, 0.34)), openL = E(seg(t, 0.32, 0.4));
+  var tipF = E(seg(t, 0.5, 0.32)), content = E(seg(t, 0.42, 0.3)), fade = 1;
+  if (inst.exitAt !== null) {
+    var e = now - inst.exitAt;
+    if (e > LEAF_TIME.EXIT) return;
+    content = Math.min(content, 1 - A(seg(e, 0, 0.1))); tipF = Math.min(tipF, 1 - A(seg(e, 0.02, 0.12)));
+    openL = Math.min(openL, 1 - A(seg(e, 0.06, 0.18))); openR = Math.min(openR, 1 - A(seg(e, 0.06, 0.18)));
+    openH = Math.min(openH, 1 - A(seg(e, 0.14, 0.14))); grow = Math.min(grow, 1 - A(seg(e, 0.22, 0.1)));
+    rise = Math.min(rise, 1 - A(seg(e, 0.26, 0.14))); fade = 1 - seg(e, 0.3, 0.1);
+  }
+  var R = LEAF_K.TEXT_GAP + leafTweenW(inst, now) + LEAF_K.RIGHT_INSET, L = LEAF_K.VOICE_W, stemX = leafSnap(cx - (R - L) / 2), bot = bottom + (1 - rise) * 12;
+  var cy = bot - LEAF_K.H / 2, h = 5 + (LEAF_K.H - 5) * openH, left = stemX - 2.5 - (L - 2.5) * openL, right = stemX + 2.5 + (R - 2.5) * openR;
+  var w = right - left, top = cy - h / 2, geo = {left:left, top:top, w:w, h:h, stemX:stemX, cy:cy, tipF:tipF, droop:inst.droop};
+  ctx.save(); ctx.globalAlpha = fade;
+  if (openH > 0.02) { leafShadow(ctx, geo, openH); leafSurface(ctx, inst, geo, col); }
+  ctx.save();
+  if (openH > 0.02) { leafPath(ctx, left, top, w, h, tipF, inst.droop); ctx.clip(); }
+  if (content > 0.001) { ctx.globalAlpha = fade * content; leafVoice(ctx, inst, now, geo, t); leafLabel(ctx, inst, now, geo, content); }
+  ctx.restore(); ctx.globalAlpha = fade;
+  leafStem(ctx, inst, now, stemX, cy, grow, col); leafSeed(ctx, inst, now, stemX, cy);
+  ctx.restore();
+}
+
+// ---- loop and controls
+function leafIsStill() {
+  var media = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return !!media || document.documentElement.getAttribute('data-motion') === 'off';
+}
+function leafSize() {
+  var dpr = window.devicePixelRatio || 1, c = LEAF.canvas;
+  if (dpr === LEAF.dpr) return;
+  LEAF.dpr = dpr;
+  c.width = Math.round(LEAF_VIEW.W * LEAF_VIEW.ZOOM * dpr); c.height = Math.round(LEAF_VIEW.H * LEAF_VIEW.ZOOM * dpr);
+  c.style.width = (LEAF_VIEW.W * LEAF_VIEW.ZOOM) + 'px'; c.style.height = (LEAF_VIEW.H * LEAF_VIEW.ZOOM) + 'px';
+  LEAF.pattern = null;
+}
+function leafPaint(now) {
+  var ctx = LEAF.ctx;
+  LEAF.sc = LEAF.dpr * LEAF_VIEW.ZOOM;
+  ctx.setTransform(LEAF.sc, 0, 0, LEAF.sc, 0, 0);
+  ctx.clearRect(0, 0, LEAF_VIEW.W, LEAF_VIEW.H);
+  leafDraw(ctx, LEAF.inst, now, LEAF_VIEW.W / 2, LEAF_VIEW.BOTTOM);
+}
+function leafPaintStill() { // one Listening frame, fully open, with a fixed voice
+  var now = 1.1, inst = leafInst(0);
+  inst.enterAt = now - 10; inst.stateAt = now - 10; LEAF.inst = inst;
+  leafSize(); LEAF.sc = LEAF.dpr * LEAF_VIEW.ZOOM;
+  leafStep(inst, now, 0); leafPaint(now);
+}
+function leafTimeline(now) {
+  var T = LEAF_TIME, cyc = T.ENTER + T.LISTEN + T.WORK + T.DONE + T.EXIT + T.GAP, rel = now - LEAF.t0, n = Math.floor(rel / cyc), c = rel - n * cyc, start = LEAF.t0 + n * cyc;
+  var workAt = T.ENTER + T.LISTEN, doneAt = workAt + T.WORK, exitAt = doneAt + T.DONE;
+  if (n !== LEAF.cycle) { LEAF.cycle = n; LEAF.inst = leafInst(n * 1.7); LEAF.inst.enterAt = start; LEAF.inst.stateAt = start; }
+  var inst = LEAF.inst, state = c < workAt ? 'listen' : (c < doneAt ? 'work' : 'done');
+  if (state !== inst.state) { inst.state = state; inst.stateAt = start + (state === 'work' ? workAt : doneAt); }
+  inst.exitAt = c >= exitAt ? start + exitAt : null;
+}
+function leafShouldRun() {
+  return LEAF.ready && CURRENT_VIEW === 'appearance' && !document.hidden && !LEAF.still;
+}
+function leafFrame() {
+  LEAF.raf = 0;
+  if (!leafShouldRun()) return;
+  var now = performance.now() / 1000, dt = Math.min(0.05, Math.max(0, now - LEAF.last));
+  LEAF.last = now; leafSize(); leafTimeline(now); leafStep(LEAF.inst, now, dt); leafPaint(now);
+  LEAF.raf = requestAnimationFrame(leafFrame);
+}
+function leafPreviewSync() { // the loop runs only while the view is open, the page is visible and motion is allowed
+  if (!LEAF.ready) return;
+  LEAF.still = leafIsStill();
+  var active = CURRENT_VIEW === 'appearance' && !document.hidden;
+  if (!active || LEAF.still) {
+    if (LEAF.raf) { cancelAnimationFrame(LEAF.raf); LEAF.raf = 0; }
+    if (active) leafPaintStill();
+    return;
+  }
+  if (!LEAF.raf) {
+    LEAF.t0 = LEAF.last = performance.now() / 1000; LEAF.cycle = -1;
+    LEAF.raf = requestAnimationFrame(leafFrame);
+  }
+}
+function leafSetOption(key, value) {
+  var hid = el(key);
+  if (hid) hid.value = value;
+  LEAF.opt[LEAF_KEYS[key]] = value;
+  var seg = document.querySelector('.hud-seg[data-hud-key="' + key + '"]'), btns = seg ? seg.querySelectorAll('button') : [];
+  for (var i = 0; i < btns.length; i++) {
+    var on = btns[i].getAttribute('data-value') === value;
+    btns[i].classList.toggle('selected', on);
+    btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) seg.style.setProperty('--i', String(i));
+  }
+  if (LEAF.ready && LEAF.still && CURRENT_VIEW === 'appearance') leafPaintStill();
+}
+function initLeafPreview() {
+  LEAF.canvas = el('leaf_preview');
+  if (!LEAF.canvas || !LEAF.canvas.getContext) return;
+  LEAF.ctx = LEAF.canvas.getContext('2d');
+  var segs = document.querySelectorAll('.hud-seg');
+  for (var i = 0; i < segs.length; i++) {
+    (function (seg) {
+      var key = seg.getAttribute('data-hud-key'), hid = el(key);
+      if (hid && hid.value) LEAF.opt[LEAF_KEYS[key]] = hid.value;
+      seg.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('button[data-value]') : null;
+        if (!btn || btn.getAttribute('data-value') === (el(key) || {}).value) return;
+        leafSetOption(key, btn.getAttribute('data-value'));
+        markDirty();
+      });
+    })(segs[i]);
+  }
+  document.addEventListener('visibilitychange', leafPreviewSync);
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mq.addEventListener) mq.addEventListener('change', leafPreviewSync);
+  }
+  if (window.MutationObserver) new MutationObserver(leafPreviewSync).observe(document.documentElement, {attributes:true, attributeFilter:['data-motion']});
+  var go = function () { LEAF.ready = true; leafPreviewSync(); };
+  var fontReady = document.fonts && document.fonts.load ? document.fonts.load(LEAF_FONT) : Promise.resolve();
+  Promise.race([fontReady, new Promise(function (r) { setTimeout(r, 2500); })]).catch(function () {}).then(go);
+}
+
 // -------------------------------------------------------------------- boot
 initMotion();
 initNav();
@@ -2830,6 +3294,7 @@ initEffortSelects();
 loadOpenrouterCatalog();
 initTranscribeMode();
 initGearbox();
+initLeafPreview();
 initSwitches();
 initSttChoices();
 syncSttProvider();

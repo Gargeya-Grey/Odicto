@@ -67,24 +67,28 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # Polish label, model summary and help text now have explicit vertical spacing.
 # Polish shortcut now uses the shared key recorder and keycaps.
 # Selection polish explicitly reviews/copies instead of injecting into unverified fields.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
- 'provider_meta': 'a206366010e827dd49dccab5b8b7f7262fc7c30b356f9f4474bea5ff52d38ec8',
- 'provider_openrouter': '4909b6f37431abd424853675e7787005a3bc37a558f2ad663ec7ba1c356d4313',
- 'provider_gemini': '13af00dc988bda06aae537e82b7d59433a87958059e8ebb076cda6387a99752a',
- 'provider_ollama': '3fab3d59de4091542ee84677a189e3bd34ac89b4a9ac896b2abd6d1433043288',
- 'provider_none': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
- 'provider_groq': 'edae047c5d774094cd5ef4bdde6105c979317ffd0df52e17fd2bdae002247f01',
- 'polish_enabled': 'ce03270699a6dd408801820cc813707ce838d6377c173b68cf89f0b84021d15c',
- 'history_and_custom': '8d3c7f02f2cce0bac76d2207d232195b9cbb4844b409873d68a2c138c9b996ba',
- 'hotkey_short': 'f4817b4e7622c9641af7ac556183893659841ddfb5f4709eb9e8b085b3d77d69',
- 'stt_gemini': '10caca37e7c64c09a5017fd6cca2a22f141b29f1956e783aa97b55a58078e615',
- 'prompt_from_file': '0bf7faf242c16034f5e0aeeec07ff2940225af902ae5d540969da07979d1aa0a',
- 'prompt_from_inline_env': '5b99684aa685b944827dfd81d63aa783753d9f5279970c6c55f06e51b26fb6ae',
- 'msg_ok': '25777821f06661a1f160996895df64f54515bf6b34c8f602cd523388890bf19b',
- 'msg_err': '4f8dd23f2f993bf13eb329eba089bcc9ea33c0390059788576c17e7b8006eeb4',
- 'msg_neutral': '1cb34f6da9056f19ebaa190ea1f2b151a4e63aea363361eee825b5b7e5fc2109',
- 'admin_on': '7132562e31716d2ac9c0272f976bbc2ceb0dc6808291c9405770cb68891bbef0',
- 'admin_unavailable': '1271a444b6729ac6f73be3d0737ee6b588e0b70f2eb1d20b9c625756e3a23e1c'}
+# 2026-11-04: the setup page gained an Appearance view (nav item, stylesheet, view, preview script)
+# for the HUD_WAVEFORM, HUD_TEXTURE, HUD_EDGE and HUD_SHAPE keys. Before rebasing, the previous
+# template reproduced every old golden, and each new page differed from its old page by
+# inserted lines only (no line removed or changed), the same 465 lines in every state.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '08fd9654e23fcfa51507c8108982585332c2b610197eb0132dc3ca6c11b3c964',
+ 'provider_meta': 'd3e0529cd0f84e6e24835aa2f88f21664347e1727e768af555aa3cfd7db49df4',
+ 'provider_openrouter': 'd2242cc13ce9dd227067b63a21d2c45a0c1de44287c3a1dbe2bf12f09a747d1d',
+ 'provider_gemini': '87cc450882638135ff9c1f7d69964bb908fcab1be2ba2d198462b75952956e0e',
+ 'provider_ollama': '9ec105ca7e4a4dd51f2da4077ccba12125496432fad432c800e6939cfe14e3e9',
+ 'provider_none': '08fd9654e23fcfa51507c8108982585332c2b610197eb0132dc3ca6c11b3c964',
+ 'provider_groq': '3e56d14dee1cffc6a0474e0fa7b7e69186933f0ae84cf561e7db196d022d53c2',
+ 'polish_enabled': '5791514004a606dd4da433a7a4a40b8f84a7a24803d3ddbd0b4d996b0e323324',
+ 'history_and_custom': 'ba5b3788e3785be5397dda63ccfa7e0815cdc618be8d4d60da30ac934682c305',
+ 'hotkey_short': '8688d60dfb02d186955bcf2aa5bdfee1986d311776c2c3afe8c8198b9bcccd9f',
+ 'stt_gemini': '0d4dc23d292fd1c432d401e11893e312188c2a87e624d13a9a27b0b165316b39',
+ 'prompt_from_file': '08a08bb53e182712b50494d6a45353a163fa8a39b243ffcbf713a3a34e9c3390',
+ 'prompt_from_inline_env': '65d1173f36e0816f1abbc59a76d3981e93930f5e36de8261b4137941483e3239',
+ 'msg_ok': 'fe96fef1a596b282dfb8e858c62fa06dd1751926f023adcd978f174fd011a10b',
+ 'msg_err': 'a13705603594d783e361551aceada29b4e89265830a3a0d9057f4e55504f312e',
+ 'msg_neutral': 'b569df3d86c5410db0fe306492e7190f77292298d326b5ad3d4dff0d8177999a',
+ 'admin_on': '09f30663e99de8c7cea15cbfebc888d068f9f6b6f313f638444590f422b81090',
+ 'admin_unavailable': '8d1af07cbbd9685ea8c1a8ddc4012ec1c6a5572c47dc668e5c7b00282847ce2b'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {
