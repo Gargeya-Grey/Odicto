@@ -46,7 +46,8 @@ GATE = {
     # Plus 5 for the private-directory access-list policy (managed homes and migration): 1035.
     # Plus 41 for the leaf HUD: the painter (28), voice bands (6) and the HUD_* keys (7): 1076.
     # Plus 32 for the HUD widget on the leaf painter (test_hud_motion, 54 to 86): 1108.
-    "floor": 1108,
+    # Plus 20 for the setup page Appearance view (15) and its parity with the painter (5): 1128.
+    "floor": 1128,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

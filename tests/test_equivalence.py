@@ -67,24 +67,30 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # Polish label, model summary and help text now have explicit vertical spacing.
 # Polish shortcut now uses the shared key recorder and keycaps.
 # Selection polish explicitly reviews/copies instead of injecting into unverified fields.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
- 'provider_meta': 'a206366010e827dd49dccab5b8b7f7262fc7c30b356f9f4474bea5ff52d38ec8',
- 'provider_openrouter': '4909b6f37431abd424853675e7787005a3bc37a558f2ad663ec7ba1c356d4313',
- 'provider_gemini': '13af00dc988bda06aae537e82b7d59433a87958059e8ebb076cda6387a99752a',
- 'provider_ollama': '3fab3d59de4091542ee84677a189e3bd34ac89b4a9ac896b2abd6d1433043288',
- 'provider_none': '7d3e9793fd6c4e0bf35b601df614bc05722512c6ff122ba98c0f33775e5595bb',
- 'provider_groq': 'edae047c5d774094cd5ef4bdde6105c979317ffd0df52e17fd2bdae002247f01',
- 'polish_enabled': 'ce03270699a6dd408801820cc813707ce838d6377c173b68cf89f0b84021d15c',
- 'history_and_custom': '8d3c7f02f2cce0bac76d2207d232195b9cbb4844b409873d68a2c138c9b996ba',
- 'hotkey_short': 'f4817b4e7622c9641af7ac556183893659841ddfb5f4709eb9e8b085b3d77d69',
- 'stt_gemini': '10caca37e7c64c09a5017fd6cca2a22f141b29f1956e783aa97b55a58078e615',
- 'prompt_from_file': '0bf7faf242c16034f5e0aeeec07ff2940225af902ae5d540969da07979d1aa0a',
- 'prompt_from_inline_env': '5b99684aa685b944827dfd81d63aa783753d9f5279970c6c55f06e51b26fb6ae',
- 'msg_ok': '25777821f06661a1f160996895df64f54515bf6b34c8f602cd523388890bf19b',
- 'msg_err': '4f8dd23f2f993bf13eb329eba089bcc9ea33c0390059788576c17e7b8006eeb4',
- 'msg_neutral': '1cb34f6da9056f19ebaa190ea1f2b151a4e63aea363361eee825b5b7e5fc2109',
- 'admin_on': '7132562e31716d2ac9c0272f976bbc2ceb0dc6808291c9405770cb68891bbef0',
- 'admin_unavailable': '1271a444b6729ac6f73be3d0737ee6b588e0b70f2eb1d20b9c625756e3a23e1c'}
+# 2026-11-04: the setup page gained an Appearance view (nav item, stylesheet, view, preview script)
+# for the HUD_WAVEFORM, HUD_TEXTURE, HUD_EDGE and HUD_SHAPE keys. Before rebasing, the previous
+# template reproduced every old golden, and each new page differed from its old page by
+# inserted lines only (no line removed or changed), the same 465 lines in every state.
+# Review fixes, same day: Plain keeps the grain, a still preview follows a new pixel ratio,
+# and two comments. Every state changed by the same 4 lines and nothing else.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
+ 'provider_meta': '509ba66da7de5a140dae0c496f3cc1391c1bbda9109c495327d3088eb131886b',
+ 'provider_openrouter': '26a0db5e58e02cc51f8d3461350c8d8198484dc61bec519361a895adfbe4c5e6',
+ 'provider_gemini': '0f6634ff1a41ee546d19489005ce26088f9d90ed756a084a21998e64d62081b6',
+ 'provider_ollama': 'c213b63eb12d65e402c02841aa49ccca95e6173e9756af16c4751a71ab19623e',
+ 'provider_none': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
+ 'provider_groq': 'f46210833875b872e5b5d1b89ff21252804c0e6b6f75a450562829cd8a5b0b62',
+ 'polish_enabled': '555f0dcd95da58a4ad2f92254b9294902c5f9834398682b570bde7036d885bf0',
+ 'history_and_custom': '9d5cbb9a09414a6b394f6752a9b437e3eaae009f370d20aacb78f35c30927c99',
+ 'hotkey_short': 'e877300f32f87f17fefdbce31a74a697f2365fe92433d44d54dfe3bb01977d5d',
+ 'stt_gemini': '424ffd537a6adcd50fc7338af3793a26cc035de20171a5a9b1e063c7fd84de6b',
+ 'prompt_from_file': 'bf06f69c550f391538545becd586cc97331a66c9f932827661c8b245695c065a',
+ 'prompt_from_inline_env': 'ef7d9468a0078ee713f19b1d33fa192963d95ca809a112aa47dc28fb799b1f69',
+ 'msg_ok': '46228cdd4ab171d694e301014f538f039acb8df7e3b7af341b250193a8da571e',
+ 'msg_err': '338473b41313d3ba933dff53f7a01122f629232d89ca17ee47d18b340f2af0cd',
+ 'msg_neutral': 'dc95a0e06483fd48997518ebe1dcbeb54b4fd55757e65fe5cf6dcc8eb453e242',
+ 'admin_on': 'd46866c7a5435ed3c9adeec526e083f084fd63f4e98fbfdd9b72f8694a52c45d',
+ 'admin_unavailable': '6016178a298fd6da4abbe6deee79b7e1d4240e63fb66b513fdd02c0004e02ce3'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

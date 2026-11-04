@@ -32,6 +32,7 @@ from config import (
     OPENROUTER_FALLBACK_MODEL,
     DEFAULT_SYSTEM_PROMPT,
     ENV_DEFAULTS,
+    HUD_CHOICES,
     Config,
     PROMPT_LIVE_NAME,
     prompt_live_path,
@@ -111,6 +112,10 @@ EDITABLE_KEYS = {
     "HOTKEY_TOGGLE",
     "SYSTEM_PROMPT",
     "SYSTEM_PROMPT_FILE",
+    "HUD_WAVEFORM",
+    "HUD_TEXTURE",
+    "HUD_EDGE",
+    "HUD_SHAPE",
 }
 
 _MASKED = "••••••••••••••••"
@@ -183,6 +188,15 @@ def _whisper_model_options(current: str) -> str:
             f'<option value="{html.escape(value)}"{selected}>{html.escape(label)}</option>'
         )
     return "\n".join(lines)
+
+
+def _valid_hud_choice(key: str, value: str):
+    """The allowed value for a HUD appearance key (stripped, lowercased), else None.
+
+    Anything else, including a value with an embedded newline, is never written to .env.
+    """
+    candidate = (value or "").strip().lower()
+    return candidate if candidate in HUD_CHOICES[key] else None
 
 
 def _clean_submitted_value(key: str, value: str) -> str:
@@ -293,6 +307,11 @@ def merge_env(updates: dict) -> None:
         if key not in EDITABLE_KEYS:
             continue
         if value == _MASKED:
+            continue
+        if key in HUD_CHOICES:
+            choice = _valid_hud_choice(key, value)
+            if choice is not None:  # an invalid choice leaves the stored value alone
+                cleaned[key] = choice
             continue
         cleaned[key] = _clean_submitted_value(key, value)
 
@@ -554,6 +573,19 @@ def pull_status() -> dict:
         }
 
 
+def _hud_appearance_tokens(hud_choice) -> dict:
+    """Template tokens that seed the Appearance view: value, slider index, per-segment state."""
+    tokens = {}
+    for key, allowed in HUD_CHOICES.items():
+        chosen = hud_choice(key)
+        tokens[f"__{key}__"] = html.escape(chosen)
+        tokens[f"__{key}_I__"] = str(allowed.index(chosen))
+        for n, value in enumerate(allowed):
+            tokens[f"__{key}_{n}_SEL__"] = " selected" if value == chosen else ""
+            tokens[f"__{key}_{n}_ARIA__"] = "true" if value == chosen else "false"
+    return tokens
+
+
 def _page(message: str = "", message_kind: str = "neutral") -> str:
     current = read_env()
 
@@ -573,6 +605,11 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         user had chosen it.
         """
         return (current.get(key) or "").strip()
+
+    def hud_choice(key: str) -> str:
+        """Saved HUD appearance value when it is an allowed one, else the built-in default."""
+        value = (current.get(key) or "").strip().lower()
+        return value if value in HUD_CHOICES[key] else ENV_DEFAULTS[key]
 
     polish_hotkey = env_raw("POLISH_HOTKEY")
     if "POLISH_HOTKEY" not in current:
@@ -705,6 +742,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__HOTKEY_LONG_ARIA__": 'true' if hotkey_toggle_on else 'false',
         "__HOTKEY_SHORT_SELECTED__": '' if hotkey_toggle_on else ' selected',
         "__HOTKEY_SHORT_ARIA__": 'false' if hotkey_toggle_on else 'true',
+        **_hud_appearance_tokens(hud_choice),
         "__PROVIDER__": html.escape(provider),
         "__META_KEY_SAVED__": 'true' if meta_key else 'false',
         "__META_KEY__": html.escape(meta_key),
