@@ -50,7 +50,8 @@ GATE = {
     # Plus 3 for the Plain texture's faint grain (painter 2, preview parity 1): 1131.
     # Plus 10 for the F7 failure message on the caption card (9) and its service rule (1): 1141.
     # Plus 22 for HUD_SIZE: painter 6, widget 7, config 2, setup page 6, preview parity 1: 1163.
-    "floor": 1163,
+    # Plus 15 for the setup page look (text contrast from the tokens, no network, one leaf painter, the shell): 1178.
+    "floor": 1178,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

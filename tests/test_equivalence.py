@@ -80,24 +80,29 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # follows it (a larger preview canvas holds the 1.5x leaf and its shadow). Before rebasing, the previous template
 # reproduced every old golden, and every state changed by the same lines and nothing else (compare output kept in
 # the hand-back).
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '2b653861217421b4d85ca6161b552c5e74db55a4067ffdc6a650758e2a3b856a',
- 'provider_meta': 'c98a9a051c122f69e27bdc4fcdd6bdb5b98cca4e3a741dbeadb19639bf645657',
- 'provider_openrouter': '47fbd2e2bb49e4996e6ce7cb8df78f675de9046d4f68a599a6ba68028b471971',
- 'provider_gemini': '0700838676f9d452084c7891aff80e40cff88b39c492603cc093e11cff27e5ea',
- 'provider_ollama': '809d365e29fd0e7c0127f6a0330ccc63f3a73e800a339d206cdaaffb44b8a4e6',
- 'provider_none': '2b653861217421b4d85ca6161b552c5e74db55a4067ffdc6a650758e2a3b856a',
- 'provider_groq': '33e4a57ce9dff235a00f12490161980b47a3f14f083b271040948ee5e1bb740c',
- 'polish_enabled': 'bd38f0608a39e3253cb7efc9130d928777c040bf7a4fb0a86f6df3ab4aa1d233',
- 'history_and_custom': 'd3c7f0ca1bf5501831435f57de597b155adc7dade9eb879024b05c486da35969',
- 'hotkey_short': '43d02bd045f7fceb95997ad5c11bd3bcd8ba983b54abc400dc2823e9280f641d',
- 'stt_gemini': '61d671c0a6951c20d386bf1bf5ebc5a8a4ef2148ec0c1e6407a3abb7251277ad',
- 'prompt_from_file': 'a33ee75c43fcdc5944b9d50ef1180f83863519a1a59373fbd85ecd73489f9ca7',
- 'prompt_from_inline_env': '62e3a3cd7c99a8314a88a6836221132b4086e1b576a907d2c65cea990969ba01',
- 'msg_ok': 'fb519e6a75c4426bae364b734d04193302ef8bd7d2972f841177ee116d6165c8',
- 'msg_err': '7cd3bd763f5a46d31b754aac37fa62e7f34fa8cc504e9aaa4b201069e145b8c9',
- 'msg_neutral': '9e49c3d67a7f74a6e67d3fa716e6290801f9daac782b11ee915d0a1181507fc8',
- 'admin_on': '3db6103dbb6c9cf834c57405ae2ec3151d6d2c5aa095484ce42e3197adf1d06e',
- 'admin_unavailable': 'e8f1c18ba321b48c02ec7713ba223e754a000e7dcca3f9d0b5ec158322554be6'}
+# 2026-11-04, setup page in the leaf language: the whole page was restyled (tokens, ground, rail, panels, controls, status marks)
+# and the Home hero draws the leaf with the preview's painter. Before rebasing, the previous template reproduced every old
+# golden. Every state changed by the same lines and nothing else (compare output kept in the hand-back). A behaviour proof
+# (IDs, form fields and values, data and aria attributes, button labels, visible text) found no difference except the
+# hero canvas and the nav item titles; the script text changed only by the hero painter.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
+ 'provider_meta': '998b16d0269690072377823b46c8ebbb030a0f70570178b60a371cdb52df4c69',
+ 'provider_openrouter': '2b85633745e4fbe4d153fc245d189f8bab5e7ee77f734f4252c3f302ec619a01',
+ 'provider_gemini': 'ca9a841f74690ebdb99db86ea34ac222909683d8f290ea3dc74adb06fe9bece7',
+ 'provider_ollama': '2eb14c672476067bade8e3d40b115d55acf76fc8488702c19a448bc3d5ac2702',
+ 'provider_none': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
+ 'provider_groq': 'edf0e08b77f31417b124e2ece3f813300db2e83aec4c5a9195550e6f0e78ef6e',
+ 'polish_enabled': 'b4b9c850984cdc19f4a1dcd642626971c21708b9f09f21ab94e9ede6887687b8',
+ 'history_and_custom': '1373c396a7f092b04531f3782c0a27a3e92657519fdf8abec47f2b75e9810795',
+ 'hotkey_short': 'da643867493d9fd819527240ae84b9a26ee41415bc9bfc4ff70cc745944b9c76',
+ 'stt_gemini': '210a849140cd1ae949bc75474f1db3b5590e7f2e4396b929e36d7214fc19ef20',
+ 'prompt_from_file': 'cf25dbf9e03590646b5e8b0af15f91b2b7ac0319cda673d086531df5964491ca',
+ 'prompt_from_inline_env': 'c8604267d4206fded8da8d6349ca641b853c71231daf94d75df2fe050a8530b5',
+ 'msg_ok': 'eb1fbe1ccb1d8f1639ab972cccd0622b5cb815f929f5ccffb3e55e13a5c86ce7',
+ 'msg_err': 'ec904d9678199e2c030c565b2fb97cb615824a546f6815ebee8e559f98f6bb8a',
+ 'msg_neutral': '155fde14bae476e059a528d47af45ba0b1fed3feedc252f446d88fc7a629960f',
+ 'admin_on': 'a2f027ddc0be480da655eba6b609b886b79705047fed74ae49d69eb2b7cda958',
+ 'admin_unavailable': '4254a4fe2040d8f621427b638fcc1cf8888638f2441bfa73062c514b7cf028ea'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {
