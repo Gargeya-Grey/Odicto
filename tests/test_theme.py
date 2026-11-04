@@ -7,10 +7,13 @@ read the page source and fail when a table, a rule or a matrix constant drifts f
 from __future__ import annotations
 
 import importlib.util
+import json
 import io
 import os
 import random
 import re
+import shutil
+import subprocess
 import unittest
 from collections import Counter
 from contextlib import redirect_stdout
@@ -357,6 +360,18 @@ class TestThemeConfig(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- the page's copy of the maths
+class TestNeutralCustomColour(unittest.TestCase):
+    def test_a_grey_takes_graphite_hue_and_the_lowest_k(self) -> None:
+        for grey in ("#000000", "#010101", "#808080", "#ffffff"):
+            self.assertEqual(theme.theme_hue_k(grey), (theme.PRESETS["graphite"][0], theme.HEX_K_MIN), grey)
+
+    def test_every_grey_gives_the_same_palette(self) -> None:
+        self.assertEqual(len({theme.hud_palette(g) for g in ("#000000", "#808080", "#ffffff")}), 1)
+
+    def test_a_coloured_pick_keeps_its_own_hue(self) -> None:
+        self.assertNotEqual(theme.theme_hue_k("#c06a8f")[0], theme.PRESETS["graphite"][0])
+
+
 class TestPageParity(unittest.TestCase):
     def test_the_preset_table_is_equal(self) -> None:
         match = re.search(r"const THEME_PRESETS = \{(.*?)\};", PAGE)
@@ -365,10 +380,11 @@ class TestPageParity(unittest.TestCase):
         self.assertEqual(found, theme.PRESETS)
 
     def test_the_k_rule_is_equal(self) -> None:
-        match = re.search(r"const THEME_HEX_K = \{DIVISOR:([0-9.]+), MIN:([0-9.]+), MAX:([0-9.]+)\};", PAGE)
+        match = re.search(r"const THEME_HEX_K = \{DIVISOR:([0-9.]+), MIN:([0-9.]+), MAX:([0-9.]+), "
+                          r"NEUTRAL:([0-9.]+)\};", PAGE)
         self.assertIsNotNone(match)
         self.assertEqual(tuple(float(v) for v in match.groups()),
-                         (theme.HEX_K_DIVISOR, theme.HEX_K_MIN, theme.HEX_K_MAX))
+                         (theme.HEX_K_DIVISOR, theme.HEX_K_MIN, theme.HEX_K_MAX, theme.HEX_NEUTRAL_CHROMA))
 
     def test_the_matrix_constants_are_equal(self) -> None:
         pattern = r"\d\.\d{9,10}"
@@ -398,6 +414,27 @@ class TestPageParity(unittest.TestCase):
                         "240,255,248", "244,255,250", "238,255,248", "LEAF_C.jade"):
             self.assertNotIn(literal, painter, literal)
         self.assertIn("LEAF.pal.jade", painter)
+
+    def test_the_page_maths_gives_the_python_values_when_run(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available for the theme maths run")
+        themes = list(theme.PRESETS) + ["#000000", "#010101", "#808080", "#ffffff", "#ff0000",
+                                        "#00ff00", "#0000ff", "#ffff00", "#c06a8f", "#123456"]
+        script = _block("theme") + (
+            "\nconst out = {};\n"
+            "for (const t of %s) out[t] = {hk: themeHueK(t), pal: themePalette(t)};\n"
+            "process.stdout.write(JSON.stringify(out));\n" % json.dumps(themes))
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        got = json.loads(result.stdout)
+        for name in themes:
+            hue, k = theme.theme_hue_k(name)
+            self.assertAlmostEqual(got[name]["hk"][0], hue, delta=1e-9, msg=name)
+            self.assertAlmostEqual(got[name]["hk"][1], k, delta=1e-9, msg=name)
+            pal = theme.hud_palette(name)
+            for field in theme._THEMED:
+                self.assertEqual(tuple(got[name]["pal"][field]), getattr(pal, field), (name, field))
 
     def test_the_page_contrast_holds_for_every_preset_and_custom_colour(self) -> None:
         for name in ALL:

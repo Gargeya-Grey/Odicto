@@ -53,7 +53,8 @@ GATE = {
     # Plus 15 for the setup page look (text contrast from the tokens, no network, one leaf painter, the shell): 1178.
     # Plus 57 for THEME_COLOR: colour maths, palette and HUD painter, config key, page parity and contrast (43),
     # the setup page Colour panel and its save (14): 1235.
-    "floor": 1235,
+    # Plus 4 for the review fixes: a grey custom colour (3) and the page maths run in Node (1): 1239.
+    "floor": 1239,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

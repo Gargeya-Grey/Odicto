@@ -89,24 +89,26 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # Colour panel (swatches and a custom colour), and the preview paints with the theme's palette (the THEME maths block).
 # Before rebasing, the previous template reproduced every old golden. Every state changed by the same lines and nothing
 # else (compare output kept in the hand-back).
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'ef7c9e0b49183a7a54d4d72b33aa77efd7fe632ba621d0f886dff6cd6124f796',
- 'provider_meta': 'fe01c886be7b4fd3376e6982c694f1e3f1a0aef3d13da0d5938538701ff4232d',
- 'provider_openrouter': 'e63e65d8457af3d5ce634912170f2d64266ece955bac177cdb621d9732c598d0',
- 'provider_gemini': '5d5e1fdb7c70d14013a83b17353f314791a5ac060e3233ecaa96d3dbaef85d79',
- 'provider_ollama': 'e0b7d581cbb2147003e5c0aabfbeb51ad35b0e49efd1f707d38f890002e2a8dc',
- 'provider_none': 'ef7c9e0b49183a7a54d4d72b33aa77efd7fe632ba621d0f886dff6cd6124f796',
- 'provider_groq': 'de215d66209db21144d0d7befaa085fd031ef3120a1bad49fca9bc1a3ea8fa62',
- 'polish_enabled': '0a4a823c3c15ec555bed314ae3248a5d84e6c6b58c300d5bdb19f9d193566c10',
- 'history_and_custom': '2872e16b3e6c4d1a85a96aaf85f56417fa6173320d0e84da8b42bc737bcadb47',
- 'hotkey_short': '9893a3bd0ccfb2b89ea2b319676ad4645bed840957cf09349ca618fd01ad70b6',
- 'stt_gemini': '201fe93e17cc7c35d0659590ea642856ec4f70b8112f1a04e1667044e2b99e80',
- 'prompt_from_file': '41500199d452ee74cd93d2297b2cc0e276c027bb05481694d0388c4700f6c611',
- 'prompt_from_inline_env': 'd20a68213fe94b2f8285d83ffc062021721706d557954265063895d7a37970ef',
- 'msg_ok': '9311c4a3455ccfed68eb7db6514a8e4c8be82d1f9c4490cf8fbbf5b2fbbe617e',
- 'msg_err': '003dbcdda5ef77f2692131c8ed8de74569a6085136676ba364b6d58d3376cb21',
- 'msg_neutral': 'a689501b58054a30f9739b7ae899cc6b2e11eac13fb9af9f3d62d81e07978702',
- 'admin_on': '97d0053efe45637b3ebc0b2cad66e8928fbb651f45077238a371d90b2bd209b6',
- 'admin_unavailable': '06e3db8dfa8e7e7f402f6b1164fa1ef5120cafb85364c0f409e31be25de80c64'}
+# Review fix, same day: a grey custom colour (chroma under 0.02) takes Graphite's hue, so it gets no random tint.
+# Every state changed by the same 2 lines of the THEME maths block and nothing else.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
+ 'provider_meta': '3e2a2c8a72f282099a866ea630e94b7bdd7a54e61284ab35c2881ad35bb6c554',
+ 'provider_openrouter': '4f259e12d0b1795a45d299a10b4b4d1db28adaa45c6a96157b8d255d883c62ec',
+ 'provider_gemini': '85bcb14e144580bf031b8a1d6396ca298b7ddb0982561298f1a792e21d87dbc8',
+ 'provider_ollama': '04af83aa07d19505f4adc445cfc1926d61c39f3192b8ee6bbb84e536a9137551',
+ 'provider_none': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
+ 'provider_groq': 'd0a9f48d50b1916210d0d5e70acf4f81df7219efa105ea172916319d9bda2608',
+ 'polish_enabled': '1cb85b395d4228f688cf208b3458e7c8446a1ac35dbcbcb2d6d645a29cbcd823',
+ 'history_and_custom': '151428aad799bc99b948234e5823429ed27734661ef8941808c91e75754b8180',
+ 'hotkey_short': '1b129f59fad3c9da97fc34b8eaf6e01a63c948c2c3fe049e937ca5a3c6fdd7ae',
+ 'stt_gemini': 'd67e86132f5e83cecb3287b7caf5589dbebf97c3f853dc56a26ae56fc79412c3',
+ 'prompt_from_file': '7fbc1ac538fc384e2c9594efe61925120011624cb79e8e29cf21031a85e935d0',
+ 'prompt_from_inline_env': 'b17e4555f310160bbe28515bf0cd7325bbc59aff25c4bf4bbe1c797087274430',
+ 'msg_ok': '3df4b71349a7ec463baaf361861d2a29b4751074825949ce2466cba968fcf493',
+ 'msg_err': '7ea363c6055f27637e4bb187eb81824f0d559bb758bfb0e63e1f7dff3ac4c5d3',
+ 'msg_neutral': '01ae673695fe52a2ba3dff8da427f1b53ee57a8f73f22504c5c7a87aad93e868',
+ 'admin_on': '26841c9c12a997045e59a1f42836590d237d7ab6665cb0e0965eb9a90c030dc8',
+ 'admin_unavailable': '4655b1bfa68eca81652fd274f3cc71353b89d0d45c4491258df3a8851ed27fae'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

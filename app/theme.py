@@ -42,6 +42,8 @@ PRESETS: dict[str, tuple[float, float]] = {
 HEX_K_DIVISOR = 0.13
 HEX_K_MIN = 0.08
 HEX_K_MAX = 1.0
+# Below this chroma a colour is grey and its hue is rounding noise, so it takes Graphite's hue.
+HEX_NEUTRAL_CHROMA = 0.02
 
 _HEX = re.compile(r"#[0-9a-f]{6}")
 
@@ -174,6 +176,8 @@ def theme_hue_k(theme: str) -> tuple[float, float]:
         raise ValueError(f"unknown theme {theme!r}")
     rgb = (int(theme[1:3], 16), int(theme[3:5], 16), int(theme[5:7], 16))
     _, chroma, hue = srgb_to_oklch(rgb)
+    if chroma < HEX_NEUTRAL_CHROMA:
+        return PRESETS["graphite"][0], HEX_K_MIN
     return hue, min(HEX_K_MAX, max(HEX_K_MIN, chroma / HEX_K_DIVISOR))
 
 
