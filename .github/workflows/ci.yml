@@ -30,7 +30,16 @@ jobs:
         with:
           node-version: 24
       - name: Install supported Python
-        run: uv python install 3.12
+        # The download from GitHub releases timed out once on macos-26-intel (4 Nov 2026),
+        # after uv's own retries. A network error gets 3 tries; a real error still fails.
+        shell: bash
+        run: |
+          for try in 1 2 3; do
+            uv python install 3.12 && exit 0
+            echo "uv python install failed (try $try of 3)"
+            [ "$try" = 3 ] || sleep 30
+          done
+          exit 1
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: |
