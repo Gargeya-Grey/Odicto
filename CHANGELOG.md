@@ -6,6 +6,11 @@ section as the release notes and refuses a version that has no section.
 
 ## [1.4.1] - 2026-11-04
 
+### Changed
+
+- `odicto update` shows a short list of steps and one result line, like an application update: "Odicto 1.4.1 is ready", with a link to what is new. The package and tool output goes to `update.log` in the data folder. If an update fails, it says that your current version still works and where the details are. You see this from the first update after 1.4.1, because an update runs the update code of the version you have.
+- `odicto help` no longer ends with an "options" block for advanced flags, and it says where to change the indicator's look.
+
 ### Fixed
 
 - The setup page shows the original Odicto logo again. 1.4.0 replaced it with a small leaf by mistake. The logo keeps its own green in every theme colour.

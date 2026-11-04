@@ -351,6 +351,57 @@ print('NATIVE DEPENDENCY PASS')
         self.assertIn("Config.validate()", run.call_args_list[2].args[0][3])
         self.assertFalse(any("main.py" in argument for call in run.call_args_list for argument in call.args[0]))
 
+    def test_dependency_install_sends_tool_output_to_the_update_log(self):
+        record = self.manager.stage(self.release)
+        directory = self.manager.release_path(record)
+        with patch.object(dist.shutil, "which", return_value="uv-fixture"), patch.object(
+            dist.subprocess, "run", return_value=SimpleNamespace(stdout="Odicto 1.2.0\n")
+        ) as run:
+            self.manager._install_dependencies(directory, self.manager.environment())
+        for call in run.call_args_list[:3]:
+            self.assertEqual(call.kwargs["stderr"], subprocess.STDOUT)
+            self.assertEqual(Path(call.kwargs["stdout"].name), self.manager.update_log)
+        self.assertIn(directory.name, self.manager.update_log.read_text(encoding="utf-8"))
+
+    def _update_output(self):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(dist, "Manager", return_value=self.manager), \
+                patch("sys.stdout", out), patch("sys.stderr", err):
+            code = dist.main(["--home", str(self.manager.home), "update"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_update_shows_steps_and_a_short_result(self):
+        self.initial()
+        self.add_release("v1.3.0")
+        code, out, err = self._update_output()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        for words in ("Checking for updates", "Downloading and verifying", "Installing"):
+            self.assertRegex(out, words + r" *\.\.\. done")
+        self.assertIn("Odicto 1.3.0 is ready.", out)
+        self.assertIn("/releases/tag/v1.3.0", out)
+        self.assertIn("odicto start", out)
+        self.assertNotIn("{", out)
+
+    def test_update_says_up_to_date_in_one_line(self):
+        self.initial()
+        code, out, _ = self._update_output()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip().splitlines()[-1], "Odicto 1.2.0 is up to date.")
+
+    def test_a_failed_update_says_the_current_version_still_works(self):
+        self.initial()
+        self.add_release("v1.3.0")
+        self.manager.installer = lambda directory, environment: (_ for _ in ()).throw(
+            dist.DistributionError("fixture install failure"))
+        code, out, err = self._update_output()
+        self.assertNotEqual(code, 0)
+        self.assertIn("Installing", out)
+        self.assertIn("failed", out)
+        self.assertIn("Odicto 1.2.0 still works.", err)
+        self.assertIn(str(self.manager.update_log), err)
+        self.assertEqual(self.manager.active()["version"], "v1.2.0")
+
     def test_settings_and_unknown_files_survive_update_and_rollback(self):
         old = self.initial()
         settings = self.manager.data / ".env"

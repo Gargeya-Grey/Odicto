@@ -99,6 +99,11 @@ can retry a version blocked after rollback. The command does not kill an owner t
 activate an update; a busy owner or Setup defers activation and preserves the ready
 pending version for the next launch.
 
+`odicto update` prints one line per step (check, download and verify, install, health
+check) and one result line. The output of `uv` and of the health check goes to
+`<data>/update.log`, so a failed step names that file and says the active version still
+works.
+
 ## On-disk contract
 
 ```text
