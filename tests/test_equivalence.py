@@ -91,24 +91,26 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # else (compare output kept in the hand-back).
 # Review fix, same day: a grey custom colour (chroma under 0.02) takes Graphite's hue, so it gets no random tint.
 # Every state changed by the same 2 lines of the THEME maths block and nothing else.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
- 'provider_meta': '3e2a2c8a72f282099a866ea630e94b7bdd7a54e61284ab35c2881ad35bb6c554',
- 'provider_openrouter': '4f259e12d0b1795a45d299a10b4b4d1db28adaa45c6a96157b8d255d883c62ec',
- 'provider_gemini': '85bcb14e144580bf031b8a1d6396ca298b7ddb0982561298f1a792e21d87dbc8',
- 'provider_ollama': '04af83aa07d19505f4adc445cfc1926d61c39f3192b8ee6bbb84e536a9137551',
- 'provider_none': 'aa61854d439886ac4dc7165793e44031e63c9fbb6139fa8323377f51d873353e',
- 'provider_groq': 'd0a9f48d50b1916210d0d5e70acf4f81df7219efa105ea172916319d9bda2608',
- 'polish_enabled': '1cb85b395d4228f688cf208b3458e7c8446a1ac35dbcbcb2d6d645a29cbcd823',
- 'history_and_custom': '151428aad799bc99b948234e5823429ed27734661ef8941808c91e75754b8180',
- 'hotkey_short': '1b129f59fad3c9da97fc34b8eaf6e01a63c948c2c3fe049e937ca5a3c6fdd7ae',
- 'stt_gemini': 'd67e86132f5e83cecb3287b7caf5589dbebf97c3f853dc56a26ae56fc79412c3',
- 'prompt_from_file': '7fbc1ac538fc384e2c9594efe61925120011624cb79e8e29cf21031a85e935d0',
- 'prompt_from_inline_env': 'b17e4555f310160bbe28515bf0cd7325bbc59aff25c4bf4bbe1c797087274430',
- 'msg_ok': '3df4b71349a7ec463baaf361861d2a29b4751074825949ce2466cba968fcf493',
- 'msg_err': '7ea363c6055f27637e4bb187eb81824f0d559bb758bfb0e63e1f7dff3ac4c5d3',
- 'msg_neutral': '01ae673695fe52a2ba3dff8da427f1b53ee57a8f73f22504c5c7a87aad93e868',
- 'admin_on': '26841c9c12a997045e59a1f42836590d237d7ab6665cb0e0965eb9a90c030dc8',
- 'admin_unavailable': '4655b1bfa68eca81652fd274f3cc71353b89d0d45c4491258df3a8851ed27fae'}
+# 2026-11-04, 1.4.1: the rail shows the original Odicto mark again, in its own green (#8edcbb), not the leaf.
+# Every state changed by the same logo lines (brand SVG, its size, the logo tokens) and nothing else.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'e1df4150f3e6d00e8b102618667f506a95858c98bb1148ffd953a818d1340a64',
+ 'provider_meta': '13cf18a376be78274bad0eaa3b9fcee269363b2acb6a1fe908dedeb9cf0856be',
+ 'provider_openrouter': '062dcdc57d9cc0dd428499cdef4a3a92150ac97065f1bb59e791f0667c717816',
+ 'provider_gemini': 'e3b226163a223e21154c442caea62df83887395a2668ed5114e8f4eceba6f8b5',
+ 'provider_ollama': '7ecadf4dc11218031dfd15bf75638a035f342ccc474f49684c13804741a65faf',
+ 'provider_none': 'e1df4150f3e6d00e8b102618667f506a95858c98bb1148ffd953a818d1340a64',
+ 'provider_groq': '09dd657a3d3a45f6efb70310415667fdc582f093edda058d08b12b110161c723',
+ 'polish_enabled': '5414cbb528cd20d302396c6244afe451b1170cd7080d84a1f6ed51b1f1916d27',
+ 'history_and_custom': '66a0c0580b5d18c43c40189a5e18954e23cf3cf1222e5ea4c2c991413fdd64dd',
+ 'hotkey_short': '0a0933c5b7457c78b3530a597ae57323d1a2ae49253820f635bad5b36e3e8eae',
+ 'stt_gemini': '554da50d24e7971c1b9e5ed85ef6840aa3aeab51e8e476d308e0269a75a5c6b3',
+ 'prompt_from_file': '17c02ddcd06a16c1ebeaa8bf93dfd05a9d0c450c31b18ea408c329e80b7d743a',
+ 'prompt_from_inline_env': 'd1c98bf1e36cd89a8807e9099a72a228504fb4f9b0e4a03db80f8500ba9e1304',
+ 'msg_ok': 'f6bf71483a0f1316674d3c951aaf428fae77d3304d5f29108cab55ecd08a635d',
+ 'msg_err': '2fb3120e58a8101692ab1852bbf8a90ab5be6b22903beb50ee08a4d62fd25815',
+ 'msg_neutral': '2e40fa7299dff5456bc93349aebe3d47917c3a2223cdd7e2c47b8d457f31a36c',
+ 'admin_on': '497b6b781437ddd84b31f39b374cc8d9c32dd1d02191845710b4fdf637297804',
+ 'admin_unavailable': 'd475555f890fcec21d3d4d5e4a324fa542d4f82094cafb56175ff6c8f3d86107'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

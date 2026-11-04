@@ -50,9 +50,7 @@
   --leaf-b: oklch(0.24 calc(0.045 * var(--k)) var(--h) / 0.94);
   --vein: oklch(0.90 calc(0.07 * var(--k)) var(--h) / 0.16);
   /* The logo never follows the theme */
-  --logo-leaf: oklch(0.34 0.055 165 / 0.92);
-  --logo-stem: oklch(0.86 0.105 165);
-  --logo-glow: oklch(0.86 0.105 165 / 0.55);
+  --logo-stem: #8edcbb;
   /* Status colours and the AI accent stay fixed for every theme */
   --warn: #f2c27a;
   --danger: #f2a39b;
@@ -107,9 +105,7 @@
     --leaf-a: rgb(23 65 49 / 0.92);
     --leaf-b: rgb(5 38 26 / 0.94);
     --vein: rgb(179 237 211 / 0.16);
-    --logo-leaf: rgb(23 65 49 / 0.92);
-    --logo-stem: #8be7c0;
-    --logo-glow: rgb(139 231 192 / 0.55);
+    --logo-stem: #8edcbb;
   }
 }
 html[data-motion="reduced"] { --t-fast: 60ms; --t-med: 90ms; --t-slow: 120ms; }
@@ -168,7 +164,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 }
 .rail::-webkit-scrollbar { display: none; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
-.brand-mark { width: 30px; height: 16px; flex: none; overflow: visible; }
+.brand-mark { width: 26px; height: 26px; flex: none; }
 .brand-word { font-size: 19px; line-height: 24px; font-weight: 600; letter-spacing: -0.02em; }
 .brand-dot { color: var(--logo-stem); }
 .brand-ver { margin-left: auto; font: 500 11px var(--mono); color: var(--faint); }
@@ -697,7 +693,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
 <div class="app">
   <aside class="rail">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 30 16" aria-hidden="true"><path d="M0 8 C6 3.5 12 1 18 1 L24 1 A7 7 0 0 1 24 15 L18 15 C12 15 6 12.5 0 8Z" fill="var(--logo-leaf)"/><rect x="17" y="2.5" width="1.4" height="11" rx=".7" fill="var(--logo-stem)" style="filter: drop-shadow(0 0 2px var(--logo-glow))"/></svg>
+      <svg class="brand-mark" viewBox="18 18 72 72" fill="none" stroke="var(--logo-stem)" stroke-width="7" stroke-linecap="round" aria-hidden="true"><line x1="26.00" y1="69.00" x2="26.00" y2="39.00"/><line x1="32.71" y1="65.88" x2="43.29" y2="42.12"/><line x1="41.83" y1="61.36" x2="58.17" y2="46.64"/><line x1="52.49" y1="57.09" x2="71.51" y2="50.91"/><line x1="65.00" y1="54.00" x2="83.00" y2="54.00"/></svg>
       <span class="brand-word">odicto<span class="brand-dot">.</span></span>
       <span class="brand-ver" title="Odicto version">v__APP_VERSION__</span>
     </div>

@@ -4,6 +4,12 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.4.1] - 2026-11-04
+
+### Fixed
+
+- The setup page shows the original Odicto logo again. 1.4.0 replaced it with a small leaf by mistake. The logo keeps its own green in every theme colour.
+
 ## [1.4.0] - 2026-11-04
 
 ### Added
