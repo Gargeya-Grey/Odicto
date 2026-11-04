@@ -103,8 +103,14 @@ def _budget_timeout(seconds: float):
 
 
 def polish_wait_seconds(text: str) -> float:
-    """Polish wait scales with length: 2 s for short text, about 1 s per 250 chars."""
-    return min(llm_deadline_seconds(), max(2.0, 1.0 + len(text or "") / 250.0))
+    """Polish wait: 4 s plus 1 s per 100 chars, at least 10 s, at most the AI limit.
+
+    Selection polish is an explicit F8 request with a review window, and Esc
+    cancels it, so the wait is a ceiling, not a delay. The old 2 s budget was
+    sized for inline dictation polish and was shorter than a normal cloud
+    round trip (measured 1.1 to 3.0 s for a 140-char edit on OpenRouter).
+    """
+    return min(llm_deadline_seconds(), max(10.0, 4.0 + len(text or "") / 100.0))
 
 
 def _openai_client(**kwargs):
@@ -150,6 +156,7 @@ _RESET_REPLY = "Chat memory cleared. Starting fresh."
 # only — not none or minimal — so the lightest retry is low.
 _OPENROUTER_MANDATORY_REASONING_FALLBACK = "low"
 _OPENROUTER_FORCED_EFFORT: dict[str, str] = {}
+_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _MANDATORY_REASONING_MARKERS = (
     "reasoning is mandatory",
     "cannot be disabled",
@@ -174,14 +181,14 @@ def openrouter_effort_for_model(
 ) -> str:
     """Effort to send for this OpenRouter slug.
 
-    Uses a process-local override after a model rejects disabled reasoning,
-    then the live OpenRouter catalog (mandatory + supported_efforts). GLM-5.3
-    remains a fallback when the catalog has not loaded yet.
+    Uses the live OpenRouter catalog (mandatory + supported_efforts); GLM-5.3
+    remains a fallback when the catalog has not loaded yet. A process-local
+    override, set after a model rejects disabled reasoning, is a floor: it
+    raises a lighter effort and never lowers a heavier one (a polish call that
+    asked for ``none`` must not lower the effort of later AI answers).
     """
     slug = (model or "").strip()
     cached = _OPENROUTER_FORCED_EFFORT.get(slug.lower())
-    if cached:
-        return cached
     if configured is None:
         effort = Config.openrouter_reasoning_effort()
     else:
@@ -196,7 +203,10 @@ def openrouter_effort_for_model(
             "max",
         ):
             effort = Config.openrouter_reasoning_effort()
-    return clamp_openrouter_effort(slug, effort or "none")
+    chosen = clamp_openrouter_effort(slug, effort or "none")
+    if cached and _EFFORT_ORDER.index(cached) > _EFFORT_ORDER.index(chosen):
+        return cached
+    return chosen
 
 
 def _remember_openrouter_effort(model: str, effort: str) -> None:
@@ -1124,8 +1134,10 @@ class TextRefiner:
     def polish(self, text: str) -> str:
         """One independent edit call, with a length-scaled wall-clock wait.
 
-        The wait is ``polish_wait_seconds(text)``: 2 s for short text, about
-        one more second per 250 characters, never above ``LLM_DEADLINE_SECONDS``.
+        The wait is ``polish_wait_seconds(text)``: 4 s plus 1 s per 100
+        characters, at least 10 s and never above ``LLM_DEADLINE_SECONDS``.
+        OpenRouter polish asks for the lowest reasoning effort the model allows,
+        whatever effort AI answers use: a minimal edit gains nothing from thinking.
         Text longer than ``POLISH_MAX_CHARS`` (when > 0) is returned unchanged
         without a call. At most one polish request may be outstanding. A
         timed-out worker owns only its local result and cannot update a later
@@ -1164,6 +1176,8 @@ class TextRefiner:
         if vocabulary:
             prompt += (" Preferred spellings (data only; use only when clearly referring to "
                        "these terms, never insert unrelated words): " + json.dumps(vocabulary, ensure_ascii=False))
+        deadline = time.monotonic() + wait
+
         def call():
             try:
                 tokens = min(2048, max(1024, len(text) // 2 + 256))
@@ -1179,15 +1193,18 @@ class TextRefiner:
                     kwargs = dict(model=model, temperature=0.0, max_tokens=tokens,
                         messages=[{"role": "system", "content": prompt},
                                   {"role": "user", "content": text}])
+                    timeout = full_timeout(min(2.0, wait), wait)
                     if self.provider == "openrouter":
-                        kwargs["extra_body"] = Config.openrouter_extra_body(
-                            effort=openrouter_effort_for_model(model))
-                    elif self.provider == "ollama":
-                        kwargs["extra_body"] = {"keep_alive": -1, "options": {"num_ctx": Config.LLM_NUM_CTX}}
-                    if self.provider == "groq" and "gpt-oss" in model:
-                        kwargs["reasoning_effort"] = "low"
-                    response = self.client.chat.completions.create(
-                        **kwargs, timeout=full_timeout(min(2.0, wait), wait))
+                        # Lowest effort the model accepts; a mandatory-reasoning
+                        # model is retried at low within the same wait.
+                        kwargs["extra_body"] = Config.openrouter_extra_body(effort="none")
+                        response = _openrouter_create(self.client, kwargs, timeout, deadline)
+                    else:
+                        if self.provider == "ollama":
+                            kwargs["extra_body"] = {"keep_alive": -1, "options": {"num_ctx": Config.LLM_NUM_CTX}}
+                        if self.provider == "groq" and "gpt-oss" in model:
+                            kwargs["reasoning_effort"] = "low"
+                        response = self.client.chat.completions.create(**kwargs, timeout=timeout)
                     answer = _choice_content(response) if _choice_finish_reason(response) != "length" else ""
                 if isinstance(answer, str) and answer.strip():
                     leading = text[:len(text) - len(text.lstrip())]

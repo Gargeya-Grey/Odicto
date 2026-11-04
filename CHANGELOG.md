@@ -4,6 +4,13 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.4.2] - 2026-11-04
+
+### Fixed
+
+- Polish (F8) works again with cloud models. It waited only 2 seconds, and a normal request takes 1 to 3 seconds, so it often showed "Polish unavailable". It now waits at least 10 seconds (longer for text over 600 characters) and never longer than the AI time limit. Esc still cancels it; a new polish can start when the cancelled request has ended.
+- Polish on OpenRouter is faster. It now asks the model not to think first (the lowest effort the model allows), even when your AI answers use a high effort. In a test with Claude Haiku, one polish took 1.1 seconds instead of 3.0 seconds.
+
 ## [1.4.1] - 2026-11-04
 
 ### Changed

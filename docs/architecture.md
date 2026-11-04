@@ -213,8 +213,9 @@ after Quit. Existing insertion finishes before shutdown takes that gate.
 Valid empty cloud speech responses remain empty instead of invoking another
 recognizer. Exact digital silence bypasses local Whisper decoding; no amplitude
 threshold suppresses quiet speech. Gemini unary speech requests use a 15-second
-HTTP timeout without SDK retries; Gemini AI requests default to 30 seconds while
-preserving the two-second polish timeout. These are HTTP phase/inactivity bounds,
+HTTP timeout without SDK retries; Gemini AI requests default to 30 seconds. Selection
+polish waits 4 s plus 1 s per 100 characters, at least 10 s, capped at
+`LLM_DEADLINE_SECONDS`. These are HTTP phase/inactivity bounds,
 not absolute whole-cycle deadlines including retries or local model loading.
 
 Gemini Live owns a bounded audio queue. Overflow, transport errors or stop timeout

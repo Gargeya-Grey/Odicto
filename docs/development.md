@@ -710,8 +710,9 @@ emotion, deliberate emphasis, paragraph breaks and language. Esc cancels. Failur
 timeout or an empty response leaves the original text alone. A review window shows the
 original and polished text with Copy and Dismiss. No automatic replacement is performed. Terminal targets are skipped. Copy-based
 selection checks depend on the editor; matching text cannot prove field identity.
-`POLISH_MAX_CHARS` defaults to 1200. Short requests wait up to two seconds; longer
-requests get a length-scaled wait bounded by `LLM_DEADLINE_SECONDS`.
+`POLISH_MAX_CHARS` defaults to 1200. A request waits 4 s plus 1 s per 100 characters,
+at least 10 s and at most `LLM_DEADLINE_SECONDS`. On OpenRouter, polish sends the lowest
+reasoning effort the model allows, whatever effort AI answers use.
 
 Groq is available on the AI page with a custom chat model. Its shared key is entered
 on Speech; `GROQ_MODEL` is independent of `GROQ_STT_MODEL`. The default is
