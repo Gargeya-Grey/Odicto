@@ -88,8 +88,12 @@ to supply spelling hints to transcription and Polish.
 | `odicto setup` | Open settings / localhost UI |
 | `odicto start` | Start background dictation |
 | `odicto stop` | Stop dictation |
+| `odicto restart` | Stop, then start again (it does not check for updates) |
+| `odicto config` | Show the main settings and where each value came from (keys show only as `<set>`) |
+| `odicto version` | Show the Odicto version |
 | `odicto run status` | Show the application's runtime status |
 | `odicto status` | Show the installed and previous release records |
+| `odicto help` | List every command. `odicto help stop` or `odicto stop --help` shows one command. Help never runs the command. |
 | `odicto update` | Check for and activate a ready update when the app is inactive |
 | `odicto rollback` | Restore the previous compatible ready version |
 | `odicto autostart` | Enable startup at login |

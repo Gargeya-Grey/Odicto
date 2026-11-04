@@ -1100,24 +1100,251 @@ runpy.run_path(str(script), run_name='__main__')
                 receipt.unlink(missing_ok=True)
 
 
+class _Parser(argparse.ArgumentParser):
+    """Errors name the way to the full command list instead of a bare usage line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, f"odicto: error: {message}\nRun 'odicto --help' to see every command.\n")
+
+
+class _HelpShown(Exception):
+    """Help was printed. The caller must not run the command."""
+
+
+class _HelpAction(argparse.Action):
+    """-h / --help, and every prefix argparse accepts (--h, --he, --hel).
+
+    It raises instead of exiting, so a caller can tell "help was shown" from "the
+    arguments are valid" without comparing strings with the spellings it knows.
+    """
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings=option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help()
+        raise _HelpShown
+
+
+class _AppParser(_Parser):
+    """The parser of the application commands. Its subcommands are built from this class too."""
+
+    def __init__(self, **kwargs):
+        kwargs["add_help"] = False
+        super().__init__(**kwargs)
+        self.add_argument("-h", "--help", action=_HelpAction, help="show this help message and exit")
+
+
+def _guide(home: Path) -> str:
+    """The text of `odicto --help`: every command, grouped by what you want to do."""
+    command = home / "bin" / ("odicto.cmd" if os.name == "nt" else "odicto")
+    return f"""\
+Odicto - voice dictation for your desktop.
+
+Everyday commands:
+  odicto setup             Open the settings page in your browser
+  odicto start             Start dictation in the background
+  odicto stop              Stop dictation
+  odicto restart           Stop, then start again (no update check)
+  odicto config            Show the main settings and where each value came from
+  odicto version           Show the Odicto version
+  odicto run status        Show runtime status: running, microphone, problems
+
+Updates:
+  odicto update            Apply a ready update, or check for a newer one
+  odicto check             Print the latest release tag; change nothing
+  odicto stage             Download and verify a version without switching to it
+  odicto rollback          Go back to the previous version
+  odicto auto-updates on|off
+                           Turn the automatic update check on or off
+  odicto status            Show the installed and the previous release
+
+Start at login:
+  odicto autostart         Start Odicto when you sign in
+  odicto remove-autostart  Stop starting Odicto when you sign in
+
+Windows only:
+  odicto admin on|off      Let Odicto type into windows that run as administrator.
+                           When the mode changes, Windows asks you to approve it and
+                           dictation is left stopped: run 'odicto start' afterwards.
+
+Moving from a source checkout:
+  odicto migrate --source PATH --check    Look first; changes nothing
+  odicto migrate --source PATH            Apply, or resume, the move
+
+Other:
+  odicto help [command]    Show this guide, or the help for one command
+  odicto <command> --help  Show the help for one command. It never runs the command.
+  odicto install           Installs or repairs the managed release (the installer runs it)
+  odicto run <command>     The same as 'odicto <command>' for setup, start, stop, ...
+                           Add --no-auto-updates before the command to skip the
+                           update check:  odicto run --no-auto-updates start
+
+Default shortcuts (change them in 'odicto setup'):
+  Ctrl+`        dictate: tap, speak, tap again
+  Ctrl+Shift+`  ask the AI: tap, speak, tap again
+  F7            live dictation: tap to start, tap to finish
+  F8            polish the selected text
+  Esc           cancel while processing
+
+Good to know:
+  'odicto' with no command is the same as 'odicto start'.
+  Settings and keys are kept when Odicto updates.
+  If your shell says 'odicto' is not found, run it by its full path:
+    {command}
+  or add that folder to your PATH.
+"""
+
+
+def _app_parser() -> argparse.ArgumentParser:
+    """Checks arguments of the commands the application runs (`odicto start`, ...).
+
+    This runs before anything starts or stops, so `odicto stop --help` shows help
+    and `odicto stop now` is refused. It must accept every form the manager itself
+    passes to the application (for example the hidden wait-ready options).
+    """
+    parser = _AppParser(prog="odicto", usage="odicto <command> [options]",
+                        description="Commands that run Odicto itself.",
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>", prog="odicto")
+
+    def add(name: str, summary: str, detail: str = "") -> argparse.ArgumentParser:
+        return sub.add_parser(name, help=summary, description=f"{summary}.\n\n{detail}".strip(),
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    add("setup", "Open the settings page in your browser",
+        "The page runs on this computer only, usually at http://127.0.0.1:8765. If that\n"
+        "port is busy, Odicto opens and prints another address. Choose the speech engine,\n"
+        "microphone, keys, vocabulary, Polish and shortcuts. Closing the page stops its\n"
+        "server. Dictation is a separate background app. Odicto checks for an update first\n"
+        "when one is due.")
+    add("start", "Start dictation in the background",
+        "Odicto runs in the background and shows a small indicator at the bottom of the\n"
+        "screen. This command returns when Odicto is ready. If Odicto already runs and is\n"
+        "ready, nothing changes. Odicto checks for an update first when one is due. Run\n"
+        "only one Odicto install at a time: two installs would each hook the keyboard.")
+    add("restart", "Stop Odicto, then start it again",
+        "Like 'odicto stop' followed by 'odicto start', except that it does not check for\n"
+        "an update. A ready update is applied by 'odicto start' or 'odicto update'.")
+    add("stop", "Stop dictation",
+        "Stops every Odicto process of this install. It never updates first.")
+    add("status", "Show runtime status",
+        "Shows whether Odicto runs, whether the microphone is ready, and any problem.\n"
+        "Use it as 'odicto run status'. Plain 'odicto status' shows the installed release.")
+    ready = add("wait-ready", "Wait until Odicto and the microphone are ready",
+                "Exits 0 when ready, or 1 when the time runs out.")
+    ready.add_argument("--timeout", type=float, default=30.0,
+                       help="seconds to wait (default 30)")
+    ready.add_argument("--launch-token", help=argparse.SUPPRESS)
+    ready.add_argument("--expected-root", help=argparse.SUPPRESS)
+    add("config", "Show the main settings and where each value came from",
+        "Shows the main settings, their values, and whether each value is a default or\n"
+        "comes from your settings file. It is not a full list: some values are only\n"
+        "summarized. A key shows only as <set>. It changes nothing. Use 'odicto setup'\n"
+        "to change a setting.")
+    add("version", "Show the Odicto version")
+    add("autostart", "Start Odicto when you sign in",
+        "Adds one startup entry for this install. Undo it with 'odicto remove-autostart'.")
+    add("remove-autostart", "Stop starting Odicto when you sign in",
+        "Removes the startup entry of this install.")
+    return parser
+
+
+def _show_help(parser: argparse.ArgumentParser, argv: list[str]) -> int:
+    """Print help (or the argument error) for ``argv``. Nothing is run."""
+    try:
+        parser.parse_args(argv)
+    except _HelpShown:
+        return 0
+    except SystemExit as stop:
+        return stop.code if isinstance(stop.code, int) else 1
+    return 0
+
+
+def _app_args_refused(argv: list[str]) -> int | None:
+    """None when ``argv`` is a valid application command that may run.
+
+    Otherwise the exit code: help or the argument error was already printed, and
+    nothing may start, stop or change. Help is recognised by the parser itself, so
+    every spelling it accepts (``-h``, ``--help``, ``--h``, ``--hel``) counts.
+    """
+    try:
+        _app_parser().parse_args(argv)
+    except _HelpShown:
+        return 0
+    except SystemExit as stop:
+        return stop.code if isinstance(stop.code, int) and stop.code else 2
+    return None
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Install, update or run managed Odicto releases")
-    parser.add_argument("--home", type=Path, default=default_home())
-    sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("install", "check", "stage", "update", "rollback", "status"):
-        sub.add_parser(command)
-    automatic = sub.add_parser("auto-updates")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # The guide names this install's command path, so it needs --home before the real parse.
+    early = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    early.add_argument("--home", type=Path, default=default_home())
+    try:
+        guide_home = early.parse_known_args(argv)[0].home
+    except SystemExit:
+        guide_home = default_home()  # a broken --home is reported by the real parse below
+    # No abbreviations here: `odicto stop --h` would otherwise be an ambiguous --help/--home
+    # before the application parser sees it. Each command's own parser keeps its own rules.
+    parser = _Parser(prog="odicto", usage="odicto [--home HOME] <command> [options]",
+                     description=_guide(guide_home), allow_abbrev=False,
+                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--home", type=Path, default=default_home(),
+                        help="managed Odicto folder (advanced; the default is right for most users)")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>", prog="odicto",
+                                help=argparse.SUPPRESS)
+    summaries = {
+        "install": "Install or repair the managed release (the installer runs it)",
+        "check": "Print the latest release tag; change nothing",
+        "stage": "Download and verify a version without switching to it",
+        "update": "Apply a ready update, or check for a newer one",
+        "rollback": "Go back to the previous version",
+        "status": "Show the installed and the previous release",
+    }
+    for command, summary in summaries.items():
+        sub.add_parser(command, help=summary, description=f"{summary}.")
+    automatic = sub.add_parser("auto-updates", help="Turn the automatic update check on or off",
+                               description="Turn the automatic update check on or off.")
     automatic.add_argument("setting", choices=("on", "off"))
-    admin = sub.add_parser("admin")
+    admin = sub.add_parser("admin", help="Windows: type into administrator windows",
+                           description="Windows only. 'on' lets Odicto type into windows that "
+                                       "run as administrator. If the mode changes, Windows asks "
+                                       "you to approve it and dictation is left stopped; run "
+                                       "'odicto start' afterwards. If it already has that "
+                                       "setting, nothing happens.")
     admin.add_argument("setting", choices=("on", "off"))
     sub.add_parser("admin-task", help=argparse.SUPPRESS)
-    migration = sub.add_parser("migrate")
-    migration.add_argument("--source", type=Path, required=True)
-    migration.add_argument("--check", action="store_true")
-    run = sub.add_parser("run")
+    migration = sub.add_parser("migrate", help="Move a source checkout to this install",
+                               description="Move a source checkout to this install. Run with "
+                                           "--check first. Quit Odicto and close its setup "
+                                           "page before you apply it.")
+    migration.add_argument("--source", type=Path, required=True,
+                           help="the folder of the source checkout")
+    migration.add_argument("--check", action="store_true", help="look only; change nothing")
+    run = sub.add_parser("run", help="Run an application command (setup, start, stop, ...)",
+                         description="Run an application command. 'odicto start' is the same as "
+                                     "'odicto run start'. Use --no-auto-updates before the "
+                                     "command to skip the update check.")
     run.add_argument("--no-auto-updates", action="store_true")
-    run.add_argument("app_args", nargs=argparse.REMAINDER)
+    run.add_argument("app_args", nargs=argparse.REMAINDER, metavar="<command> ...")
+    helper = sub.add_parser("help", help="Show this guide, or the help for one command",
+                            description="Show this guide, or the help for one command.")
+    helper.add_argument("topic", nargs="?", metavar="command")
     args = parser.parse_args(argv)
+    if args.command == "help":
+        if not args.topic:
+            parser.print_help()
+            return 0
+        known = parser if args.topic in sub.choices else _app_parser()
+        return _show_help(known, [args.topic, "--help"])
+    if args.command == "run":
+        # Check first: a help flag or a stray word must not start or stop anything.
+        checked = args.app_args[1:] if args.app_args[:1] == ["--"] else args.app_args
+        if checked and (code := _app_args_refused(checked)) is not None:
+            return code
     manager = Manager(args.home)
     try:
         if args.command in {"run", "migrate", "admin", "admin-task"}:

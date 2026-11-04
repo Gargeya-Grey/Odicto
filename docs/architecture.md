@@ -412,7 +412,7 @@ sequenceDiagram
     Hook->>App: second F7 tap
     App->>App: PROCESSING, detach listener, stop capture
     App->>Pipe: finish session off hook thread
-    Pipe->>Sess: stop, drain PCM, wait up to 2.5s for final
+    Pipe->>Sess: stop, drain PCM, wait for the first final after the end (2.5s limit)
     Sess-->>Pipe: authoritative transcript
     Pipe->>Typ: insert once, restore_clipboard=False
     Pipe->>App: clear recorder, IDLE

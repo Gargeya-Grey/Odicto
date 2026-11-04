@@ -144,9 +144,10 @@ supplied it) with:
   speaking instead. Hold **F6** + **Ctrl+`** (`CTRL_KEEP_CONTEXT_KEYS`)
   to keep / continue AI memory. Tap **F7** (`LIVE_HOTKEY`) to start live
   dictation; tap again to finalize and insert once. Interim Gemini captions appear
-  in the HUD. Stop remains PROCESSING through finalization, and
-  waits up to ~2.5s for the single Live call's authoritative final. A final or draft
-  skips batch STT. F7 leaves its final text on the clipboard outside terminals; no
+  in the HUD. Stop remains PROCESSING through finalization. It returns when the
+  first final after the end of speech arrives (the service sends the whole utterance
+  as one final), or after ~2.5s without one. A final or draft skips batch STT
+  (`docs/engineering-notes.md`, "F7 stop wait"). F7 leaves its final text on the clipboard outside terminals; no
   caret worker, tail replacement or delayed clipboard restoration remains.
   Keyboard lib name for `` ` `` is `grave`.
   Avoid Alt chords (browser focus loss on Alt release).

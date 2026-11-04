@@ -500,6 +500,89 @@ class TestReliability(unittest.TestCase):
         self.assertEqual(app.live_preview, "first sentence second draft")
         paste.assert_not_called()
 
+    def test_live_error_shows_in_hud_only_for_the_current_live_session(self):
+        for rejected, expected in ((True, "live_key_rejected"), (False, "live_unavailable")):
+            with self.subTest(rejected=rejected):
+                app = app_fixture()
+                app.state = AppState.RECORDING
+                app.live_active = True
+                app._on_live_error(rejected, 2)  # stale session
+                self.assertIsNone(app.last_status)
+                app._on_live_error(rejected, 3)
+                self.assertEqual(app.last_status, expected)
+                self.assertIn("Live off", status_label(GuiState.RECORDING, False, app.last_status))
+        app = app_fixture()
+        app._on_live_error(True, 3)  # stop was pressed: not live any more
+        self.assertIsNone(app.last_status)
+        self.assertEqual(status_label(GuiState.RECORDING), "Listening")
+        self.assertEqual(status_label(GuiState.PROCESSING, False, "finalizing"), "Finalizing")
+
+    def test_rejected_key_flows_from_connect_to_hud_to_fallback_choice(self):
+        import transcriber
+
+        class Rejected(Exception):
+            code = 1008
+
+        class Connection:
+            async def __aenter__(self):
+                raise Rejected("1008 None. API key not valid. Please pass a valid API key.")
+
+            async def __aexit__(self, *args):
+                return False
+
+        client = SimpleNamespace(aio=SimpleNamespace(live=SimpleNamespace(
+            connect=lambda **kwargs: Connection())))
+        app = app_fixture()
+        app.state = AppState.RECORDING
+        app.live_active = True
+        session = transcriber.GeminiLiveSession(
+            client=client, on_error=lambda rejected: app._on_live_error(rejected, 3))
+        with patch.object(transcriber, "_ensure_google_genai"), patch.object(
+            transcriber, "google_genai", MagicMock()
+        ), patch.object(transcriber, "google_genai_types", MagicMock()), patch.object(
+            Config, "GEMINI_API_KEY", "synthetic-key"
+        ):
+            session.start()
+            session._thread.join(2)
+        self.assertEqual(app.last_status, "live_key_rejected")  # while still recording
+        self.assertEqual(status_label(GuiState.RECORDING, False, app.last_status),
+                         "Live off · Gemini key rejected")
+        session.stop(timeout=0)
+        self.assertTrue(session.auth_rejected)
+        app.live_active = False
+        app.state = AppState.PROCESSING
+        with patch.object(Config, "effective_stt_provider", return_value="groq"), patch.object(
+            Config, "effective_live_stt_provider", return_value="gemini"
+        ), patch("main.paste_text") as paste, patch.object(
+            app, "process_and_paste", wraps=app.process_and_paste
+        ) as pipeline:
+            app._finish_live_session(session, np.zeros(10), 3)
+        self.assertIs(pipeline.call_args.kwargs.get("live_key_rejected"), True)
+        app.transcriber.transcribe.assert_called_once()
+        paste.assert_called_once()
+
+    def test_rejected_live_key_uses_the_normal_speech_provider(self):
+        app = app_fixture()
+        with patch.object(Config, "effective_stt_provider", return_value="groq"), patch.object(
+            Config, "effective_live_stt_provider", return_value="gemini"
+        ), patch.object(app, "_live_transcribe") as live, patch("main.paste_text") as paste:
+            app.process_and_paste(np.zeros(10), False, live=True, live_key_rejected=True)
+        live.assert_not_called()
+        app.transcriber.transcribe.assert_called_once()
+        paste.assert_called_once()
+        self.assertEqual(app.last_status, "success")
+
+    def test_rejected_live_key_skips_a_gemini_batch_retry(self):
+        app = app_fixture()
+        app.transcriber.local_fallback.return_value = "local words"
+        with patch.object(Config, "effective_stt_provider", return_value="gemini"), patch.object(
+            Config, "effective_live_stt_provider", return_value="gemini"
+        ), patch.object(app, "_live_transcribe") as live, patch("main.paste_text") as paste:
+            app.process_and_paste(np.zeros(10), False, live=True, live_key_rejected=True)
+        live.assert_not_called()
+        app.transcriber.transcribe.assert_not_called()
+        paste.assert_called_once_with("local words", restore_clipboard=False)
+
     def test_explicit_live_provider_is_used_and_cached(self):
         app = app_fixture()
         with patch.object(Config, "effective_stt_provider", return_value="whisper"), patch.object(
