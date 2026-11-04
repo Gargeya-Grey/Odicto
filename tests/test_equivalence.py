@@ -73,24 +73,27 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # inserted lines only (no line removed or changed), the same 465 lines in every state.
 # Review fixes, same day: Plain keeps the grain, a still preview follows a new pixel ratio,
 # and two comments. Every state changed by the same 4 lines and nothing else.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
- 'provider_meta': '509ba66da7de5a140dae0c496f3cc1391c1bbda9109c495327d3088eb131886b',
- 'provider_openrouter': '26a0db5e58e02cc51f8d3461350c8d8198484dc61bec519361a895adfbe4c5e6',
- 'provider_gemini': '0f6634ff1a41ee546d19489005ce26088f9d90ed756a084a21998e64d62081b6',
- 'provider_ollama': 'c213b63eb12d65e402c02841aa49ccca95e6173e9756af16c4751a71ab19623e',
- 'provider_none': '6d519f540daf91e070392a6f5a5aef8258e9113fd7a62f709d448e9ff2afbe7c',
- 'provider_groq': 'f46210833875b872e5b5d1b89ff21252804c0e6b6f75a450562829cd8a5b0b62',
- 'polish_enabled': '555f0dcd95da58a4ad2f92254b9294902c5f9834398682b570bde7036d885bf0',
- 'history_and_custom': '9d5cbb9a09414a6b394f6752a9b437e3eaae009f370d20aacb78f35c30927c99',
- 'hotkey_short': 'e877300f32f87f17fefdbce31a74a697f2365fe92433d44d54dfe3bb01977d5d',
- 'stt_gemini': '424ffd537a6adcd50fc7338af3793a26cc035de20171a5a9b1e063c7fd84de6b',
- 'prompt_from_file': 'bf06f69c550f391538545becd586cc97331a66c9f932827661c8b245695c065a',
- 'prompt_from_inline_env': 'ef7d9468a0078ee713f19b1d33fa192963d95ca809a112aa47dc28fb799b1f69',
- 'msg_ok': '46228cdd4ab171d694e301014f538f039acb8df7e3b7af341b250193a8da571e',
- 'msg_err': '338473b41313d3ba933dff53f7a01122f629232d89ca17ee47d18b340f2af0cd',
- 'msg_neutral': 'dc95a0e06483fd48997518ebe1dcbeb54b4fd55757e65fe5cf6dcc8eb453e242',
- 'admin_on': 'd46866c7a5435ed3c9adeec526e083f084fd63f4e98fbfdd9b72f8694a52c45d',
- 'admin_unavailable': '6016178a298fd6da4abbe6deee79b7e1d4240e63fb66b513fdd02c0004e02ce3'}
+# 2026-11-04, HUD polish (Plain texture): the Plain subtitle reads "no veins, faint grain" and the preview draws
+# the Plain grain at 0.4 (LEAF_GRAIN_PLAIN). Before rebasing, the previous template reproduced every old golden,
+# and every state changed by the same lines and nothing else (compare output kept in the hand-back).
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '157ce2302475ad6ad9e34c67eaa58e2c5e4dcb4c22501ff4776f0739e002554c',
+ 'provider_meta': 'b8b0d86889ef4ed0738b1771b2f5ae2933b14e863ae29d5a153464364bda2068',
+ 'provider_openrouter': '84e6278c3dc18a39a26f330c9c56b5c3535a3f711aa8300e642e52b1f99e8698',
+ 'provider_gemini': 'edffbc07276eeec5578c8f631af1596bc90168512793730ded4ddb1c82fbb65d',
+ 'provider_ollama': 'd245181a8a2d4861906b672f775a57dbb9c4260eff616336ba8f4e65bc25da2a',
+ 'provider_none': '157ce2302475ad6ad9e34c67eaa58e2c5e4dcb4c22501ff4776f0739e002554c',
+ 'provider_groq': '225b40eb76fba709eecf46fc0fb395badbeb5e561d0e74363981d558e0f6a217',
+ 'polish_enabled': '81014950a1fcdae8ef5509fbed0d4cba0585d708c68420cf70bda605882e46d2',
+ 'history_and_custom': '6b8f60ea3494031e29f64bc8137583d6b897d3cfbd524971f7646870a529b55c',
+ 'hotkey_short': 'f56ac5b0f6b70cb07273790a3d9493039364da02f8973127376041e6038f1e39',
+ 'stt_gemini': 'ad7ddc5d0192ba30a8e5d2758c6fe90a3de5c43102afc6eaee64f750a5bce698',
+ 'prompt_from_file': '19fd8f1d38fef0ab4241806a339de4bfedf684af6cdb34e5df55a1283f8b37fd',
+ 'prompt_from_inline_env': '4f6ca07018640654fbb469c6319fade393ecf243c0710cb919ac5455f71b4c81',
+ 'msg_ok': '1009cd4edc6c446f638b418df60e4225fc3973636e8a5dcb0d8dac111518be23',
+ 'msg_err': '63b2ca58ac5e10ebd34a8ab96b3fa9a571b47051f0df0dcbcd41a996fcac64e0',
+ 'msg_neutral': '87601904d53aa98a3dd236e145f14a4db579005b0eeef7c49d96f8c355eb0fe6',
+ 'admin_on': '7976ce690362d41c2c337931279b7a52248ec929b5b827989d4fae38db3b176d',
+ 'admin_unavailable': '20585c084af6b4280732b8df847075d24569df0c2f668e8d8b5c458d8a849b7f'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

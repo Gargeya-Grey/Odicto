@@ -79,6 +79,7 @@ _BODY_MARGIN = 3.0          # image bleed around the body (the rim and AA fringe
 _SHADOW_MARGIN = 28.0       # widest shadow: 2.4 sigma + drop + 2 px
 _GRAIN_TILE = 128
 _GRAIN_ALPHA_MAX = 16 / 255
+PLAIN_GRAIN = 0.4           # Plain keeps this share of the Veins grain strength
 
 
 class Stem(Enum):
@@ -727,11 +728,20 @@ def _pool_layer(q: QPainter, geo: LeafGeometry, col: tuple[int, int, int]) -> No
     q.fillRect(QRectF(geo.left - 1, geo.top - 1, geo.w + 2, geo.h + 2), g)
 
 
+def grain_strength(texture: str) -> float:
+    """How strongly the leaf's grain shows: 1.0 with veins, PLAIN_GRAIN with plain."""
+    if texture not in HUD_STYLE_CHOICES["texture"]:
+        raise ValueError(f"unknown texture {texture!r}")
+    return 1.0 if texture == "veins" else PLAIN_GRAIN
+
+
 def _over_layer(q: QPainter, geo: LeafGeometry, texture: str, dpr: float) -> None:
     box = QRectF(geo.left - 1, geo.top - 1, geo.w + 2, geo.h + 2)
     if texture == "veins":
         _draw_veins(q, geo)
+    q.setOpacity(grain_strength(texture))
     q.drawTiledPixmap(box, _grain_tile(dpr))
+    q.setOpacity(1.0)
     q.fillRect(box, _vertical(geo.top, geo.h, [(0.0, QColor(225, 255, 238, 22)),
                                                (0.38, QColor(225, 255, 238, 0)),
                                                (0.7, QColor(0, 0, 0, 0)),

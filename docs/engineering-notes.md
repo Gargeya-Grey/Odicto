@@ -182,6 +182,12 @@ the stem timeline is past `_DROOP_S`. `_is_static` drops a finished leaf to the 
 only when nothing moves: the entry and its vein sweep, the stem's check, cross and seed, both
 springs and the voice have all ended.
 
+The grain is one 128 px noise tile drawn over the body. `HUD_TEXTURE=plain` draws no veins and
+draws that tile at `PLAIN_GRAIN` (0.4) of the Veins strength, through `grain_strength(texture)`,
+so the owner's "slightly nano textured, but not so much" is one named number. The setup preview
+holds the same number (`LEAF_GRAIN_PLAIN`), and the parity test keeps the two equal. The caption
+card keeps its full grain.
+
 Three things in the widget look odd and are on purpose:
 
 - **`_glyph_fade` is the stem's timeline** (0 to 1 over `_STEM_SETTLE_S`), kept under the name
