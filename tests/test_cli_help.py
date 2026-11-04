@@ -63,7 +63,9 @@ class TestCliHelp(unittest.TestCase):
         code, out, _ = run_main("--help")
         self.assertEqual(code, 0)
         _, _, error = run_main("not-a-command")
-        manager_commands = set(re.findall(r"'([a-z][a-z-]*)'", error.split("choose from", 1)[1]))
+        # Python 3.11 quotes the choices ('install', 'run'); 3.12.8+ does not (install, run).
+        choices = error.split("choose from", 1)[1].split(")", 1)[0]
+        manager_commands = set(re.findall(r"[a-z][a-z-]*", choices))
         app_commands = set(dist._app_parser()._subparsers._group_actions[0].choices)
         self.assertTrue({"install", "update", "rollback", "migrate", "run", "help"} <= manager_commands)
         self.assertTrue({"setup", "start", "stop", "restart", "status", "config"} <= app_commands)
