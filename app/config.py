@@ -58,6 +58,35 @@ def _env_float(name: str, lo=None, hi=None) -> float:
     return _clamp_env(name, _parse_env_number(name, float), lo, hi)
 
 
+# Allowed values of the HUD appearance keys. The first value of each is the default
+# (ENV_DEFAULTS stays the only place a default is written; a test checks they agree).
+HUD_CHOICES: dict[str, tuple] = {
+    "HUD_WAVEFORM": ("reach", "stream"),
+    "HUD_TEXTURE": ("veins", "plain"),
+    "HUD_EDGE": ("rim", "soft"),
+    "HUD_SHAPE": ("leaf", "capsule"),
+}
+
+
+def _env_choice(name: str) -> str:
+    """Choice env value: stripped and lowercased. Blank uses the default.
+
+    An unknown value warns once (naming the key and the allowed values) and uses the default.
+    """
+    default = ENV_DEFAULTS[name]
+    allowed = HUD_CHOICES[name]
+    raw = os.getenv(name, default)
+    value = str(raw).strip().lower()
+    if not value:
+        return default
+    if value not in allowed:
+        _warn_config(
+            f"{name}={raw!r} is not one of {', '.join(allowed)}; using default {default!r}"
+        )
+        return default
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Single source of truth for built-in defaults.
 #
@@ -149,6 +178,11 @@ ENV_DEFAULTS: dict[str, str] = {
     "POLISH_MAX_CHARS": "1200",
     "PLAY_AUDIO_CUES": "true",
     "SHOW_VISUAL_INDICATOR": "true",
+    # HUD appearance (allowed values: HUD_CHOICES)
+    "HUD_WAVEFORM": "reach",
+    "HUD_TEXTURE": "veins",
+    "HUD_EDGE": "rim",
+    "HUD_SHAPE": "leaf",
     "MIN_HOLD_MS": "80",
     "RETRIGGER_COOLDOWN_MS": "120",
     # Terminal text injection
@@ -586,6 +620,11 @@ class Config:
     SHOW_VISUAL_INDICATOR: bool = _env_bool(
         "SHOW_VISUAL_INDICATOR", _def("SHOW_VISUAL_INDICATOR")
     )
+    # HUD appearance. Blank or unknown values use the default (see HUD_CHOICES).
+    HUD_WAVEFORM: str = _env_choice("HUD_WAVEFORM")
+    HUD_TEXTURE: str = _env_choice("HUD_TEXTURE")
+    HUD_EDGE: str = _env_choice("HUD_EDGE")
+    HUD_SHAPE: str = _env_choice("HUD_SHAPE")
     # Minimum hold time (ms) before a recording is accepted — filters accidental taps
     MIN_HOLD_MS: int = _env_int("MIN_HOLD_MS")
     # Debounce between consecutive capture cycles (ms)
@@ -1268,6 +1307,10 @@ class Config:
         add("Timing", "Polish max chars", cls.POLISH_MAX_CHARS, _source_of("POLISH_MAX_CHARS"))
         add("Timing", "Audio cues", cls.PLAY_AUDIO_CUES, _source_of("PLAY_AUDIO_CUES"))
         add("Timing", "Visual HUD", cls.SHOW_VISUAL_INDICATOR, _source_of("SHOW_VISUAL_INDICATOR"))
+        add("Timing", "Visual HUD waveform", cls.HUD_WAVEFORM, _source_of("HUD_WAVEFORM"))
+        add("Timing", "Visual HUD texture", cls.HUD_TEXTURE, _source_of("HUD_TEXTURE"))
+        add("Timing", "Visual HUD edge", cls.HUD_EDGE, _source_of("HUD_EDGE"))
+        add("Timing", "Visual HUD shape", cls.HUD_SHAPE, _source_of("HUD_SHAPE"))
         add("Timing", "Min hold (ms)", cls.MIN_HOLD_MS, _source_of("MIN_HOLD_MS"))
         add("Timing", "Retrigger cooldown (ms)", cls.RETRIGGER_COOLDOWN_MS, _source_of("RETRIGGER_COOLDOWN_MS"))
         add("Timing", "Type in terminal", cls.TYPE_IN_TERMINAL, _source_of("TYPE_IN_TERMINAL"))
