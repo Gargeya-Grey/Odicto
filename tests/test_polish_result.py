@@ -1,4 +1,4 @@
-"""User-controlled result review never injects input into another application."""
+"""The copy-result window (text that could not be pasted) never injects input into another application."""
 import unittest
 from unittest.mock import MagicMock, patch
 from PySide6.QtWidgets import QApplication
@@ -68,7 +68,7 @@ class TestPolishResult(unittest.TestCase):
             first = indicator._polish_dialog
             indicator._show_copy_result("second complete transcript", "Manual paste needed")
             second = indicator._polish_dialog
-            indicator._show_polish_result("original", "polished")
+            indicator._show_copy_result("third complete transcript", "Manual paste needed")
             polish = indicator._polish_dialog
             self.assertEqual(indicator._result_dialogs, {first, second, polish})
             self.assertTrue(all(dialog.isVisible() for dialog in (first, second, polish)))

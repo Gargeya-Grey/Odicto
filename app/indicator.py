@@ -161,12 +161,12 @@ _LIVE_H = hl.LEAF_H + hl.CARD_GAP + hl.CARD_H   # the leaf and the caption card 
 
 # Live captions (F7): two wrapped lines on the card, newest at the bottom. The card is
 # drawn by the painter; the text is laid out here.
-_CAPTION_PX = 14
+_CAPTION_PX = 15            # 22.5 device px at 150 %: readable at a glance
 _CAPTION_LINE = 20         # line pitch
 _CAPTION_LINES = 2
 _CAPTION_PAD = 18          # left and right
-_CAPTION_ALPHA = 0.92      # the ink of the newest line
-_CAPTION_OLD_ALPHA = 0.55  # the older line recedes
+_CAPTION_ALPHA = 1.0       # the newest line at full ink: no wash-out on the glass card
+_CAPTION_OLD_ALPHA = 0.75  # the older line recedes but stays readable
 _CAPTION_WORDS_PER_S = 9.0 # at least this fast, so a chunk of words never lags behind speech
 _CAPTION_CATCHUP_S = 0.18  # a larger backlog is caught up faster: ~63 % of it in this time
 _CAPTION_SCROLL_TAU = 0.07 # a new line slides up into place
@@ -301,7 +301,7 @@ class _Spring:
 
 # Text was inserted, with a caveat the user should see.
 SUCCESS_NOTICE_LABELS = {
-    "polish_ready": "Polish ready - review result",
+    "polished": "Polished",
     "copy_ready": "Text ready - copy to insert",
     "ai_fallback": "AI failed · raw text",
     "ai_timeout": "AI timed out · raw text",
@@ -408,7 +408,6 @@ class DictationIndicator(QWidget):
     """Bottom-center always-on-top HUD for the dictation service."""
 
     # Thread-safe wake-ups from keyboard / worker threads
-    _polish_result = Signal(str, str)
     _copy_result = Signal(str, str)
     _image_request = Signal(object)
     _wake = Signal()
@@ -428,7 +427,6 @@ class DictationIndicator(QWidget):
 
         super().__init__(None)
 
-        self._polish_result.connect(self._show_polish_result)
         self._copy_result.connect(self._show_copy_result)
         self._polish_dialog = None
         self._result_dialogs = set()
@@ -614,7 +612,7 @@ class DictationIndicator(QWidget):
 
         self._font_caption = QFont(family)
         self._font_caption.setPixelSize(_CAPTION_PX)
-        self._font_caption.setWeight(QFont.Weight.Normal)
+        self._font_caption.setWeight(QFont.Weight.Medium)  # Normal is too thin on the grain
         # Full hinting rounds advances and makes paint and fit metrics disagree.
         self._font_caption.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
         self._font_caption.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
@@ -815,13 +813,6 @@ class DictationIndicator(QWidget):
         apply_window_exstyles(self)
 
     # -------------------------------------------------------------- public API
-    def show_polish_result(self, original, polished):
-        self._polish_result.emit(original, polished)
-
-    def _show_polish_result(self, original, polished):
-        from polish_result import PolishResultDialog
-        self._present_result(PolishResultDialog(original, polished))
-
     def _present_result(self, dialog):
         self._result_dialogs.add(dialog)
         self._polish_dialog = dialog

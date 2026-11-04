@@ -105,7 +105,7 @@ def _budget_timeout(seconds: float):
 def polish_wait_seconds(text: str) -> float:
     """Polish wait: 4 s plus 1 s per 100 chars, at least 10 s, at most the AI limit.
 
-    Selection polish is an explicit F8 request with a review window, and Esc
+    Selection polish is an explicit F8 request that replaces the selection, and Esc
     cancels it, so the wait is a ceiling, not a delay. The old 2 s budget was
     sized for inline dictation polish and was shorter than a normal cloud
     round trip (measured 1.1 to 3.0 s for a 140-char edit on OpenRouter).

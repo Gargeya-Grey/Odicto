@@ -74,9 +74,10 @@ There is no separate activation command. You can change the shortcuts in Setup.
 | Cancel processing | **Esc** |
 
 Raw and live dictation never polish automatically. On the **Polish** page, select
-its model independently and record its shortcut by pressing the keys. Polish
-preserves the original document and presents the original and edited text in a
-review card. Use **Copy** when you want the edited version, or **Dismiss**.
+its model independently and record its shortcut by pressing the keys. Select text
+and press the shortcut: the polished text replaces your selection. Press **Ctrl+Z**
+to get the original back. If the selection changed while polish ran, your text stays
+as it was.
 
 Add names, brands and technical terms to your personal vocabulary on **Speech**
 to supply spelling hints to transcription and Polish.

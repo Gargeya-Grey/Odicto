@@ -707,8 +707,9 @@ still has `POLISH_DICTATION=true`.
 
 Polish makes minimal grammar, spelling and structure repairs while preserving voice,
 emotion, deliberate emphasis, paragraph breaks and language. Esc cancels. Failure,
-timeout or an empty response leaves the original text alone. A review window shows the
-original and polished text with Copy and Dismiss. No automatic replacement is performed. Terminal targets are skipped. Copy-based
+timeout or an empty response leaves the original text alone. The polished text replaces
+the selection with one paste, so Ctrl+Z undoes it. It is pasted only when the same window
+and the same selected text are still there. Terminal targets are skipped. Copy-based
 selection checks depend on the editor; matching text cannot prove field identity.
 `POLISH_MAX_CHARS` defaults to 1200. A request waits 4 s plus 1 s per 100 characters,
 at least 10 s and at most `LLM_DEADLINE_SECONDS`. On OpenRouter, polish sends the lowest

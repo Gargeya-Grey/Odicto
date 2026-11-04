@@ -326,8 +326,9 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 offers an editable chat model and the shared saved key on Speech.
 `POLISH_HOTKEY=f8` requests polish separately from dictation. A blank disables it;
 an implicit default that conflicts with an existing shortcut is disabled safely.
-`POLISH_MODEL` blank uses the selected AI model. Polish leaves the document unchanged
-and shows a review window with explicit Copy and Dismiss. It never touches AI memory.
+`POLISH_MODEL` blank uses the selected AI model. Polish replaces the selection in place
+(one paste; Ctrl+Z undoes it), only when the window and the selected text are unchanged
+when the result arrives. It never touches AI memory.
 `POLISH_DICTATION` is an ignored legacy key. `AI_CLIPBOARD_IMAGE=false` makes screenshots
 explicit; when enabled the HUD reads them on Qt's GUI thread. Auto Whisper uses
 CPU when its bounded CUDA probe fails, and always on macOS. `SAMPLE_RATE` must be
