@@ -34,6 +34,7 @@ CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 UNACQUIRED_MESSAGE = re.compile(r"not acquired by runner", re.IGNORECASE)
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
 MAX_PAGES = 10
+START_GRACE_SECONDS = 300  # time GitHub gets to start the attempt a POST asked for
 
 
 class Plan(NamedTuple):
@@ -167,14 +168,21 @@ def drive(api, run_id: int, max_attempts: int, dry_run: bool, poll_seconds: floa
           deadline: float, log=print, clock=time.monotonic, sleep=time.sleep) -> Plan:
     """Re-run, wait for the new attempt, and decide again, until a final plan."""
     waited_for = None    # the attempt number this loop waits to see completed
+    posted_at = 0.0
     rerun_ids = set()    # job ids that the last POST should have replaced
     while True:
         if clock() >= deadline:
             return Plan("give_up", "deadline reached while waiting for a CI attempt")
         run, jobs, plan = plan_for(api, run_id, max_attempts)
         attempt = int(run.get("run_attempt") or 1)
-        if plan.action == "wait" or (waited_for is not None and attempt < waited_for):
-            sleep(min(poll_seconds, max(0.0, deadline - clock())))
+        if waited_for is not None and attempt < waited_for:
+            if run.get("status") == "completed" and clock() >= posted_at + START_GRACE_SECONDS:
+                return Plan("give_up", "GitHub accepted the re-run but started no new attempt "
+                            f"within {START_GRACE_SECONDS // 60} minutes", plan.jobs)
+            sleep(min(poll_seconds, max(1.0, deadline - clock())))
+            continue
+        if plan.action == "wait":
+            sleep(min(poll_seconds, max(1.0, deadline - clock())))
             continue
         log(f"run {run_id} attempt {attempt}: {plan.action}: {plan.reason}")
         if plan.action != "rerun" or dry_run:
@@ -182,6 +190,12 @@ def drive(api, run_id: int, max_attempts: int, dry_run: bool, poll_seconds: floa
         same = sorted(job["name"] for job in jobs if job["id"] in rerun_ids)
         if same:
             return Plan("give_up", "GitHub did not re-run " + ", ".join(same), plan.jobs)
+        # Read again just before the POST: a person may have re-run the run meanwhile.
+        fresh_run, fresh_jobs, fresh = plan_for(api, run_id, max_attempts)
+        if (fresh.action != "rerun" or int(fresh_run.get("run_attempt") or 1) != attempt
+                or sorted(job["id"] for job in fresh_jobs) != sorted(job["id"] for job in jobs)):
+            log(f"run {run_id} changed before the re-run; deciding again")
+            continue
         try:
             api.rerun_failed_jobs(run_id)
         except Exception:
@@ -189,8 +203,8 @@ def drive(api, run_id: int, max_attempts: int, dry_run: bool, poll_seconds: floa
                 raise
             log("the re-run request had no clear reply, but GitHub started a new attempt")
         rerun_ids = {job["id"] for job in jobs if job["name"] in plan.jobs}
-        waited_for = attempt + 1
-        sleep(min(poll_seconds, max(0.0, deadline - clock())))
+        waited_for, posted_at = attempt + 1, clock()
+        sleep(min(poll_seconds, max(1.0, deadline - clock())))
 
 
 def main(argv=None) -> int:
@@ -199,7 +213,7 @@ def main(argv=None) -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--max-attempts", type=int, default=5)
     parser.add_argument("--poll-seconds", type=float, default=30)
-    parser.add_argument("--deadline-minutes", type=float, default=100)
+    parser.add_argument("--deadline-minutes", type=float, default=90)
     parser.add_argument("--dry-run", action="store_true", help="decide and print; re-run nothing")
     args = parser.parse_args(argv)
     if not RUN_ID.fullmatch(args.run_id):

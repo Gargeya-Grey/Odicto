@@ -48,4 +48,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-        run: python3 -I tools/ci_rerun_unacquired.py --repository "$REPOSITORY" --run-id "$RUN_ID" --max-attempts 5 --deadline-minutes 100
+        run: python3 -I tools/ci_rerun_unacquired.py --repository "$REPOSITORY" --run-id "$RUN_ID" --max-attempts 5 --deadline-minutes 90

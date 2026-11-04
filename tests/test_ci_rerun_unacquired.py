@@ -177,6 +177,24 @@ class TestDrive(unittest.TestCase):
         self.assertEqual(("give_up", 1), (plan.action, api.reruns))
         self.assertIn("did not re-run", plan.reason)
 
+    def test_accepted_rerun_that_starts_no_attempt_gives_up_quickly(self):
+        api = FakeGitHub(misses=99)
+        api.rerun_failed_jobs = lambda run_id: setattr(api, "reruns", api.reruns + 1)
+        plan = self.drive(api)
+        self.assertEqual(("give_up", 1), (plan.action, api.reruns))
+        self.assertIn("no new attempt", plan.reason)
+
+    def test_run_rerun_by_a_person_before_the_post_is_decided_again(self):
+        api = FakeGitHub(misses=1)
+        real_jobs, calls = api.jobs, [0]
+        def jobs(run_id):
+            calls[0] += 1
+            if calls[0] == 2:  # the re-read just before the POST: a person re-ran it, and it passed
+                api.attempt += 1
+            return real_jobs(run_id)
+        api.jobs = jobs
+        self.assertEqual(("none", 0), (self.drive(api).action, api.reruns))
+
     def test_release_run_is_never_rerun(self):
         api = FakeGitHub(misses=1, path=".github/workflows/release.yml")
         self.assertEqual(("none", 0), (self.drive(api).action, api.reruns))
