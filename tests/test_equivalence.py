@@ -178,7 +178,11 @@ _PROVIDER_ATTRS = {
 
 def _render_page(state: dict) -> str:
     """Render ``setup_web._page()`` with every machine-dependent input pinned."""
-    tmp = tempfile.mkdtemp(prefix="odicto-equiv-")
+    with tempfile.TemporaryDirectory(prefix="odicto-equiv-") as tmp:
+        return _render_page_in(state, tmp)
+
+
+def _render_page_in(state: dict, tmp: str) -> str:
     prompt_dir = os.path.join(tmp, "prompts")
     os.makedirs(prompt_dir)
     if state.get("prompt_txt"):
