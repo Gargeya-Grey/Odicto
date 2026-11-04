@@ -4,7 +4,7 @@ The bottom-center HUD is a leaf: a stem, a leaf body whose five vein rows show t
 short label (Listening, Transcribing, Thinking, Done, a notice, an error). F7 live captions sit
 in a card above the leaf. `app/hud_leaf.py` paints it; `app/indicator.py` owns the state, the
 clock and the window. Four keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`, `HUD_EDGE`,
-`HUD_SHAPE`.
+`HUD_SHAPE`. The setup page's Appearance view sets them and shows a live preview.
 
 ## Sub-features
 
