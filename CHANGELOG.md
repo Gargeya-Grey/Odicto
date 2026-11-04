@@ -4,6 +4,23 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.3.0] - 2026-11-04
+
+### Added
+
+- `odicto help` and `odicto --help` list every command with examples. `odicto help COMMAND` and `odicto COMMAND --help` show the help of one command, and never run it.
+
+### Changed
+
+- F7 live dictation returns its text as soon as the final arrives: about 0.5 s after the second tap, not 2.6 s.
+- The F7 pill shows the live words on two larger lines. The words appear smoothly, the older line is dimmer, and a new line slides up.
+
+### Fixed
+
+- When Google rejects the Gemini API key, the F7 pill shows "Live off · Gemini key rejected" while you speak, and the stop does not send the audio to Gemini again with the same key.
+- The "Transcribing" pill after an F7 stop no longer cuts off its label.
+- A command with an unknown word, for example `odicto stop now`, is refused before anything runs.
+
 ## [1.2.6] - 2026-11-04
 
 ### Documentation
