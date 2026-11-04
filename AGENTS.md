@@ -194,6 +194,16 @@ supplied it) with:
   (`hud_leaf.PLAIN_GRAIN`). The painter is `app/hud_leaf.py`; the state, clock and window are
   `app/indicator.py`. The setup page's Appearance view sets the five keys, with a live preview
   of the leaf at the chosen size.
+- **Theme colour:** `THEME_COLOR=forest|ocean|plum|ember|graphite|#rrggbb` (default `forest`) sets the colour of
+  the HUD and of the setup page. A value is stripped and lower-cased; blank or unknown uses `forest`, with one
+  warning; `merge_env` writes only an allowed value. `app/theme.py` (no Qt) holds the maths. A theme is a hue and a
+  chroma factor `k` (a custom colour takes its own hue and `k = clamp(chroma / 0.13, 0.08, 1)`). The page gets them
+  as `--h` and `--k`, seeded in the HTML. The HUD gets a `Palette` (`HudStyle.theme`): each themed colour of the
+  Forest leaf keeps its OKLCH lightness, takes the theme's hue and scales its chroma by `k`, clamped into sRGB by
+  lowering chroma. Forest is today's constants, not a round trip. `WARN`, `DANGER`, `INK` and `MOON` never change.
+  The HUD reads the theme once at start, so a change applies after the restart that Save does. The Appearance
+  view's Colour panel picks it (five leaf swatches and a custom colour) and changes the page and the preview at
+  once; its JavaScript maths equals `app/theme.py` (`tests/test_theme.py`).
 - First Ollama pull downloads the LLM (size depends on model). Odicto only
   starts/calls Ollama when `LLM_PROVIDER=ollama`.
 - **Config cascade:** generic `LLM_*` keys (`LLM_MODEL`, `LLM_MAX_TOKENS`,

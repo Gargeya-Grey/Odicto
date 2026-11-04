@@ -85,24 +85,28 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # golden. Every state changed by the same lines and nothing else (compare output kept in the hand-back). A behaviour proof
 # (IDs, form fields and values, data and aria attributes, button labels, visible text) found no difference except the
 # hero canvas and the nav item titles; the script text changed only by the hero painter.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
- 'provider_meta': '998b16d0269690072377823b46c8ebbb030a0f70570178b60a371cdb52df4c69',
- 'provider_openrouter': '2b85633745e4fbe4d153fc245d189f8bab5e7ee77f734f4252c3f302ec619a01',
- 'provider_gemini': 'ca9a841f74690ebdb99db86ea34ac222909683d8f290ea3dc74adb06fe9bece7',
- 'provider_ollama': '2eb14c672476067bade8e3d40b115d55acf76fc8488702c19a448bc3d5ac2702',
- 'provider_none': '26d63f4438d72d28565b699d9f5d236d9c45aed553339ada940a50978e151e34',
- 'provider_groq': 'edf0e08b77f31417b124e2ece3f813300db2e83aec4c5a9195550e6f0e78ef6e',
- 'polish_enabled': 'b4b9c850984cdc19f4a1dcd642626971c21708b9f09f21ab94e9ede6887687b8',
- 'history_and_custom': '1373c396a7f092b04531f3782c0a27a3e92657519fdf8abec47f2b75e9810795',
- 'hotkey_short': 'da643867493d9fd819527240ae84b9a26ee41415bc9bfc4ff70cc745944b9c76',
- 'stt_gemini': '210a849140cd1ae949bc75474f1db3b5590e7f2e4396b929e36d7214fc19ef20',
- 'prompt_from_file': 'cf25dbf9e03590646b5e8b0af15f91b2b7ac0319cda673d086531df5964491ca',
- 'prompt_from_inline_env': 'c8604267d4206fded8da8d6349ca641b853c71231daf94d75df2fe050a8530b5',
- 'msg_ok': 'eb1fbe1ccb1d8f1639ab972cccd0622b5cb815f929f5ccffb3e55e13a5c86ce7',
- 'msg_err': 'ec904d9678199e2c030c565b2fb97cb615824a546f6815ebee8e559f98f6bb8a',
- 'msg_neutral': '155fde14bae476e059a528d47af45ba0b1fed3feedc252f446d88fc7a629960f',
- 'admin_on': 'a2f027ddc0be480da655eba6b609b886b79705047fed74ae49d69eb2b7cda958',
- 'admin_unavailable': '4254a4fe2040d8f621427b638fcc1cf8888638f2441bfa73062c514b7cf028ea'}
+# 2026-11-04, THEME_COLOR: the page follows the theme colour. The server seeds --h and --k, the Appearance view gained a
+# Colour panel (swatches and a custom colour), and the preview paints with the theme's palette (the THEME maths block).
+# Before rebasing, the previous template reproduced every old golden. Every state changed by the same lines and nothing
+# else (compare output kept in the hand-back).
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'ef7c9e0b49183a7a54d4d72b33aa77efd7fe632ba621d0f886dff6cd6124f796',
+ 'provider_meta': 'fe01c886be7b4fd3376e6982c694f1e3f1a0aef3d13da0d5938538701ff4232d',
+ 'provider_openrouter': 'e63e65d8457af3d5ce634912170f2d64266ece955bac177cdb621d9732c598d0',
+ 'provider_gemini': '5d5e1fdb7c70d14013a83b17353f314791a5ac060e3233ecaa96d3dbaef85d79',
+ 'provider_ollama': 'e0b7d581cbb2147003e5c0aabfbeb51ad35b0e49efd1f707d38f890002e2a8dc',
+ 'provider_none': 'ef7c9e0b49183a7a54d4d72b33aa77efd7fe632ba621d0f886dff6cd6124f796',
+ 'provider_groq': 'de215d66209db21144d0d7befaa085fd031ef3120a1bad49fca9bc1a3ea8fa62',
+ 'polish_enabled': '0a4a823c3c15ec555bed314ae3248a5d84e6c6b58c300d5bdb19f9d193566c10',
+ 'history_and_custom': '2872e16b3e6c4d1a85a96aaf85f56417fa6173320d0e84da8b42bc737bcadb47',
+ 'hotkey_short': '9893a3bd0ccfb2b89ea2b319676ad4645bed840957cf09349ca618fd01ad70b6',
+ 'stt_gemini': '201fe93e17cc7c35d0659590ea642856ec4f70b8112f1a04e1667044e2b99e80',
+ 'prompt_from_file': '41500199d452ee74cd93d2297b2cc0e276c027bb05481694d0388c4700f6c611',
+ 'prompt_from_inline_env': 'd20a68213fe94b2f8285d83ffc062021721706d557954265063895d7a37970ef',
+ 'msg_ok': '9311c4a3455ccfed68eb7db6514a8e4c8be82d1f9c4490cf8fbbf5b2fbbe617e',
+ 'msg_err': '003dbcdda5ef77f2692131c8ed8de74569a6085136676ba364b6d58d3376cb21',
+ 'msg_neutral': 'a689501b58054a30f9739b7ae899cc6b2e11eac13fb9af9f3d62d81e07978702',
+ 'admin_on': '97d0053efe45637b3ebc0b2cad66e8928fbb651f45077238a371d90b2bd209b6',
+ 'admin_unavailable': '06e3db8dfa8e7e7f402f6b1164fa1ef5120cafb85364c0f409e31be25de80c64'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

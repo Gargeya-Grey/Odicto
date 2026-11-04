@@ -441,12 +441,12 @@ class DictationIndicator(QWidget):
         self._hide_timer.timeout.connect(self.hide_indicator)
         self._last_tick: Optional[float] = None
 
-        # The four style choices, read once. Config checks them; a bad one still must not
-        # stop the HUD.
+        # The style choices and the theme colour, read once (a change applies after the restart
+        # that setup Save does). Config checks them; a bad one still must not stop the HUD.
         try:
             self._style = HudStyle(waveform=Config.HUD_WAVEFORM, texture=Config.HUD_TEXTURE,
                                    edge=Config.HUD_EDGE, shape=Config.HUD_SHAPE,
-                                   size=Config.HUD_SIZE)
+                                   size=Config.HUD_SIZE, theme=Config.THEME_COLOR)
         except ValueError as e:
             print(f"[HUD] HUD style not used, default leaf drawn: {e}", flush=True)
             self._style = HudStyle()

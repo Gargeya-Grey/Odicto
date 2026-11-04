@@ -22,6 +22,12 @@ clock and the window. Five keys choose the style: `HUD_WAVEFORM`, `HUD_TEXTURE`,
   window grows; the distance from the screen bottom and the centring stay. The voice pixels stay
   whole device pixels at every size and display scale.
 - Style keys: values and defaults are in `AGENTS.md` ("HUD style").
+- Theme colour (`THEME_COLOR`): the leaf, its glow, the voice pixels and the caption card follow the
+  theme; the notice, error and AI colours and the label text never do. Forest is today's leaf, pixel for pixel.
+  To look: render Listening, Transcribing, Done, an AI leaf and an F7 card with `HudStyle(theme=...)` for each
+  preset and one custom colour (`#c06a8f`) at 100 % and 200 %. Check that the label stays readable on the body
+  and that Graphite is neutral. The setup page's Colour panel (Appearance view) picks the colour and recolours
+  the page and the preview at once; Discard returns to the saved colour.
 
 ## How to get to it (user POV)
 

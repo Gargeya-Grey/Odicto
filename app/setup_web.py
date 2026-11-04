@@ -27,6 +27,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from theme import DEFAULT_THEME, PRESETS as THEME_PRESETS, hud_palette, page_theme, parse_theme, theme_hue_k
 from version import app_version
 from config import (
     OPENROUTER_FALLBACK_MODEL,
@@ -117,6 +118,7 @@ EDITABLE_KEYS = {
     "HUD_EDGE",
     "HUD_SHAPE",
     "HUD_SIZE",
+    "THEME_COLOR",
 }
 
 _MASKED = "••••••••••••••••"
@@ -313,6 +315,11 @@ def merge_env(updates: dict) -> None:
             choice = _valid_hud_choice(key, value)
             if choice is not None:  # an invalid choice leaves the stored value alone
                 cleaned[key] = choice
+            continue
+        if key == "THEME_COLOR":
+            theme = parse_theme(value)
+            if theme is not None:  # an unknown colour leaves the stored value alone
+                cleaned[key] = theme
             continue
         cleaned[key] = _clean_submitted_value(key, value)
 
@@ -587,6 +594,30 @@ def _hud_appearance_tokens(hud_choice) -> dict:
     return tokens
 
 
+def _theme_tokens(theme: str) -> dict:
+    """Template tokens of the page colour: --h and --k (so the first paint has no green flash),
+    the hidden field, each swatch's state, the name, and the colour the picker opens on."""
+    css = page_theme(theme)
+    custom = theme not in THEME_PRESETS
+    custom_h, custom_k = theme_hue_k(theme)
+    pick = "#%02x%02x%02x" % hud_palette(theme).jade if not custom else theme
+    tokens = {
+        "__THEME_H__": css["--h"],
+        "__THEME_K__": css["--k"],
+        "__THEME_COLOR__": html.escape(theme),
+        "__THEME_NAME__": html.escape(theme.upper() if custom else theme.capitalize()),
+        "__THEME_PICK__": html.escape(pick),
+        "__THEME_CUSTOM_CLASS__": " filled selected" if custom else "",
+        "__THEME_CUSTOM_STYLE__": f"--sh:{round(custom_h, 2):g}; --sk:{round(custom_k, 3):g}",
+    }
+    for name, (hue, k) in THEME_PRESETS.items():
+        key = name.upper()
+        tokens[f"__THEME_{key}_SEL__"] = " selected" if name == theme else ""
+        tokens[f"__THEME_{key}_ARIA__"] = "true" if name == theme else "false"
+        tokens[f"__THEME_{key}_STYLE__"] = f"--sh:{hue:g}; --sk:{k:g}"
+    return tokens
+
+
 def _page(message: str = "", message_kind: str = "neutral") -> str:
     current = read_env()
 
@@ -611,6 +642,10 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         """Saved HUD appearance value when it is an allowed one, else the built-in default."""
         value = (current.get(key) or "").strip().lower()
         return value if value in HUD_CHOICES[key] else ENV_DEFAULTS[key]
+
+    def theme_choice() -> str:
+        """Saved theme colour when it is a valid one, else the built-in default."""
+        return parse_theme(current.get("THEME_COLOR")) or DEFAULT_THEME
 
     polish_hotkey = env_raw("POLISH_HOTKEY")
     if "POLISH_HOTKEY" not in current:
@@ -744,6 +779,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__HOTKEY_SHORT_SELECTED__": '' if hotkey_toggle_on else ' selected',
         "__HOTKEY_SHORT_ARIA__": 'false' if hotkey_toggle_on else 'true',
         **_hud_appearance_tokens(hud_choice),
+        **_theme_tokens(theme_choice()),
         "__PROVIDER__": html.escape(provider),
         "__META_KEY_SAVED__": 'true' if meta_key else 'false',
         "__META_KEY__": html.escape(meta_key),

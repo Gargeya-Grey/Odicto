@@ -238,6 +238,26 @@ position (`_BOTTOM_GAP`), so the leaf never jumps when captions come or go.
 `time.monotonic()` ticks every 15.6 ms on some Windows builds. A test that needs time to pass
 sleeps 30 ms, or passes an explicit `now`.
 
+**Theme colour (`THEME_COLOR`).** A theme changes the hue and the chroma of the leaf, never its lightness.
+Each themed colour of the Forest leaf is converted to OKLCH, gets the theme's hue, has its chroma scaled by `k`,
+and is clamped into sRGB by lowering chroma (`app/theme.py`). Lightness is fixed on purpose. The leaf body is
+translucent and the label is light on dark, so the label contrast depends on the lightness of the body and
+barely on its hue. If a theme moved lightness, a yellow theme would need its own label colour and a pale one
+would break the shadow and the rim. With lightness fixed, `tests/test_theme.py` checks the label on the body
+once for every preset and for the extreme custom colours (pure red, green, blue, yellow, white, black, grey).
+Chroma is the only thing a clamp may take away, so a very vivid pick gives a calmer leaf, not a brighter one.
+
+Forest is defined by today's RGB constants, not by `hud_palette("forest")` through a round trip. A round trip
+moves a channel by one step here and there, and then Forest would no longer be the leaf the owner approved.
+`FOREST` in `app/theme.py` is those constants, `hud_palette("forest")` returns it, and a test pins the
+sixteen values. The change that added themes also rendered 48 Forest cells before and after (states, styles,
+a card, 1x and 2x) and found them byte-identical. `WARN`, `DANGER`, `INK` and `MOON` mean
+notice, error, text and AI; they stay the same in every theme. The painter takes every colour from
+`HudStyle.palette`, and the style is part of the body cache key (the card key names the theme), so a theme
+change never shows a stale layer. The page repeats the maths in JavaScript because the setup page has no way to
+call Python while you choose; the parity tests read both sources, and a one-off run of the page's maths in Node
+against `app/theme.py` on 1000 random colours found no difference.
+
 ### 3.6 Consolidating the `apply_window_exstyles` no-ops — rejected
 
 Two identical 3-line no-ops in `linux.py` and `macos.py`. But `indicator.py` does

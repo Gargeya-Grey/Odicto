@@ -51,7 +51,9 @@ GATE = {
     # Plus 10 for the F7 failure message on the caption card (9) and its service rule (1): 1141.
     # Plus 22 for HUD_SIZE: painter 6, widget 7, config 2, setup page 6, preview parity 1: 1163.
     # Plus 15 for the setup page look (text contrast from the tokens, no network, one leaf painter, the shell): 1178.
-    "floor": 1178,
+    # Plus 57 for THEME_COLOR: colour maths, palette and HUD painter, config key, page parity and contrast (43),
+    # the setup page Colour panel and its save (14): 1235.
+    "floor": 1235,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

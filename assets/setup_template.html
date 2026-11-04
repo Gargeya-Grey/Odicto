@@ -23,7 +23,7 @@
 
 :root {
   color-scheme: dark;
-  --h: 165; --k: 1;
+  --h: __THEME_H__; --k: __THEME_K__;
   /* Surfaces */
   --canvas: oklch(0.205 calc(0.010 * var(--k)) var(--h));
   --rail: oklch(0.182 calc(0.008 * var(--k)) var(--h));
@@ -399,6 +399,28 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
   box-shadow: inset 0 1px 0 var(--rim), 0 24px 48px -28px rgb(0 0 0 / 0.7);
 }
 .leaf-stage canvas { display: block; max-width: 100%; height: auto; }
+
+/* Appearance: theme colour swatches. Each is a small leaf; the chosen one has a glowing stem under it. */
+.swatches { display: flex; align-items: center; gap: 12px; }
+.swatch {
+  all: unset; box-sizing: border-box; position: relative; display: grid; place-items: center; width: 42px; height: 28px;
+  border-radius: 8px; cursor: pointer; transition: transform var(--t-fast) var(--ease);
+}
+.swatch:hover { transform: translateY(-1px); }
+.swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.swatch svg { width: 38px; height: 16px; overflow: visible; }
+.swatch .sw-body { fill: #274a3a; fill: oklch(0.34 calc(0.055 * var(--sk)) var(--sh)); }
+.swatch .sw-stem { fill: #8edcbb; fill: oklch(0.86 calc(0.105 * var(--sk)) var(--sh)); }
+.swatch.selected::after {
+  content: ''; position: absolute; left: 50%; bottom: -3px; width: 14px; height: 2px; margin-left: -7px;
+  border-radius: 2px; background: var(--accent); box-shadow: 0 0 7px var(--glow);
+}
+.swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.swatch.custom .sw-dash { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
+.swatch.custom .sw-plus { fill: none; stroke: var(--muted); stroke-linecap: round; }
+.swatch.custom.filled .sw-dash, .swatch.custom.filled .sw-plus { display: none; }
+.swatch.custom:not(.filled) .sw-body, .swatch.custom:not(.filled) .sw-stem { display: none; }
+.swname { min-width: 72px; font-size: 12.5px; line-height: 18px; color: var(--muted); text-align: right; }
 
 /* Custom select (app-drawn menu over a real select) */
 .cselect { position: relative; }
@@ -1252,6 +1274,30 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
           <section class="sect" aria-labelledby="h_appearance_preview">
             <div class="sect-label"><h2 id="h_appearance_preview">Preview</h2><span class="sect-note">Updates as you choose</span></div>
             <div class="leaf-stage"><canvas id="leaf_preview" width="585" height="168" role="img" aria-label="Preview of the dictation pill"></canvas></div>
+          </section>
+
+          <section class="sect" aria-labelledby="h_appearance_colour">
+            <div class="sect-label"><h2 id="h_appearance_colour">Colour</h2></div>
+            <ul class="group">
+              <li class="row">
+                <div class="row-text"><h3>Theme colour</h3><p>The leaf, its glow, and the accents on this page.</p></div>
+                <div class="row-ctl">
+                  <input type="hidden" name="THEME_COLOR" id="THEME_COLOR" value="__THEME_COLOR__">
+                  <div class="swatches" id="theme_swatches" role="group" aria-label="Theme colour">
+                    <button type="button" class="swatch__THEME_FOREST_SEL__" data-theme="forest" title="Forest" aria-label="Forest" aria-pressed="__THEME_FOREST_ARIA__" style="__THEME_FOREST_STYLE__"><svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/></svg></button>
+                    <button type="button" class="swatch__THEME_OCEAN_SEL__" data-theme="ocean" title="Ocean" aria-label="Ocean" aria-pressed="__THEME_OCEAN_ARIA__" style="__THEME_OCEAN_STYLE__"><svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/></svg></button>
+                    <button type="button" class="swatch__THEME_PLUM_SEL__" data-theme="plum" title="Plum" aria-label="Plum" aria-pressed="__THEME_PLUM_ARIA__" style="__THEME_PLUM_STYLE__"><svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/></svg></button>
+                    <button type="button" class="swatch__THEME_EMBER_SEL__" data-theme="ember" title="Ember" aria-label="Ember" aria-pressed="__THEME_EMBER_ARIA__" style="__THEME_EMBER_STYLE__"><svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/></svg></button>
+                    <button type="button" class="swatch__THEME_GRAPHITE_SEL__" data-theme="graphite" title="Graphite" aria-label="Graphite" aria-pressed="__THEME_GRAPHITE_ARIA__" style="__THEME_GRAPHITE_STYLE__"><svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/></svg></button>
+                    <label class="swatch custom__THEME_CUSTOM_CLASS__" title="Custom colour" style="__THEME_CUSTOM_STYLE__">
+                      <svg viewBox="0 0 38 16" aria-hidden="true"><path class="sw-body" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><rect class="sw-stem" x="21" y="2.6" width="1.4" height="10.8" rx=".7"/><path class="sw-dash" d="M0 8 C7 3 14 .8 22 .8 L30 .8 A7.2 7.2 0 0 1 30 15.2 L22 15.2 C14 15.2 7 13 0 8Z"/><path class="sw-plus" d="M25 5v6M22 8h6"/></svg>
+                      <input type="color" id="theme_custom" value="__THEME_PICK__" aria-label="Custom colour">
+                    </label>
+                    <span class="swname" id="theme_name" aria-live="polite">__THEME_NAME__</span>
+                  </div>
+                </div>
+              </li>
+            </ul>
           </section>
 
           <section class="sect" aria-labelledby="h_appearance_style">
@@ -2968,6 +3014,73 @@ function initLifecycle() {
   });
 }
 
+// ------------------------------------------------------------------- theme
+// The same colour maths as app/theme.py. tests/test_theme.py keeps the preset table, the k rule, the matrices
+// and the leaf colours equal to it.
+const THEME_PRESETS = {forest:[165, 1], ocean:[232, 1], plum:[318, 0.95], ember:[32, 1], graphite:[230, 0.12]};
+const THEME_HEX_K = {DIVISOR:0.13, MIN:0.08, MAX:1};
+const THEME_FOREST = {jade:[142,220,187], surface_top:[27,64,46], surface_bottom:[9,31,22], cool:[3,18,24], vein:[205,245,222],
+  sheen:[225,255,238], rim:[215,250,230], card_top:[24,58,42], card_bottom:[10,32,23], glint:[240,255,248],
+  stem_hi:[244,255,250], bead:[238,255,248]};
+function themeToLinear(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function themeFromLinear(c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; }
+function themeCbrt(x) { return (x < 0 ? -1 : 1) * Math.pow(Math.abs(x), 1 / 3); }
+function themeSrgbToOklch(rgb) { // sRGB 0-255 to [lightness, chroma, hue in degrees]
+  var r = themeToLinear(rgb[0] / 255), g = themeToLinear(rgb[1] / 255), b = themeToLinear(rgb[2] / 255);
+  var l_ = themeCbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  var m_ = themeCbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  var s_ = themeCbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  var lt = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+  var a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+  var bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+  var hue = Math.atan2(bb, a) * 180 / Math.PI;
+  return [lt, Math.sqrt(a * a + bb * bb), ((hue % 360) + 360) % 360];
+}
+function themeLinear(lt, ch, hue) {
+  var a = ch * Math.cos(hue * Math.PI / 180), b = ch * Math.sin(hue * Math.PI / 180);
+  var l_ = lt + 0.3963377774 * a + 0.2158037573 * b;
+  var m_ = lt - 0.1055613458 * a - 0.0638541728 * b;
+  var s_ = lt - 0.0894841775 * a - 1.2914855480 * b;
+  var l3 = l_ * l_ * l_, m3 = m_ * m_ * m_, s3 = s_ * s_ * s_;
+  return [4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+    -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+    -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3];
+}
+function themeInGamut(c) { return c[0] >= -1e-6 && c[0] <= 1 + 1e-6 && c[1] >= -1e-6 && c[1] <= 1 + 1e-6 && c[2] >= -1e-6 && c[2] <= 1 + 1e-6; }
+function themeGamut(lt, ch, hue) { // the largest chroma up to ch that sRGB can show; lightness stays
+  if (themeInGamut(themeLinear(lt, ch, hue))) return ch;
+  var lo = 0, hi = ch;
+  for (var i = 0; i < 24; i++) {
+    var mid = (lo + hi) / 2;
+    if (themeInGamut(themeLinear(lt, mid, hue))) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+function themeOklchToSrgb(lt, ch, hue) { // to sRGB 0-255
+  var lin = themeLinear(lt, themeGamut(lt, Math.max(0, ch), hue), hue), out = [];
+  for (var i = 0; i < 3; i++) out.push(Math.floor(themeFromLinear(Math.min(1, Math.max(0, lin[i]))) * 255 + 0.5));
+  return out;
+}
+function themeParse(value) { // a preset name or #rrggbb, lower case; else null
+  var text = String(value === null || value === undefined ? '' : value).trim().toLowerCase();
+  return (Object.prototype.hasOwnProperty.call(THEME_PRESETS, text) || /^#[0-9a-f]{6}$/.test(text)) ? text : null;
+}
+function themeHueK(theme) { // [hue, k]
+  if (Object.prototype.hasOwnProperty.call(THEME_PRESETS, theme)) return THEME_PRESETS[theme];
+  var o = themeSrgbToOklch([parseInt(theme.slice(1, 3), 16), parseInt(theme.slice(3, 5), 16), parseInt(theme.slice(5, 7), 16)]);
+  return [o[2], Math.min(THEME_HEX_K.MAX, Math.max(THEME_HEX_K.MIN, o[1] / THEME_HEX_K.DIVISOR))];
+}
+function themeNum(v, digits) { var p = Math.pow(10, digits); return String(Math.round(v * p) / p); }
+function themePalette(theme) { // every themed leaf colour; Forest is the constants themselves
+  if (theme === 'forest') return THEME_FOREST;
+  var hk = themeHueK(theme), pal = {};
+  Object.keys(THEME_FOREST).forEach(function (name) {
+    var o = themeSrgbToOklch(THEME_FOREST[name]);
+    pal[name] = themeOklchToSrgb(o[0], o[1] * hk[1], hk[0]);
+  });
+  return pal;
+}
+
 // ----------------------------------------------------- appearance preview
 // A port of the approved leaf pill (voice, veins, surface, stem, label, seed) so a choice shows at once.
 // The constants below must stay equal to the Qt painter's (a parity test compares them).
@@ -2982,7 +3095,7 @@ const LEAF_FONT = '500 13px "Instrument Sans", system-ui, sans-serif';
 const LEAF_WORDS = {listen:'Listening', work:'Transcribing', done:'Done'};
 const LEAF_KEYS = {HUD_WAVEFORM:'wave', HUD_TEXTURE:'tex', HUD_EDGE:'edge', HUD_SHAPE:'shape', HUD_SIZE:'size'};
 const LEAF = {ready:false, still:false, raf:0, opt:{wave:'reach', tex:'veins', edge:'rim', shape:'leaf', size:'1x'},
-  canvas:null, ctx:null, dpr:0, sc:1, inst:null, t0:0, last:0, cycle:-1, pattern:null, hero:null};
+  canvas:null, ctx:null, dpr:0, sc:1, inst:null, t0:0, last:0, cycle:-1, pattern:null, hero:null, pal:THEME_FOREST};
 
 function leafBez(x1, y1, x2, y2) {
   return function (t) {
@@ -3002,6 +3115,7 @@ function leafClamp(v, a, b) { return Math.max(a === undefined ? 0 : a, Math.min(
 function leafSeg(t, a, d) { return leafClamp((t - a) / d); }
 function leafSmooth(x) { return x * x * (3 - 2 * x); }
 function leafRgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+function leafRgbaOpen(c) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ','; }
 function leafSnap(v) { return Math.round(v * LEAF.sc) / LEAF.sc; }
 function leafRng(seed) { return function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
 function leafNoise(t) { var x = Math.sin(t * 12.9898) * 43758.5453; return x - Math.floor(x); }
@@ -3100,7 +3214,7 @@ function leafVeins(ctx, geo) {
     var mid = i === (LEAF_K.ROWS - 1) / 2;
     for (s = 0; s < n; s++) {
       d0 = 3 + s * (dmax - 3) / n; d1 = 3 + (s + 1) * (dmax - 3) / n;
-      ctx.strokeStyle = 'rgba(205,245,222,' + ((mid ? 0.2 : 0.12) * (1 - 0.7 * d0 / dmax)) + ')';
+      ctx.strokeStyle = leafRgbaOpen(LEAF.pal.vein) + ((mid ? 0.2 : 0.12) * (1 - 0.7 * d0 / dmax)) + ')';
       ctx.lineWidth = mid ? 0.9 : 0.6; ctx.beginPath();
       ctx.moveTo(geo.stemX - d0, geo.cy + leafRowY(i, d0, geo)); ctx.lineTo(geo.stemX - d1, geo.cy + leafRowY(i, d1, geo)); ctx.stroke();
     }
@@ -3108,14 +3222,14 @@ function leafVeins(ctx, geo) {
   [-1, 1].forEach(function (sg) {
     for (var q = 0; q < n; q++) {
       var a0 = 3 + q * (dmax - 3) / n, a1 = 3 + (q + 1) * (dmax - 3) / n;
-      ctx.strokeStyle = 'rgba(205,245,222,' + (0.07 * (1 - 0.6 * a0 / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
+      ctx.strokeStyle = leafRgbaOpen(LEAF.pal.vein) + (0.07 * (1 - 0.6 * a0 / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
       ctx.moveTo(geo.stemX - a0, geo.cy + leafOuterY(sg, a0, geo)); ctx.lineTo(geo.stemX - a1, geo.cy + leafOuterY(sg, a1, geo)); ctx.stroke();
     }
   });
   var r = leafRng(9);
   for (var m = 0; m < 30; m++) {
     var row = Math.floor(r() * (LEAF_K.ROWS - 1)), d = 5 + r() * (dmax - 14), dd = d + 2 + r() * 4;
-    ctx.strokeStyle = 'rgba(205,245,222,' + (0.07 * (1 - 0.6 * d / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
+    ctx.strokeStyle = leafRgbaOpen(LEAF.pal.vein) + (0.07 * (1 - 0.6 * d / dmax)) + ')'; ctx.lineWidth = 0.5; ctx.beginPath();
     ctx.moveTo(geo.stemX - d, geo.cy + leafRowY(row, d, geo)); ctx.lineTo(geo.stemX - dd, geo.cy + leafRowY(row + 1, dd, geo)); ctx.stroke();
   }
 }
@@ -3130,9 +3244,9 @@ function leafSurface(ctx, inst, geo, col) {
   var left = geo.left, top = geo.top, w = geo.w, h = geo.h, stemX = geo.stemX, cy = geo.cy, X = left - 1, Y = top - 1, W = w + 2, H = h + 2;
   ctx.save(); leafPath(ctx, left, top, w, h, geo.tipF, geo.droop); ctx.clip();
   var g = ctx.createLinearGradient(0, top, 0, top + h);
-  g.addColorStop(0, 'rgba(27,64,46,0.89)'); g.addColorStop(1, 'rgba(9,31,22,0.94)'); ctx.fillStyle = g; ctx.fillRect(X, Y, W, H);
+  g.addColorStop(0, leafRgba(LEAF.pal.surface_top, 0.89)); g.addColorStop(1, leafRgba(LEAF.pal.surface_bottom, 0.94)); ctx.fillStyle = g; ctx.fillRect(X, Y, W, H);
   g = ctx.createLinearGradient(left, 0, stemX, 0); // the tip is cooler and darker
-  g.addColorStop(0, 'rgba(3,18,24,0.42)'); g.addColorStop(1, 'rgba(3,18,24,0)'); ctx.fillStyle = g; ctx.fillRect(X, Y, stemX - X, H);
+  g.addColorStop(0, leafRgba(LEAF.pal.cool, 0.42)); g.addColorStop(1, leafRgba(LEAF.pal.cool, 0)); ctx.fillStyle = g; ctx.fillRect(X, Y, stemX - X, H);
   var pc = stemX - 16, pool = ctx.createRadialGradient(pc, cy, 0, pc, cy, 52); // soft light on the voice side
   pool.addColorStop(0, leafRgba(col, 0.08 + (LEAF.still ? 0 : 0.07 * inst.level))); pool.addColorStop(1, leafRgba(col, 0));
   ctx.fillStyle = pool; ctx.fillRect(X, Y, W, H);
@@ -3140,17 +3254,17 @@ function leafSurface(ctx, inst, geo, col) {
   var fade = ctx.globalAlpha; ctx.globalAlpha = fade * (LEAF.opt.tex === 'plain' ? LEAF_GRAIN_PLAIN : 1); // Plain keeps a faint grain, as the HUD draws it
   ctx.fillStyle = leafGrain(ctx); ctx.fillRect(X, Y, W, H); ctx.globalAlpha = fade;
   g = ctx.createLinearGradient(0, top, 0, top + h);
-  g.addColorStop(0, 'rgba(225,255,238,0.085)'); g.addColorStop(0.38, 'rgba(225,255,238,0)'); g.addColorStop(0.7, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.2)');
+  g.addColorStop(0, leafRgba(LEAF.pal.sheen, 0.085)); g.addColorStop(0.38, leafRgba(LEAF.pal.sheen, 0)); g.addColorStop(0.7, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.2)');
   ctx.fillStyle = g; ctx.fillRect(X, Y, W, H); ctx.restore(); // waxy sheen above, shade below
   var ra = LEAF.opt.edge === 'rim' ? 0.18 : 0.07;
   g = ctx.createLinearGradient(0, top, 0, top + h);
-  g.addColorStop(0, 'rgba(215,250,230,' + ra + ')'); g.addColorStop(0.55, 'rgba(215,250,230,' + (ra * 0.3) + ')'); g.addColorStop(1, 'rgba(215,250,230,' + (ra * 0.12) + ')');
+  g.addColorStop(0, leafRgba(LEAF.pal.rim, ra)); g.addColorStop(0.55, leafRgba(LEAF.pal.rim, ra * 0.3)); g.addColorStop(1, leafRgba(LEAF.pal.rim, ra * 0.12));
   ctx.strokeStyle = g; ctx.lineWidth = 1; leafPath(ctx, left + 0.5, top + 0.5, w - 1, h - 1, geo.tipF, geo.droop); ctx.stroke();
 }
 
 // ---- content
 function leafVoice(ctx, inst, now, geo, t) {
-  var k = inst.state, col = LEAF_C.jade, rm = LEAF.still, maxpx = Math.floor((LEAF_K.VOICE_W - LEAF_K.STEM_GAP - 6) / LEAF_K.PITCH);
+  var k = inst.state, col = LEAF.pal.jade, rm = LEAF.still, maxpx = Math.floor((LEAF_K.VOICE_W - LEAF_K.STEM_GAP - 6) / LEAF_K.PITCH);
   var sweepOn = !rm && inst.exitAt === null && t < 1.1, sweep = leafSeg(t, 0.6, 0.42) * (maxpx + 4) - 2; // sap fills the veins once as the leaf opens
   for (var i = 0; i < LEAF_K.ROWS; i++) for (var j = 0; j < maxpx; j++) {
     var x = leafSnap(geo.stemX - LEAF_K.STEM_GAP - (j + 1) * LEAF_K.PITCH + (LEAF_K.PITCH - LEAF_K.PIX)), d = geo.stemX - x - LEAF_K.PIX / 2;
@@ -3168,13 +3282,13 @@ function leafVoice(ctx, inst, now, geo, t) {
   }
 }
 function leafLabel(ctx, inst, now, geo, content) {
-  var k = inst.state, col = LEAF_C.jade, x = leafSnap(geo.stemX + LEAF_K.TEXT_GAP - (1 - content) * 4), base = leafSnap(geo.cy + 4.5);
+  var k = inst.state, col = LEAF.pal.jade, x = leafSnap(geo.stemX + LEAF_K.TEXT_GAP - (1 - content) * 4), base = leafSnap(geo.cy + 4.5);
   ctx.textBaseline = 'alphabetic'; ctx.font = LEAF_FONT;
   var word = LEAF_WORDS[k]; ctx.fillStyle = leafRgba(LEAF_C.ink, k === 'done' ? 0.92 : 0.78); ctx.fillText(word, x, base);
   var ww = ctx.measureText(word).width;
   if (k === 'work' && !LEAF.still) { // a light passes over the word
     var span = ww + 50, p = ((now * 0.6) % 1.5) / 1.5 * span - 25 + x, g = ctx.createLinearGradient(p - 18, 0, p + 18, 0);
-    g.addColorStop(0, leafRgba(col, 0)); g.addColorStop(0.5, 'rgba(240,255,248,1)'); g.addColorStop(1, leafRgba(col, 0));
+    g.addColorStop(0, leafRgba(col, 0)); g.addColorStop(0.5, leafRgba(LEAF.pal.glint, 1)); g.addColorStop(1, leafRgba(col, 0));
     ctx.fillStyle = g; ctx.fillText(word, x, base);
   }
   if (k === 'listen') {
@@ -3193,11 +3307,11 @@ function leafStem(ctx, inst, now, x, cy, grow, col) {
   if (k === 'work') {
     ctx.fillStyle = leafRgba(col, 0.45); ctx.beginPath(); leafRound(ctx, x - wd / 2, top, wd, hh, wd / 2); ctx.fill();
     var p = rm ? 0.5 : 0.5 + 0.5 * Math.sin(now * Math.PI * 1.4), by = top + 3 + (hh - 10) * p;
-    ctx.fillStyle = 'rgba(238,255,248,0.95)'; ctx.beginPath(); leafRound(ctx, x - wd / 2, by, wd, 5, wd / 2); ctx.fill();
+    ctx.fillStyle = leafRgba(LEAF.pal.bead, 0.95); ctx.beginPath(); leafRound(ctx, x - wd / 2, by, wd, 5, wd / 2); ctx.fill();
     return;
   }
   ctx.fillStyle = leafRgba(col, glyph ? 0.95 * (1 - morph) : 0.94); ctx.beginPath(); leafRound(ctx, x - wd / 2, top, wd, hh, wd / 2); ctx.fill();
-  if (!glyph) { ctx.fillStyle = 'rgba(244,255,250,0.5)'; ctx.fillRect(x - 0.5, top + 3, 1, Math.max(0, hh - 6)); return; }
+  if (!glyph) { ctx.fillStyle = leafRgba(LEAF.pal.stem_hi, 0.5); ctx.fillRect(x - 0.5, top + 3, 1, Math.max(0, hh - 6)); return; }
   ctx.strokeStyle = leafRgba(col, 0.98); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   var dr = rm ? 1 : LEAF_E(leafSeg(since, 0.08, 0.3)); // the check mark draws itself
   var p0 = [x - 4.5, cy + 0.5], p1 = [x - 1.2, cy + 4], l1 = Math.hypot(3.3, 3.5), l2 = Math.hypot(6.2, 8.5), run = dr * (l1 + l2);
@@ -3211,12 +3325,12 @@ function leafSeed(ctx, inst, now, x, cy) {
   var p = leafSeg(now - inst.stateAt, 0.32, 1.0);
   if (p <= 0 || p >= 1) return; // done: the leaf lets a seed go
   var y = cy - 6 - LEAF_E(p) * 22, sx = x + Math.sin(p * 6) * 1.5, a = (1 - p * p) * Math.min(1, p * 8), g = ctx.createRadialGradient(sx, y, 0, sx, y, 6);
-  g.addColorStop(0, leafRgba(LEAF_C.jade, 0.45 * a)); g.addColorStop(1, leafRgba(LEAF_C.jade, 0));
+  g.addColorStop(0, leafRgba(LEAF.pal.jade, 0.45 * a)); g.addColorStop(1, leafRgba(LEAF.pal.jade, 0));
   ctx.fillStyle = g; ctx.fillRect(sx - 6, y - 6, 12, 12);
-  ctx.fillStyle = 'rgba(240,255,248,' + a + ')'; ctx.beginPath(); ctx.arc(sx, y, 1.3, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = leafRgbaOpen(LEAF.pal.glint) + a + ')'; ctx.beginPath(); ctx.arc(sx, y, 1.3, 0, Math.PI * 2); ctx.fill();
 }
 function leafDraw(ctx, inst, now, cx, bottom) {
-  var col = LEAF_C.jade, t = (now - inst.enterAt) / LEAF_TIME.ENTER, A = LEAF_A, E = LEAF_E, seg = leafSeg;
+  var col = LEAF.pal.jade, t = (now - inst.enterAt) / LEAF_TIME.ENTER, A = LEAF_A, E = LEAF_E, seg = leafSeg;
   var rise = E(seg(t, 0, 0.22)), grow = E(seg(t, 0.14, 0.2)), openH = E(seg(t, 0.26, 0.26)), openR = E(seg(t, 0.3, 0.34)), openL = E(seg(t, 0.32, 0.4));
   var tipF = E(seg(t, 0.5, 0.32)), content = E(seg(t, 0.42, 0.3)), fade = 1;
   if (inst.exitAt !== null) {
@@ -3340,6 +3454,37 @@ function leafSetOption(key, value) {
   }
   if (LEAF.ready && LEAF.still && CURRENT_VIEW === 'appearance') leafPaintStill();
 }
+function initThemePicker() { // swatches and the custom colour set THEME_COLOR, this page and the preview at once
+  var box = el('theme_swatches'), hid = el('THEME_COLOR'), pick = el('theme_custom'), label = el('theme_name');
+  if (!box || !hid || !pick) return;
+  var custom = box.querySelector('.swatch.custom'), swatches = box.querySelectorAll('.swatch');
+  var start = themeParse(hid.value) || 'forest';
+  LEAF.pal = themePalette(start);
+  function choose(theme) {
+    if (theme === hid.value) return;
+    hid.value = theme;
+    var hk = themeHueK(theme), root = document.documentElement.style, isPreset = !!THEME_PRESETS[theme];
+    root.setProperty('--h', themeNum(hk[0], 2)); root.setProperty('--k', themeNum(hk[1], 3));
+    LEAF.pal = themePalette(theme);
+    for (var i = 0; i < swatches.length; i++) {
+      var on = swatches[i] === custom ? !isPreset : swatches[i].getAttribute('data-theme') === theme;
+      swatches[i].classList.toggle('selected', on);
+      if (swatches[i] !== custom) swatches[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    if (!isPreset) {
+      custom.classList.add('filled');
+      custom.style.setProperty('--sh', themeNum(hk[0], 2)); custom.style.setProperty('--sk', themeNum(hk[1], 3));
+    }
+    label.textContent = isPreset ? theme.charAt(0).toUpperCase() + theme.slice(1) : theme.toUpperCase();
+    if (LEAF.ready && LEAF.still && CURRENT_VIEW === 'appearance') leafPaintStill();
+    markDirty();
+  }
+  box.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('button[data-theme]') : null;
+    if (btn) choose(btn.getAttribute('data-theme'));
+  });
+  pick.addEventListener('input', function () { var theme = themeParse(pick.value); if (theme) choose(theme); });
+}
 function initLeafPreview() {
   LEAF.canvas = el('leaf_preview');
   if (!LEAF.canvas || !LEAF.canvas.getContext) return;
@@ -3385,6 +3530,7 @@ initEffortSelects();
 loadOpenrouterCatalog();
 initTranscribeMode();
 initGearbox();
+initThemePicker();
 initLeafPreview();
 initSwitches();
 initSttChoices();
