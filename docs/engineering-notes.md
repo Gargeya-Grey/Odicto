@@ -445,6 +445,43 @@ The HUD follow-up reproduced stale F7 captions when a later ordinary or AI captu
 entered PROCESSING. Clear capture-owned preview and committed text at ordinary capture
 start and on every pipeline exit. Keep current F7 captions visible until finalization ends.
 
+## F7 stop wait (November)
+
+**The rule.** After the second F7 tap, `GeminiLiveSession` returns at the first
+non-empty `input_transcription` that arrives after `activity_end`, or at the 2.5 s limit.
+That final is the authoritative text. The assumption behind it: the service answers
+`activity_end` with the whole utterance in one final.
+
+**Measured on the real service** (`gemini-3.5-transcribe-live`, SMART mode, 9 runs of 13 s,
+108 s and 123 s of synthetic speech):
+
+- No final arrives while the user speaks. After `activity_end`, three messages arrive in
+  the same millisecond: one `input_transcription` with the whole text, `generation_complete`,
+  and a `voice_activity` message of type `ACTIVITY_END` with the audio end offset.
+- The final arrives 0.4 s after stop for 13 s of speech and 1.1 s for 123 s. Stop took
+  2.6 s before this change (waiting for a `turn_complete` that never comes).
+- `Transcription.finished` is never set, and `turn_complete` never arrives.
+- Leaving out `audio_stream_end` changed nothing in 4 runs. The SDK says to send it only
+  with automatic activity detection; Odicto uses manual activity detection and still sends
+  it, because a hash-frozen test pins it and no difference was measured. Open item.
+
+**What does not mark completion.** `generation_complete` and `turn_complete` belong to the
+model turn. The SDK says the input transcription has no order relative to the model turn,
+and `receive()` ends at each turn end, so the receiver listens again until the final comes.
+
+**Rejected, after three review rounds.** A quiet period after `generation_complete`, and a
+check that the final holds 80 % of the preview's words. Both guess at a completion that no
+message proves, so a reviewer could always build a valid message order that beat them. The
+word check is also wrong for SMART mode, which rewrites text: a 123 s run gave 260 final
+words for a 300-word preview, and repeated sentences collapsed from 1535 characters to 192.
+Do not ask a review to prove that no word is lost; no message the service sends can show
+it. Review against the rule above.
+
+**Residual risk.** If the service ever splits one utterance into several finals, text after
+the first would be lost. The committed code before this change had the same exposure at its
+2.5 s limit. Transcribing the full recording after every F7 removes the risk at the cost of a
+batch call on every stop.
+
 ## October review: decision record
 
 - **The gap rule was reversed.** An overflow or callback gap used to discard the capture.

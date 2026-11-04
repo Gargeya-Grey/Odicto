@@ -182,8 +182,19 @@ _RECORDING_WAVE_W = (
 _GAP_WAVE_TEXT = 12
 _WAVE_MIN_H = 3.0          # a silent bar is a dot, never gone
 _WAVE_MAX_H = 20.0
-_LIVE_MIN_W = 440
-_LIVE_H = 88
+# Live captions (F7): two wrapped lines under the status row, newest at the bottom.
+_CAPTION_PX = 15
+_CAPTION_LINE = 21         # line pitch
+_CAPTION_LINES = 2
+_CAPTION_TOP_GAP = 4       # status row to the first caption row
+_CAPTION_BOTTOM = 10
+_CAPTION_PAD = 20          # left and right
+_CAPTION_OLD_ALPHA = 0.55  # the older line recedes
+_CAPTION_WORDS_PER_S = 9.0 # at least this fast, so a chunk of words never lags behind speech
+_CAPTION_CATCHUP_S = 0.18  # a larger backlog is caught up faster: ~63 % of it in this time
+_CAPTION_SCROLL_TAU = 0.07 # a new line slides up into place
+_LIVE_MIN_W = 480
+_LIVE_H = _COMPACT_H + _CAPTION_TOP_GAP + _CAPTION_LINES * _CAPTION_LINE + _CAPTION_BOTTOM
 _PAD = 16                  # shadow bleed around the capsule (a multiple of 4)
 # (grow px, drop px, alpha): ten faint layers falling off, then a tight contact shadow.
 _SHADOW_LAYERS = tuple(
@@ -279,6 +290,26 @@ def fit_pill_width(text_w: float, chip_w: float = 0.0) -> int:
 def fit_recording_width(text_w: float, chip_w: float = 0.0) -> int:
     """Recording capsule width: disc, waveform, label and chip. No reserved margin."""
     return fit_pill_width(_RECORDING_WAVE_W + _GAP_WAVE_TEXT + text_w, chip_w)
+
+
+def wrap_words(widths: list[float], space: float, room: float) -> list[tuple[int, int]]:
+    """Greedy word wrap: one ``(first, end)`` word range per line.
+
+    A word wider than ``room`` takes a line of its own (the painter elides it).
+    """
+    lines: list[tuple[int, int]] = []
+    start, used = 0, 0.0
+    for i, width in enumerate(widths):
+        if i == start:
+            used = width
+        elif used + space + width > room:
+            lines.append((start, i))
+            start, used = i, width
+        else:
+            used += space + width
+    if start < len(widths):
+        lines.append((start, len(widths)))
+    return lines
 
 
 def _wave_profile(n: int) -> list[float]:
@@ -379,6 +410,11 @@ ERROR_STATUS_LABELS = {
     "stt_timeout": "Speech timed out",
 }
 ERROR_STATUSES = ("error", "init_error", "preflight") + tuple(ERROR_STATUS_LABELS)
+# Shown while recording, when the F7 live captions cannot run.
+LIVE_FAILURE_LABELS = {
+    "live_key_rejected": "Live off · Gemini key rejected",
+    "live_unavailable": "Live off · see log",
+}
 # Short reasons for "init_error" / "preflight" (app.status_detail holds the code).
 INIT_REASON_LABELS = {
     "mic": "Mic unavailable",
@@ -400,7 +436,8 @@ def status_label(state: GuiState, use_llm: bool = False, last_status: Optional[s
     if state == GuiState.BOOTING:
         return "Starting"
     if state == GuiState.RECORDING:
-        return "Listening"
+        # Live captions failed. Recording goes on and the text is made at the end.
+        return LIVE_FAILURE_LABELS.get(last_status, "Listening")
     if state == GuiState.PROCESSING:
         if last_status in ("polishing", "finalizing"):
             return last_status.capitalize()
@@ -476,6 +513,17 @@ class DictationIndicator(QWidget):
         self._t: float = 0.0
         self._last_tick: Optional[float] = None
         self._bars: list[float] = [0.0] * _RECORDING_BARS
+        # Live caption: the words arrive in chunks; they are revealed smoothly.
+        self._cap_words: list[str] = []
+        self._cap_shown = 0.0                  # words revealed so far (the fraction fades one in)
+        self._cap_lines: list[str] = []        # laid-out lines of the revealed words, oldest first
+        self._cap_fading = ""                  # the word that is fading in at the end of the last line
+        self._cap_fade = 0.0
+        self._cap_last_first: Optional[int] = None  # index of the newest line's first word
+        self._cap_prev_len: Optional[int] = None  # words on screen in the last frame
+        self._cap_visible_from = 0             # index of the first word on the older of the two read lines
+        self._cap_scroll = 0.0                 # px the lines are still below their place
+        self._cap_widths: dict[str, int] = {}
         self._level: float = 0.0   # smoothed voice envelope, drives the disc halo
         self._appear: float = 0.0  # 0..1 shape opacity, derived from the phase timeline
         self._appear_target: float = 1.0
@@ -625,6 +673,7 @@ class DictationIndicator(QWidget):
         self._font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
 
         self._font_caption = QFont(self._font)
+        self._font_caption.setPixelSize(_CAPTION_PX)
         self._font_caption.setWeight(QFont.Weight.Normal)
 
         self._font_chip = QFont(family)
@@ -1112,6 +1161,10 @@ class DictationIndicator(QWidget):
             pass
 
         self._advance_phase(now)
+        # The label can change with no state change (Finalizing -> Transcribing): refit
+        # the capsule, or the longer word is clipped. Equal size returns at once.
+        if self._phase in ("entering", "open"):
+            self._sync_geometry()
 
         self._glyph_fade = min(1.0, self._glyph_fade + dt / _GLYPH_S)
 
@@ -1120,6 +1173,7 @@ class DictationIndicator(QWidget):
         self._release_resize(now)
 
         self._advance_wave(dt)
+        self._advance_caption(dt)
 
         if self.gui_state in (GuiState.SUCCESS, GuiState.ERROR, GuiState.RESET):
             self._check_progress = min(1.0, self._check_progress + dt / _CHECK_S)
@@ -1132,6 +1186,115 @@ class DictationIndicator(QWidget):
         interval = _STATIC_TICK_MS if self._is_static(now) else _ANIM_TICK_MS
         if self._tick.interval() != interval:
             self._tick.setInterval(interval)
+
+    def _caption_room(self) -> float:
+        return float(self._pill_w - 2 * _CAPTION_PAD - 4)
+
+    def _word_width(self, word: str) -> int:
+        width = self._cap_widths.get(word)
+        if width is None:
+            if len(self._cap_widths) > 4000:
+                self._cap_widths.clear()
+            width = self._cap_widths[word] = self._fm_caption.horizontalAdvance(word)
+        return width
+
+    def _reset_caption(self) -> None:
+        self._cap_words, self._cap_lines, self._cap_fading = [], [], ""
+        self._cap_shown = self._cap_fade = self._cap_scroll = 0.0
+        self._cap_last_first = None
+        self._cap_prev_len = None
+        self._cap_visible_from = 0
+
+    @staticmethod
+    def _preview_head_dropped(old: list[str], new: list[str]) -> int:
+        """How many words the preview lost at its front (0 if it did not slide).
+
+        A service that keeps only its newest words sends ``old[d:]`` plus more. Without
+        this, the revealed count would point d words too far on.
+        """
+        if not old or not new or new[:len(old)] == old:  # nothing changed, or only a longer text
+            return 0
+        for d in range(1, len(old)):
+            if old[d] != new[0]:
+                continue
+            n = min(len(old) - d, len(new))
+            if n >= 3 and old[d:d + n] == new[:n]:  # three words in a row: not by chance
+                return d
+        return 0
+
+    def _advance_caption(self, dt: float) -> None:
+        """Reveal the live words a little at a time, and lay out the revealed lines.
+
+        The service sends a few words about once a second, so showing each update at
+        once makes the caption jump. The words appear at a steady pace instead, and a
+        bigger backlog is caught up faster, so the caption never trails the speech.
+        """
+        preview = getattr(self.app, "live_preview", "")
+        words = preview.split() if isinstance(preview, str) else []
+        if not words or not self._is_live_layout():
+            if self._cap_words or self._cap_lines:
+                self._reset_caption()
+            return
+        old = self._cap_words
+        if words != old:
+            dropped = self._preview_head_dropped(old, words)
+            if dropped:  # the preview slid: the words already shown moved to the front
+                old = old[dropped:]
+                self._cap_shown = max(0.0, self._cap_shown - dropped)
+                self._cap_visible_from = max(0, self._cap_visible_from - dropped)
+                if self._cap_prev_len is not None:
+                    self._cap_prev_len = max(0, self._cap_prev_len - dropped)
+            # Find the changed stretch: the words before it and after it are the same in
+            # both. A change that ends above the two lines on screen cannot be seen, so the
+            # caption keeps its place, moved by the words added or removed there. A change
+            # that reaches the lines on screen is revealed again from where it is visible.
+            # A longer text just carries on.
+            limit = min(len(old), len(words))
+            head = 0
+            while head < limit and old[head] == words[head]:
+                head += 1
+            tail = 0
+            while tail < limit - head and old[-1 - tail] == words[-1 - tail]:
+                tail += 1
+            if head < len(old) and len(old) - tail <= self._cap_visible_from:
+                moved = len(words) - len(old)
+                self._cap_shown = max(0.0, self._cap_shown + moved)
+                self._cap_visible_from = max(0, self._cap_visible_from + moved)
+                if self._cap_prev_len is not None:
+                    self._cap_prev_len = max(0, self._cap_prev_len + moved)
+            else:
+                self._cap_shown = min(self._cap_shown, float(max(head, self._cap_visible_from)))
+            self._cap_words = words
+        total = float(len(words))
+        step = max(_CAPTION_WORDS_PER_S * dt,
+                   (total - self._cap_shown) * (1.0 - math.exp(-dt / _CAPTION_CATCHUP_S)))
+        self._cap_shown = min(total, self._cap_shown + step)
+        whole = int(self._cap_shown)
+        fraction = self._cap_shown - whole
+        fading = words[whole] if fraction > 0.0 and whole < len(words) else ""
+        shown = words[:whole] + ([fading] if fading else [])
+        # Wrap from the first word, so a line keeps its place while later words arrive; a
+        # window that slid would re-flow every line and fake a new one.
+        spans = wrap_words([self._word_width(w) for w in shown], self._word_width(" "),
+                           self._caption_room())
+        kept = spans[-(_CAPTION_LINES + 1):]
+        lines = [" ".join(shown[a:b - 1 if (fading and b == len(shown)) else b]) for a, b in kept]
+        self._cap_lines = lines
+        # The oldest kept line only leaves the screen; the two after it are what is read.
+        self._cap_visible_from = spans[-_CAPTION_LINES][0] if len(spans) >= _CAPTION_LINES else 0
+        self._cap_fading, self._cap_fade = fading, fraction
+        first = spans[-1][0] if spans else 0
+        # A line is new when it starts at a word that was not on screen in the last frame.
+        # A line that merely moved (words dropped from the front, a wider pill) is not.
+        if self._cap_prev_len is not None and first > 0 and first >= self._cap_prev_len:
+            # Everything slides up. One row is all the painter shows, so a burst of
+            # lines (a big backlog caught up) does not stack past it.
+            self._cap_scroll = min(self._cap_scroll + _CAPTION_LINE, float(_CAPTION_LINE))
+        self._cap_prev_len = len(shown)
+        self._cap_last_first = first
+        self._cap_scroll *= math.exp(-dt / _CAPTION_SCROLL_TAU)
+        if self._cap_scroll < 0.05:
+            self._cap_scroll = 0.0
 
     def _advance_wave(self, dt: float) -> None:
         """Smooth the voice envelope and the bars: fast attack, slow release.
@@ -1447,15 +1610,66 @@ class DictationIndicator(QWidget):
             self._draw_named_chip(p, pill.right() - _INSET_R - chip_w, cy, chip_w, chip)
 
         if self._is_live_layout() and pill.height() > self._compact_h + 1:
-            p.setFont(self._font_caption)
-            said = " ".join((getattr(self.app, "live_preview", "") or "").split())[-250:]
-            text = said or "Speak, then tap F7 to insert"
-            room = int(pill.width() - 32)
-            text = self._fm_caption.elidedText(text, Qt.TextElideMode.ElideLeft, room)
-            p.setPen(_Theme.text if said else _Theme.muted)
-            caption_cy = pill.top() + self._compact_h + (pill.height() - self._compact_h) * 0.5 - 4 + rise
-            p.drawText(QPointF(self._snap(pill.left() + 16), self._baseline(self._font_caption, caption_cy)),
-                       text)
+            self._paint_caption(p, pill, rise)
+
+    def _paint_caption(self, p: QPainter, pill: QRectF, rise: float) -> None:
+        """Two caption rows, newest at the bottom. The older row recedes; a new row slides up."""
+        top = pill.top() + self._compact_h + _CAPTION_TOP_GAP + rise
+        block = QRectF(pill.left(), top, pill.width(), _CAPTION_LINES * _CAPTION_LINE)
+        left = pill.left() + _CAPTION_PAD
+        room = int(pill.width() - 2 * _CAPTION_PAD)
+        font = self._font_caption
+        base_opacity = p.opacity()
+        p.setFont(font)
+        p.save()
+        p.setClipRect(block, Qt.ClipOperation.IntersectClip)
+        if not self._cap_lines:
+            p.setPen(_Theme.muted)
+            text = self._fm_caption.elidedText("Speak, then tap F7 to insert", Qt.TextElideMode.ElideRight, room)
+            row_cy = block.top() + 1.5 * _CAPTION_LINE
+            p.drawText(QPointF(self._snap(left), self._baseline(font, row_cy)), text)
+            p.restore()
+            return
+        slide = min(1.0, self._cap_scroll / _CAPTION_LINE)
+        p.setPen(_Theme.text)
+        count = len(self._cap_lines)
+        for index, line in enumerate(self._cap_lines):
+            row = index - count + 2  # the newest line is row 1; the one before it, row 0
+            if row == 1:
+                alpha = 1.0
+            elif row == 0:
+                alpha = _CAPTION_OLD_ALPHA + (1.0 - _CAPTION_OLD_ALPHA) * slide
+            else:
+                alpha = _CAPTION_OLD_ALPHA * slide  # leaving at the top
+            if alpha <= 0.01 or row < -1:
+                continue
+            row_cy = block.top() + (row + 0.5) * _CAPTION_LINE + self._cap_scroll
+            baseline = self._baseline(font, row_cy)
+            p.setOpacity(base_opacity * alpha)
+            if row == 1 and self._cap_fading:
+                # The newest words are the ones that matter, so what does not fit loses its
+                # beginning. The fading word keeps its own room; a word wider than the whole
+                # row shows its end.
+                fm = self._fm_caption
+                fade_w = fm.horizontalAdvance(self._cap_fading)
+                fade_text = self._cap_fading
+                head, lead = "", 0
+                if fade_w >= room:
+                    fade_text = fm.elidedText(fade_text, Qt.TextElideMode.ElideLeft, room)
+                elif line:
+                    head = fm.elidedText(line, Qt.TextElideMode.ElideLeft,
+                                         room - fade_w - fm.horizontalAdvance(" "))
+                    lead = fm.horizontalAdvance(head + " ") if head else 0
+                if head:
+                    p.drawText(QPointF(self._snap(left), baseline), head)
+                p.setOpacity(base_opacity * alpha * max(0.0, min(1.0, self._cap_fade)))
+                p.drawText(QPointF(self._snap(left + lead), baseline), fade_text)
+            else:
+                # A line wider than the row is one oversized word (the wrap sees to that), and
+                # its end is what the speaker just said. Left elision keeps it on either row.
+                p.drawText(QPointF(self._snap(left), baseline),
+                           self._fm_caption.elidedText(line, Qt.TextElideMode.ElideLeft, room))
+        p.restore()
 
     def _baseline(self, font: QFont, cy: float) -> float:
         """Baseline that centres capital letters on ``cy`` (the font box is not symmetric)."""

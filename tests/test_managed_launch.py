@@ -573,7 +573,7 @@ class TestLogPrivacyAndOwnership(unittest.TestCase):
         import transcriber
         from config import Config
         from types import SimpleNamespace
-        session = SimpleNamespace(_error=None)
+        session = transcriber.GeminiLiveSession()
         task = SimpleNamespace(cancelled=lambda: False, exception=lambda: RuntimeError("HTTP 500 my secret"))
         output = io.StringIO()
         with patch.object(Config, "LOG_TRANSCRIPTS", False), patch.object(sys, "stdout", output):

@@ -605,6 +605,14 @@ class DictationApp:
             self.live_preview = self._live_committed
         self._notify_ui()
 
+    def _on_live_error(self, rejected: bool, epoch: Optional[int] = None) -> None:
+        """The Live call failed while recording: say so now. Capture goes on for batch STT."""
+        with self.state_lock:
+            if not self.live_active or (epoch is not None and epoch != self._live_epoch):
+                return
+            self.last_status = "live_key_rejected" if rejected else "live_unavailable"
+        self._notify_ui()
+
     def _live_transcribe(self, audio, allow_local_fallback: bool = True) -> str:
         provider = Config.effective_live_stt_provider()
         if provider == Config.effective_stt_provider():
@@ -1434,6 +1442,7 @@ class DictationApp:
                         session = GeminiLiveSession(
                             on_interim=lambda text: self._on_live_interim(text, epoch),
                             on_final=lambda text: self._on_live_final(text, epoch),
+                            on_error=lambda rejected: self._on_live_error(rejected, epoch),
                             client=getattr(self.transcriber, "_client", None),
                         )
                         self._live_session = session
@@ -1504,7 +1513,9 @@ class DictationApp:
             transcript = "" if incomplete else (final or self.live_preview or "").strip()
             if incomplete:
                 print("Live audio delivery incomplete; transcribing the full recording.")
-            self.process_and_paste(audio, False, "", False, transcript, live=True)
+            rejected = session is not None and getattr(session, "auth_rejected", False) is True
+            self.process_and_paste(audio, False, "", False, transcript, live=True,
+                                   **({"live_key_rejected": True} if rejected else {}))
         except Exception as e:
             from http_clients import error_summary
             print(f"!!! Live finish failed: {error_summary(e)}", file=sys.stderr)
@@ -1601,7 +1612,7 @@ class DictationApp:
         pre_context: str = "",
         keep_history: bool = False,
         pre_transcript: str = "",
-        *, live: bool = False,
+        *, live: bool = False, live_key_rejected: bool = False,
     ) -> None:
         """Worker: STT (and selection/image, in parallel for AI) → optional LLM → paste.
 
@@ -1643,7 +1654,8 @@ class DictationApp:
                 self._log_text("Live Transcript", raw_text,
                                f"committed in {time.time() - stt_started:.2f}s")
             else:
-                raw_text, stt_notice = self._run_stt(audio_source, use_llm, live, cycle)
+                raw_text, stt_notice = self._run_stt(audio_source, use_llm, live, cycle,
+                                                     live_key_rejected)
                 raw_text = raw_text or ""
                 self._log_text("Raw Transcript", raw_text, f"STT {time.time() - stt_started:.2f}s")
 
@@ -1868,7 +1880,8 @@ class DictationApp:
         self._raise_for(outcome)
         return outcome, stage
 
-    def _run_stt(self, audio_source, use_llm: bool, live: bool, cycle: _Cycle) -> tuple:
+    def _run_stt(self, audio_source, use_llm: bool, live: bool, cycle: _Cycle,
+                 live_key_rejected: bool = False) -> tuple:
         """Transcribe under STT_DEADLINE_SECONDS. Returns (text, notice).
 
         The pipeline owns the one local-Whisper fallback: cloud transcribers are
@@ -1878,15 +1891,24 @@ class DictationApp:
         deadline.
         """
         seconds = Config.STT_DEADLINE_SECONDS
+        # Google refused the Live key. A batch call with the same key is refused too, so
+        # use the normal speech provider, and go straight to local Whisper if that is Gemini.
+        skip_cloud = False
+        if live and live_key_rejected:
+            live = False
+            skip_cloud = Config.effective_stt_provider() == "gemini"
         if live:
             primary = lambda: self._live_transcribe(  # noqa: E731
                 audio_source, allow_local_fallback=False)
         else:
             primary = lambda: self._transcribe_for_pipeline(  # noqa: E731
                 audio_source, use_llm, allow_local_fallback=False)
-        outcome, stage = self._run_stage(primary, seconds, cycle, "odicto-stt")
-        if outcome == "done" and stage.error is None:
-            return stage.value, ""
+        if skip_cloud:
+            outcome, stage = "skipped", None
+        else:
+            outcome, stage = self._run_stage(primary, seconds, cycle, "odicto-stt")
+            if outcome == "done" and stage.error is None:
+                return stage.value, ""
         provider = (Config.effective_live_stt_provider() if live else
                     Config.effective_stt_provider())
         fallback = getattr(self._speech_backend(live), "local_fallback", None)
@@ -1895,7 +1917,10 @@ class DictationApp:
                 raise stage.error
             print(f"!!! Speech-to-text timed out after {seconds:g}s.", file=sys.stderr, flush=True)
             raise _Abort("stt_timeout")
-        if outcome == "done":
+        if outcome == "skipped":
+            print(f"{provider} STT skipped (API key rejected); using local Whisper", flush=True)
+            notice = ""
+        elif outcome == "done":
             # Cloud error: same silent local fallback the transcriber used to run.
             error = stage.error
             from http_clients import error_summary

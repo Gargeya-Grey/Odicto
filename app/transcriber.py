@@ -927,9 +927,14 @@ class GeminiLiveSession:
         on_interim: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[str], None]] = None,
         client=None,
+        on_error: Optional[Callable[[bool], None]] = None,
     ) -> None:
         self._on_interim = on_interim
         self._on_final = on_final
+        self._on_error = on_error
+        self._error_logged = False
+        self._activity_ended = threading.Event()
+        self._auth_rejected = threading.Event()
         self._sdk_client = client
         self._chunks: queue.Queue = queue.Queue(maxsize=128)
         self._stop = threading.Event()
@@ -947,6 +952,61 @@ class GeminiLiveSession:
     def needs_batch_fallback(self) -> bool:
         """Whether a live draft/final may omit audio from the complete recording."""
         return self._incomplete_audio.is_set() or bool(self._error)
+
+    @property
+    def auth_rejected(self) -> bool:
+        """Whether Google refused the API key. A batch call with it is refused too."""
+        return self._auth_rejected.is_set()
+
+    @staticmethod
+    def _is_auth_rejection(error: BaseException) -> bool:
+        """Did Google refuse the key itself? A 403 alone may only deny one model, so it
+        counts only when the message names the API key."""
+        link = error
+        for _ in range(4):  # the error, then the exceptions it was raised from
+            if link is None:
+                break
+            codes = {getattr(link, "code", None), getattr(link, "status_code", None),
+                     getattr(getattr(link, "response", None), "status_code", None)}
+            text = f"{getattr(link, 'status', '')} {getattr(link, 'message', '')} {link}".lower()
+            if 401 in codes or "unauthenticated" in text:
+                return True
+            # The Live socket closes with code 1008, "API key not valid".
+            if codes & {403, 1008} and "api key" in text:
+                return True
+            link = link.__cause__ or link.__context__
+        return False
+
+    def _log_error(self) -> None:
+        # Only the type, an HTTP status and our own note: provider text can echo the request.
+        note = " - API key rejected" if self.auth_rejected else ""
+        print(f"Gemini Live STT error: {self._error}{note}", flush=True)
+        self._error_logged = True
+
+    def _record_error(self, error: BaseException) -> None:
+        """Log at once and tell the app, so the HUD need not stay silent.
+
+        The first error stays the diagnostic. A later one can still show that the key
+        was refused, and then the app is told again.
+        """
+        rejected = self._is_auth_rejection(error)
+        first = not self._error
+        newly_rejected = rejected and not self._auth_rejected.is_set()
+        if not (first or newly_rejected):
+            return
+        if first:
+            self._error = error_summary(error)
+        if newly_rejected:
+            self._auth_rejected.set()
+        self._notify_error()
+
+    def _notify_error(self) -> None:
+        self._log_error()
+        if self._on_error is not None:
+            try:
+                self._on_error(self.auth_rejected)
+            except Exception:
+                pass
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -1000,8 +1060,8 @@ class GeminiLiveSession:
                     except RuntimeError:
                         pass  # loop finished between snapshot and cancellation
                 self._thread.join(timeout=0.5)
-        if self._error:
-            print(f"Gemini Live STT error: {self._error}", flush=True)
+        if self._error and not self._error_logged:
+            self._log_error()  # an error set without _record_error (older callers, tests)
         return " ".join(p for p in self._final_parts if p).strip()
 
     def _thread_main(self) -> None:
@@ -1010,16 +1070,15 @@ class GeminiLiveSession:
         except asyncio.CancelledError:
             pass  # stop() deliberately cancelled the session's own task
         except Exception as e:
-            self._error = error_summary(e)
-            print(f"Gemini Live STT thread failed: {self._error}", flush=True)
+            self._record_error(e)  # logs the error once
 
     def _observe_task(self, task) -> None:
         """Retrieve a finished task's exception so asyncio never prints it verbatim."""
         if task.cancelled():
             return
         error = task.exception()
-        if error is not None and not self._error:
-            self._error = error_summary(error)
+        if error is not None:
+            self._record_error(error)
 
     @staticmethod
     def _loop_exception(_loop, context) -> None:
@@ -1044,15 +1103,18 @@ class GeminiLiveSession:
     async def _run(self) -> None:
         _ensure_google_genai()
         if google_genai is None or google_genai_types is None:
-            self._error = "google-genai not installed"
+            self._error = "google-genai not installed"  # fixed text only: no provider text
+            self._notify_error()
             return
         api_key = Config.GEMINI_API_KEY.strip()
         if not api_key:
             self._error = "GEMINI_API_KEY empty"
+            self._notify_error()
             return
         client = self._sdk_client or get_genai_client(api_key)
         if client is None:
             self._error = "no Gemini client"
+            self._notify_error()
             return
         mode = Config.gemini_transcribe_mode()
         mode_enum = (
@@ -1087,20 +1149,26 @@ class GeminiLiveSession:
                 receiver = asyncio.create_task(self._recv_loop(session))
                 receiver.add_done_callback(self._observe_task)
                 await self._send_loop(session, mime)
+                # The service answers the end with the final, and that final can arrive
+                # before this send returns, so the end is marked first.
+                self._activity_ended.set()
                 try:
                     await session.send_realtime_input(
                         activity_end=google_genai_types.ActivityEnd()
                     )
                 except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(receiver), timeout=self._final_wait_s
-                    )
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # The service may never learn that the speech ended, so no text it
+                    # sends can be trusted to cover all of it.
+                    self._incomplete_audio.set()
+                # asyncio.wait never raises the receiver's own error (a TimeoutError from
+                # the stream included); _observe_task records it below.
+                await asyncio.wait({receiver}, timeout=self._final_wait_s)
+                if receiver.done():
+                    self._observe_task(receiver)
+                else:
                     receiver.cancel()
         except Exception as e:
-            self._error = error_summary(e)
+            self._record_error(e)
 
     async def _send_loop(self, session, mime: str) -> None:
         while True:
@@ -1120,7 +1188,7 @@ class GeminiLiveSession:
                     audio=google_genai_types.Blob(data=pcm, mime_type=mime)
                 )
             except Exception as e:
-                self._error = error_summary(e)
+                self._record_error(e)
                 break
         try:
             await session.send_realtime_input(audio_stream_end=True)
@@ -1128,27 +1196,58 @@ class GeminiLiveSession:
             pass
 
     async def _recv_loop(self, session) -> None:
-        async for response in session.receive():
-            server = getattr(response, "server_content", None)
-            if server is None:
-                continue
-            interim = getattr(server, "interim_input_transcription", None)
-            if interim is not None:
-                text = getattr(interim, "text", None)
-                if isinstance(text, str) and text.strip() and self._on_interim:
-                    try:
-                        self._on_interim(text.strip())
-                    except Exception:
-                        pass
-            final = getattr(server, "input_transcription", None)
-            if final is not None:
-                text = getattr(final, "text", None)
-                if isinstance(text, str) and text.strip():
-                    self._final_parts.append(text.strip())
-                    if self._on_final:
-                        try:
-                            self._on_final(text.strip())
-                        except Exception:
-                            pass
-            if self._stop.is_set() and getattr(server, "turn_complete", False):
-                break
+        """Pass on the live text, and return when the final for the whole speech is in.
+
+        The rule (docs/engineering-notes.md, "F7 stop wait"): the service answers
+        activity_end with one input_transcription that holds the whole utterance, so the
+        first final after the end is the authoritative text and ends the wait. Nothing
+        else marks the transcription complete: ``finished`` is never set, and
+        generation_complete and turn_complete belong to the model turn, which the SDK
+        says has no order relative to the transcription.
+
+        ``receive()`` returns at each end of a model turn. A turn can end before the
+        final, so this listens again until the final arrives or the caller's wait ends.
+        """
+        try:
+            while True:
+                messages = 0
+                async for response in session.receive():
+                    messages += 1
+                    if self._take(response):
+                        return
+                if messages == 0:  # the stream has ended
+                    if not self._stop.is_set():
+                        self._incomplete_audio.set()  # the rest of the speech was never sent
+                    return
+        except Exception as e:
+            if self._stop.is_set() and getattr(e, "code", None) == 1000:
+                # The SDK raises a normal close (1000) as an APIError. It is no error,
+                # but it came before the final (a final returns above), so the draft
+                # may lack the last words: transcribe the whole recording.
+                self._incomplete_audio.set()
+                return
+            raise
+
+    def _take(self, response) -> bool:
+        """Pass one message on. True when it holds the final after the end of the speech."""
+        server = getattr(response, "server_content", None)
+        if server is None:
+            return False
+        interim = getattr(server, "interim_input_transcription", None)
+        text = getattr(interim, "text", None) if interim is not None else None
+        if isinstance(text, str) and text.strip() and self._on_interim:
+            try:
+                self._on_interim(text.strip())
+            except Exception:
+                pass
+        final = getattr(server, "input_transcription", None)
+        text = getattr(final, "text", None) if final is not None else None
+        if not (isinstance(text, str) and text.strip()):
+            return False
+        self._final_parts.append(text.strip())
+        if self._on_final:
+            try:
+                self._on_final(text.strip())
+            except Exception:
+                pass
+        return self._activity_ended.is_set()
