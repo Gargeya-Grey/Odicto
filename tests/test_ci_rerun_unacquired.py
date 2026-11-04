@@ -1,7 +1,11 @@
 """CI re-runs only jobs that GitHub never gave a runner, and never hides a real failure."""
 import importlib.util
+import io
+import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 
 path = Path(__file__).resolve().parents[1] / "tools" / "ci_rerun_unacquired.py"
@@ -47,6 +51,12 @@ class TestDecide(unittest.TestCase):
         for jobs in ([failed, unacquired(2)], [failed]):
             with self.subTest(jobs=len(jobs)):
                 self.assertEqual("none", retry.decide(run(), jobs, {2}, 5).action)
+
+    def test_skipped_or_neutral_job_blocks_the_rerun(self):
+        for conclusion in ("skipped", "neutral"):
+            with self.subTest(conclusion=conclusion):
+                other = dict(passed(1, "platform-ubuntu-26.04"), conclusion=conclusion)
+                self.assertEqual("none", retry.decide(run(), [other, unacquired(2)], {2}, 5).action)
 
     def test_timed_out_job_with_steps_is_not_unacquired(self):
         timed = dict(passed(1, "platform-macos-26"), conclusion="timed_out")
@@ -100,10 +110,11 @@ class FakeGitHub:
 
     def jobs(self, run_id):
         ok = self.attempt > self.misses
-        return [passed(1, "platform-windows-2025"), passed(2, "platform-macos-26") if ok else unacquired(2)]
+        mac = 100 + self.attempt  # GitHub gives a re-run job a new id
+        return [passed(1, "platform-windows-2025"), passed(mac, "platform-macos-26") if ok else unacquired(mac)]
 
     def annotations(self, job_id):
-        return NOT_ACQUIRED if job_id == 2 else []
+        return NOT_ACQUIRED if job_id >= 100 else []
 
     def rerun_failed_jobs(self, run_id):
         self.reruns += 1
@@ -142,9 +153,75 @@ class TestDrive(unittest.TestCase):
         plan = self.drive(api, deadline=120)
         self.assertEqual("give_up", plan.action)
 
+    def test_lost_reply_after_an_accepted_rerun_is_not_sent_again(self):
+        api = FakeGitHub(misses=1)
+        accept = api.rerun_failed_jobs
+        def lost_reply(run_id):
+            accept(run_id)
+            raise TimeoutError("reply lost")
+        api.rerun_failed_jobs = lost_reply
+        self.assertEqual(("none", 1), (self.drive(api).action, api.reruns))
+
+    def test_refused_rerun_raises(self):
+        api = FakeGitHub(misses=1)
+        def refused(run_id):
+            raise RuntimeError("403 no failed jobs")
+        api.rerun_failed_jobs = refused
+        with self.assertRaises(RuntimeError):
+            self.drive(api)
+
+    def test_job_that_github_did_not_rerun_gives_up(self):
+        api = FakeGitHub(misses=99)
+        api.jobs = lambda run_id: [unacquired(100)]  # same id after the re-run
+        plan = self.drive(api)
+        self.assertEqual(("give_up", 1), (plan.action, api.reruns))
+        self.assertIn("did not re-run", plan.reason)
+
     def test_release_run_is_never_rerun(self):
         api = FakeGitHub(misses=1, path=".github/workflows/release.yml")
         self.assertEqual(("none", 0), (self.drive(api).action, api.reruns))
+
+
+class TestGitHubClient(unittest.TestCase):
+    def client(self, pages):
+        api = retry.GitHub("owner/repo", "synthetic-token", deadline=10**9)
+        api.request = lambda method, path: pages[int(path.rsplit("page=", 1)[1]) - 1]
+        return api
+
+    def test_jobs_reads_every_page(self):
+        first = [passed(i, f"job-{i}") for i in range(100)]
+        api = self.client([{"jobs": first, "total_count": 101}, {"jobs": [passed(101, "late")], "total_count": 101}])
+        self.assertEqual(101, len(api.jobs(7)))
+
+    def test_incomplete_job_list_refuses(self):
+        api = self.client([{"jobs": [passed(1, "a")], "total_count": 2}, {"jobs": [], "total_count": 2}])
+        with self.assertRaises(ValueError):
+            api.jobs(7)
+
+    def test_annotations_read_every_page(self):
+        notices = [{"message": "notice"}] * 100
+        api = self.client([notices, NOT_ACQUIRED])
+        self.assertTrue(retry.is_unacquired_annotation(api.annotations(2)))
+
+    def test_request_stops_at_the_deadline(self):
+        api = retry.GitHub("owner/repo", "synthetic-token", deadline=0, clock=lambda: 5)
+        with self.assertRaises(retry.DeadlineReached):
+            api.request("GET", "repos/owner/repo/actions/runs/7")
+
+
+class TestMain(unittest.TestCase):
+    def test_run_id_must_be_canonical(self):
+        for value in ("041883798347", "1e5", "-3", "12 ", ""):
+            with self.subTest(value=value), self.assertRaises(SystemExit),                     patch.dict(os.environ, {"GH_TOKEN": "synthetic-token"}),                     patch("sys.stderr", io.StringIO()):
+                retry.main(["--repository", "o/r", "--run-id", value])
+
+    def test_any_error_gives_up_with_a_summary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            summary = Path(folder) / "summary.md"
+            env = {"GH_TOKEN": "synthetic-token", "GITHUB_STEP_SUMMARY": str(summary)}
+            with patch.dict(os.environ, env), patch.object(retry, "drive", side_effect=OSError("down")),                     patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, retry.main(["--repository", "o/r", "--run-id", "7"]))
+            self.assertIn("give_up", summary.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
