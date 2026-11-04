@@ -162,11 +162,25 @@ def sheet_states(out: Path, scene: Scene, dpr: float) -> None:
 def sheet_styles(out: Path, scene: Scene, dpr: float = 2.0) -> None:
     v = scene.voice()
     cells = []
-    for wave, tex, edge, shape in itertools.product(*hl.HUD_STYLE_CHOICES.values()):
+    looks = [values for name, values in hl.HUD_STYLE_CHOICES.items() if name != "size"]
+    for wave, tex, edge, shape in itertools.product(*looks):
         style = hl.HudStyle(wave, tex, edge, shape)
         f = scene.frame(hl.Stem.LISTEN, "Listening", voice=v)
         cells.append((f"{wave} / {tex} / {edge} / {shape}", leaf_cell(scene, f, style, dpr)))
     sheet(out / "styles.png", cells, 4, scene.family)
+
+
+def sheet_sizes(out: Path, scene: Scene) -> None:
+    v = scene.voice()
+    w, h = 456.0, 144.0
+    cells = []
+    for size, scale in hl.HUD_SIZE_SCALE.items():
+        style = hl.HudStyle(size=size)
+        for dpr in (1.0, 2.0):
+            f = scene.frame(hl.Stem.LISTEN, "Listening", voice=v)
+            f.cx, f.bottom = w / 2 / scale, (h - 24 * scale) / scale   # design px; the bottom gap stays
+            cells.append((f"size {size} at {dpr:g}x", leaf_cell(scene, f, style, dpr, w=w, h=h)))
+    sheet(out / "sizes.png", cells, 2, scene.family)
 
 
 def sheet_scales(out: Path, scene: Scene) -> None:
@@ -265,6 +279,7 @@ def main() -> int:
     for dpr in (1.0, 2.0):
         sheet_states(args.out, scene, dpr)
     sheet_styles(args.out, scene)
+    sheet_sizes(args.out, scene)
     sheet_scales(args.out, scene)
     sheet_motion(args.out, scene)
     sheet_backdrops(args.out, scene)

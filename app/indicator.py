@@ -445,10 +445,15 @@ class DictationIndicator(QWidget):
         # stop the HUD.
         try:
             self._style = HudStyle(waveform=Config.HUD_WAVEFORM, texture=Config.HUD_TEXTURE,
-                                   edge=Config.HUD_EDGE, shape=Config.HUD_SHAPE)
+                                   edge=Config.HUD_EDGE, shape=Config.HUD_SHAPE,
+                                   size=Config.HUD_SIZE)
         except ValueError as e:
             print(f"[HUD] HUD style not used, default leaf drawn: {e}", flush=True)
             self._style = HudStyle()
+        # The size scales the whole HUD: the window and the canvas margin grow by it; every
+        # layout number stays in design pixels and the painter scales the drawing.
+        self._scale = self._style.scale
+        self._bleed = round(_BLEED * self._scale)
 
         # Live caption: the words arrive in chunks; they are revealed smoothly.
         self._cap_words: list[str] = []
@@ -484,7 +489,7 @@ class DictationIndicator(QWidget):
         self._droop_from: float = hl.DROOP
         self._shown_state: GuiState = GuiState.BOOTING  # painted while leaving
         self._label_cache: str = ""
-        self._dpr: float = 1.0          # device pixel ratio, read once per paint
+        self._dpr: float = 1.0          # device pixels per design pixel (device ratio x size), per paint
         self._success_since: float = 0.0
 
         # --- Geometry ---
@@ -677,19 +682,19 @@ class DictationIndicator(QWidget):
         h = self._live_h if self._is_live_layout() else self._compact_h
         return w, float(h)
 
-    @staticmethod
-    def _canvas_size(label_w: float, h: float) -> tuple[int, int]:
+    def _canvas_size(self, label_w: float, h: float) -> tuple[int, int]:
         """Window size that holds the leaf (and the card) with the painter's shadow around it.
 
         Sizes round up to a multiple of 4 px, so the centre falls on a whole device pixel
         at 1x, 1.5x and 2x. At 1.25x it can fall on a half pixel; the painter snaps the
-        stem and the label to whole device pixels, so nothing blurs.
+        stem and the label to whole device pixels, so nothing blurs. The margin is whole
+        pixels (``_bleed``), so the leaf's bottom edge lands on a whole pixel too.
         """
         inner = hl.leaf_width(label_w)
         if h > _COMPACT_H:
             inner = max(inner, float(hl.CARD_MIN_W))
-        cw = -(-(int(math.ceil(inner)) + _BLEED * 2) // 4) * 4
-        ch = -(-(int(math.ceil(h)) + _BLEED * 2) // 4) * 4
+        cw = -(-(int(math.ceil(inner * self._scale)) + self._bleed * 2) // 4) * 4
+        ch = -(-(int(math.ceil(h * self._scale)) + self._bleed * 2) // 4) * 4
         return cw, ch
 
     def _sync_geometry(self) -> None:
@@ -802,7 +807,7 @@ class DictationIndicator(QWidget):
             return
         geo = screen.availableGeometry()
         x = geo.x() + (geo.width() - self._canvas_w) // 2
-        y = geo.y() + geo.height() - _BOTTOM_GAP - (self._canvas_h - _BLEED)
+        y = geo.y() + geo.height() - _BOTTOM_GAP - (self._canvas_h - self._bleed)
         self.move(x, y)
 
     def _apply_win32_exstyles(self) -> None:
@@ -1254,8 +1259,8 @@ class DictationIndicator(QWidget):
         else:
             entered = self._enter_at
         return LeafFrame(
-            cx=self._canvas_w / 2.0,
-            bottom=float(self._canvas_h - _BLEED),
+            cx=self._canvas_w / 2.0 / self._scale,
+            bottom=(self._canvas_h - self._bleed) / self._scale,
             label_w=self._w_tw.value(now),
             opening=self._opening(now),
             stem=self._stem,
@@ -1275,7 +1280,7 @@ class DictationIndicator(QWidget):
         if opening.fade <= 0.0:
             return
 
-        self._dpr = self.devicePixelRatioF() or 1.0
+        self._dpr = hl.pixel_ratio(self.devicePixelRatioF() or 1.0, self._style)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -1308,6 +1313,7 @@ class DictationIndicator(QWidget):
         room = int(rect.width() - 2 * _CAPTION_PAD)
         font = self._font_caption
         p.save()
+        p.scale(self._scale, self._scale)
         p.setFont(font)
         p.setClipRect(block, Qt.ClipOperation.IntersectClip)
         if not self._cap_lines:

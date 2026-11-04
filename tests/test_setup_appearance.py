@@ -15,9 +15,11 @@ from unittest import mock
 import config
 import setup_web
 
-KEYS = ("HUD_WAVEFORM", "HUD_TEXTURE", "HUD_EDGE", "HUD_SHAPE")
-DEFAULTS = {"HUD_WAVEFORM": "reach", "HUD_TEXTURE": "veins", "HUD_EDGE": "rim", "HUD_SHAPE": "leaf"}
-OTHER = {"HUD_WAVEFORM": "stream", "HUD_TEXTURE": "plain", "HUD_EDGE": "soft", "HUD_SHAPE": "capsule"}
+KEYS = ("HUD_WAVEFORM", "HUD_TEXTURE", "HUD_EDGE", "HUD_SHAPE", "HUD_SIZE")
+DEFAULTS = {"HUD_WAVEFORM": "reach", "HUD_TEXTURE": "veins", "HUD_EDGE": "rim", "HUD_SHAPE": "leaf",
+            "HUD_SIZE": "1x"}
+OTHER = {"HUD_WAVEFORM": "stream", "HUD_TEXTURE": "plain", "HUD_EDGE": "soft", "HUD_SHAPE": "capsule",
+         "HUD_SIZE": "1.5x"}
 
 
 class _Roots(unittest.TestCase):
@@ -91,6 +93,35 @@ class TestAppearancePage(_Roots):
         self.assertEqual(self._hidden(page, "HUD_TEXTURE"), "veins")
         self.assertEqual(self._hidden(page, "HUD_EDGE"), "rim")
         self.assertEqual(self._hidden(page, "HUD_SHAPE"), "capsule")
+
+    def test_each_size_seeds_the_third_segment_control(self) -> None:
+        for index, size in enumerate(config.HUD_CHOICES["HUD_SIZE"]):
+            self._write_env({"HUD_SIZE": size})
+            page = setup_web._page()
+            self.assertEqual(self._hidden(page, "HUD_SIZE"), size)
+            self.assertEqual(_selected_values(page, "HUD_SIZE"), [(size, True)])
+            self.assertRegex(page, r'data-hud-key="HUD_SIZE" style="--n:3; --i:%d"' % index)
+
+    def test_the_size_control_has_three_labelled_segments(self) -> None:
+        page = setup_web._page()
+        self.assertIn("<h3>Size</h3>", page)
+        names = re.findall(r'<span class="gear-name">([^<]+)</span>', _segment_html(page, "HUD_SIZE"))
+        self.assertEqual(names, ["1x", "1.3x", "1.5x"])
+
+    def test_a_hand_edited_size_is_normalised_and_a_bad_one_shows_one_x(self) -> None:
+        self._write_env({"HUD_SIZE": " 1.3X "})
+        self.assertEqual(self._hidden(setup_web._page(), "HUD_SIZE"), "1.3x")
+        for bad in ("2x", "1.3", "huge", ""):
+            self._write_env({"HUD_SIZE": bad})
+            page = setup_web._page()
+            self.assertEqual(self._hidden(page, "HUD_SIZE"), "1x", bad)
+            self.assertEqual(_selected_values(page, "HUD_SIZE"), [("1x", True)], bad)
+
+    def test_the_preview_follows_the_size_choice(self) -> None:
+        page = setup_web._page()
+        self.assertIn("HUD_SIZE:'size'", page)
+        self.assertIn("const LEAF_SIZE = {'1x':1, '1.3x':1.3, '1.5x':1.5};", page)
+        self.assertIn("LEAF_VIEW.W / 2 / size, LEAF_VIEW.BOTTOM / size", page)
 
     def test_every_option_has_a_segment_and_no_token_is_left(self) -> None:
         page = setup_web._page()
@@ -193,6 +224,25 @@ class TestAppearanceSave(_Roots):
         self.assertEqual(stored.get("HUD_TEXTURE"), "plain")
         self.assertIn(stored.get("HUD_WAVEFORM", ""), ("", DEFAULTS["HUD_WAVEFORM"]))
 
+    def test_a_size_is_written_normalised_and_a_bad_size_is_not(self) -> None:
+        self.assertEqual(self._save({"HUD_SIZE": " 1.3X "}), 200)
+        self.assertEqual(self._stored().get("HUD_SIZE"), "1.3x")
+        for bad in ("2x", "1.4x", "1.3", "x", "1.3x1.5x"):
+            self.assertEqual(self._save({"HUD_SIZE": bad}), 200)
+            self.assertEqual(self._stored().get("HUD_SIZE"), "1.3x", bad)
+            self.assertIn("HUD_SIZE=1.3x", self._env_text().splitlines())
+        self.assertEqual(self._save({"HUD_SIZE": "1x"}), 200)
+        self.assertEqual(self._stored().get("HUD_SIZE"), "1x")
+
+    def test_a_size_with_a_newline_writes_nothing(self) -> None:
+        for payload in ("1.5x\nLLM_PROVIDER=meta", "1.3x\r\nSETUP_PORT=1"):
+            with self.subTest(payload=payload):
+                self.assertEqual(self._save({"HUD_SIZE": payload}), 200)
+                text = self._env_text()
+                self.assertNotIn("LLM_PROVIDER=meta", text)
+                self.assertNotIn("SETUP_PORT=1", text)
+                self.assertIn(self._stored().get("HUD_SIZE", ""), ("", "1x"))
+
     def test_invalid_value_keeps_the_saved_one(self) -> None:
         self.assertEqual(self._save(OTHER), 200)
         self.assertEqual(self._save({"HUD_EDGE": "glow", "HUD_SHAPE": ""}), 200)
@@ -215,10 +265,12 @@ class TestAppearanceSave(_Roots):
                     self.assertIn(stored.get(key, ""), ("", DEFAULTS[key]), key)
 
     def test_merge_env_rejects_an_invalid_value_directly(self) -> None:
-        setup_web.merge_env({"HUD_SHAPE": "blob", "HUD_EDGE": "soft"})
+        setup_web.merge_env({"HUD_SHAPE": "blob", "HUD_EDGE": "soft", "HUD_SIZE": "2x"})
         stored = self._stored()
         self.assertNotIn("blob", self._env_text())
+        self.assertNotIn("2x", self._env_text())
         self.assertEqual(stored.get("HUD_EDGE"), "soft")
+        self.assertEqual(stored.get("HUD_SIZE"), "1x")
 
 
 if __name__ == "__main__":

@@ -1221,7 +1221,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
 
           <section class="sect" aria-labelledby="h_appearance_preview">
             <div class="sect-label"><h2 id="h_appearance_preview">Preview</h2><span class="sect-note">Updates as you choose</span></div>
-            <div class="leaf-stage"><canvas id="leaf_preview" width="450" height="144" role="img" aria-label="Preview of the dictation pill"></canvas></div>
+            <div class="leaf-stage"><canvas id="leaf_preview" width="585" height="168" role="img" aria-label="Preview of the dictation pill"></canvas></div>
           </section>
 
           <section class="sect" aria-labelledby="h_appearance_style">
@@ -1291,6 +1291,27 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                     <button type="button" class="gear__HUD_SHAPE_1_SEL__" data-value="capsule" aria-pressed="__HUD_SHAPE_1_ARIA__">
                       <span class="gear-name">Capsule</span>
                       <span class="gear-hint">round ends</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li class="row block">
+                <div class="row-text"><h3>Size</h3><p>How large the pill is on your screen.</p></div>
+                <div class="gearbox">
+                  <input type="hidden" name="HUD_SIZE" id="HUD_SIZE" value="__HUD_SIZE__">
+                  <div class="segmented hud-seg" role="group" aria-label="Size" data-hud-key="HUD_SIZE" style="--n:3; --i:__HUD_SIZE_I__">
+                    <span class="seg-knob" aria-hidden="true"></span>
+                    <button type="button" class="gear__HUD_SIZE_0_SEL__" data-value="1x" aria-pressed="__HUD_SIZE_0_ARIA__">
+                      <span class="gear-name">1x</span>
+                      <span class="gear-hint">normal</span>
+                    </button>
+                    <button type="button" class="gear__HUD_SIZE_1_SEL__" data-value="1.3x" aria-pressed="__HUD_SIZE_1_ARIA__">
+                      <span class="gear-name">1.3x</span>
+                      <span class="gear-hint">a little larger</span>
+                    </button>
+                    <button type="button" class="gear__HUD_SIZE_2_SEL__" data-value="1.5x" aria-pressed="__HUD_SIZE_2_ARIA__">
+                      <span class="gear-name">1.5x</span>
+                      <span class="gear-hint">larger</span>
                     </button>
                   </div>
                 </div>
@@ -2922,13 +2943,14 @@ function initLifecycle() {
 // The constants below must stay equal to the Qt painter's (a parity test compares them).
 const LEAF_K = {H:36, STEM_H:32, STEM_W:2, VOICE_W:84, STEM_GAP:8, TIP:58, TEXT_GAP:12, RIGHT_INSET:18, ROWS:5, PIX:2, PITCH:3, ROW_PITCH:4, HIST:24};
 const LEAF_C = {jade:[142,220,187], warn:[242,194,122], danger:[242,163,155], ink:[231,229,223]};
-const LEAF_VIEW = {W:300, H:96, ZOOM:1.5, BOTTOM:70};
+const LEAF_VIEW = {W:390, H:112, ZOOM:1.5, BOTTOM:70};
+const LEAF_SIZE = {'1x':1, '1.3x':1.3, '1.5x':1.5};
 const LEAF_TIME = {ENTER:0.62, LISTEN:3, WORK:1.2, DONE:1.2, EXIT:0.5, GAP:0.5};
 const LEAF_GRAIN_PLAIN = 0.4;
 const LEAF_FONT = '500 13px "Instrument Sans", system-ui, sans-serif';
 const LEAF_WORDS = {listen:'Listening', work:'Transcribing', done:'Done'};
-const LEAF_KEYS = {HUD_WAVEFORM:'wave', HUD_TEXTURE:'tex', HUD_EDGE:'edge', HUD_SHAPE:'shape'};
-const LEAF = {ready:false, still:false, raf:0, opt:{wave:'reach', tex:'veins', edge:'rim', shape:'leaf'},
+const LEAF_KEYS = {HUD_WAVEFORM:'wave', HUD_TEXTURE:'tex', HUD_EDGE:'edge', HUD_SHAPE:'shape', HUD_SIZE:'size'};
+const LEAF = {ready:false, still:false, raf:0, opt:{wave:'reach', tex:'veins', edge:'rim', shape:'leaf', size:'1x'},
   canvas:null, ctx:null, dpr:0, sc:1, inst:null, t0:0, last:0, cycle:-1, pattern:null};
 
 function leafBez(x1, y1, x2, y2) {
@@ -3200,17 +3222,19 @@ function leafSize() {
   c.style.width = (LEAF_VIEW.W * LEAF_VIEW.ZOOM) + 'px'; c.style.height = (LEAF_VIEW.H * LEAF_VIEW.ZOOM) + 'px';
   LEAF.pattern = null;
 }
+function leafScale() { return LEAF.dpr * LEAF_VIEW.ZOOM * (LEAF_SIZE[LEAF.opt.size] || 1); } // device px per design px
 function leafPaint(now) {
-  var ctx = LEAF.ctx;
-  LEAF.sc = LEAF.dpr * LEAF_VIEW.ZOOM;
-  ctx.setTransform(LEAF.sc, 0, 0, LEAF.sc, 0, 0);
-  ctx.clearRect(0, 0, LEAF_VIEW.W, LEAF_VIEW.H);
-  leafDraw(ctx, LEAF.inst, now, LEAF_VIEW.W / 2, LEAF_VIEW.BOTTOM);
+  var ctx = LEAF.ctx, size = LEAF_SIZE[LEAF.opt.size] || 1;
+  LEAF.sc = leafScale();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, LEAF.canvas.width, LEAF.canvas.height);
+  ctx.setTransform(LEAF.sc, 0, 0, LEAF.sc, 0, 0); // the size scales the drawing; the bottom and the centre stay
+  leafDraw(ctx, LEAF.inst, now, LEAF_VIEW.W / 2 / size, LEAF_VIEW.BOTTOM / size);
 }
 function leafPaintStill() { // one Listening frame, fully open, with a fixed voice
   var now = 1.1, inst = leafInst(0);
   inst.enterAt = now - 10; inst.stateAt = now - 10; LEAF.inst = inst;
-  leafSize(); LEAF.sc = LEAF.dpr * LEAF_VIEW.ZOOM;
+  leafSize(); LEAF.sc = leafScale();
   leafStep(inst, now, 0); leafPaint(now);
 }
 function leafTimeline(now) {

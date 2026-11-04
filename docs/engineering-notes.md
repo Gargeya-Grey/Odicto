@@ -155,7 +155,7 @@ label. `app/hud_leaf.py` paints it. `LeafPainter.paint(p, LeafFrame, HudStyle)` 
 shadow, the body, the voice, the label and the AI mark in one call. The module is pure: no
 widget, no timer, no config. `app/indicator.py` owns the rest: the state and the stem it maps
 to (`orb_kind`, `STEM_FOR_ORB`), the clock, the label width spring, the voice envelope, the F7
-caption text and the window. The four `HUD_*` keys choose the style (`HudStyle`); the widget
+caption text and the window. The five `HUD_*` keys choose the style (`HudStyle`); the widget
 reads them once.
 
 The pill no longer mirrors the Odicto Mobile voice bubble. The phone app is unchanged. The
@@ -198,6 +198,19 @@ gives way to local Whisper, because a batch call with the same key fails too), s
 the pipeline cannot disagree. Captions already on the card stay, and the message shows only when
 the card has no caption text.
 
+`HUD_SIZE` (1x, 1.3x, 1.5x) scales the whole HUD without a second set of numbers. Every constant
+in `hud_leaf.py` stays in design pixels. `LeafPainter.paint` and `paint_card` draw under
+`QPainter.scale(s)` and take `pixel_ratio(device ratio, style)` (device ratio times `s`) as the ratio
+for every snap and every layer image. A layer image is `dpr x s` device pixels per design pixel,
+so under the scale it maps to the device 1:1. The pixel voice therefore still lands on whole
+device pixels at any size and display scale (tested at 1.3x and 1.5x on 1, 1.25, 1.5 and 2).
+The caches key on
+the ratio and the size. The widget builds the frame in design pixels (`cx` and `bottom` divided by
+`s`) and `_paint_caption` scales its own text and rows, so the caption card grows with the leaf.
+The grain, the shadow blur and the card radius scale with it, so a larger HUD is the same HUD
+enlarged, not a different look. Measured at 1.5x on a 1.5 display: entry frames about 3 ms,
+settled frames about 0.7 ms (1x: about 2.3 ms and 0.5 ms), against a 16.7 ms budget.
+
 Three things in the widget look odd and are on purpose:
 
 - **`_glyph_fade` is the stem's timeline** (0 to 1 over `_STEM_SETTLE_S`), kept under the name
@@ -216,7 +229,9 @@ widens). The widget does not hold the width back until the word has faded in, as
 did.
 
 The window is a fixed canvas. It holds the leaf, the painter's shadow (up to 28 px on every
-side, so `_BLEED` is 32, a multiple of 4) and the entry rise. In the live layout it also holds
+side, so `_BLEED` is 32, a multiple of 4) and the entry rise. `HUD_SIZE` multiplies the canvas
+and its margin by the scale (`_bleed` is `round(_BLEED * scale)`, whole pixels, so the leaf's
+bottom edge stays on a whole pixel and keeps its distance from the screen bottom). In the live layout it also holds
 the card above the leaf. The window grows upward: the leaf's bottom edge keeps its screen
 position (`_BOTTOM_GAP`), so the leaf never jumps when captions come or go.
 

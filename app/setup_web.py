@@ -116,6 +116,7 @@ EDITABLE_KEYS = {
     "HUD_TEXTURE",
     "HUD_EDGE",
     "HUD_SHAPE",
+    "HUD_SIZE",
 }
 
 _MASKED = "••••••••••••••••"

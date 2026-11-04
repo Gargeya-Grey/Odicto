@@ -76,24 +76,28 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # 2026-11-04, HUD polish (Plain texture): the Plain subtitle reads "no veins, faint grain" and the preview draws
 # the Plain grain at 0.4 (LEAF_GRAIN_PLAIN). Before rebasing, the previous template reproduced every old golden,
 # and every state changed by the same lines and nothing else (compare output kept in the hand-back).
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '157ce2302475ad6ad9e34c67eaa58e2c5e4dcb4c22501ff4776f0739e002554c',
- 'provider_meta': 'b8b0d86889ef4ed0738b1771b2f5ae2933b14e863ae29d5a153464364bda2068',
- 'provider_openrouter': '84e6278c3dc18a39a26f330c9c56b5c3535a3f711aa8300e642e52b1f99e8698',
- 'provider_gemini': 'edffbc07276eeec5578c8f631af1596bc90168512793730ded4ddb1c82fbb65d',
- 'provider_ollama': 'd245181a8a2d4861906b672f775a57dbb9c4260eff616336ba8f4e65bc25da2a',
- 'provider_none': '157ce2302475ad6ad9e34c67eaa58e2c5e4dcb4c22501ff4776f0739e002554c',
- 'provider_groq': '225b40eb76fba709eecf46fc0fb395badbeb5e561d0e74363981d558e0f6a217',
- 'polish_enabled': '81014950a1fcdae8ef5509fbed0d4cba0585d708c68420cf70bda605882e46d2',
- 'history_and_custom': '6b8f60ea3494031e29f64bc8137583d6b897d3cfbd524971f7646870a529b55c',
- 'hotkey_short': 'f56ac5b0f6b70cb07273790a3d9493039364da02f8973127376041e6038f1e39',
- 'stt_gemini': 'ad7ddc5d0192ba30a8e5d2758c6fe90a3de5c43102afc6eaee64f750a5bce698',
- 'prompt_from_file': '19fd8f1d38fef0ab4241806a339de4bfedf684af6cdb34e5df55a1283f8b37fd',
- 'prompt_from_inline_env': '4f6ca07018640654fbb469c6319fade393ecf243c0710cb919ac5455f71b4c81',
- 'msg_ok': '1009cd4edc6c446f638b418df60e4225fc3973636e8a5dcb0d8dac111518be23',
- 'msg_err': '63b2ca58ac5e10ebd34a8ab96b3fa9a571b47051f0df0dcbcd41a996fcac64e0',
- 'msg_neutral': '87601904d53aa98a3dd236e145f14a4db579005b0eeef7c49d96f8c355eb0fe6',
- 'admin_on': '7976ce690362d41c2c337931279b7a52248ec929b5b827989d4fae38db3b176d',
- 'admin_unavailable': '20585c084af6b4280732b8df847075d24569df0c2f668e8d8b5c458d8a849b7f'}
+# 2026-11-04, HUD polish (HUD_SIZE): the Appearance view gained a three-way Size control and the preview
+# follows it (a larger preview canvas holds the 1.5x leaf and its shadow). Before rebasing, the previous template
+# reproduced every old golden, and every state changed by the same lines and nothing else (compare output kept in
+# the hand-back).
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '2b653861217421b4d85ca6161b552c5e74db55a4067ffdc6a650758e2a3b856a',
+ 'provider_meta': 'c98a9a051c122f69e27bdc4fcdd6bdb5b98cca4e3a741dbeadb19639bf645657',
+ 'provider_openrouter': '47fbd2e2bb49e4996e6ce7cb8df78f675de9046d4f68a599a6ba68028b471971',
+ 'provider_gemini': '0700838676f9d452084c7891aff80e40cff88b39c492603cc093e11cff27e5ea',
+ 'provider_ollama': '809d365e29fd0e7c0127f6a0330ccc63f3a73e800a339d206cdaaffb44b8a4e6',
+ 'provider_none': '2b653861217421b4d85ca6161b552c5e74db55a4067ffdc6a650758e2a3b856a',
+ 'provider_groq': '33e4a57ce9dff235a00f12490161980b47a3f14f083b271040948ee5e1bb740c',
+ 'polish_enabled': 'bd38f0608a39e3253cb7efc9130d928777c040bf7a4fb0a86f6df3ab4aa1d233',
+ 'history_and_custom': 'd3c7f0ca1bf5501831435f57de597b155adc7dade9eb879024b05c486da35969',
+ 'hotkey_short': '43d02bd045f7fceb95997ad5c11bd3bcd8ba983b54abc400dc2823e9280f641d',
+ 'stt_gemini': '61d671c0a6951c20d386bf1bf5ebc5a8a4ef2148ec0c1e6407a3abb7251277ad',
+ 'prompt_from_file': 'a33ee75c43fcdc5944b9d50ef1180f83863519a1a59373fbd85ecd73489f9ca7',
+ 'prompt_from_inline_env': '62e3a3cd7c99a8314a88a6836221132b4086e1b576a907d2c65cea990969ba01',
+ 'msg_ok': 'fb519e6a75c4426bae364b734d04193302ef8bd7d2972f841177ee116d6165c8',
+ 'msg_err': '7cd3bd763f5a46d31b754aac37fa62e7f34fa8cc504e9aaa4b201069e145b8c9',
+ 'msg_neutral': '9e49c3d67a7f74a6e67d3fa716e6290801f9daac782b11ee915d0a1181507fc8',
+ 'admin_on': '3db6103dbb6c9cf834c57405ae2ec3151d6d2c5aa095484ce42e3197adf1d06e',
+ 'admin_unavailable': 'e8f1c18ba321b48c02ec7713ba223e754a000e7dcca3f9d0b5ec158322554be6'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {

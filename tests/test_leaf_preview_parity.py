@@ -80,6 +80,10 @@ class TestLeafPreviewParity(unittest.TestCase):
         self.assertEqual(_literal(r"droop:\s*([0-9.]+)", "tip droop"), hud_leaf.DROOP)
         self.assertEqual(_literal(r"\(1 - rise\) \* ([0-9.]+)", "seed rise"), hud_leaf.RISE_PX)
 
+    def test_the_preview_sizes_are_the_painter_scales(self) -> None:
+        found = {k: float(v) for k, v in re.findall(r"'([0-9.]+x)'\s*:\s*([0-9.]+)", _table("LEAF_SIZE"))}
+        self.assertEqual(found, hud_leaf.HUD_SIZE_SCALE)
+
     def test_the_preview_plain_grain_is_the_painter_grain(self) -> None:
         self.assertEqual(_literal(r"const LEAF_GRAIN_PLAIN = ([0-9.]+);", "plain grain"),
                          hud_leaf.PLAIN_GRAIN)
