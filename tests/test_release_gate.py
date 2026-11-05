@@ -277,6 +277,81 @@ class TestReleaseGateWaitsForRunnerRetry(unittest.TestCase):
                                 log=lambda *_: None)
         self.assertEqual("pass", result["result"])
 
+    def run_check(self, sha, api, wait_seconds=6000):
+        now, slept = [0.0], []
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+        with patch.object(gate, "api", side_effect=api):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=wait_seconds,
+                                poll_seconds=60, sleep=sleep, clock=lambda: now[0], log=lambda *_: None)
+        return result, slept
+
+    def test_transient_error_on_first_and_last_read_is_retried(self):
+        import urllib.error
+        for where in ("workflows/ci.yml", "runs?"):
+            with self.subTest(where=where):
+                sha, states = self.states("ok")
+                api = self.fake_api(states)
+                calls = {"n": 0}
+                def flaky(path, token):
+                    if where in path:
+                        calls["n"] += 1
+                        last_runs_read = where == "runs?" and calls["n"] == 2
+                        if (where != "runs?" and calls["n"] == 1) or last_runs_read:
+                            raise urllib.error.HTTPError(path, 502, "Bad Gateway", {}, None)
+                    return api(path, token)
+                result, _ = self.run_check(sha, flaky)
+                self.assertEqual("pass", result["result"])
+
+    def test_bad_token_fails_at_once(self):
+        import urllib.error
+        sha, _ = self.states("ok")
+        def denied(path, token):
+            raise urllib.error.HTTPError(path, 401, "Bad credentials", {}, None)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_check(sha, denied)
+
+    def test_known_failure_blocks_even_when_annotations_fail(self):
+        sha, states = self.states("running")
+        run, jobs = states[0]
+        jobs[0] = dict(jobs[0], conclusion="cancelled", runner_name="", steps=[])  # unacquired shape
+        jobs[1] = dict(jobs[1], conclusion="failure")                               # real failure
+        api = self.fake_api(states)
+        def no_annotations(path, token):
+            if "/annotations" in path:
+                raise OSError("annotations down")
+            return api(path, token)
+        slept = []
+        with patch.object(gate, "api", side_effect=no_annotations), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, sleep=slept.append,
+                       clock=lambda: 0.0, log=lambda *_: None)
+        self.assertEqual([], slept)
+
+    def test_missing_attempt_number_fails_closed(self):
+        sha, states = self.states("ok")
+        states[0][0].pop("run_attempt")
+        with self.assertRaises(ValueError):
+            self.run_check(sha, self.fake_api(states))
+
+    def test_new_attempt_of_the_same_run_is_judged_instead(self):
+        sha, states = self.states("ok")
+        good, jobs = states[0]
+        rerun = dict(good, run_attempt=2, conclusion="failure")
+        bad_jobs = [dict(job, conclusion="failure") for job in jobs]
+        reads = [0]
+        def api(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "runs?" in path:
+                reads[0] += 1
+                return {"workflow_runs": [good if reads[0] == 1 else rerun]}
+            if "/annotations" in path:
+                return []
+            return {"jobs": jobs if reads[0] == 1 else bad_jobs, "total_count": len(jobs)}
+        with self.assertRaises(ValueError):
+            self.run_check(sha, api)
+
     def test_wait_is_bounded(self):
         sha, states = self.states(*(["running"] * 500))
         with self.assertRaises(ValueError):

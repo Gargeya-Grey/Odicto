@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -49,22 +50,33 @@ def pending_reason(run: dict, jobs: list[dict], annotations) -> str | None:
     while CI is still running with no real failure yet, or while the only non-passing jobs
     are ones GitHub gave no runner and the retry workflow still has attempts left. A finished
     job that really failed is judged at once, even while other jobs still run."""
-    def unacquired(job):
-        return (retry_rules.has_unacquired_shape(job)
-                and retry_rules.is_unacquired_annotation(annotations(job["id"])))
     finished_bad = [job for job in jobs
                     if job.get("status") == "completed" and job.get("conclusion") != "success"]
+    # A failure whose shape alone proves it ran is judged before any annotation is read.
+    if any(not retry_rules.has_unacquired_shape(job) for job in finished_bad):
+        return None
+    unacquired_ids = {job["id"] for job in finished_bad
+                      if retry_rules.is_unacquired_annotation(annotations(job["id"]))}
+    if len(unacquired_ids) != len(finished_bad):
+        return None
     if run.get("status") != "completed":
-        if any(not unacquired(job) for job in finished_bad):
-            return None
         return f"CI run {run.get('id')} is still {run.get('status')}"
     if run.get("conclusion") == "success":
         return None
-    unacquired_ids = {job["id"] for job in finished_bad if unacquired(job)}
     plan = retry_rules.decide(run, jobs, unacquired_ids, retry_rules.MAX_ATTEMPTS)
     if plan.action == "rerun":
         return f"CI run {run.get('id')}: {plan.reason}; waiting for the CI runner retry"
     return None
+
+
+def is_transient(error: Exception) -> bool:
+    """Network errors, timeouts, 5xx and rate limits are retried; 401, 403, 404 are not."""
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code == 429 or error.code >= 500:
+            return True
+        headers = error.headers or {}
+        return error.code == 403 and headers.get("x-ratelimit-remaining") == "0"
+    return isinstance(error, OSError)
 
 
 def api(path: str, token: str):
@@ -82,10 +94,10 @@ def check(repository: str, sha: str, token: str, wait_seconds: float = 0, poll_s
         raise ValueError("Invalid repository")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Release SHA must be a full commit SHA")
-    prefix = f"repos/{repository}/actions"
-    workflow = api(prefix + "/workflows/ci.yml", token)
-    query = urllib.parse.urlencode({"head_sha": sha, "branch": "main", "event": "push", "per_page": 100})
     deadline = clock() + wait_seconds
+    prefix = f"repos/{repository}/actions"
+    query = urllib.parse.urlencode({"head_sha": sha, "branch": "main", "event": "push", "per_page": 100})
+    workflow = None
 
     def newest_run():
         runs = api(prefix + "/workflows/ci.yml/runs?" + query, token)["workflow_runs"]
@@ -107,6 +119,8 @@ def check(repository: str, sha: str, token: str, wait_seconds: float = 0, poll_s
 
     while True:
         try:
+            if workflow is None:
+                workflow = api(prefix + "/workflows/ci.yml", token)
             run = newest_run()
             if run is None:
                 if clock() >= deadline:
@@ -116,18 +130,20 @@ def check(repository: str, sha: str, token: str, wait_seconds: float = 0, poll_s
             jobs = read_jobs(run)
             reason = pending_reason(run, jobs, lambda job_id: api(
                 f"repos/{repository}/check-runs/{job_id}/annotations?per_page=100", token))
-        except OSError as error:  # urllib errors and timeouts: retry until the deadline, then fail
-            if clock() >= deadline:
+            if reason is not None and clock() < deadline:
+                wait(reason)
+                continue
+            validate_run(run, jobs, sha, workflow["id"])
+            if not isinstance(run.get("run_attempt"), int):
+                raise ValueError("CI run has no attempt number, so a rerun could not be detected")
+            # Judge the run that is newest now: a new run or attempt may have started meanwhile.
+            latest = newest_run()
+        except Exception as error:
+            if not is_transient(error) or clock() >= deadline:
                 raise
             wait(f"GitHub read failed ({type(error).__name__}: {error})")
             continue
-        if reason is not None and clock() < deadline:
-            wait(reason)
-            continue
-        validate_run(run, jobs, sha, workflow["id"])
-        # Judge the run that is newest now: a new run or attempt may have started meanwhile.
-        latest = newest_run()
-        if latest is None or (latest["id"], latest.get("run_attempt")) != (run["id"], run.get("run_attempt")):
+        if latest is None or (latest["id"], latest.get("run_attempt")) != (run["id"], run["run_attempt"]):
             if clock() >= deadline:
                 raise ValueError("A newer CI run or attempt started during the release gate")
             wait("a newer CI run or attempt started; judging it instead")
