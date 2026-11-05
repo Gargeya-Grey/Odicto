@@ -667,6 +667,13 @@ bash scripts/posix/run_debug.sh
   file. The release notes are the changelog section plus
   [`tools/release/release-notes.md`](../tools/release/release-notes.md).
 - Downloads: [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases).
+- CI runner retry: GitHub sometimes cancels a hosted job after about 15 minutes because no
+  runner took it (no runner, no steps, annotation "not acquired by Runner"). The **CI runner
+  retry** workflow (`.github/workflows/ci-runner-retry.yml`) then re-runs that job, up to 5
+  attempts in total, and waits for each attempt. It never re-runs a real failure, a timeout,
+  a cancel by a person, or any workflow other than CI. Logic and tests:
+  `tools/ci_rerun_unacquired.py`, `tests/test_ci_rerun_unacquired.py`. To retry an older
+  run by hand, start the workflow from the Actions tab with its run id.
 
 ---
 
