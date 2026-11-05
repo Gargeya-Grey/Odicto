@@ -139,5 +139,239 @@ class TestSpeechFixtureFetch(unittest.TestCase):
         self.assertEqual(1, len(calls))
 
 
+class TestReleaseGateWaitsForRunnerRetry(unittest.TestCase):
+    """Release waits while CI runs or retries a job GitHub gave no runner; never on a real failure."""
+    NOT_ACQUIRED = [{"message": "The job was not acquired by Runner of type hosted even after multiple attempts"}]
+
+    def states(self, *attempts):
+        sha = "a" * 40
+        def job(name, conclusion, ran=True):
+            return dict(id=hash((name, conclusion, ran)) & 0xFFFF, name=name, status="completed",
+                        conclusion=conclusion, runner_name="GitHub Actions 1" if ran else "",
+                        steps=[{"name": "x"}] if ran else [])
+        out = []
+        for index, kind in enumerate(attempts, start=1):
+            run = dict(id=10, head_sha=sha, head_branch="main", event="push", workflow_id=4,
+                       path=".github/workflows/ci.yml", status="completed", conclusion="success",
+                       run_attempt=index, html_url="https://example.invalid/run/10")
+            jobs = [job(name, "success") for name in sorted(gate.REQUIRED_JOBS)]
+            if kind == "running":
+                run.update(status="in_progress", conclusion=None)
+            elif kind == "no-runner":
+                run["conclusion"] = "failure"
+                jobs[0] = job(jobs[0]["name"], "cancelled", ran=False)
+            elif kind == "failed":
+                run["conclusion"] = "failure"
+                jobs[0] = job(jobs[0]["name"], "failure")
+            out.append((run, jobs))
+        return sha, out
+
+    def fake_api(self, states):
+        position = [0]
+        def api(path, token):
+            run, jobs = states[min(position[0], len(states) - 1)]
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "workflows/ci.yml/runs?" in path:
+                return {"workflow_runs": [run]}
+            if "/annotations" in path:
+                return self.NOT_ACQUIRED
+            position[0] += 1  # each jobs read moves the story on by one state
+            return {"jobs": jobs, "total_count": len(jobs)}
+        return api
+
+    def check(self, sha, states, wait_seconds):
+        now = [0.0]
+        def sleep(seconds):
+            now[0] += seconds
+        with patch.object(gate, "api", side_effect=self.fake_api(states)):
+            return gate.check("owner/repo", sha, "synthetic-token", wait_seconds=wait_seconds,
+                              poll_seconds=60, sleep=sleep, clock=lambda: now[0], log=lambda *_: None)
+
+    def test_waits_through_running_and_no_runner_then_passes(self):
+        sha, states = self.states("running", "no-runner", "running", "ok")
+        self.assertEqual("pass", self.check(sha, states, wait_seconds=6000)["result"])
+
+    def test_real_failure_blocks_without_waiting(self):
+        sha, states = self.states("failed", "ok")
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=6000)
+
+    def test_no_wait_by_default_keeps_the_old_rule(self):
+        sha, states = self.states("no-runner", "ok")
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=0)
+
+    def test_real_failure_while_other_jobs_run_blocks_at_once(self):
+        sha, states = self.states("running")
+        run, jobs = states[0]
+        jobs[1] = dict(jobs[1], conclusion="failure")
+        jobs[2] = dict(jobs[2], status="in_progress", conclusion=None)
+        slept = []
+        with patch.object(gate, "api", side_effect=self.fake_api(states)), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                       sleep=slept.append, clock=lambda: 0.0, log=lambda *_: None)
+        self.assertEqual([], slept)
+
+    def test_read_error_is_retried_then_passes(self):
+        sha, states = self.states("no-runner", "ok")
+        api = self.fake_api(states)
+        failures = [OSError("502 from GitHub")]
+        def flaky(path, token):
+            if "/annotations" in path and failures:
+                raise failures.pop()
+            return api(path, token)
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=flaky):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                                log=lambda *_: None)
+        self.assertEqual("pass", result["result"])
+
+    def test_read_error_past_the_deadline_fails_closed(self):
+        sha, states = self.states("ok")
+        def broken(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            raise OSError("GitHub down")
+        with patch.object(gate, "api", side_effect=broken), self.assertRaises(OSError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=0, sleep=lambda s: None,
+                       clock=lambda: 0.0, log=lambda *_: None)
+
+    def test_newer_failed_run_after_selection_is_judged_instead(self):
+        sha, states = self.states("ok")
+        good_run, jobs = states[0]
+        newer = dict(good_run, id=11, conclusion="failure")
+        bad_jobs = [dict(job, conclusion="failure") for job in jobs]
+        runs_reads = [0]
+        def api(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "workflows/ci.yml/runs?" in path:
+                runs_reads[0] += 1
+                return {"workflow_runs": [good_run] if runs_reads[0] == 1 else [good_run, newer]}
+            if "/annotations" in path:
+                return []
+            run_id = int(path.split("/runs/")[1].split("/")[0])
+            chosen = jobs if run_id == 10 else bad_jobs
+            return {"jobs": chosen, "total_count": len(chosen)}
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=api), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                       sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                       log=lambda *_: None)
+
+    def test_no_run_yet_waits_for_it(self):
+        sha, states = self.states("ok")
+        api = self.fake_api(states)
+        empty = [True]
+        def late(path, token):
+            if "workflows/ci.yml/runs?" in path and empty:
+                empty.pop()
+                return {"workflow_runs": []}
+            return api(path, token)
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=late):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                                log=lambda *_: None)
+        self.assertEqual("pass", result["result"])
+
+    def run_check(self, sha, api, wait_seconds=6000):
+        now, slept = [0.0], []
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+        with patch.object(gate, "api", side_effect=api):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=wait_seconds,
+                                poll_seconds=60, sleep=sleep, clock=lambda: now[0], log=lambda *_: None)
+        return result, slept
+
+    def test_transient_error_on_first_and_last_read_is_retried(self):
+        import urllib.error
+        for where in ("workflows/ci.yml", "runs?"):
+            with self.subTest(where=where):
+                sha, states = self.states("ok")
+                api = self.fake_api(states)
+                calls = {"n": 0}
+                def flaky(path, token):
+                    if where in path:
+                        calls["n"] += 1
+                        last_runs_read = where == "runs?" and calls["n"] == 2
+                        if (where != "runs?" and calls["n"] == 1) or last_runs_read:
+                            raise urllib.error.HTTPError(path, 502, "Bad Gateway", {}, None)
+                    return api(path, token)
+                result, _ = self.run_check(sha, flaky)
+                self.assertEqual("pass", result["result"])
+
+    def test_bad_token_fails_at_once(self):
+        import urllib.error
+        sha, _ = self.states("ok")
+        def denied(path, token):
+            raise urllib.error.HTTPError(path, 401, "Bad credentials", {}, None)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_check(sha, denied)
+
+    def test_known_failure_blocks_even_when_annotations_fail(self):
+        sha, states = self.states("running")
+        run, jobs = states[0]
+        jobs[0] = dict(jobs[0], conclusion="cancelled", runner_name="", steps=[])  # unacquired shape
+        jobs[1] = dict(jobs[1], conclusion="failure")                               # real failure
+        api = self.fake_api(states)
+        def no_annotations(path, token):
+            if "/annotations" in path:
+                raise OSError("annotations down")
+            return api(path, token)
+        slept = []
+        with patch.object(gate, "api", side_effect=no_annotations), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, sleep=slept.append,
+                       clock=lambda: 0.0, log=lambda *_: None)
+        self.assertEqual([], slept)
+
+    def test_missing_attempt_number_fails_closed(self):
+        sha, states = self.states("ok")
+        states[0][0].pop("run_attempt")
+        with self.assertRaises(ValueError):
+            self.run_check(sha, self.fake_api(states))
+
+    def test_new_attempt_of_the_same_run_is_judged_instead(self):
+        sha, states = self.states("ok")
+        good, jobs = states[0]
+        rerun = dict(good, run_attempt=2, conclusion="failure")
+        bad_jobs = [dict(job, conclusion="failure") for job in jobs]
+        reads = [0]
+        def api(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "runs?" in path:
+                reads[0] += 1
+                return {"workflow_runs": [good if reads[0] == 1 else rerun]}
+            if "/annotations" in path:
+                return []
+            return {"jobs": jobs if reads[0] == 1 else bad_jobs, "total_count": len(jobs)}
+        with self.assertRaises(ValueError):
+            self.run_check(sha, api)
+
+    def test_wait_is_bounded(self):
+        sha, states = self.states(*(["running"] * 500))
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=600)
+
+
+class TestSmokeFailureIsVisibleInTheLog(unittest.TestCase):
+    def test_failed_command_prints_its_last_lines(self):
+        import contextlib, io, sys
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "install-first.txt"
+            command = [sys.executable, "-c", "print(chr(10).join(f'line {i}' for i in range(100))); raise SystemExit(2)"]
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(RuntimeError):
+                smoke.run(command, cwd=Path(temp), output=output)
+        shown = stderr.getvalue()
+        self.assertIn("line 99", shown)
+        self.assertIn("line 40", shown)
+        self.assertNotIn("line 39\n", shown)
+
+
 if __name__ == "__main__":
     unittest.main()
