@@ -33,6 +33,11 @@ def run(command, *, cwd: Path, output: Path, timeout=900, env=None) -> str:
                                 stderr=subprocess.STDOUT, timeout=timeout)
     text = output.read_text(encoding="utf-8", errors="replace")
     if result.returncode:
+        # Show the cause in the job log too: the evidence upload can fail (GitHub's artifact
+        # service timed out on 5 Nov 2026), and then this file would be lost.
+        tail = "\n".join(text.splitlines()[-60:])
+        print(f"--- last lines of {output.name} ---\n{tail}\n--- end of {output.name} ---",
+              file=sys.stderr)
         raise RuntimeError(f"Command failed with exit {result.returncode}; see {output.name}")
     return text
 

@@ -208,5 +208,20 @@ class TestReleaseGateWaitsForRunnerRetry(unittest.TestCase):
             self.check(sha, states, wait_seconds=600)
 
 
+class TestSmokeFailureIsVisibleInTheLog(unittest.TestCase):
+    def test_failed_command_prints_its_last_lines(self):
+        import contextlib, io, sys
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "install-first.txt"
+            command = [sys.executable, "-c", "print(chr(10).join(f'line {i}' for i in range(100))); raise SystemExit(2)"]
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(RuntimeError):
+                smoke.run(command, cwd=Path(temp), output=output)
+        shown = stderr.getvalue()
+        self.assertIn("line 99", shown)
+        self.assertIn("line 40", shown)
+        self.assertNotIn("line 39\n", shown)
+
+
 if __name__ == "__main__":
     unittest.main()
