@@ -202,6 +202,81 @@ class TestReleaseGateWaitsForRunnerRetry(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check(sha, states, wait_seconds=0)
 
+    def test_real_failure_while_other_jobs_run_blocks_at_once(self):
+        sha, states = self.states("running")
+        run, jobs = states[0]
+        jobs[1] = dict(jobs[1], conclusion="failure")
+        jobs[2] = dict(jobs[2], status="in_progress", conclusion=None)
+        slept = []
+        with patch.object(gate, "api", side_effect=self.fake_api(states)), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                       sleep=slept.append, clock=lambda: 0.0, log=lambda *_: None)
+        self.assertEqual([], slept)
+
+    def test_read_error_is_retried_then_passes(self):
+        sha, states = self.states("no-runner", "ok")
+        api = self.fake_api(states)
+        failures = [OSError("502 from GitHub")]
+        def flaky(path, token):
+            if "/annotations" in path and failures:
+                raise failures.pop()
+            return api(path, token)
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=flaky):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                                log=lambda *_: None)
+        self.assertEqual("pass", result["result"])
+
+    def test_read_error_past_the_deadline_fails_closed(self):
+        sha, states = self.states("ok")
+        def broken(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            raise OSError("GitHub down")
+        with patch.object(gate, "api", side_effect=broken), self.assertRaises(OSError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=0, sleep=lambda s: None,
+                       clock=lambda: 0.0, log=lambda *_: None)
+
+    def test_newer_failed_run_after_selection_is_judged_instead(self):
+        sha, states = self.states("ok")
+        good_run, jobs = states[0]
+        newer = dict(good_run, id=11, conclusion="failure")
+        bad_jobs = [dict(job, conclusion="failure") for job in jobs]
+        runs_reads = [0]
+        def api(path, token):
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "workflows/ci.yml/runs?" in path:
+                runs_reads[0] += 1
+                return {"workflow_runs": [good_run] if runs_reads[0] == 1 else [good_run, newer]}
+            if "/annotations" in path:
+                return []
+            run_id = int(path.split("/runs/")[1].split("/")[0])
+            chosen = jobs if run_id == 10 else bad_jobs
+            return {"jobs": chosen, "total_count": len(chosen)}
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=api), self.assertRaises(ValueError):
+            gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                       sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                       log=lambda *_: None)
+
+    def test_no_run_yet_waits_for_it(self):
+        sha, states = self.states("ok")
+        api = self.fake_api(states)
+        empty = [True]
+        def late(path, token):
+            if "workflows/ci.yml/runs?" in path and empty:
+                empty.pop()
+                return {"workflow_runs": []}
+            return api(path, token)
+        now = [0.0]
+        with patch.object(gate, "api", side_effect=late):
+            result = gate.check("owner/repo", sha, "synthetic-token", wait_seconds=6000, poll_seconds=60,
+                                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                                log=lambda *_: None)
+        self.assertEqual("pass", result["result"])
+
     def test_wait_is_bounded(self):
         sha, states = self.states(*(["running"] * 500))
         with self.assertRaises(ValueError):
