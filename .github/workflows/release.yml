@@ -23,18 +23,21 @@ jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
-    timeout-minutes: 30
+    # The platform gate may wait up to 100 minutes for CI and its runner retries.
+    timeout-minutes: 140
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
+      # Waits while CI on this commit runs or waits for the CI runner retry (a job GitHub
+      # gave no runner); a real failure blocks at once. The rule itself is unchanged.
       - name: Require all platform install/test jobs for this exact commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python tools/release/check_platform_gate.py --repository $env:GITHUB_REPOSITORY --sha $env:GITHUB_SHA --output out/platform-gate.json
+          python tools/release/check_platform_gate.py --repository $env:GITHUB_REPOSITORY --sha $env:GITHUB_SHA --output out/platform-gate.json --wait-minutes 100
           if ($LASTEXITCODE -ne 0) { throw 'Required platform evidence is missing or failed' }
 
       - name: Read version and refuse an existing tag
@@ -82,8 +85,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          uv venv --python 3.12 .venv
-          if ($LASTEXITCODE -ne 0) { throw 'uv venv failed' }
+          # The Python download can time out (seen in CI, 4 Nov 2026): 3 tries, 30 s apart.
+          foreach ($try in 1..3) {
+            uv venv --clear --python 3.12 .venv
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($try -eq 3) { throw 'uv venv failed' }
+            Start-Sleep -Seconds 30
+          }
           uv pip sync --python .venv --require-hashes tools/distribution/requirements.lock
           if ($LASTEXITCODE -ne 0) { throw 'dependency install failed' }
           .venv\Scripts\python.exe tools/run_tests.py

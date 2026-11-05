@@ -34,6 +34,7 @@ CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 UNACQUIRED_MESSAGE = re.compile(r"not acquired by runner", re.IGNORECASE)
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
 MAX_PAGES = 10
+MAX_ATTEMPTS = 5  # the first run counts as attempt 1
 START_GRACE_SECONDS = 300  # time GitHub gets to start the attempt a POST asked for
 
 
@@ -211,7 +212,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repository", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--max-attempts", type=int, default=5)
+    parser.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS)
     parser.add_argument("--poll-seconds", type=float, default=30)
     parser.add_argument("--deadline-minutes", type=float, default=90)
     parser.add_argument("--dry-run", action="store_true", help="decide and print; re-run nothing")

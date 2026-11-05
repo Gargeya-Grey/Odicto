@@ -139,5 +139,74 @@ class TestSpeechFixtureFetch(unittest.TestCase):
         self.assertEqual(1, len(calls))
 
 
+class TestReleaseGateWaitsForRunnerRetry(unittest.TestCase):
+    """Release waits while CI runs or retries a job GitHub gave no runner; never on a real failure."""
+    NOT_ACQUIRED = [{"message": "The job was not acquired by Runner of type hosted even after multiple attempts"}]
+
+    def states(self, *attempts):
+        sha = "a" * 40
+        def job(name, conclusion, ran=True):
+            return dict(id=hash((name, conclusion, ran)) & 0xFFFF, name=name, status="completed",
+                        conclusion=conclusion, runner_name="GitHub Actions 1" if ran else "",
+                        steps=[{"name": "x"}] if ran else [])
+        out = []
+        for index, kind in enumerate(attempts, start=1):
+            run = dict(id=10, head_sha=sha, head_branch="main", event="push", workflow_id=4,
+                       path=".github/workflows/ci.yml", status="completed", conclusion="success",
+                       run_attempt=index, html_url="https://example.invalid/run/10")
+            jobs = [job(name, "success") for name in sorted(gate.REQUIRED_JOBS)]
+            if kind == "running":
+                run.update(status="in_progress", conclusion=None)
+            elif kind == "no-runner":
+                run["conclusion"] = "failure"
+                jobs[0] = job(jobs[0]["name"], "cancelled", ran=False)
+            elif kind == "failed":
+                run["conclusion"] = "failure"
+                jobs[0] = job(jobs[0]["name"], "failure")
+            out.append((run, jobs))
+        return sha, out
+
+    def fake_api(self, states):
+        position = [0]
+        def api(path, token):
+            run, jobs = states[min(position[0], len(states) - 1)]
+            if path.endswith("workflows/ci.yml"):
+                return {"id": 4}
+            if "workflows/ci.yml/runs?" in path:
+                return {"workflow_runs": [run]}
+            if "/annotations" in path:
+                return self.NOT_ACQUIRED
+            position[0] += 1  # each jobs read moves the story on by one state
+            return {"jobs": jobs, "total_count": len(jobs)}
+        return api
+
+    def check(self, sha, states, wait_seconds):
+        now = [0.0]
+        def sleep(seconds):
+            now[0] += seconds
+        with patch.object(gate, "api", side_effect=self.fake_api(states)):
+            return gate.check("owner/repo", sha, "synthetic-token", wait_seconds=wait_seconds,
+                              poll_seconds=60, sleep=sleep, clock=lambda: now[0], log=lambda *_: None)
+
+    def test_waits_through_running_and_no_runner_then_passes(self):
+        sha, states = self.states("running", "no-runner", "running", "ok")
+        self.assertEqual("pass", self.check(sha, states, wait_seconds=6000)["result"])
+
+    def test_real_failure_blocks_without_waiting(self):
+        sha, states = self.states("failed", "ok")
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=6000)
+
+    def test_no_wait_by_default_keeps_the_old_rule(self):
+        sha, states = self.states("no-runner", "ok")
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=0)
+
+    def test_wait_is_bounded(self):
+        sha, states = self.states(*(["running"] * 500))
+        with self.assertRaises(ValueError):
+            self.check(sha, states, wait_seconds=600)
+
+
 if __name__ == "__main__":
     unittest.main()
