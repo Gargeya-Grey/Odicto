@@ -18,10 +18,13 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ### Windows, no terminal
 
-Do you already use Odicto from a source folder (a copy you set up with Git)? Then quit it first:
-right-click its icon near the clock and choose **Quit Odicto**. A source copy older than 1.5.0
-does not check for other copies, so never run it beside the new copy. An Odicto that this
-installer or `install-managed.ps1` installed is not a second copy: the installer updates it.
+Do you already use Odicto from a source folder (a copy you set up with Git)? Then quit it first
+(right-click its icon near the clock, **Quit Odicto**) and turn off its start at sign-in: its Startup shortcut, and the `Odicto` task in Task
+Scheduler if you used Admin mode. A source copy
+older than 1.5.0 does not check for other copies, so never run it beside the new copy. An Odicto
+that this installer or `install-managed.ps1` installed in its default folder is not a second
+copy: the installer updates it. If you gave `install-managed.ps1` your own folder (`-HomePath`),
+update that copy with its `odicto update` instead, and do not run this installer.
 
 1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
    Your browser can ask if you want to keep the file. Choose **Keep**.

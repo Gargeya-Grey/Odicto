@@ -7,9 +7,13 @@ latest stable release. Download `Install-Odicto.cmd` below and double-click it. 
 "Windows protected your PC", because the file is not signed: click **More info**, then **Run
 anyway**. The window installs Odicto in a few minutes. Then Odicto starts at sign-in, it is
 running, and Setup opens in your browser. The Start Menu has Odicto, Odicto Setup and Stop Odicto.
-An Odicto that this installer or `install-managed.ps1` installed is updated in place.
+An Odicto that this installer or `install-managed.ps1` installed in its default folder is
+updated in place. A copy in your own folder (`-HomePath`) is not: update it with its
+`odicto update` instead, and do not run this file.
 
-Do you already use Odicto from a source folder? Quit it first. A source copy older than 1.5.0
+Do you already use Odicto from a source folder? Quit it first and turn off its start at sign-in: its Startup shortcut, and the `Odicto` task in Task
+Scheduler if you used Admin mode.
+The installer does not see that task. A source copy older than 1.5.0
 does not check for other copies, so never run it beside the new copy. When the installer finds
 the source copy's Start Menu or Startup shortcut, it installs the new copy but does not start
 it, turn on start at sign-in or open Setup. Then follow "Existing source installations" below.
