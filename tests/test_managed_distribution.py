@@ -132,6 +132,9 @@ module.subprocess.run = unexpected
 module.subprocess.Popen = unexpected
 module.shutil.which = lambda name: 'fixture-uv'
 module.Manager.expose_command = lambda self: self.home / 'bin/odicto.cmd'
+def no_shortcuts(self):
+    raise module.DistributionError('fixture shortcut failure')
+module.Manager.install_shortcuts = no_shortcuts
 assert module.main(['--home', sys.argv[2], 'install']) == 0
 home = Path(sys.argv[2])
 active = json.loads((home / 'active.json').read_text())
@@ -145,6 +148,7 @@ print('COLD ADMIN REPAIR PASS')
                                str(self.manager.home)], cwd=self.root, capture_output=True, text=True, timeout=20)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("COLD ADMIN REPAIR PASS", done.stdout)
+        self.assertIn("Start Menu unchanged: fixture shortcut failure", done.stderr)
 
     def test_missing_support_import_returns_a_clean_cli_error(self):
         with patch.object(dist, "Manager", return_value=self.manager), patch.object(
