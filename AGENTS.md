@@ -294,8 +294,16 @@ deliver each character twice (`tthhiiss`). That is not the mic, Whisper, or past
 path; it is the global hook layer.
 
 The Windows mutex + lockfile layering is preserved. On macOS/Linux the
-equivalent single-instance gate is an exclusive `fcntl.flock` on
-`dictation.lock` plus process enumeration.
+equivalent install gate is an exclusive `fcntl.flock` on `dictation.lock` plus
+process enumeration. From 1.5.0 a second lock, the session hook lock, is shared by
+every install in the user session (a source checkout and the managed install): a
+`Local\Odicto_KeyboardHooks_<scope>` mutex on Windows, an X selection on the X server
+on Linux, and an flock on `~/Library/Application Support/.odicto-keyboard-hooks-<scope>.lock`
+on macOS, where a root copy is refused. A busy lock exits 75 (`EXIT_ANOTHER_OWNER`; the
+managed command prints "Another copy of Odicto is running"); a lock error exits 2.
+A copy older than 1.5.0 does not take the session hook lock, so it can still hook beside a
+newer copy: retire its startup entries and stop it before a newer copy starts.
+Tests isolate the lock with `ODICTO_HOOK_LOCK_SCOPE` (`tools/run_tests.py` sets it).
 
 **Hard rules for agents and operators:**
 
@@ -304,7 +312,7 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 3. Startup **must** acquire the install-scoped lock and the session hook lock (one per
    user session, for every install), and kill orphan `main.py` processes; if a lock cannot
    be taken, **exit without** installing hooks.
-4. **Never** install global hotkey hooks unless the single-instance lock is held.
+4. **Never** install global hotkey hooks unless both locks (install and session hook) are held.
 5. On shutdown, always release hooks and the lock so typing returns to normal.
 6. If the user reports **double letters while typing**, assume stacked instances
    first: stop all, confirm no `main.py` left, start **once**.

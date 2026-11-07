@@ -73,3 +73,37 @@ establish Wayland support, or replace an owner-confirmed real dictation journey.
 Programs folder. A real install from the published asset needs a fresh Windows user or machine,
 with the owner's hands: download it, pass SmartScreen, and confirm the Start Menu items, the
 HUD after start, and Setup in the browser. Never run it on a machine that runs Odicto for real.
+
+### Owner checklist: a fresh Windows user
+
+Use a new local Windows account (Settings, Accounts, Other users) or a Windows Sandbox with a
+microphone. No Odicto, Git or Python is installed there.
+
+1. Open the README's **Download for Windows** link. Expect `Install-Odicto.cmd` (about 10 KB).
+   Keep the file when the browser asks.
+2. Double-click it. Expect "Windows protected your PC". Click **More info**, then **Run anyway**.
+3. Expect a console window with "Step 1 of 3" to "Step 3 of 3" and no question. At the end,
+   expect "Odicto is ready.", the Odicto icon near the clock, Setup in the browser, and "Press
+   any key to close this window." The HUD is not visible while Odicto waits; that is correct.
+4. Dictate in Notepad, or in the browser's address bar (Windows Sandbox has no Notepad): tap Ctrl+\`. Expect the HUD at the bottom of the screen. Speak, tap
+   Ctrl+\` again, and expect the words at the cursor.
+5. Start Menu: expect the folder **Odicto** with Odicto, Odicto Setup and Stop Odicto, each with
+   the Odicto logo. Stop Odicto removes the icon near the clock; Odicto brings it back (dictate
+   once more); Odicto Setup opens Setup.
+6. Task Manager, Startup apps: expect "Odicto managed", enabled. Sign out and in: the icon near
+   the clock returns, and dictation works.
+7. Repair: double-click `Install-Odicto.cmd` again. Expect the same three steps, one running
+   Odicto (type a sentence; no letter twice), and the start-at-sign-in choice unchanged.
+8. Optional, needs a fresh clone of 1.5.0 or later in the same account that was never migrated
+   (a migrated checkout forwards its launchers to the managed copy), installed with
+   `install.ps1 -NoShortcuts` (without the flag it takes over the Start Menu items). Call the
+   managed launcher by its path, never through a shortcut: `M` = `%LOCALAPPDATA%\Odicto\bin\odicto.cmd`.
+   First prove that the checkout starts by itself: `M stop`, run the checkout's
+   `start_dictation.bat`, and confirm in Task Manager (Details, Command line column) that a
+   `pythonw.exe` runs the checkout's `main.py`, not one under `%LOCALAPPDATA%\Odicto`. Dictate
+   once, then run its `stop_dictation.bat`. Then run `M start` and
+   `M run status`, and confirm the managed owner runs. Run `start_dictation.bat` again. Expect a
+   start failure, the line `Could not acquire Odicto single-instance lock` at the end of the
+   checkout's `dictation.log`, and no letter twice while you type. A failure without that line,
+   or with no managed owner running, does not prove the lock.
+9. Clean up: open Stop Odicto, then delete the test account. Its files go with it.

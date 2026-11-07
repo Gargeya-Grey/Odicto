@@ -18,6 +18,14 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ### Windows, no terminal
 
+Do you already use Odicto from a source folder (a copy you set up with Git)? Then quit it first
+(right-click its icon near the clock, **Quit Odicto**) and turn off its start at sign-in: its Startup shortcut, and the `Odicto` task in Task
+Scheduler if you used Admin mode. A source copy
+older than 1.5.0 does not check for other copies, so never run it beside the new copy. An Odicto
+that this installer or `install-managed.ps1` installed in its default folder is not a second
+copy: the installer updates it. If you gave `install-managed.ps1` your own folder (`-HomePath`),
+update that copy with its `odicto update` instead, and do not run this installer.
+
 1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
    Your browser can ask if you want to keep the file. Choose **Keep**.
 2. Double-click the file.
@@ -32,12 +40,22 @@ If a copy of Odicto that you installed from its folder is on the computer, the i
 the new copy but does not start it, because two copies must never run together. Follow
 [Moving from a source checkout](#moving-from-a-source-checkout). The installer finds that copy by
 its Start Menu and Startup shortcuts only. If you made it without shortcuts, stop it before you run
-the installer. Run again on a computer that has the new copy, the installer repairs it and keeps your
-start-at-sign-in choice.
+the installer. If you run the installer again on a computer that has the new copy, it repairs that
+copy and keeps your start-at-sign-in choice.
 
 The Start Menu then has **Odicto**, **Odicto Setup** and **Stop Odicto**. You never need a terminal.
 Updates install by themselves when Odicto starts. To stop Odicto starting at sign-in, turn it off
 in Task Manager, **Startup apps** ("Odicto managed").
+
+If Odicto says **Another copy of Odicto is running**, a different Odicto is already on, usually
+a copy that you installed from a source folder. Odicto does not start a second copy, because
+two copies would type every letter twice. Right-click the Odicto icon near the clock and choose
+**Quit Odicto**. Then start the new copy: press **Windows key + R**, type
+`%LOCALAPPDATA%\Odicto\bin\odicto.cmd start` and press **Enter**. The Start Menu item **Odicto** can still
+belong to the source copy. To move the source copy's settings into the new copy, stop the new
+copy too (the same box, `%LOCALAPPDATA%\Odicto\bin\odicto.cmd stop`) and close every Setup page,
+then follow [Moving from a source checkout](#moving-from-a-source-checkout). A source copy older
+than 1.5.0 does not do this check, so never run it beside the new copy.
 
 ### Any platform, from a terminal
 

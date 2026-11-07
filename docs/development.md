@@ -621,7 +621,9 @@ invariants not to break.
 | No HUD on hotkey | Restart with `scripts/windows/run_debug.bat` / `bash scripts/posix/run_debug.sh`; look for `HUD enabled` and `[HUD] → RECORDING` |
 | Hotkey does nothing | Wait until “Application ready”; check shortcuts in Setup; grant macOS Accessibility/Input Monitoring; use an X11 desktop session on Linux; run `odicto.py status` |
 | Old hotkeys still work / both modes feel wrong | Multiple instances — run the stop script (kills all), then start once. Check log for `Hotkeys bound: …` |
-| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
+| **Every letter types twice** while typing in any app (`tthhiiss`) | **Two Odicto processes** each installed a system-wide keyboard hook. From 1.5.0 a second copy refuses to hook, so one of the two is older than 1.5.0. Run the stop script, confirm no second start, then launch **once**. Log should show `Single-instance lock acquired`. |
+| Start says **Another copy of Odicto is running** (exit code 75) | Another install in this user session (for example a source checkout beside the managed install) holds the session hook lock. Quit it from its tray icon (**Quit Odicto**) or its own stop command, then start once. |
+| macOS: **Odicto does not run as root on macOS** | Odicto was started with `sudo` or as root. Start it as your own desktop user. |
 | Always raw, never AI | Use the AI chord, **Ctrl+Shift+\`**. Log should say `Recording (AI refined)` |
 | Empty paste / “No speech” | Check mic privacy settings (Windows → Privacy → Microphone; macOS → Privacy → Microphone) |
 | AI mode pastes raw text (Ollama) | Server/model issue — `ollama list`, `ollama pull …`, ensure `LLM_PROVIDER=ollama` |
