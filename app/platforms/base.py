@@ -46,22 +46,14 @@ def hook_lock_scope() -> str:
     return scope[:64] or "session"
 
 
-def hook_lock_owner_uid() -> int:
-    """macOS: the desktop user the hook lock belongs to. Under sudo it is the user who ran
-    sudo, so a root copy and a normal copy in one session find the same file."""
-    uid = os.getuid()
-    sudo = os.environ.get("SUDO_UID", "")
-    return int(sudo) if uid == 0 and sudo.isdigit() else uid
-
-
 def hook_lock_path() -> str:
     """macOS: the file whose flock is the keyboard-hook lock. The folder comes from the account
     database, not from HOME, so every launch for this user finds the same file. It sits beside
     the managed home (Application Support/Odicto), never in it, so an installer still finds
-    that folder empty; no cache cleaner removes it."""
+    that folder empty; no cache cleaner removes it. Root never gets here (the lock refuses it)."""
     import pwd
 
-    home = pwd.getpwuid(hook_lock_owner_uid()).pw_dir
+    home = pwd.getpwuid(os.getuid()).pw_dir
     return os.path.join(home, "Library", "Application Support", f".odicto-keyboard-hooks-{hook_lock_scope()}.lock")
 
 

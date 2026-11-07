@@ -31,6 +31,8 @@ OWNER = textwrap.dedent("""
 """)
 
 
+@unittest.skipIf(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"),
+                 "the Linux hook lock lives on an X server; CI runs these under Xvfb")
 class TestSessionHookLock(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -146,6 +148,24 @@ class TestReleaseInstallsNoHook(unittest.TestCase):
         fake.unhook_all.assert_called_once_with()
 
 
+@unittest.skipUnless(sys.platform == "win32", "the Windows session mutex")
+class TestWindowsHookMutexOutlivesTheNativeHook(unittest.TestCase):
+    """keyboard.unhook_all() clears callbacks, but the native hook stays until the process exits."""
+
+    def release(self, installed):
+        import platforms.windows as windows
+        with patch.object(windows, "native_hook_installed", return_value=installed), \
+                patch.object(windows, "unhook_all"), patch.object(windows, "_release_hook_mutex") as release:
+            windows.release_lock()
+        return release
+
+    def test_the_mutex_stays_while_a_native_hook_exists(self):
+        self.release(installed=True).assert_not_called()
+
+    def test_a_process_that_never_hooked_frees_it_at_once(self):
+        self.release(installed=False).assert_called_once_with()
+
+
 class FakeXServer:
     """The selection table of one X server, shared by every connection to it."""
 
@@ -228,30 +248,44 @@ class TestLinuxXSelectionLock(unittest.TestCase):
             self.assertEqual(self.take(), (False, "error"))
 
 
-class TestMacLockPath(unittest.TestCase):
-    """macOS: one file per desktop user, beside the managed home, never inside it."""
-
-    def path(self, uid, environment):
-        homes = {501: "/Users/ada", 0: "/var/root"}
-        pwd = types.SimpleNamespace(getpwuid=lambda value: types.SimpleNamespace(pw_dir=homes[value]))
-        import platforms.base as base
-        with patch.dict(sys.modules, {"pwd": pwd}), \
-                patch.object(base.os, "getuid", create=True, return_value=uid), \
-                patch.dict(os.environ, environment, clear=True):
-            return base.hook_lock_path()
+class TestMacLock(unittest.TestCase):
+    """macOS: one file per desktop user, beside the managed home; a root copy is refused."""
 
     def test_the_lock_is_not_inside_the_managed_home(self):
-        path = self.path(501, {"ODICTO_HOOK_LOCK_SCOPE": "session"})
+        pwd = types.SimpleNamespace(getpwuid=lambda uid: types.SimpleNamespace(pw_dir={501: "/Users/ada"}[uid]))
+        import platforms.base as base
+        with patch.dict(sys.modules, {"pwd": pwd}), patch.object(base.os, "getuid", create=True, return_value=501), \
+                patch.dict(os.environ, {"ODICTO_HOOK_LOCK_SCOPE": "session"}):
+            path = base.hook_lock_path()
         support = os.path.join("/Users/ada", "Library", "Application Support")
         self.assertEqual(path, os.path.join(support, ".odicto-keyboard-hooks-session.lock"))
         self.assertFalse(path.startswith(os.path.join(support, "Odicto") + os.sep))
 
-    def test_a_sudo_copy_uses_the_desktop_users_file(self):
-        self.assertEqual(self.path(0, {"SUDO_UID": "501"}), self.path(501, {}))
+    def test_the_path_ignores_the_launch_environment(self):
+        """Every review round found a launch whose environment picked another lock: the lock
+        must come from the account, never from HOME, XDG_RUNTIME_DIR or TMPDIR."""
+        pwd = types.SimpleNamespace(getpwuid=lambda uid: types.SimpleNamespace(pw_dir="/Users/ada"))
+        import platforms.base as base
+        paths = set()
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as runtime:
+            launches = ({}, {"HOME": home, "USERPROFILE": home, "TMPDIR": home},
+                        {"HOME": home, "USERPROFILE": home, "XDG_RUNTIME_DIR": runtime})
+            for environment in launches:
+                with patch.dict(sys.modules, {"pwd": pwd}), \
+                        patch.object(base.os, "getuid", create=True, return_value=501), \
+                        patch.dict(os.environ, environment, clear=True):
+                    paths.add(base.hook_lock_path())
+        self.assertEqual(len(paths), 1, paths)
 
-    def test_sudo_uid_counts_only_for_root(self):
-        self.assertEqual(self.path(501, {"SUDO_UID": "0"}), self.path(501, {}))
-        self.assertTrue(self.path(0, {}).startswith("/var/root"))
+    def test_a_root_copy_is_refused_before_any_file_is_made(self):
+        import platforms._posix as posix
+        with patch.object(posix.sys, "platform", "darwin"), \
+                patch.object(posix.os, "geteuid", create=True, return_value=0), \
+                patch.object(posix.os, "open", side_effect=AssertionError("no lock file for root")), \
+                patch("builtins.print") as said:
+            self.assertFalse(posix._try_acquire_hook_lock())
+        self.assertEqual(posix.lock_refusal(), "error")
+        self.assertIn("does not run as root on macOS", said.call_args[0][0])
 
 
 class TestLockErrorIsNotAnotherOwner(unittest.TestCase):

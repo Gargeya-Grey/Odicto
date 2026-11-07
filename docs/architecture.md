@@ -530,8 +530,10 @@ a server grab. Every DISPLAY spelling, SSH forward, user and root reach the same
 server, a second server (VNC, a second session) has its own, and the server frees it when the
 owner's connection closes. macOS: an flock on `.odicto-keyboard-hooks-<scope>.lock` directly in the
 desktop user's Application Support folder, beside the managed home and never inside it, found
-through the account database, not HOME; a sudo copy uses the file of the user who ran sudo
-(`SUDO_UID`) and leaves it owned by that user. `platforms.lock_refusal()` says why a lock failed:
+through the account database, not HOME. A file stands for the session only when every copy runs
+as the desktop user, so macOS refuses a root copy (sudo, su, a helper) with exit 2. Windows keeps the session mutex after `release_lock()` while the native hook
+exists (`unhook_all()` clears callbacks only; the hook goes at process exit), so a waiting copy
+takes it, as abandoned, only when that process has exited. `platforms.lock_refusal()` says why a lock failed:
 "busy" (another copy holds it) exits with `EXIT_ANOTHER_OWNER` (75), and the managed updater reports
 "another copy is running" for start and restart and keeps the new release instead of rolling back;
 "error" (the lock cannot be made) exits with 2, a failed start. A process that never hooked does

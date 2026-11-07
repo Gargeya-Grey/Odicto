@@ -62,7 +62,10 @@ GATE = {
     # busy exit code shared with the updater (1), and no rollback when another copy runs (1): 1278.
     # Plus 9 for its second review: the Linux X selection (3) replaces the display key (-2), the
     # macOS path (3), no hook on release (2), busy or error (2), a refused restart (1): 1287.
-    "floor": 1287,
+    # Third review: macOS refuses root, so its sudo path tests (2) go and one root refusal test
+    # comes (-1); the lock path ignores the launch environment (1); the Windows mutex outlives
+    # the native hook (2, Windows only): 1289.
+    "floor": 1289,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -83,6 +86,10 @@ GATE = {
             "tests.test_launchers.TestBatFilesRun.*",
             "tests.test_easy_install.TestWindowsEasyInstallerRuns.*",
             "tests.test_easy_install.TestWindowsStartMenuShortcuts.*",
+            "tests.test_session_hook_lock.TestWindowsHookMutexOutlivesTheNativeHook.*",
+            # The Linux hook lock is an X selection; a headless checkout has no X server.
+            # CI runs the suite under Xvfb, so these run there.
+            "tests.test_session_hook_lock.TestSessionHookLock.*",
             "tests.test_resource_use.TestBlasThreads.test_importing_main_commits_little_memory_on_windows",
             "tests.test_reliability.*.test_win32_input_union_size_and_partial_input_never_retried",
             "tests.test_process_lifecycle.TestWindowsStop.*",

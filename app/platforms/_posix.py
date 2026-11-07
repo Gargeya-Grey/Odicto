@@ -248,13 +248,17 @@ def _try_acquire_hook_lock() -> bool:
     """Take the keyboard-hook lock that every install shares.
 
     Linux: an X selection (_try_acquire_x_selection). macOS: an flock on a file whose path comes
-    from the account database (base.hook_lock_path); under sudo it is the desktop user's file.
+    from the account database (base.hook_lock_path). A file stands for the session only when
+    every copy runs as the desktop user, so a root copy (sudo, su, a helper) is refused.
     """
     global _hook_lock_fd
 
     if sys.platform.startswith("linux"):
         return _try_acquire_x_selection()
 
+    if os.geteuid() == 0:
+        print("Odicto does not run as root on macOS. Start it as your own user.")
+        return _refuse("error")
     path = base.hook_lock_path()
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
@@ -262,12 +266,6 @@ def _try_acquire_hook_lock() -> bool:
     except OSError as e:
         print(f"Warning: keyboard-hook lock unavailable: {e}")
         return _refuse("error")
-    owner = base.hook_lock_owner_uid()
-    if os.getuid() == 0 and owner != 0:
-        try:  # a root copy leaves the file usable by the desktop user it runs for
-            os.fchown(fd, owner, -1)
-        except OSError:
-            pass
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as e:

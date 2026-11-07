@@ -371,7 +371,10 @@ def release_lock() -> None:
 
     _INSTANCE_MUTEX_HANDLE = None
     _INSTANCE_MUTEX_NAME = ""
-    _release_hook_mutex()
+    # The native hook outlives unhook_all() until this process exits, so the session gate does
+    # too: Windows frees the mutex at exit, and a waiting copy takes it as abandoned.
+    if not native_hook_installed():
+        _release_hook_mutex()
 
 
 def lock_is_held() -> bool:
