@@ -20,7 +20,10 @@ managed task, so updating application files does not change the task's target.
 
 On Windows, the release also has `Install-Odicto.cmd`. It holds `bootstrap.ps1` unchanged
 (built by `build_easy_installer.py` in the Release workflow). Double-clicked, it runs that
-bootstrap, then `odicto autostart`, `odicto start` and `odicto setup`, and waits for a key.
+bootstrap, then `odicto autostart` (new installs only), `odicto start` and `odicto setup`,
+and waits for a key. It starts nothing when the Start Menu item `Odicto` runs another program
+or a Startup `Odicto.lnk` exists (a source checkout); the user migrates first. It reports each
+failed step and exits 1.
 It is not signed. On Windows, install also writes the Start Menu folder `Odicto` with
 Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
 the same name that runs another program is kept.

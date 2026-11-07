@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DISTRIBUTION = ROOT / "tools" / "distribution"
@@ -25,6 +26,17 @@ def _load(name, path):
 builder = _load("odicto_easy_installer_tested", DISTRIBUTION / "build_easy_installer.py")
 dist = _load("odicto_distribution_shortcuts_tested", DISTRIBUTION / "manager.py")
 WINDOWS = sys.platform == "win32"
+
+
+def _powershell(script, **values):
+    return subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                          env=dict(os.environ, **values), capture_output=True, text=True, timeout=60, check=True)
+
+
+def _make_link(path, target):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    _powershell("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
+                "$l.TargetPath = $env:T_TARGET; $l.Save()", T_LINK=str(path), T_TARGET=str(target))
 
 
 class TestEasyInstallerBuild(unittest.TestCase):
@@ -63,70 +75,123 @@ class TestEasyInstallerBuild(unittest.TestCase):
 class TestWindowsEasyInstallerRuns(unittest.TestCase):
     """Runs the built file for real, with a fake bootstrap and a fake odicto command."""
 
+    # The fake bootstrap puts the fake command where the real install puts odicto.cmd.
+    INSTALL = ("param([string]$HomePath)\nNew-Item -ItemType Directory -Force -Path $env:T_BIN | Out-Null\n"
+               "Copy-Item -LiteralPath $env:T_FAKE -Destination (Join-Path $env:T_BIN 'odicto.cmd')\n")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        root = Path(self.temporary.name)
-        self.folder = root / "O'Brien 100% (Downloads)"
+        self.root = Path(self.temporary.name)
+        self.folder = self.root / "O'Brien 100% (Downloads)"
         self.folder.mkdir()
-        self.local = root / "local app data"
+        self.local = self.root / "local app data"
+        self.roaming = self.root / "roaming app data"
+        self.menu = self.roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs"
         self.bin = self.local / "Odicto" / "bin"
-        self.calls = root / "calls.txt"
+        self.fake = self.root / "fake-odicto.cmd"
+        self.calls = self.root / "calls.txt"
+        self.fake_odicto()
 
     def fake_odicto(self, failing=""):
-        self.bin.mkdir(parents=True)
         lines = ["@echo off", f'>>"{self.calls}" echo %*']
         if failing:
             lines.append(f'if "%1"=="{failing}" exit /b 3')
         lines.append("exit /b 0")
-        (self.bin / "odicto.cmd").write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
+        self.fake.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
 
-    def run_installer(self, bootstrap):
+    def managed_links(self):
+        for name in ("Odicto", "Odicto Setup", "Stop Odicto"):
+            _make_link(self.menu / "Odicto" / (name + ".lnk"), self.bin / "odicto.cmd")
+
+    def run_installer(self, bootstrap=None):
+        self.calls.unlink(missing_ok=True)
         installer = self.folder / "Install-Odicto.cmd"
-        installer.write_bytes(builder.build(bootstrap))
-        environment = dict(os.environ, LOCALAPPDATA=str(self.local))
+        installer.write_bytes(builder.build(self.INSTALL if bootstrap is None else bootstrap))
+        environment = dict(os.environ, LOCALAPPDATA=str(self.local), APPDATA=str(self.roaming),
+                           T_BIN=str(self.bin), T_FAKE=str(self.fake))
         done = subprocess.run(["cmd.exe", "/d", "/c", str(installer)], env=environment, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
         calls = self.calls.read_text(encoding="ascii").split() if self.calls.exists() else []
         return done, calls
 
-    def test_success_turns_on_autostart_then_starts_then_opens_setup(self):
-        self.fake_odicto()
-        done, calls = self.run_installer("#Requires -Version 5.1\nparam([string]$HomePath)\nWrite-Host 'FAKE BOOTSTRAP'\n")
+    def test_new_install_turns_on_autostart_then_starts_then_opens_setup(self):
+        self.managed_links()
+        done, calls = self.run_installer("#Requires -Version 5.1\n" + self.INSTALL + "Write-Host 'FAKE BOOTSTRAP'\n")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("FAKE BOOTSTRAP", done.stdout)
         self.assertEqual(calls, ["autostart", "start", "setup"])
-        self.assertIn("Odicto is running", done.stdout)
+        self.assertIn("It starts by itself when you sign in.", done.stdout)
+        self.assertIn("Your browser shows Odicto Setup.", done.stdout)
+        self.assertIn("are in the Start Menu", done.stdout)
+
+    def test_repair_keeps_the_sign_in_choice(self):
+        self.managed_links()
+        self.bin.mkdir(parents=True)
+        (self.bin / "odicto.cmd").write_bytes(self.fake.read_bytes())
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(calls, ["start", "setup"])
+        self.assertNotIn("sign in", done.stdout)
+
+    def test_a_source_checkout_shortcut_stops_before_anything_starts(self):
+        other = self.root / "checkout" / "start_dictation.bat"
+        other.parent.mkdir()
+        other.write_text("@exit /b 0\r\n", encoding="ascii")
+        for link in (self.menu / "Odicto" / "Odicto.lnk", self.menu / "Startup" / "Odicto.lnk"):
+            with self.subTest(link=link.parent.name):
+                self.managed_links()
+                _make_link(link, other)
+                done, calls = self.run_installer()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(calls, [])
+                self.assertIn("another copy of Odicto is on this computer", done.stdout)
+                link.unlink()
+
+    def test_missing_start_menu_items_are_reported(self):
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(calls, ["autostart", "start", "setup"])
+        self.assertIn("The Start Menu items were not made", done.stdout)
+        self.assertNotIn("are in the Start Menu", done.stdout)
 
     def test_failed_bootstrap_runs_no_odicto_command(self):
-        self.fake_odicto()
         done, calls = self.run_installer("param([string]$HomePath)\nthrow 'fixture failure'\n")
         self.assertEqual(done.returncode, 1)
         self.assertIn("Odicto was not installed: fixture failure", done.stdout)
         self.assertEqual(calls, [])
 
     def test_failed_start_exits_non_zero_and_skips_setup(self):
+        self.managed_links()
         self.fake_odicto(failing="start")
-        done, calls = self.run_installer("param([string]$HomePath)\n")
+        done, calls = self.run_installer()
         self.assertEqual(done.returncode, 1)
         self.assertEqual(calls, ["autostart", "start"])
         self.assertIn("Odicto did not start", done.stdout)
 
-    def test_failed_autostart_still_starts(self):
+    def test_failed_autostart_still_starts_and_says_so(self):
+        self.managed_links()
         self.fake_odicto(failing="autostart")
-        done, calls = self.run_installer("param([string]$HomePath)\n")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
         self.assertEqual(calls, ["autostart", "start", "setup"])
+        self.assertIn("It does not start by itself when you sign in.", done.stdout)
+        self.assertNotIn("It starts by itself", done.stdout)
+
+    def test_failed_setup_says_so(self):
+        self.managed_links()
+        self.fake_odicto(failing="setup")
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Odicto Setup did not open.", done.stdout)
+        self.assertNotIn("Your browser shows", done.stdout)
 
     def test_real_bootstrap_payload_parses(self):
         installer = self.folder / "Install-Odicto.cmd"
         installer.write_bytes(builder.build((DISTRIBUTION / "bootstrap.ps1").read_text(encoding="utf-8")))
-        script = ("$t = [IO.File]::ReadAllText($env:T_FILE); $m = '#' + 'ODICTO-POWERSHELL'; $e = $null;"
-                  "[void][Management.Automation.Language.Parser]::ParseInput($t.Substring($t.IndexOf($m)), [ref]$null, [ref]$e);"
-                  "if ($e.Count) { $e | ForEach-Object { $_.Message }; exit 1 }")
-        done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                              env=dict(os.environ, T_FILE=str(installer)), capture_output=True, text=True, timeout=60)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        _powershell("$t = [IO.File]::ReadAllText($env:T_FILE); $m = '#' + 'ODICTO-POWERSHELL'; $e = $null;"
+                    "[void][Management.Automation.Language.Parser]::ParseInput($t.Substring($t.IndexOf($m)), [ref]$null, [ref]$e);"
+                    "if ($e.Count) { $e | ForEach-Object { $_.Message }; exit 1 }", T_FILE=str(installer))
 
 
 @unittest.skipUnless(WINDOWS, "Windows Start Menu shortcuts")
@@ -143,21 +208,30 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
         self.folder = self.programs / "Odicto"
 
     def read(self, name):
-        script = ("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
-                  "@{target=$l.TargetPath; arguments=$l.Arguments; directory=$l.WorkingDirectory;"
-                  "style=$l.WindowStyle} | ConvertTo-Json -Compress")
-        done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                              env=dict(os.environ, T_LINK=str(self.folder / (name + ".lnk"))),
-                              capture_output=True, text=True, timeout=60, check=True)
+        done = _powershell("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
+                           "@{target=$l.TargetPath; arguments=$l.Arguments; directory=$l.WorkingDirectory;"
+                           "style=$l.WindowStyle; icon=$l.IconLocation} | ConvertTo-Json -Compress",
+                           T_LINK=str(self.folder / (name + ".lnk")))
         return json.loads(done.stdout)
+
+    def with_release_icon(self):
+        release = self.manager.home / "releases" / "fixture"
+        (release / "assets").mkdir(parents=True)
+        (release / "assets" / "odicto.ico").write_bytes(b"release icon")
+        for name, value in (("active", {"directory": "fixture"}), ("release_path", release)):
+            patcher = patch.object(self.manager, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_creates_three_shortcuts_that_run_the_stable_command(self):
         lines = self.manager.install_shortcuts(self.programs)
         self.assertEqual(lines, ["Start Menu: Odicto", "Start Menu: Odicto Setup", "Start Menu: Stop Odicto"])
         for name, command, _ in dist.SHORTCUTS:
             with self.subTest(name=name):
-                self.assertEqual(self.read(name), {"target": str(self.launcher), "arguments": command,
-                                                   "directory": str(self.manager.home), "style": 7})
+                link = self.read(name)
+                del link["icon"]
+                self.assertEqual(link, {"target": str(self.launcher), "arguments": command,
+                                        "directory": str(self.manager.home), "style": 7})
 
     def test_second_run_refreshes_the_same_shortcuts(self):
         self.manager.install_shortcuts(self.programs)
@@ -171,16 +245,26 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
         other = self.programs.parent / "source checkout" / "start_dictation.bat"
         other.parent.mkdir()
         other.write_text("@exit /b 0\r\n", encoding="ascii")
-        self.folder.mkdir(parents=True)
-        script = ("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
-                  "$l.TargetPath = $env:T_TARGET; $l.Save()")
-        subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                       env=dict(os.environ, T_LINK=str(self.folder / "Odicto.lnk"), T_TARGET=str(other)),
-                       capture_output=True, timeout=60, check=True)
+        _make_link(self.folder / "Odicto.lnk", other)
         lines = self.manager.install_shortcuts(self.programs)
         self.assertEqual(lines[0], "Kept Odicto (it runs another program)")
         self.assertEqual(self.read("Odicto")["target"], str(other))
         self.assertEqual(self.read("Stop Odicto")["target"], str(self.launcher))
+
+    def test_icon_is_copied_into_the_home_and_used(self):
+        self.with_release_icon()
+        self.manager.install_shortcuts(self.programs)
+        icon = self.manager.home / "odicto.ico"
+        self.assertEqual(icon.read_bytes(), b"release icon")
+        self.assertEqual(self.read("Odicto")["icon"], str(icon) + ",0")
+
+    def test_an_icon_file_odicto_did_not_write_is_kept_and_not_used(self):
+        self.with_release_icon()
+        icon = self.manager.home / "odicto.ico"
+        icon.write_bytes(b"the user's own file")
+        self.manager.install_shortcuts(self.programs)
+        self.assertEqual(icon.read_bytes(), b"the user's own file")
+        self.assertNotIn("odicto.ico", self.read("Odicto")["icon"])
 
     def test_missing_launcher_creates_nothing(self):
         self.launcher.unlink()

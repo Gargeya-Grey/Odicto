@@ -865,12 +865,21 @@ runpy.run_path(str(script), run_name='__main__')
         icon = self.home / "odicto.ico"
         current = self.active()
         source_icon = self.release_path(current) / "assets" / "odicto.ico" if current else None
-        if icon.is_symlink():
-            raise DistributionError("The shortcut icon path is a symlink; shortcuts were not created")
-        if source_icon and source_icon.is_file():
-            shutil.copyfile(source_icon, icon)
+        marker = self._read_json(self.marker) if self.marker.exists() else {}
+        present = icon.exists() or icon.is_symlink()
+        owned = (present and icon.is_file() and not icon.is_symlink()
+                 and hashlib.sha256(icon.read_bytes()).hexdigest() == marker.get("shortcut_icon"))
+        if (owned or not present) and source_icon and source_icon.is_file():
+            contents = source_icon.read_bytes()
+            temporary = icon.with_name(icon.name + ".new-" + uuid.uuid4().hex)
+            temporary.write_bytes(contents)
+            os.replace(temporary, icon)
+            owned = True
+            if self.marker.exists():
+                marker["shortcut_icon"] = hashlib.sha256(contents).hexdigest()
+                atomic_json(self.marker, marker)
         environment = dict(os.environ, ODICTO_LAUNCHER=str(launcher), ODICTO_HOME=str(self.home),
-                           ODICTO_ICON=str(icon) if icon.is_file() else "",
+                           ODICTO_ICON=str(icon) if owned else "",
                            ODICTO_PROGRAMS=str(programs) if programs else "",
                            ODICTO_SHORTCUTS=json.dumps(SHORTCUTS))
         done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",

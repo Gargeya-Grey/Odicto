@@ -23,14 +23,16 @@ pause
 exit /b %ODICTO_STATUS%
 """
 
-BEFORE = """$ErrorActionPreference = 'Stop'
+BEFORE = r"""$ErrorActionPreference = 'Stop'
+$odicto = Join-Path $env:LOCALAPPDATA 'Odicto\bin\odicto.cmd'
+$repair = Test-Path -LiteralPath $odicto
 Write-Host 'Installing Odicto. The first install takes a few minutes.'
 Write-Host ''
 try {
 & {
 """
 
-AFTER = """
+AFTER = r"""
 }
 } catch {
     Write-Host ''
@@ -38,24 +40,54 @@ AFTER = """
     Write-Host 'Check the internet connection, then double-click Install-Odicto.cmd again.'
     exit 1
 }
-$odicto = Join-Path $env:LOCALAPPDATA 'Odicto\\bin\\odicto.cmd'
 if (-not (Test-Path -LiteralPath $odicto)) {
     Write-Host ('Odicto was not installed: ' + $odicto + ' is missing.')
     exit 1
 }
+$menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$shell = New-Object -ComObject WScript.Shell
+function Test-OdictoLink([string]$Name) {
+    $path = Join-Path $menu $Name
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $target = [string]$shell.CreateShortcut($path).TargetPath
+    return ($target -and [string]::Equals([IO.Path]::GetFullPath($target), [IO.Path]::GetFullPath($odicto),
+        [StringComparison]::OrdinalIgnoreCase))
+}
+# A source checkout's Start Menu item or sign-in shortcut: two copies must never run together.
+if ((Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false -or (Test-Path -LiteralPath (Join-Path $menu 'Startup\Odicto.lnk'))) {
+    Write-Host ''
+    Write-Host 'Odicto is installed, but another copy of Odicto is on this computer.'
+    Write-Host 'Two copies must never run together, so the new copy was not started.'
+    Write-Host 'Move your settings to the new copy first:'
+    Write-Host '  https://github.com/Gargeya-Grey/Odicto#moving-from-a-source-checkout'
+    exit 0
+}
+$failed = @()
 Write-Host ''
-& $odicto autostart
-if ($LASTEXITCODE -ne 0) { Write-Host 'Odicto will not start by itself when you sign in. Use the Odicto item in the Start Menu.' }
+if (-not $repair) {
+    & $odicto autostart
+    if ($LASTEXITCODE -ne 0) { $failed += 'autostart' }
+}
 & $odicto start
 if ($LASTEXITCODE -ne 0) {
+    Write-Host ''
     Write-Host 'Odicto did not start. Open the Start Menu and click Odicto to try again.'
     exit 1
 }
 & $odicto setup
+if ($LASTEXITCODE -ne 0) { $failed += 'setup' }
+$items = (Test-OdictoLink 'Odicto\Odicto Setup.lnk') -and (Test-OdictoLink 'Odicto\Stop Odicto.lnk')
+if (-not $items) { $failed += 'shortcuts' }
 Write-Host ''
-Write-Host 'Odicto is running, and it starts by itself when you sign in.'
+Write-Host 'Odicto is running.'
+if ('autostart' -in $failed) { Write-Host 'It does not start by itself when you sign in.' }
+elseif (-not $repair) { Write-Host 'It starts by itself when you sign in.' }
 Write-Host 'To type with your voice: click in a text box, press Ctrl and the ` key (left of 1), speak, then press them again.'
-Write-Host 'Your browser shows Odicto Setup. Odicto, Odicto Setup and Stop Odicto are in the Start Menu.'
+if ('setup' -in $failed) { Write-Host 'Odicto Setup did not open.' }
+else { Write-Host 'Your browser shows Odicto Setup.' }
+if ($items) { Write-Host 'Odicto, Odicto Setup and Stop Odicto are in the Start Menu.' }
+else { Write-Host 'The Start Menu items were not made. To stop Odicto, right-click the Odicto icon next to the clock and click Quit Odicto.' }
+if ($failed.Count) { exit 1 }
 exit 0
 """
 
