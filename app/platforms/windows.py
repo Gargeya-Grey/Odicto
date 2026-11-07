@@ -19,9 +19,16 @@ from platforms._keyboard import *  # noqa: F401,F403
 _INSTANCE_MUTEX_HANDLE: Optional[int] = None
 _INSTANCE_LOCK_FILE = None
 _INSTANCE_MUTEX_NAME: str = ""
+# Session-wide keyboard-hook mutex (the Local namespace is this logon session), held with the
+# install lock: another install has another install mutex, so only this one stops both hooking.
+_HOOK_MUTEX_HANDLE: Optional[int] = None
+# Why the last acquire_lock() failed: "busy" (another copy holds a lock) or "error".
+_REFUSAL: str = ""
 
 _WAIT_OBJECT_0 = 0x00000000
 _WAIT_ABANDONED = 0x00000080
+_WAIT_TIMEOUT = 0x00000102
+_ERROR_ACCESS_DENIED = 5
 _ERROR_ALREADY_EXISTS = 183
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -148,6 +155,26 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     return killed
 
 
+def _refuse(created: bool, wait: int = 0) -> bool:
+    """Record why a lock step failed and return False. A mutex this process may not open (an
+    elevated owner made it) or one still held after the wait is another copy; anything else is
+    an error, so the caller does not tell the user to quit a copy that does not exist."""
+    global _REFUSAL
+
+    import ctypes
+
+    if created:
+        _REFUSAL = "busy" if wait == _WAIT_TIMEOUT else "error"
+    else:
+        _REFUSAL = "busy" if ctypes.GetLastError() == _ERROR_ACCESS_DENIED else "error"
+    return False
+
+
+def lock_refusal() -> str:
+    """Why the last acquire_lock() failed: "busy" (another copy holds a lock), "error" or ""."""
+    return _REFUSAL
+
+
 def _try_acquire_mutex(timeout_ms: int) -> bool:
     global _INSTANCE_MUTEX_HANDLE, _INSTANCE_MUTEX_NAME
 
@@ -175,7 +202,7 @@ def _try_acquire_mutex(timeout_ms: int) -> bool:
     if not handle:
         _INSTANCE_MUTEX_HANDLE = None
         _INSTANCE_MUTEX_NAME = ""
-        return False
+        return _refuse(created=False)
 
     wait = kernel32.WaitForSingleObject(handle, int(timeout_ms))
     if wait in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
@@ -189,11 +216,11 @@ def _try_acquire_mutex(timeout_ms: int) -> bool:
         pass
     _INSTANCE_MUTEX_HANDLE = None
     _INSTANCE_MUTEX_NAME = ""
-    return False
+    return _refuse(created=True, wait=wait)
 
 
 def _try_acquire_lockfile() -> bool:
-    global _INSTANCE_LOCK_FILE
+    global _INSTANCE_LOCK_FILE, _REFUSAL
 
     import msvcrt
 
@@ -205,6 +232,7 @@ def _try_acquire_lockfile() -> bool:
             msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
             fh.close()
+            _REFUSAL = "busy"
             return False
         try:
             fh.seek(0)
@@ -217,6 +245,7 @@ def _try_acquire_lockfile() -> bool:
         return True
     except Exception as e:
         print(f"Warning: lock file acquire failed: {e}")
+        _REFUSAL = "error"
         return False
 
 
@@ -236,10 +265,76 @@ def _release_mutex_only() -> None:
     _INSTANCE_MUTEX_NAME = ""
 
 
+def _try_acquire_hook_mutex(timeout_ms: int) -> bool:
+    """Take the session's keyboard-hook mutex. A mutex this process cannot open (an elevated
+    owner made it) counts as held by another copy."""
+    global _HOOK_MUTEX_HANDLE
+
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.CreateMutexW(None, False, f"Local\\Odicto_KeyboardHooks_{base.hook_lock_scope()}")
+    if not handle:
+        return _refuse(created=False)
+    wait = kernel32.WaitForSingleObject(handle, int(timeout_ms))
+    if wait in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
+        _HOOK_MUTEX_HANDLE = int(handle)
+        return True
+    kernel32.CloseHandle(handle)
+    return _refuse(created=True, wait=wait)
+
+
+def _release_hook_mutex() -> None:
+    global _HOOK_MUTEX_HANDLE
+
+    if _HOOK_MUTEX_HANDLE:
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.ReleaseMutex(_HOOK_MUTEX_HANDLE)
+            kernel32.CloseHandle(_HOOK_MUTEX_HANDLE)
+        except Exception:
+            pass
+    _HOOK_MUTEX_HANDLE = None
+
+
+def _release_lockfile_only() -> None:
+    global _INSTANCE_LOCK_FILE
+
+    if _INSTANCE_LOCK_FILE is not None:
+        try:
+            import msvcrt
+
+            _INSTANCE_LOCK_FILE.seek(0)
+            msvcrt.locking(_INSTANCE_LOCK_FILE.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+        try:
+            _INSTANCE_LOCK_FILE.close()
+        except Exception:
+            pass
+        _INSTANCE_LOCK_FILE = None
+
+
 def acquire_lock(timeout_ms: int = 8000) -> bool:
+    global _REFUSAL
+
+    _REFUSAL = ""
     if not _try_acquire_mutex(timeout_ms):
         return False
     if not _try_acquire_lockfile():
+        _release_mutex_only()
+        return False
+    if not _try_acquire_hook_mutex(timeout_ms):
+        _release_lockfile_only()
         _release_mutex_only()
         return False
     return True
@@ -276,10 +371,12 @@ def release_lock() -> None:
 
     _INSTANCE_MUTEX_HANDLE = None
     _INSTANCE_MUTEX_NAME = ""
+    _release_hook_mutex()
 
 
 def lock_is_held() -> bool:
-    return _INSTANCE_MUTEX_HANDLE is not None and _INSTANCE_LOCK_FILE is not None
+    return (_INSTANCE_MUTEX_HANDLE is not None and _INSTANCE_LOCK_FILE is not None
+            and _HOOK_MUTEX_HANDLE is not None)
 
 
 def spawn_detached(args) -> subprocess.Popen:

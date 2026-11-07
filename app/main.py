@@ -278,6 +278,10 @@ is_pressed_exclusive = platforms.is_pressed_exclusive
 # backend reports its lock is held.
 # ---------------------------------------------------------------------------
 _INSTANCE_LOCK_HELD: bool = False
+# Exit code when another owner holds a lock (this install or another one in the session). The
+# managed updater reads it as "busy", not as a broken release (tools/distribution/manager.py).
+EXIT_ANOTHER_OWNER = 75
+_LOCK_REFUSED: bool = False
 
 
 def _install_root() -> str:
@@ -295,13 +299,21 @@ def _mutex_name_for_install() -> str:
 
 def acquire_single_instance_lock(timeout_ms: int = 8000) -> bool:
     """Take exclusive ownership of this install. False ⇒ must not bind keyboard hooks."""
-    global _INSTANCE_LOCK_HELD
+    global _INSTANCE_LOCK_HELD, _LOCK_REFUSED
 
     if not platforms.acquire_lock(timeout_ms):
+        # Only a lock another copy holds is "busy" (exit 75); an error is a failed start.
+        _LOCK_REFUSED = platforms.lock_refusal() == "busy"
+        if not _LOCK_REFUSED:
+            print("!!! FATAL: Could not create the Odicto single-instance lock (see the warning "
+                  "above). No other copy holds it; Odicto did not start.", flush=True)
+            _INSTANCE_LOCK_HELD = False
+            return False
         print(
             "!!! FATAL: Could not acquire Odicto single-instance lock.\n"
             "    Two copies would stack system-wide keyboard hooks and double every\n"
-            "    typed character (even when not dictating). Stop all instances,\n"
+            "    typed character (even when not dictating). Another copy may be running\n"
+            "    from this folder or from another install. Stop all instances,\n"
             "    then start only once.",
             flush=True,
         )
@@ -2010,7 +2022,7 @@ if __name__ == "__main__":
 
     _pid_path = os.path.join(_install_root(), "dictation.pid")
     if not claim_install(_pid_path):
-        sys.exit(2)
+        sys.exit(EXIT_ANOTHER_OWNER if _LOCK_REFUSED else 2)
 
     # Write PID as soon as we own the install so start scripts can confirm
     # launch without waiting for Whisper load / initialize_app.
