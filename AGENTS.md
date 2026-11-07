@@ -301,6 +301,8 @@ every install in the user session (a source checkout and the managed install): a
 on Linux, and an flock on `~/Library/Application Support/.odicto-keyboard-hooks-<scope>.lock`
 on macOS, where a root copy is refused. A busy lock exits 75 (`EXIT_ANOTHER_OWNER`; the
 managed command prints "Another copy of Odicto is running"); a lock error exits 2.
+A copy older than 1.5.0 does not take the session hook lock, so it can still hook beside a
+newer copy: retire its startup entries and stop it before a newer copy starts.
 Tests isolate the lock with `ODICTO_HOOK_LOCK_SCOPE` (`tools/run_tests.py` sets it).
 
 **Hard rules for agents and operators:**

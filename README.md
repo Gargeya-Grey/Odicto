@@ -39,10 +39,13 @@ The Start Menu then has **Odicto**, **Odicto Setup** and **Stop Odicto**. You ne
 Updates install by themselves when Odicto starts. To stop Odicto starting at sign-in, turn it off
 in Task Manager, **Startup apps** ("Odicto managed").
 
-If Odicto says **Another copy of Odicto is running**, a different Odicto is already on (for
-example a copy from a source folder). Right-click the Odicto icon near the clock and choose
-**Quit Odicto**. Then open **Odicto** from the Start Menu. Odicto never starts a second copy,
-because two copies would type every letter twice.
+If Odicto says **Another copy of Odicto is running**, a different Odicto is already on, usually
+a copy that you installed from a source folder. Odicto does not start a second copy, because
+two copies would type every letter twice. Right-click the Odicto icon near the clock and choose
+**Quit Odicto**. Then follow [Moving from a source checkout](#moving-from-a-source-checkout),
+and double-click `Install-Odicto.cmd` again. Do not use the Start Menu item **Odicto** before
+that step: it can still start the source copy. A copy older than 1.5.0 does not do this check,
+so stop it and turn off its start at sign-in before you use the new copy.
 
 ### Any platform, from a terminal
 
