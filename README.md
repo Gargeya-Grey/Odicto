@@ -24,8 +24,10 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 If a copy of Odicto that you installed from its folder is on the computer, the installer installs
 the new copy but does not start it, because two copies must never run together. Follow
-[Moving from a source checkout](#moving-from-a-source-checkout). Run again on a computer that has
-the new copy, the installer repairs it and keeps your start-at-sign-in choice.
+[Moving from a source checkout](#moving-from-a-source-checkout). The installer finds that copy by
+its Start Menu and Startup shortcuts only. If you made it without shortcuts, stop it before you run
+the installer. Run again on a computer that has the new copy, the installer repairs it and keeps your
+start-at-sign-in choice.
 
 The Start Menu then has **Odicto**, **Odicto Setup** and **Stop Odicto**. You never need a terminal.
 Updates install by themselves when Odicto starts. To stop Odicto starting at sign-in, turn it off

@@ -22,8 +22,11 @@ On Windows, the release also has `Install-Odicto.cmd`. It holds `bootstrap.ps1` 
 (built by `build_easy_installer.py` in the Release workflow). Double-clicked, it runs that
 bootstrap, then `odicto autostart` (new installs only), `odicto start` and `odicto setup`,
 and waits for a key. It starts nothing when the Start Menu item `Odicto` runs another program
-or a Startup `Odicto.lnk` exists (a source checkout); the user migrates first. It reports each
-failed step and exits 1.
+or a Startup `Odicto.lnk` exists (a source checkout), unless `migration.json` says the
+migration is complete; the user migrates first. The check reads only those two shortcuts, under
+`%APPDATA%`: a source copy without them, or a running source owner, is not detected. It reports
+each failed step and exits 1. Pre-releases do not get the file, because it installs the latest
+stable release.
 It is not signed. On Windows, install also writes the Start Menu folder `Odicto` with
 Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
 the same name that runs another program is kept.

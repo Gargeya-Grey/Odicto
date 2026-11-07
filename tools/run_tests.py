@@ -56,9 +56,9 @@ GATE = {
     # Plus 4 for the review fixes: a grey custom colour (3) and the page maths run in Node (1): 1239.
     # Plus 4 for the update screen: tool output in update.log, steps and result, up to date, failure: 1243.
     # Plus 3 for its review fixes: an update while Odicto runs, a failed check, the help rows: 1246.
-    # Plus 19 for the no-terminal Windows path: the double-click installer (4 on every platform,
-    # 9 Windows-only runs of the built file) and the Start Menu shortcuts (6 Windows-only): 1265.
-    "floor": 1265,
+    # Plus 21 for the no-terminal Windows path: the double-click installer (4 on every platform,
+    # 11 Windows-only runs of the built file) and the Start Menu shortcuts (6 Windows-only): 1267.
+    "floor": 1267,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
