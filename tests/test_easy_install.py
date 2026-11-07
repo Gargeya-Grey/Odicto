@@ -33,10 +33,14 @@ def _powershell(script, **values):
                           env=dict(os.environ, **values), capture_output=True, text=True, timeout=60, check=True)
 
 
-def _make_link(path, target):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    _powershell("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
-                "$l.TargetPath = $env:T_TARGET; $l.Save()", T_LINK=str(path), T_TARGET=str(target))
+def _make_links(*pairs):
+    """Make every (link, target) shortcut with one PowerShell process: each start costs seconds."""
+    for path, _ in pairs:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    _powershell("$s = New-Object -ComObject WScript.Shell;"
+                "foreach ($row in $env:T_LINKS.Split([char]10)) { $p = $row.Split([char]9);"
+                "$l = $s.CreateShortcut($p[0]); $l.TargetPath = $p[1]; $l.Save() }",
+                T_LINKS="\n".join(f"{path}\t{target}" for path, target in pairs))
 
 
 class TestEasyInstallerBuild(unittest.TestCase):
@@ -100,9 +104,9 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         lines.append("exit /b 0")
         self.fake.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
 
-    def managed_links(self):
-        for name in ("Odicto", "Odicto Setup", "Stop Odicto"):
-            _make_link(self.menu / "Odicto" / (name + ".lnk"), self.bin / "odicto.cmd")
+    def managed_links(self, *extra):
+        _make_links(*[(self.menu / "Odicto" / (name + ".lnk"), self.bin / "odicto.cmd")
+                      for name in ("Odicto", "Odicto Setup", "Stop Odicto")], *extra)
 
     def run_installer(self, bootstrap=None):
         self.calls.unlink(missing_ok=True)
@@ -150,8 +154,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         other = self.root / "checkout" / "start_dictation.bat"
         other.parent.mkdir()
         other.write_text("@exit /b 0\r\n", encoding="ascii")
-        self.managed_links()
-        _make_link(self.menu / "Startup" / "Odicto.lnk", other)
+        self.managed_links((self.menu / "Startup" / "Odicto.lnk", other))
         (self.local / "Odicto").mkdir(parents=True)
         receipt = self.local / "Odicto" / "migration.json"
         receipt.write_text('{"state": "complete"}', encoding="ascii")
@@ -168,8 +171,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         other.write_text("@exit /b 0\r\n", encoding="ascii")
         for link in (self.menu / "Odicto" / "Odicto.lnk", self.menu / "Startup" / "Odicto.lnk"):
             with self.subTest(link=link.parent.name):
-                self.managed_links()
-                _make_link(link, other)
+                self.managed_links((link, other))
                 done, calls = self.run_installer()
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual(calls, [])
@@ -201,8 +203,8 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_missing_start_menu_items_are_reported(self):
-        for name in ("Odicto Setup", "Stop Odicto"):
-            _make_link(self.menu / "Odicto" / (name + ".lnk"), self.bin / "odicto.cmd")
+        _make_links(*[(self.menu / "Odicto" / (name + ".lnk"), self.bin / "odicto.cmd")
+                      for name in ("Odicto Setup", "Stop Odicto")])
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 1)
         self.assertEqual(calls, ["autostart", "start", "setup"])
@@ -263,11 +265,14 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
         self.programs = root / "Programs"
         self.folder = self.programs / "Odicto"
 
-    def read(self, name):
-        done = _powershell("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:T_LINK);"
-                           "@{target=$l.TargetPath; arguments=$l.Arguments; directory=$l.WorkingDirectory;"
-                           "style=$l.WindowStyle; icon=$l.IconLocation} | ConvertTo-Json -Compress",
-                           T_LINK=str(self.folder / (name + ".lnk")))
+    def read(self):
+        """All three shortcuts, read with one PowerShell process."""
+        done = _powershell("$s = New-Object -ComObject WScript.Shell; $o = @{};"
+                           "foreach ($n in $env:T_NAMES.Split([char]10)) {"
+                           "$l = $s.CreateShortcut((Join-Path $env:T_DIR ($n + '.lnk')));"
+                           "$o[$n] = @{target=$l.TargetPath; arguments=$l.Arguments; directory=$l.WorkingDirectory;"
+                           "style=$l.WindowStyle; icon=$l.IconLocation} }; $o | ConvertTo-Json -Compress",
+                           T_DIR=str(self.folder), T_NAMES="\n".join(name for name, _, _ in dist.SHORTCUTS))
         return json.loads(done.stdout)
 
     def with_release_icon(self):
@@ -282,9 +287,10 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
     def test_creates_three_shortcuts_that_run_the_stable_command(self):
         lines = self.manager.install_shortcuts(self.programs)
         self.assertEqual(lines, ["Start Menu: Odicto", "Start Menu: Odicto Setup", "Start Menu: Stop Odicto"])
+        links = self.read()
         for name, command, _ in dist.SHORTCUTS:
             with self.subTest(name=name):
-                link = self.read(name)
+                link = links[name]
                 del link["icon"]
                 self.assertEqual(link, {"target": str(self.launcher), "arguments": command,
                                         "directory": str(self.manager.home), "style": 7})
@@ -301,18 +307,19 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
         other = self.programs.parent / "source checkout" / "start_dictation.bat"
         other.parent.mkdir()
         other.write_text("@exit /b 0\r\n", encoding="ascii")
-        _make_link(self.folder / "Odicto.lnk", other)
+        _make_links((self.folder / "Odicto.lnk", other))
         lines = self.manager.install_shortcuts(self.programs)
         self.assertEqual(lines[0], "Kept Odicto (it runs another program)")
-        self.assertEqual(self.read("Odicto")["target"], str(other))
-        self.assertEqual(self.read("Stop Odicto")["target"], str(self.launcher))
+        links = self.read()
+        self.assertEqual(links["Odicto"]["target"], str(other))
+        self.assertEqual(links["Stop Odicto"]["target"], str(self.launcher))
 
     def test_icon_is_copied_into_the_home_and_used(self):
         self.with_release_icon()
         self.manager.install_shortcuts(self.programs)
         icon = self.manager.home / "odicto.ico"
         self.assertEqual(icon.read_bytes(), b"release icon")
-        self.assertEqual(self.read("Odicto")["icon"], str(icon) + ",0")
+        self.assertEqual(self.read()["Odicto"]["icon"], str(icon) + ",0")
 
     def test_an_icon_file_odicto_did_not_write_is_kept_and_not_used(self):
         self.with_release_icon()
@@ -320,7 +327,7 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
         icon.write_bytes(b"the user's own file")
         self.manager.install_shortcuts(self.programs)
         self.assertEqual(icon.read_bytes(), b"the user's own file")
-        self.assertNotIn("odicto.ico", self.read("Odicto")["icon"])
+        self.assertNotIn("odicto.ico", self.read()["Odicto"]["icon"])
 
     def test_missing_launcher_creates_nothing(self):
         self.launcher.unlink()

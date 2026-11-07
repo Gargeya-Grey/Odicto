@@ -29,8 +29,10 @@ def main():
                      "start_dictation.sh", "setup.sh", "stop_dictation.sh", ".gitignore",
                      "VERSION", "CHANGELOG.md"):
             shutil.copy2(root / name, clean / name)
+        # The same suite gets 600 s in Gate 2 and verify.ps1 waits 600 s for this script;
+        # stop just before that, so this run reports its own timeout and cleans up.
         result = subprocess.run([sys.executable, "-B", "tools/run_tests.py"],
-                                cwd=clean, env=environment, timeout=290)
+                                cwd=clean, env=environment, timeout=570)
         # Windows reports a crash status (0xC0000409) unsigned; sys.exit() needs it
         # signed, or the parent sees 0xFFFFFFFF and the crash type is lost.
         code = result.returncode
