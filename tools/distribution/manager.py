@@ -448,6 +448,45 @@ def private_directory(path: Path, *, exist_ok: bool = False, parents: bool = Fal
     return path
 
 
+# Start Menu items of a managed Windows install: (file name, command, description).
+SHORTCUTS = (("Odicto", "start", "Start Odicto dictation"),
+             ("Odicto Setup", "setup", "Open the Odicto setup page"),
+             ("Stop Odicto", "stop", "Stop Odicto"))
+
+# Values arrive in environment variables, so no path is ever quoted into the script.
+SHORTCUT_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$programs = $env:ODICTO_PROGRAMS
+if (-not $programs) { $programs = [Environment]::GetFolderPath('Programs') }
+if (-not $programs) { throw 'The Start Menu folder of this user could not be found.' }
+$folder = Join-Path $programs 'Odicto'
+if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder | Out-Null }
+$launcher = [IO.Path]::GetFullPath($env:ODICTO_LAUNCHER)
+$shell = New-Object -ComObject WScript.Shell
+foreach ($entry in ($env:ODICTO_SHORTCUTS | ConvertFrom-Json)) {
+    $name, $command, $text = $entry
+    $path = Join-Path $folder ($name + '.lnk')
+    if (Test-Path -LiteralPath $path) {
+        $existing = [string]$shell.CreateShortcut($path).TargetPath
+        if (-not $existing -or -not [string]::Equals([IO.Path]::GetFullPath($existing), $launcher,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Output "Kept $name (it runs another program)"
+            continue
+        }
+    }
+    $link = $shell.CreateShortcut($path)
+    $link.TargetPath = $launcher
+    $link.Arguments = $command
+    $link.WorkingDirectory = $env:ODICTO_HOME
+    $link.WindowStyle = 7
+    $link.Description = $text
+    if ($env:ODICTO_ICON) { $link.IconLocation = $env:ODICTO_ICON + ',0' }
+    $link.Save()
+    Write-Output "Start Menu: $name"
+}
+"""
+
+
 def default_home() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Odicto"
@@ -812,6 +851,35 @@ runpy.run_path(str(script), run_name='__main__')
             else:
                 command.symlink_to(target)
         return command
+
+    def install_shortcuts(self, programs: Path | None = None) -> list[str]:
+        """Windows: Start Menu items that run the stable command, so no terminal is needed.
+
+        A shortcut that already exists and runs something else (a source checkout's
+        shortcut, a user's own) is preserved. Returns one line per shortcut.
+        """
+        launcher = self.home / "bin" / "odicto.cmd"
+        if not launcher.is_file():
+            raise DistributionError("The stable launcher is missing; shortcuts were not created")
+        # A copy in the home, because a release directory goes away after later updates.
+        icon = self.home / "odicto.ico"
+        current = self.active()
+        source_icon = self.release_path(current) / "assets" / "odicto.ico" if current else None
+        if icon.is_symlink():
+            raise DistributionError("The shortcut icon path is a symlink; shortcuts were not created")
+        if source_icon and source_icon.is_file():
+            shutil.copyfile(source_icon, icon)
+        environment = dict(os.environ, ODICTO_LAUNCHER=str(launcher), ODICTO_HOME=str(self.home),
+                           ODICTO_ICON=str(icon) if icon.is_file() else "",
+                           ODICTO_PROGRAMS=str(programs) if programs else "",
+                           ODICTO_SHORTCUTS=json.dumps(SHORTCUTS))
+        done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                               "-Command", SHORTCUT_SCRIPT], env=environment, capture_output=True,
+                              text=True, timeout=60)
+        if done.returncode:
+            raise DistributionError("Start Menu shortcuts were not created: "
+                                    + (done.stderr.strip().splitlines() or ["unknown error"])[-1])
+        return [line for line in done.stdout.splitlines() if line.strip()]
 
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
@@ -1481,6 +1549,12 @@ def main(argv=None) -> int:
                         print(f"Command installed at {command_path}")
                     except DistributionError as error:
                         print(f"Command alias unchanged: {error}", file=sys.stderr)
+                    if sys.platform == "win32":
+                        try:
+                            for line in manager.install_shortcuts():
+                                print(line)
+                        except (DistributionError, OSError, subprocess.SubprocessError) as error:
+                            print(f"Start Menu unchanged: {error}", file=sys.stderr)
                     print(f"Configure with: {manager.home / 'bin' / ('odicto.cmd' if os.name == 'nt' else 'odicto')} setup")
                 print(f"Odicto {record['version']} is active.")
         return 0

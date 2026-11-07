@@ -4,6 +4,13 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.5.0] - 2026-11-07
+
+### Added
+
+- Install on Windows without a terminal. Download `Install-Odicto.cmd` from the release and double-click it. It installs Odicto, turns on start at sign-in, starts Odicto and opens Setup. The file is not signed, so Windows asks once: click "More info", then "Run anyway".
+- The Windows install adds three Start Menu items: Odicto, Odicto Setup and Stop Odicto. A Start Menu item of the same name that runs another program (for example a source checkout's) stays as it is.
+
 ## [1.4.3] - 2026-11-04
 
 ### Changed

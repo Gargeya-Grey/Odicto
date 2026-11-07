@@ -109,6 +109,13 @@ jobs:
           [IO.File]::WriteAllText("$PWD/out/$name.sha256", "$hash  $name`n")
           "name=$name" >> $env:GITHUB_OUTPUT
 
+      # One file a Windows user can double-click: the same verified bootstrap, then start
+      # at sign-in, start and Setup. Unsigned, so Windows SmartScreen asks once.
+      - name: Build the double-click Windows installer
+        run: |
+          .venv\Scripts\python.exe tools/distribution/build_easy_installer.py out/Install-Odicto.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
+
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,7 +124,7 @@ jobs:
           $name = '${{ steps.package.outputs.name }}'
           $flags = @()
           if ('${{ inputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
-          gh release create $tag "out/$name" "out/$name.sha256" "out/platform-gate.json" `
+          gh release create $tag "out/$name" "out/$name.sha256" "out/Install-Odicto.cmd" "out/platform-gate.json" `
             --target $env:GITHUB_SHA --title "Odicto $tag" `
             --notes-file out/notes.md --generate-notes @flags
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }

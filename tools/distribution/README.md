@@ -18,6 +18,13 @@ managed task, so updating application files does not change the task's target.
 
 ## Install
 
+On Windows, the release also has `Install-Odicto.cmd`. It holds `bootstrap.ps1` unchanged
+(built by `build_easy_installer.py` in the Release workflow). Double-clicked, it runs that
+bootstrap, then `odicto autostart`, `odicto start` and `odicto setup`, and waits for a key.
+It is not signed. On Windows, install also writes the Start Menu folder `Odicto` with
+Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
+the same name that runs another program is kept.
+
 Download the release ZIP from [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases/latest)
 and extract it. Run the bootstrap from its `Odicto` directory as your desktop user.
 

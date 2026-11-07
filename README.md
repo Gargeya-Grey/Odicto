@@ -14,6 +14,20 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ## Install
 
+### Windows, no terminal
+
+1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
+2. Double-click it. The file is not signed, so Windows can show "Windows protected your PC".
+   Click **More info**, then **Run anyway**. Your browser can also ask you to keep the file.
+3. Wait a few minutes. The installer installs Odicto, sets it to start when you sign in, starts it,
+   and opens Setup in your browser. Press a key to close the window when it says so.
+
+The Start Menu then has **Odicto**, **Odicto Setup** and **Stop Odicto**. You never need a terminal.
+Updates install by themselves when Odicto starts. To stop Odicto starting at sign-in, turn it off
+in Task Manager, **Startup apps** ("Odicto managed").
+
+### Any platform, from a terminal
+
 Download `Odicto-v<version>.zip` from the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest),
 extract it, and open a terminal in the extracted `Odicto` folder.
 

@@ -65,3 +65,11 @@ kernel and OS release. Publication requires all six jobs at the exact main commi
 
 These checks do not grant macOS permissions, record physical microphone audio,
 establish Wayland support, or replace an owner-confirmed real dictation journey.
+
+## Double-click installer and Start Menu (Windows)
+
+`tests/test_easy_install.py` runs a built `Install-Odicto.cmd` with a fake bootstrap and a fake
+`odicto.cmd` (order autostart, start, setup; exit codes) and writes real shortcuts in a temp
+Programs folder. A real install from the published asset needs a fresh Windows user or machine,
+with the owner's hands: download it, pass SmartScreen, and confirm the Start Menu items, the
+HUD after start, and Setup in the browser. Never run it on a machine that runs Odicto for real.
