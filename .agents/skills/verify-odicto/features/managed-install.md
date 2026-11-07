@@ -73,3 +73,25 @@ establish Wayland support, or replace an owner-confirmed real dictation journey.
 Programs folder. A real install from the published asset needs a fresh Windows user or machine,
 with the owner's hands: download it, pass SmartScreen, and confirm the Start Menu items, the
 HUD after start, and Setup in the browser. Never run it on a machine that runs Odicto for real.
+
+### Owner checklist: a fresh Windows user
+
+Use a new local Windows account (Settings, Accounts, Other users) or a Windows Sandbox with a
+microphone. No Odicto, Git or Python is installed there.
+
+1. Open the README's **Download for Windows** link. Expect `Install-Odicto.cmd` (about 10 KB).
+   Keep the file when the browser asks.
+2. Double-click it. Expect "Windows protected your PC". Click **More info**, then **Run anyway**.
+3. Expect a console window with "Step 1 of 3" to "Step 3 of 3" and no question. At the end,
+   expect "Odicto is ready.", the leaf HUD at the bottom of the screen, Setup in the browser,
+   and "Press any key to close this window."
+4. Dictate in Notepad: tap Ctrl+\`, speak, tap Ctrl+\` again. Expect the words at the cursor.
+5. Start Menu: expect the folder **Odicto** with Odicto, Odicto Setup and Stop Odicto, each with
+   the Odicto logo. Stop Odicto removes the HUD; Odicto brings it back; Odicto Setup opens Setup.
+6. Task Manager, Startup apps: expect "Odicto managed", enabled. Sign out and in: the HUD returns.
+7. Repair: double-click `Install-Odicto.cmd` again. Expect the same three steps, one running
+   Odicto (type a sentence; no letter twice), and the start-at-sign-in choice unchanged.
+8. Optional, needs a source checkout of 1.5.0 or later in the same account: with the managed
+   Odicto running, run the checkout's `start_dictation.bat`. Expect a start failure (a source
+   launcher shows a generic message) and no letter twice while you type.
+9. Clean up: open Stop Odicto, then delete the test account. Its files go with it.

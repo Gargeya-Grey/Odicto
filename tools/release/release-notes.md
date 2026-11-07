@@ -1,10 +1,16 @@
 ## Install
 
+### Windows, no terminal
+
+Download `Install-Odicto.cmd` below and double-click it. Windows can show "Windows protected
+your PC", because the file is not signed: click **More info**, then **Run anyway**. The window
+installs Odicto in a few minutes. Then Odicto starts at sign-in, it is running, and Setup opens
+in your browser. The Start Menu has Odicto, Odicto Setup and Stop Odicto.
+
+### Windows, from a terminal
+
 Download the release ZIP below and extract it. The managed installer supplies
 Python and creates an `odicto` command. No system Python, Git, Node or npm is required.
-
-### Windows
-
 Open PowerShell in the extracted `Odicto` directory and run:
 
 ```powershell
@@ -13,7 +19,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 
 ### macOS / Ubuntu / Debian
 
-Open a terminal in the extracted `Odicto` directory and run:
+Download the release ZIP below, extract it, open a terminal in the extracted `Odicto`
+directory and run:
 
 ```bash
 bash install-managed.sh
@@ -47,7 +54,8 @@ launch dictation. Afterwards use `odicto setup` and `odicto start`, like a new u
 On macOS/Linux, retire an existing source login-startup entry before migration;
 use `odicto autostart` afterward to enable the managed entry.
 
-Never run the source and installed applications together. See
+Never run the source and installed applications together. From 1.5.0 the second one
+refuses to start and says "Another copy of Odicto is running". See
 `tools/distribution/README.md` for migration, command and permissions details.
 Development-only source setup is documented in `docs/development.md`.
 

@@ -32,12 +32,17 @@ If a copy of Odicto that you installed from its folder is on the computer, the i
 the new copy but does not start it, because two copies must never run together. Follow
 [Moving from a source checkout](#moving-from-a-source-checkout). The installer finds that copy by
 its Start Menu and Startup shortcuts only. If you made it without shortcuts, stop it before you run
-the installer. Run again on a computer that has the new copy, the installer repairs it and keeps your
-start-at-sign-in choice.
+the installer. If you run the installer again on a computer that has the new copy, it repairs that
+copy and keeps your start-at-sign-in choice.
 
 The Start Menu then has **Odicto**, **Odicto Setup** and **Stop Odicto**. You never need a terminal.
 Updates install by themselves when Odicto starts. To stop Odicto starting at sign-in, turn it off
 in Task Manager, **Startup apps** ("Odicto managed").
+
+If Odicto says **Another copy of Odicto is running**, a different Odicto is already on (for
+example a copy from a source folder). Right-click the Odicto icon near the clock and choose
+**Quit Odicto**. Then open **Odicto** from the Start Menu. Odicto never starts a second copy,
+because two copies would type every letter twice.
 
 ### Any platform, from a terminal
 

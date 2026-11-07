@@ -31,6 +31,12 @@ It is not signed. On Windows, install also writes the Start Menu folder `Odicto`
 Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
 the same name that runs another program is kept.
 
+Two installs never run together in one user session. From 1.5.0 every Odicto takes a session
+keyboard-hook lock before it hooks the keyboard (`docs/architecture.md` section 7). When another
+copy holds it, the owner exits 75, and `odicto start` or `odicto restart` prints "Another copy of
+Odicto is running. Quit it, then start Odicto again." The updater keeps the new release in that
+case. A start that fails for another reason exits 2 and still rolls back.
+
 Download the release ZIP from [GitHub Releases](https://github.com/Gargeya-Grey/Odicto/releases/latest)
 and extract it. Run the bootstrap from its `Odicto` directory as your desktop user.
 
