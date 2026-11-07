@@ -26,8 +26,19 @@ exit /b %ODICTO_STATUS%
 BEFORE = r"""$ErrorActionPreference = 'Stop'
 $managed = Join-Path $env:LOCALAPPDATA 'Odicto'
 $odicto = Join-Path $managed 'bin\odicto.cmd'
-# The receipt exists once the sign-in choice was made (on or off); a repair keeps it.
-$chosen = Test-Path -LiteralPath (Join-Path $managed 'autostart.json')
+$installed = Test-Path -LiteralPath $odicto
+$migrated = $false
+$receipt = Join-Path $managed 'migration.json'
+if (Test-Path -LiteralPath $receipt) {
+    try { $migrated = (Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json).state -eq 'complete' } catch { }
+}
+# A saved sign-in choice (on or off), or one a migration carried over, is kept. A pending
+# receipt is an unfinished first attempt, so it is tried again.
+$chosen = $migrated
+$startup = Join-Path $managed 'autostart.json'
+if (-not $chosen -and (Test-Path -LiteralPath $startup)) {
+    try { $chosen = (Get-Content -LiteralPath $startup -Raw | ConvertFrom-Json).pending -ne $true } catch { }
+}
 Write-Host 'Installing Odicto. The first install takes a few minutes.'
 Write-Host ''
 try {
@@ -39,6 +50,7 @@ AFTER = r"""
 } catch {
     Write-Host ''
     Write-Host ('Odicto was not installed: ' + $_.Exception.Message)
+    if ($installed) { Write-Host 'If Odicto is open, stop it first (Start Menu: Stop Odicto).' }
     Write-Host 'Check the internet connection, then double-click Install-Odicto.cmd again.'
     exit 1
 }
@@ -57,11 +69,6 @@ function Test-OdictoLink([string]$Name) {
 }
 # A source checkout's Start Menu item or sign-in shortcut: two copies must never run together.
 # After a finished migration the source shortcuts forward to this install, so they are fine.
-$migrated = $false
-$receipt = Join-Path $managed 'migration.json'
-if (Test-Path -LiteralPath $receipt) {
-    try { $migrated = (Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json).state -eq 'complete' } catch { }
-}
 if (-not $migrated -and ((Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false -or
         (Test-Path -LiteralPath (Join-Path $menu 'Startup\Odicto.lnk')))) {
     Write-Host ''
@@ -87,7 +94,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { $failed += 'setup' }
 $items = (Test-OdictoLink 'Odicto\Odicto.lnk') -and (Test-OdictoLink 'Odicto\Odicto Setup.lnk') -and
     (Test-OdictoLink 'Odicto\Stop Odicto.lnk')
-if (-not $items) { $failed += 'shortcuts' }
+if (-not $items -and -not $migrated) { $failed += 'shortcuts' }
 Write-Host ''
 Write-Host 'Odicto is running.'
 if ('autostart' -in $failed) { Write-Host 'It does not start by itself when you sign in.' }
@@ -96,6 +103,7 @@ Write-Host 'To type with your voice: click in a text box, press Ctrl and the ` k
 if ('setup' -in $failed) { Write-Host 'Odicto Setup did not open.' }
 else { Write-Host 'Your browser shows Odicto Setup.' }
 if ($items) { Write-Host 'Odicto, Odicto Setup and Stop Odicto are in the Start Menu.' }
+elseif ($migrated) { Write-Host 'The Odicto items in the Start Menu open your old folder, which hands over to this copy.' }
 else { Write-Host 'The Start Menu items were not made. To stop Odicto, right-click the Odicto icon next to the clock and click Quit Odicto.' }
 if ($failed.Count) { exit 1 }
 exit 0

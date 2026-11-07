@@ -154,7 +154,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         receipt.write_text('{"state": "complete"}', encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(calls, ["autostart", "start", "setup"])
+        self.assertEqual(calls, ["start", "setup"])
         receipt.write_text('{"state": "copying"}', encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(calls, [])
@@ -172,6 +172,29 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
                 self.assertEqual(calls, [])
                 self.assertIn("another copy of Odicto is on this computer", done.stdout)
                 link.unlink()
+
+    def test_migrated_source_items_are_not_reported_missing(self):
+        (self.local / "Odicto").mkdir(parents=True)
+        (self.local / "Odicto" / "migration.json").write_text('{"state": "complete"}', encoding="ascii")
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("hands over to this copy", done.stdout)
+
+    def test_a_pending_sign_in_receipt_is_tried_again(self):
+        self.managed_links()
+        (self.local / "Odicto").mkdir(parents=True)
+        (self.local / "Odicto" / "autostart.json").write_text('{"pending": true}', encoding="ascii")
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(calls, ["autostart", "start", "setup"])
+
+    def test_a_failed_repair_says_to_stop_odicto_first(self):
+        self.bin.mkdir(parents=True)
+        (self.bin / "odicto.cmd").write_bytes(self.fake.read_bytes())
+        done, calls = self.run_installer("param([string]$HomePath)\nthrow 'fixture busy'\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("If Odicto is open, stop it first", done.stdout)
+        self.assertEqual(calls, [])
 
     def test_missing_start_menu_items_are_reported(self):
         for name in ("Odicto Setup", "Stop Odicto"):
