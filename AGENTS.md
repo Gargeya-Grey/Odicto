@@ -301,8 +301,9 @@ equivalent single-instance gate is an exclusive `fcntl.flock` on
 
 1. **Never run two Odicto `main.py` processes** for the same install.
 2. Before a new start, prefer the stop/start scripts (they stop first).
-3. Startup **must** acquire the install-scoped lock and kill orphan `main.py`
-   processes; if the lock cannot be taken, **exit without** installing hooks.
+3. Startup **must** acquire the install-scoped lock and the session hook lock (one per
+   user session, for every install), and kill orphan `main.py` processes; if a lock cannot
+   be taken, **exit without** installing hooks.
 4. **Never** install global hotkey hooks unless the single-instance lock is held.
 5. On shutdown, always release hooks and the lock so typing returns to normal.
 6. If the user reports **double letters while typing**, assume stacked instances

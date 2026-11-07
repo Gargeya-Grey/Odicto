@@ -500,10 +500,12 @@ graph TD
     Start["main.py starts"] --> Lock{"acquire_lock()"}
     Lock -->|Windows| Mutex["Named mutex<br/>Global then Local, install-scoped digest"]
     Mutex --> LockFile["msvcrt lockfile on dictation.lock"]
+    LockFile --> HookMutex["Session hook mutex<br/>Local Odicto_KeyboardHooks, every install"]
     Lock -->|macOS / Linux| Flock["fcntl.flock LOCK_EX and LOCK_NB<br/>on dictation.lock, pid written inside"]
-    LockFile --> Held["_INSTANCE_LOCK_HELD = True"]
-    Flock --> Held
-    Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
+    Flock --> HookFlock["Session hook lock<br/>Linux: X selection on the X server<br/>macOS: flock beside the managed home"]
+    HookMutex --> Held["_INSTANCE_LOCK_HELD = True"]
+    HookFlock --> Held
+    Lock -->|cannot take| Exit["exit 75 if another copy holds it, else 2;<br/>hooks NOT installed"]
     Held --> Kill["platforms.kill_other_odicto_processes<br/>reap verified orphan script processes"]
     Kill --> Keep["platforms.keep_responsive()<br/>Windows: above-normal priority, normal memory and I/O priority,<br/>no EcoQoS, 192 MB hard minimum working set"]
     Keep --> Bind["_bind_hotkeys()"]
@@ -518,8 +520,28 @@ answer `ctrl`, `shift`, `alt`, `cmd`, their `left`/`right` names and F1-F24 (the
 Shift turned the raw chord into the AI chord. Other names, a failing OS call, and a left Ctrl held
 with Right Alt (AltGr injects one) use the library, which names the injected event `alt gr`.
 
-**Never install hooks without the lock.** On Windows the same install-scoped name is used,
-so a second copy in the same folder collides while a second *different* install does not.
+**Never install hooks without the lock.** The install lock is scoped to one data root, so it
+cannot see another install (a source checkout beside the managed install). The session hook lock
+is the same for every install of this user session, so a second install is refused too.
+`platforms.lock_is_held()` is true only when both are held. Windows: a `Local\` mutex, one per
+logon session; an elevated owner's mutex that a normal process cannot open counts as held. Linux:
+an X selection (`ODICTO_KEYBOARD_HOOKS_<scope>`) on the X server the hooks grab keys on, taken under
+a server grab. Every DISPLAY spelling, SSH forward, user and root reach the same selection on one
+server, a second server (VNC, a second session) has its own, and the server frees it when the
+owner's connection closes. macOS: an flock on `.odicto-keyboard-hooks-<scope>.lock` directly in the
+desktop user's Application Support folder, beside the managed home and never inside it, found
+through the account database, not HOME. A file stands for the session only when every copy runs
+as the desktop user, so macOS refuses a root copy (sudo, su, a helper) with exit 2. Windows keeps the session mutex after `release_lock()` while the native hook
+exists (`unhook_all()` clears callbacks only; the hook goes at process exit), so a waiting copy
+takes it, as abandoned, only when that process has exited. `platforms.lock_refusal()` says why a lock failed:
+"busy" (another copy holds it) exits with `EXIT_ANOTHER_OWNER` (75), and the managed updater reports
+"another copy is running" for start and restart and keeps the new release instead of rolling back;
+"error" (the lock cannot be made) exits with 2, a failed start. A process that never hooked does
+not call `keyboard.unhook_all()`, because that call starts the listener, which installs a hook. Copies
+older than 1.5.0 do not take the hook lock, and a 1.4.x updater still rolls back on any refusal.
+`ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run); a process with
+a real owner drops it before it takes a lock (`main.use_the_session_hook_lock`), so an owner
+launched from a test shell still locks against the session's real owner.
 
 ## 8. Threads and locks
 
@@ -652,8 +674,8 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 
 ## 13. Invariants — do not break these
 
-1. **One instance, one hook.** Never install global hooks unless the single-instance lock is
-   held (`main.ensure_can_bind_hotkeys`). Double letters while typing almost always means two
+1. **One instance, one hook.** Never install global hooks unless the install lock and the
+   session hook lock are both held (`main.ensure_can_bind_hotkeys`). Double letters while typing almost always means two
    instances; stop all, confirm no `main.py` remains, start once.
 2. **Dictation never fails.** Every STT and LLM error path must fall back to pasteable text.
 3. **`ENV_DEFAULTS` is the only place defaults live.** `.env.example` mirrors it;

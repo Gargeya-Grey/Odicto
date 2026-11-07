@@ -35,6 +35,29 @@ def install_digest() -> str:
     ).hexdigest()[:16]
 
 
+def hook_lock_scope() -> str:
+    """The keyboard-hook lock is per user session, not per install.
+
+    Two installs (a source checkout and the managed install, say) have different install
+    locks, so only this lock stops both from hooking the keyboard. Tests set
+    ODICTO_HOOK_LOCK_SCOPE so they never meet the owner's real lock; a real owner drops it
+    before it takes a lock (main.use_the_session_hook_lock).
+    """
+    scope = "".join(c for c in os.environ.get("ODICTO_HOOK_LOCK_SCOPE", "") if c.isalnum() or c in "-_")
+    return scope[:64] or "session"
+
+
+def hook_lock_path() -> str:
+    """macOS: the file whose flock is the keyboard-hook lock. The folder comes from the account
+    database, not from HOME, so every launch for this user finds the same file. It sits beside
+    the managed home (Application Support/Odicto), never in it, so an installer still finds
+    that folder empty; no cache cleaner removes it. Root never gets here (the lock refuses it)."""
+    import pwd
+
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    return os.path.join(home, "Library", "Application Support", f".odicto-keyboard-hooks-{hook_lock_scope()}.lock")
+
+
 def pid_file_path() -> str:
     return os.path.join(install_root(), "dictation.pid")
 

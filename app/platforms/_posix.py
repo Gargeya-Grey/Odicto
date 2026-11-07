@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import os
 import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -26,6 +27,10 @@ except ImportError:  # pragma: no cover
     psutil = None
 
 _lock_file_obj = None
+_hook_lock_fd: Optional[int] = None
+_hook_lock_display = None  # Linux: the X connection that owns the hook-lock selection
+# Why the last acquire_lock() failed: "busy" (another copy holds a lock) or "error".
+_REFUSAL: str = ""
 
 
 class _VerifiedPid(int):
@@ -188,12 +193,135 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     return killed
 
 
+def _refuse(reason: str) -> bool:
+    global _REFUSAL
+
+    _REFUSAL = reason
+    return False
+
+
+def lock_refusal() -> str:
+    """Why the last acquire_lock() failed: "busy" (another copy holds a lock), "error" or ""."""
+    return _REFUSAL
+
+
+def _try_acquire_x_selection() -> bool:
+    """Linux: own an X selection on the X server that the hooks grab keys on.
+
+    A selection belongs to one X server, whatever DISPLAY spelling, user or SSH forward reached
+    it, and the server frees it when the owner's connection closes, also when the process dies.
+    The server grab makes "nobody owns it, so take it" one step for every client."""
+    global _hook_lock_display
+
+    try:
+        from Xlib import X, display as xdisplay
+
+        connection = xdisplay.Display()
+    except Exception as e:
+        print(f"Warning: keyboard-hook lock unavailable (no X display): {e}")
+        return _refuse("error")
+    try:
+        atom = connection.intern_atom("ODICTO_KEYBOARD_HOOKS_" + base.hook_lock_scope())
+        window = connection.screen().root.create_window(-1, -1, 1, 1, 0, X.CopyFromParent)
+        connection.grab_server()
+        try:
+            owner = connection.get_selection_owner(atom)
+            free = getattr(owner, "id", owner) == X.NONE
+            if free:
+                window.set_selection_owner(atom, X.CurrentTime)
+        finally:
+            connection.ungrab_server()
+            connection.sync()
+        held = free and getattr(connection.get_selection_owner(atom), "id", None) == window.id
+    except Exception as e:
+        print(f"Warning: keyboard-hook lock failed: {e}")
+        connection.close()
+        return _refuse("error")
+    if not held:
+        connection.close()
+        return _refuse("busy")
+    _hook_lock_display = connection
+    return True
+
+
+def _try_acquire_hook_lock() -> bool:
+    """Take the keyboard-hook lock that every install shares.
+
+    Linux: an X selection (_try_acquire_x_selection). macOS: an flock on a file whose path comes
+    from the account database (base.hook_lock_path). A file stands for the session only when
+    every copy runs as the desktop user, so a root copy (sudo, su, a helper) is refused.
+    """
+    global _hook_lock_fd
+
+    if sys.platform.startswith("linux"):
+        return _try_acquire_x_selection()
+
+    if os.geteuid() == 0:
+        print("Odicto does not run as root on macOS. Start it as your own user.")
+        return _refuse("error")
+    path = base.hook_lock_path()
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        print(f"Warning: keyboard-hook lock unavailable: {e}")
+        return _refuse("error")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        return _refuse("busy" if e.errno in (errno.EACCES, errno.EAGAIN) else "error")
+    try:
+        # A file replaced between open and lock is a different lock: refuse, never guess.
+        held, named = os.fstat(fd), os.stat(path)
+        replaced = (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+    except OSError:
+        replaced = True
+    if replaced:
+        os.close(fd)
+        return _refuse("error")
+    _hook_lock_fd = fd
+    return True
+
+
+def _release_hook_lock() -> None:
+    global _hook_lock_fd, _hook_lock_display
+
+    if _hook_lock_display is not None:
+        try:
+            _hook_lock_display.close()
+        except Exception:
+            pass
+        _hook_lock_display = None
+    if _hook_lock_fd is not None:
+        try:
+            fcntl.flock(_hook_lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            os.close(_hook_lock_fd)
+        except Exception:
+            pass
+        _hook_lock_fd = None
+
+
 def acquire_lock(timeout_ms: int = 8000) -> bool:
-    """Take the exclusive ``dictation.lock`` byte-lock."""
-    global _lock_file_obj
+    """Take the exclusive ``dictation.lock`` byte-lock, then the per-user hook lock."""
+    global _REFUSAL
 
     if fcntl is None:
         return True  # Windows path never reaches here; keep import-safe.
+    _REFUSAL = ""
+    if not _acquire_install_lock():
+        return False
+    if not _try_acquire_hook_lock():
+        release_lock()
+        return False
+    return True
+
+
+def _acquire_install_lock() -> bool:
+    global _lock_file_obj
 
     path = base.lock_file_path()
     try:
@@ -204,7 +332,7 @@ def acquire_lock(timeout_ms: int = 8000) -> bool:
         except OSError as e:
             if e.errno in (errno.EACCES, errno.EAGAIN):
                 fh.close()
-                return False
+                return _refuse("busy")
             raise
         try:
             fh.seek(0)
@@ -217,7 +345,7 @@ def acquire_lock(timeout_ms: int = 8000) -> bool:
         return True
     except Exception as e:
         print(f"Warning: lock file acquire failed: {e}")
-        return False
+        return _refuse("error")
 
 
 def release_lock() -> None:
@@ -234,10 +362,11 @@ def release_lock() -> None:
         except Exception:
             pass
         _lock_file_obj = None
+    _release_hook_lock()
 
 
 def lock_is_held() -> bool:
-    return _lock_file_obj is not None
+    return _lock_file_obj is not None and (_hook_lock_fd is not None or _hook_lock_display is not None)
 
 
 def spawn_detached(args) -> subprocess.Popen:

@@ -102,9 +102,21 @@ def hook_key(key: str, handler, suppress: bool) -> None:
     _require_keyboard().hook_key(key, handler, suppress=suppress)
 
 
+def native_hook_installed() -> bool:
+    """True once the keyboard library's listener started: its system-wide hook then stays
+    installed until the process exits, also after unhook_all() (that clears callbacks only).
+    An unknown listener counts as installed."""
+    if keyboard is None:
+        return False
+    return getattr(getattr(keyboard, "_listener", None), "listening", True) is not False
+
+
 def unhook_all() -> None:
+    """Remove this process's hooks. keyboard.unhook_all() starts the listener first, and that
+    installs a system-wide hook, so a process that never hooked (a refused copy, a lock-only
+    test) skips the call instead of installing a hook to remove nothing."""
     try:
-        if keyboard is not None:
+        if native_hook_installed():
             keyboard.unhook_all()
     except Exception:
         pass
