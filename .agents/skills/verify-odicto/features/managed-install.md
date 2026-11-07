@@ -85,7 +85,7 @@ microphone. No Odicto, Git or Python is installed there.
 3. Expect a console window with "Step 1 of 3" to "Step 3 of 3" and no question. At the end,
    expect "Odicto is ready.", the Odicto icon near the clock, Setup in the browser, and "Press
    any key to close this window." The HUD is not visible while Odicto waits; that is correct.
-4. Dictate in Notepad: tap Ctrl+\`. Expect the HUD at the bottom of the screen. Speak, tap
+4. Dictate in Notepad, or in the browser's address bar (Windows Sandbox has no Notepad): tap Ctrl+\`. Expect the HUD at the bottom of the screen. Speak, tap
    Ctrl+\` again, and expect the words at the cursor.
 5. Start Menu: expect the folder **Odicto** with Odicto, Odicto Setup and Stop Odicto, each with
    the Odicto logo. Stop Odicto removes the icon near the clock; Odicto brings it back (dictate
@@ -94,10 +94,13 @@ microphone. No Odicto, Git or Python is installed there.
    the clock returns, and dictation works.
 7. Repair: double-click `Install-Odicto.cmd` again. Expect the same three steps, one running
    Odicto (type a sentence; no letter twice), and the start-at-sign-in choice unchanged.
-8. Optional, needs a source checkout of 1.5.0 or later in the same account. First prove that the
-   checkout starts by itself: Stop Odicto, run its `start_dictation.bat`, dictate once, then run its
-   `stop_dictation.bat`. Then open Odicto (the managed copy) and run `start_dictation.bat` again.
-   Expect a start failure, the line `Could not acquire Odicto single-instance lock` at the end of
-   the checkout's `dictation.log`, and no letter twice while you type. A failure without that line
-   does not prove the lock.
+8. Optional, needs a source checkout of 1.5.0 or later in the same account, installed with
+   `install.ps1 -NoShortcuts` (without the flag it takes over the Start Menu items). Call the
+   managed launcher by its path, never through a shortcut: `M` = `%LOCALAPPDATA%\Odicto\bin\odicto.cmd`.
+   First prove that the checkout starts by itself: `M stop`, run the checkout's
+   `start_dictation.bat`, dictate once, then run its `stop_dictation.bat`. Then run `M start` and
+   `M run status`, and confirm the managed owner runs. Run `start_dictation.bat` again. Expect a
+   start failure, the line `Could not acquire Odicto single-instance lock` at the end of the
+   checkout's `dictation.log`, and no letter twice while you type. A failure without that line,
+   or with no managed owner running, does not prove the lock.
 9. Clean up: open Stop Odicto, then delete the test account. Its files go with it.

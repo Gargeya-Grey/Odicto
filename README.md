@@ -18,6 +18,10 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ### Windows, no terminal
 
+Do you already use Odicto from a source folder, or a version older than 1.5.0? Then quit it
+first (right-click its icon near the clock, **Quit Odicto**) and turn off its start at sign-in.
+An older copy does not check for other copies, so both could type every letter twice.
+
 1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
    Your browser can ask if you want to keep the file. Choose **Keep**.
 2. Double-click the file.
@@ -42,10 +46,11 @@ in Task Manager, **Startup apps** ("Odicto managed").
 If Odicto says **Another copy of Odicto is running**, a different Odicto is already on, usually
 a copy that you installed from a source folder. Odicto does not start a second copy, because
 two copies would type every letter twice. Right-click the Odicto icon near the clock and choose
-**Quit Odicto**. Then follow [Moving from a source checkout](#moving-from-a-source-checkout),
-and double-click `Install-Odicto.cmd` again. Do not use the Start Menu item **Odicto** before
-that step: it can still start the source copy. A copy older than 1.5.0 does not do this check,
-so stop it and turn off its start at sign-in before you use the new copy.
+**Quit Odicto**. Then start the new copy: press **Windows key + R**, type
+`%LOCALAPPDATA%\Odicto\bin\odicto.cmd start` and press **Enter**. The Start Menu item **Odicto** can still
+belong to the source copy. To keep its settings and use only the new copy, follow
+[Moving from a source checkout](#moving-from-a-source-checkout). A copy older than 1.5.0 does
+not do this check, so stop it and turn off its start at sign-in before you use the new copy.
 
 ### Any platform, from a terminal
 

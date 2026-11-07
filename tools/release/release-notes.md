@@ -3,7 +3,9 @@
 ### Windows, no terminal
 
 Stable releases only: a pre-release does not have this file, and the file always installs the
-latest stable release. Download `Install-Odicto.cmd` below and double-click it. Windows can show "Windows protected
+latest stable release. Do you already use Odicto from a source folder, or a version older than
+1.5.0? Then quit it and turn off its start at sign-in first: an older copy does not check for
+other copies, so both could type every letter twice. Download `Install-Odicto.cmd` below and double-click it. Windows can show "Windows protected
 your PC", because the file is not signed: click **More info**, then **Run anyway**. The window
 installs Odicto in a few minutes. Then Odicto starts at sign-in, it is running, and Setup opens
 in your browser. The Start Menu has Odicto, Odicto Setup and Stop Odicto.
