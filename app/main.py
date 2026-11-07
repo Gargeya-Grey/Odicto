@@ -301,7 +301,8 @@ def acquire_single_instance_lock(timeout_ms: int = 8000) -> bool:
         print(
             "!!! FATAL: Could not acquire Odicto single-instance lock.\n"
             "    Two copies would stack system-wide keyboard hooks and double every\n"
-            "    typed character (even when not dictating). Stop all instances,\n"
+            "    typed character (even when not dictating). Another copy may be running\n"
+            "    from this folder or from another install. Stop all instances,\n"
             "    then start only once.",
             flush=True,
         )

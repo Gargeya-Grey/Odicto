@@ -9,6 +9,7 @@ section as the release notes and refuses a version that has no section.
 ### Added
 
 - Install on Windows without a terminal. Download `Install-Odicto.cmd` from the release and double-click it. It installs Odicto, turns on start at sign-in, starts Odicto and opens Setup. If a copy installed from a source checkout is on the computer, it starts nothing and links to the migration steps. The file is not signed, so Windows asks once: click "More info", then "Run anyway".
+- Two different Odicto installs can no longer run at the same time in one Windows or macOS/Linux session (for example a copy from a source folder and the installed copy). The second one stops before it hooks the keyboard, so letters are never typed twice. Copies older than 1.5.0 do not have this lock.
 - The Windows install adds three Start Menu items: Odicto, Odicto Setup and Stop Odicto. A Start Menu item of the same name that runs another program (for example a source checkout's) stays as it is.
 
 ## [1.4.3] - 2026-11-04

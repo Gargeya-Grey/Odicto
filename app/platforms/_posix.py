@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
     psutil = None
 
 _lock_file_obj = None
+_hook_lock_fd: Optional[int] = None
 
 
 class _VerifiedPid(int):
@@ -188,12 +189,55 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     return killed
 
 
-def acquire_lock(timeout_ms: int = 8000) -> bool:
-    """Take the exclusive ``dictation.lock`` byte-lock."""
-    global _lock_file_obj
+def _try_acquire_hook_lock() -> bool:
+    """Take the per-user keyboard-hook flock that every install shares."""
+    global _hook_lock_fd
 
+    path = base.hook_lock_path()
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        print(f"Warning: keyboard-hook lock unavailable: {e}")
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _hook_lock_fd = fd
+    return True
+
+
+def _release_hook_lock() -> None:
+    global _hook_lock_fd
+
+    if _hook_lock_fd is not None:
+        try:
+            fcntl.flock(_hook_lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            os.close(_hook_lock_fd)
+        except Exception:
+            pass
+        _hook_lock_fd = None
+
+
+def acquire_lock(timeout_ms: int = 8000) -> bool:
+    """Take the exclusive ``dictation.lock`` byte-lock, then the per-user hook lock."""
     if fcntl is None:
         return True  # Windows path never reaches here; keep import-safe.
+    if not _acquire_install_lock():
+        return False
+    if not _try_acquire_hook_lock():
+        release_lock()
+        return False
+    return True
+
+
+def _acquire_install_lock() -> bool:
+    global _lock_file_obj
 
     path = base.lock_file_path()
     try:
@@ -234,10 +278,11 @@ def release_lock() -> None:
         except Exception:
             pass
         _lock_file_obj = None
+    _release_hook_lock()
 
 
 def lock_is_held() -> bool:
-    return _lock_file_obj is not None
+    return _lock_file_obj is not None and _hook_lock_fd is not None
 
 
 def spawn_detached(args) -> subprocess.Popen:

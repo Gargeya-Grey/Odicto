@@ -19,6 +19,9 @@ from platforms._keyboard import *  # noqa: F401,F403
 _INSTANCE_MUTEX_HANDLE: Optional[int] = None
 _INSTANCE_LOCK_FILE = None
 _INSTANCE_MUTEX_NAME: str = ""
+# Session-wide keyboard-hook mutex (the Local namespace is this logon session), held with the
+# install lock: another install has another install mutex, so only this one stops both hooking.
+_HOOK_MUTEX_HANDLE: Optional[int] = None
 
 _WAIT_OBJECT_0 = 0x00000000
 _WAIT_ABANDONED = 0x00000080
@@ -236,10 +239,72 @@ def _release_mutex_only() -> None:
     _INSTANCE_MUTEX_NAME = ""
 
 
+def _try_acquire_hook_mutex(timeout_ms: int) -> bool:
+    """Take the session's keyboard-hook mutex. A mutex this process cannot open (an elevated
+    owner made it) counts as held by another copy."""
+    global _HOOK_MUTEX_HANDLE
+
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.CreateMutexW(None, False, f"Local\\Odicto_KeyboardHooks_{base.hook_lock_scope()}")
+    if not handle:
+        return False
+    if kernel32.WaitForSingleObject(handle, int(timeout_ms)) in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
+        _HOOK_MUTEX_HANDLE = int(handle)
+        return True
+    kernel32.CloseHandle(handle)
+    return False
+
+
+def _release_hook_mutex() -> None:
+    global _HOOK_MUTEX_HANDLE
+
+    if _HOOK_MUTEX_HANDLE:
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.ReleaseMutex(_HOOK_MUTEX_HANDLE)
+            kernel32.CloseHandle(_HOOK_MUTEX_HANDLE)
+        except Exception:
+            pass
+    _HOOK_MUTEX_HANDLE = None
+
+
+def _release_lockfile_only() -> None:
+    global _INSTANCE_LOCK_FILE
+
+    if _INSTANCE_LOCK_FILE is not None:
+        try:
+            import msvcrt
+
+            _INSTANCE_LOCK_FILE.seek(0)
+            msvcrt.locking(_INSTANCE_LOCK_FILE.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+        try:
+            _INSTANCE_LOCK_FILE.close()
+        except Exception:
+            pass
+        _INSTANCE_LOCK_FILE = None
+
+
 def acquire_lock(timeout_ms: int = 8000) -> bool:
     if not _try_acquire_mutex(timeout_ms):
         return False
     if not _try_acquire_lockfile():
+        _release_mutex_only()
+        return False
+    if not _try_acquire_hook_mutex(timeout_ms):
+        _release_lockfile_only()
         _release_mutex_only()
         return False
     return True
@@ -276,10 +341,12 @@ def release_lock() -> None:
 
     _INSTANCE_MUTEX_HANDLE = None
     _INSTANCE_MUTEX_NAME = ""
+    _release_hook_mutex()
 
 
 def lock_is_held() -> bool:
-    return _INSTANCE_MUTEX_HANDLE is not None and _INSTANCE_LOCK_FILE is not None
+    return (_INSTANCE_MUTEX_HANDLE is not None and _INSTANCE_LOCK_FILE is not None
+            and _HOOK_MUTEX_HANDLE is not None)
 
 
 def spawn_detached(args) -> subprocess.Popen:

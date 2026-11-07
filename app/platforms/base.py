@@ -35,6 +35,24 @@ def install_digest() -> str:
     ).hexdigest()[:16]
 
 
+def hook_lock_scope() -> str:
+    """The keyboard-hook lock is per user session, not per install.
+
+    Two installs (a source checkout and the managed install, say) have different install
+    locks, so only this lock stops both from hooking the keyboard. Tests set
+    ODICTO_HOOK_LOCK_SCOPE so they never meet the owner's real lock.
+    """
+    scope = "".join(c for c in os.environ.get("ODICTO_HOOK_LOCK_SCOPE", "") if c.isalnum() or c in "-_")
+    return scope[:64] or "session"
+
+
+def hook_lock_path() -> str:
+    """POSIX: the per-user file whose flock is the keyboard-hook lock."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    folder = runtime if runtime and os.path.isdir(runtime) else os.path.join(os.path.expanduser("~"), ".cache", "odicto")
+    return os.path.join(folder, f"odicto-keyboard-hooks-{hook_lock_scope()}.lock")
+
+
 def pid_file_path() -> str:
     return os.path.join(install_root(), "dictation.pid")
 

@@ -97,7 +97,8 @@ if (-not $chosen) {
 & $odicto start
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''
-    Write-Host 'Odicto did not start. Open the Start Menu and click Odicto to try again.'
+    Write-Host 'Odicto did not start. If another copy of Odicto is running, quit it first.'
+    Write-Host 'Then open the Start Menu and click Odicto.'
     exit 1
 }
 Step 3 'Opening Odicto Setup in your browser'

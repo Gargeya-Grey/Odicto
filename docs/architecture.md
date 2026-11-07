@@ -500,9 +500,11 @@ graph TD
     Start["main.py starts"] --> Lock{"acquire_lock()"}
     Lock -->|Windows| Mutex["Named mutex<br/>Global then Local, install-scoped digest"]
     Mutex --> LockFile["msvcrt lockfile on dictation.lock"]
+    LockFile --> HookMutex["Session hook mutex<br/>Local Odicto_KeyboardHooks, every install"]
     Lock -->|macOS / Linux| Flock["fcntl.flock LOCK_EX and LOCK_NB<br/>on dictation.lock, pid written inside"]
-    LockFile --> Held["_INSTANCE_LOCK_HELD = True"]
-    Flock --> Held
+    Flock --> HookFlock["Per-user hook flock<br/>XDG_RUNTIME_DIR or ~/.cache/odicto"]
+    HookMutex --> Held["_INSTANCE_LOCK_HELD = True"]
+    HookFlock --> Held
     Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
     Held --> Kill["platforms.kill_other_odicto_processes<br/>reap verified orphan script processes"]
     Kill --> Keep["platforms.keep_responsive()<br/>Windows: above-normal priority, normal memory and I/O priority,<br/>no EcoQoS, 192 MB hard minimum working set"]
@@ -518,8 +520,12 @@ answer `ctrl`, `shift`, `alt`, `cmd`, their `left`/`right` names and F1-F24 (the
 Shift turned the raw chord into the AI chord. Other names, a failing OS call, and a left Ctrl held
 with Right Alt (AltGr injects one) use the library, which names the injected event `alt gr`.
 
-**Never install hooks without the lock.** On Windows the same install-scoped name is used,
-so a second copy in the same folder collides while a second *different* install does not.
+**Never install hooks without the lock.** The install lock is scoped to one data root, so it
+cannot see another install (a source checkout beside the managed install). The session hook lock
+is the same for every install of this user session, so a second install is refused too.
+`platforms.lock_is_held()` is true only when both are held. An elevated owner's hook mutex cannot
+be opened from a normal process, which counts as held. Copies older than 1.5.0 do not take the
+hook lock. `ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run).
 
 ## 8. Threads and locks
 
@@ -652,8 +658,8 @@ serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scrip
 
 ## 13. Invariants — do not break these
 
-1. **One instance, one hook.** Never install global hooks unless the single-instance lock is
-   held (`main.ensure_can_bind_hotkeys`). Double letters while typing almost always means two
+1. **One instance, one hook.** Never install global hooks unless the install lock and the
+   session hook lock are both held (`main.ensure_can_bind_hotkeys`). Double letters while typing almost always means two
    instances; stop all, confirm no `main.py` remains, start once.
 2. **Dictation never fails.** Every STT and LLM error path must fall back to pasteable text.
 3. **`ENV_DEFAULTS` is the only place defaults live.** `.env.example` mirrors it;
