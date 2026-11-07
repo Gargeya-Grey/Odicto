@@ -32,12 +32,12 @@ $receipt = Join-Path $managed 'migration.json'
 if (Test-Path -LiteralPath $receipt) {
     try { $migrated = (Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json).state -eq 'complete' } catch { }
 }
-# A saved sign-in choice (on or off), or one a migration carried over, is kept. A pending
-# receipt is an unfinished first attempt, so it is tried again.
-$chosen = $migrated
+# A new install turns on start at sign-in. An existing one keeps its choice (on or off), except
+# an unfinished attempt: a pending receipt is tried again.
+$chosen = $migrated -or $installed
 $startup = Join-Path $managed 'autostart.json'
-if (-not $chosen -and (Test-Path -LiteralPath $startup)) {
-    try { $chosen = (Get-Content -LiteralPath $startup -Raw | ConvertFrom-Json).pending -ne $true } catch { }
+if (-not $migrated -and (Test-Path -LiteralPath $startup)) {
+    try { if ((Get-Content -LiteralPath $startup -Raw | ConvertFrom-Json).pending -eq $true) { $chosen = $false } } catch { }
 }
 Write-Host 'Installing Odicto. The first install takes a few minutes.'
 Write-Host ''

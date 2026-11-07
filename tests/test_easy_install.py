@@ -94,7 +94,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.fake_odicto()
 
     def fake_odicto(self, failing=""):
-        lines = ["@echo off", f'>>"{self.calls}" echo %*']
+        lines = ["@echo off", '>>"%T_CALLS%" echo %*']
         if failing:
             lines.append(f'if "%1"=="{failing}" exit /b 3')
         lines.append("exit /b 0")
@@ -109,7 +109,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         installer = self.folder / "Install-Odicto.cmd"
         installer.write_bytes(builder.build(self.INSTALL if bootstrap is None else bootstrap))
         environment = dict(os.environ, LOCALAPPDATA=str(self.local), APPDATA=str(self.roaming),
-                           T_BIN=str(self.bin), T_FAKE=str(self.fake))
+                           T_BIN=str(self.bin), T_FAKE=str(self.fake), T_CALLS=str(self.calls))
         done = subprocess.run(["cmd.exe", "/d", "/c", str(installer)], env=environment, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
         calls = self.calls.read_text(encoding="ascii").split() if self.calls.exists() else []
@@ -135,13 +135,13 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(calls, ["start", "setup"])
         self.assertNotIn("sign in", done.stdout)
 
-    def test_a_rerun_after_a_failed_sign_in_step_tries_it_again(self):
+    def test_a_repair_without_a_receipt_keeps_sign_in_off(self):
         self.managed_links()
         self.bin.mkdir(parents=True)
         (self.bin / "odicto.cmd").write_bytes(self.fake.read_bytes())
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(calls, ["autostart", "start", "setup"])
+        self.assertEqual(calls, ["start", "setup"])
 
     def test_source_shortcuts_after_a_finished_migration_do_not_block(self):
         other = self.root / "checkout" / "start_dictation.bat"
@@ -182,7 +182,8 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
 
     def test_a_pending_sign_in_receipt_is_tried_again(self):
         self.managed_links()
-        (self.local / "Odicto").mkdir(parents=True)
+        self.bin.mkdir(parents=True)
+        (self.bin / "odicto.cmd").write_bytes(self.fake.read_bytes())
         (self.local / "Odicto" / "autostart.json").write_text('{"pending": true}', encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
