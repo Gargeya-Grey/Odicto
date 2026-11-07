@@ -18,9 +18,10 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ### Windows, no terminal
 
-Do you already use Odicto from a source folder, or a version older than 1.5.0? Then quit it
-first (right-click its icon near the clock, **Quit Odicto**) and turn off its start at sign-in.
-An older copy does not check for other copies, so both could type every letter twice.
+Do you already use Odicto from a source folder (a copy you set up with Git)? Then quit it first:
+right-click its icon near the clock and choose **Quit Odicto**. A source copy older than 1.5.0
+does not check for other copies, so never run it beside the new copy. An Odicto that this
+installer or `install-managed.ps1` installed is not a second copy: the installer updates it.
 
 1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
    Your browser can ask if you want to keep the file. Choose **Keep**.
@@ -48,9 +49,10 @@ a copy that you installed from a source folder. Odicto does not start a second c
 two copies would type every letter twice. Right-click the Odicto icon near the clock and choose
 **Quit Odicto**. Then start the new copy: press **Windows key + R**, type
 `%LOCALAPPDATA%\Odicto\bin\odicto.cmd start` and press **Enter**. The Start Menu item **Odicto** can still
-belong to the source copy. To keep its settings and use only the new copy, follow
-[Moving from a source checkout](#moving-from-a-source-checkout). A copy older than 1.5.0 does
-not do this check, so stop it and turn off its start at sign-in before you use the new copy.
+belong to the source copy. To move the source copy's settings into the new copy, stop the new
+copy too (the same box, `%LOCALAPPDATA%\Odicto\bin\odicto.cmd stop`) and close every Setup page,
+then follow [Moving from a source checkout](#moving-from-a-source-checkout). A source copy older
+than 1.5.0 does not do this check, so never run it beside the new copy.
 
 ### Any platform, from a terminal
 

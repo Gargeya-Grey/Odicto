@@ -94,11 +94,14 @@ microphone. No Odicto, Git or Python is installed there.
    the clock returns, and dictation works.
 7. Repair: double-click `Install-Odicto.cmd` again. Expect the same three steps, one running
    Odicto (type a sentence; no letter twice), and the start-at-sign-in choice unchanged.
-8. Optional, needs a source checkout of 1.5.0 or later in the same account, installed with
+8. Optional, needs a fresh clone of 1.5.0 or later in the same account that was never migrated
+   (a migrated checkout forwards its launchers to the managed copy), installed with
    `install.ps1 -NoShortcuts` (without the flag it takes over the Start Menu items). Call the
    managed launcher by its path, never through a shortcut: `M` = `%LOCALAPPDATA%\Odicto\bin\odicto.cmd`.
    First prove that the checkout starts by itself: `M stop`, run the checkout's
-   `start_dictation.bat`, dictate once, then run its `stop_dictation.bat`. Then run `M start` and
+   `start_dictation.bat`, and confirm in Task Manager (Details, Command line column) that a
+   `pythonw.exe` runs the checkout's `main.py`, not one under `%LOCALAPPDATA%\Odicto`. Dictate
+   once, then run its `stop_dictation.bat`. Then run `M start` and
    `M run status`, and confirm the managed owner runs. Run `start_dictation.bat` again. Expect a
    start failure, the line `Could not acquire Odicto single-instance lock` at the end of the
    checkout's `dictation.log`, and no letter twice while you type. A failure without that line,
