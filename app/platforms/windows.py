@@ -6,6 +6,7 @@ mutex plus an exclusive ``msvcrt`` byte-lock on ``dictation.lock``.
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -230,9 +231,10 @@ def _try_acquire_lockfile() -> bool:
         fh.seek(0)
         try:
             msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError:
+        except OSError as e:
             fh.close()
-            _REFUSAL = "busy"
+            # EACCES is a byte another process locked; any other error is not another copy.
+            _REFUSAL = "busy" if e.errno in (errno.EACCES, errno.EDEADLK) else "error"
             return False
         try:
             fh.seek(0)

@@ -40,7 +40,8 @@ def hook_lock_scope() -> str:
 
     Two installs (a source checkout and the managed install, say) have different install
     locks, so only this lock stops both from hooking the keyboard. Tests set
-    ODICTO_HOOK_LOCK_SCOPE so they never meet the owner's real lock.
+    ODICTO_HOOK_LOCK_SCOPE so they never meet the owner's real lock; a real owner drops it
+    before it takes a lock (main.use_the_session_hook_lock).
     """
     scope = "".join(c for c in os.environ.get("ODICTO_HOOK_LOCK_SCOPE", "") if c.isalnum() or c in "-_")
     return scope[:64] or "session"

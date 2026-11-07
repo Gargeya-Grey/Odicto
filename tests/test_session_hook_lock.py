@@ -166,6 +166,43 @@ class TestWindowsHookMutexOutlivesTheNativeHook(unittest.TestCase):
         self.release(installed=False).assert_called_once_with()
 
 
+@unittest.skipUnless(sys.platform == "win32", "the Windows lockfile")
+class TestWindowsLockfileRefusal(unittest.TestCase):
+    def refusal(self, error):
+        import platforms.windows as windows
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(windows.base, "lock_file_path", return_value=os.path.join(folder, "dictation.lock")), \
+                patch("msvcrt.locking", side_effect=error):
+            self.assertFalse(windows._try_acquire_lockfile())
+        return windows.lock_refusal()
+
+    def test_a_byte_another_process_locked_is_busy(self):
+        self.assertEqual(self.refusal(OSError(13, "Permission denied")), "busy")
+
+    def test_an_io_error_is_not_another_copy(self):
+        self.assertEqual(self.refusal(OSError(5, "Input/output error")), "error")
+
+
+class TestTheOwnerUsesTheSessionLock(unittest.TestCase):
+    """A real owner launched from a test shell must still lock against the session's real owner."""
+
+    def test_the_owner_drops_an_inherited_test_scope(self):
+        import main
+        environment = {"ODICTO_HOOK_LOCK_SCOPE": "gate-1234", "PATH": "kept"}
+        main.use_the_session_hook_lock(environment)
+        self.assertEqual(environment, {"PATH": "kept"})
+
+    def test_the_owner_drops_it_before_it_takes_a_lock(self):
+        import ast
+        tree = ast.parse((ROOT / "app" / "main.py").read_text(encoding="utf-8"))
+        block = next(node for node in tree.body if isinstance(node, ast.If)
+                     and "__main__" in ast.unparse(node.test))
+        calls = [ast.unparse(node.func) for statement in block.body for node in ast.walk(statement)
+                 if isinstance(node, ast.Call)]
+        self.assertIn("use_the_session_hook_lock", calls)
+        self.assertLess(calls.index("use_the_session_hook_lock"), calls.index("claim_install"))
+
+
 class FakeXServer:
     """The selection table of one X server, shared by every connection to it."""
 

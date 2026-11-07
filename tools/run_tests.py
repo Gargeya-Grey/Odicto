@@ -65,7 +65,9 @@ GATE = {
     # Third review: macOS refuses root, so its sudo path tests (2) go and one root refusal test
     # comes (-1); the lock path ignores the launch environment (1); the Windows mutex outlives
     # the native hook (2, Windows only): 1289.
-    "floor": 1289,
+    # Plus 4 for its fourth review: an owner drops an inherited test scope (2), lockfile busy or
+    # error (2, Windows only): 1293.
+    "floor": 1293,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -87,6 +89,7 @@ GATE = {
             "tests.test_easy_install.TestWindowsEasyInstallerRuns.*",
             "tests.test_easy_install.TestWindowsStartMenuShortcuts.*",
             "tests.test_session_hook_lock.TestWindowsHookMutexOutlivesTheNativeHook.*",
+            "tests.test_session_hook_lock.TestWindowsLockfileRefusal.*",
             # The Linux hook lock is an X selection; a headless checkout has no X server.
             # CI runs the suite under Xvfb, so these run there.
             "tests.test_session_hook_lock.TestSessionHookLock.*",

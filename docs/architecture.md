@@ -539,7 +539,9 @@ takes it, as abandoned, only when that process has exited. `platforms.lock_refus
 "error" (the lock cannot be made) exits with 2, a failed start. A process that never hooked does
 not call `keyboard.unhook_all()`, because that call starts the listener, which installs a hook. Copies
 older than 1.5.0 do not take the hook lock, and a 1.4.x updater still rolls back on any refusal.
-`ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run).
+`ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run); a process with
+a real owner drops it before it takes a lock (`main.use_the_session_hook_lock`), so an owner
+launched from a test shell still locks against the session's real owner.
 
 ## 8. Threads and locks
 

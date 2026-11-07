@@ -337,6 +337,13 @@ def release_single_instance_lock() -> None:
     _INSTANCE_LOCK_HELD = False
 
 
+def use_the_session_hook_lock(environment=os.environ) -> None:
+    """A real owner locks against every copy in the session. ODICTO_HOOK_LOCK_SCOPE isolates
+    tests from each other; an owner that inherited it (a launch from a test shell) would lock
+    against tests only and could hook beside the real owner, so the owner drops it first."""
+    environment.pop("ODICTO_HOOK_LOCK_SCOPE", None)
+
+
 def claim_install(pid_file: str) -> bool:
     """Leave a live owner alone; sweep orphans only under exclusive ownership."""
     if not acquire_single_instance_lock():
@@ -2013,6 +2020,7 @@ if __name__ == "__main__":
 
     # STRICT single-instance: take lock, sweep orphans, then construct the app
     # (which binds a system-wide keyboard hook). Never skip this gate.
+    use_the_session_hook_lock()
     from platforms.preflight import environment_problems
     startup_blockers = [problem for problem in environment_problems() if problem.severity == "error"]
     if startup_blockers:
