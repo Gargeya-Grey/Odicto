@@ -19,7 +19,8 @@ set "ODICTO_INSTALLER=%~f0"
 "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$t = [IO.File]::ReadAllText($env:ODICTO_INSTALLER); $m = '#' + 'ODICTO-POWERSHELL'; & ([scriptblock]::Create($t.Substring($t.IndexOf($m))))"
 set "ODICTO_STATUS=%ERRORLEVEL%"
 echo.
-pause
+echo Press any key to close this window.
+pause >nul
 exit /b %ODICTO_STATUS%
 """
 
@@ -39,8 +40,17 @@ $startup = Join-Path $managed 'autostart.json'
 if (-not $migrated -and (Test-Path -LiteralPath $startup)) {
     try { if ((Get-Content -LiteralPath $startup -Raw | ConvertFrom-Json).pending -eq $true) { $chosen = $false } } catch { }
 }
-Write-Host 'Installing Odicto. The first install takes a few minutes.'
+function Step([int]$Number, [string]$Text) {
+    Write-Host ''
+    Write-Host ("Step $Number of 3: " + $Text) -ForegroundColor Cyan
+    try { $Host.UI.RawUI.WindowTitle = "Odicto installer - step $Number of 3" } catch { }
+}
 Write-Host ''
+Write-Host '  Odicto installer' -ForegroundColor Cyan
+Write-Host '  This window installs Odicto, free voice typing for Windows.'
+Write-Host '  It takes a few minutes. You do not need to type anything here.'
+Write-Host '  Technical text scrolls by while it works. That is normal.'
+Step 1 'Downloading and installing Odicto (the longest step)'
 try {
 & {
 """
@@ -79,7 +89,7 @@ if (-not $migrated -and ((Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false -or
     exit 0
 }
 $failed = @()
-Write-Host ''
+Step 2 'Starting Odicto'
 if (-not $chosen) {
     & $odicto autostart
     if ($LASTEXITCODE -ne 0) { $failed += 'autostart' }
@@ -90,18 +100,31 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host 'Odicto did not start. Open the Start Menu and click Odicto to try again.'
     exit 1
 }
+Step 3 'Opening Odicto Setup in your browser'
 & $odicto setup
 if ($LASTEXITCODE -ne 0) { $failed += 'setup' }
 $items = (Test-OdictoLink 'Odicto\Odicto.lnk') -and (Test-OdictoLink 'Odicto\Odicto Setup.lnk') -and
     (Test-OdictoLink 'Odicto\Stop Odicto.lnk')
 if (-not $items -and -not $migrated) { $failed += 'shortcuts' }
+$colour = if ($failed.Count) { 'Yellow' } else { 'Green' }
+try { $Host.UI.RawUI.WindowTitle = 'Odicto installer - done' } catch { }
 Write-Host ''
-Write-Host 'Odicto is running.'
+Write-Host '  ==========================================' -ForegroundColor $colour
+if ($failed.Count) { Write-Host '  Odicto is running. Some steps did not finish.' -ForegroundColor $colour }
+else { Write-Host '  Odicto is ready.' -ForegroundColor $colour }
+Write-Host '  ==========================================' -ForegroundColor $colour
+Write-Host ''
+Write-Host 'Try it now:'
+Write-Host '  1. Click in any text box, for example a new email.'
+Write-Host '  2. Press Ctrl and the ` key together (the key under Esc, left of 1).'
+Write-Host '  3. Speak. Then press Ctrl and ` again. Your words appear.'
+Write-Host '  The first time can take a little longer.'
+Write-Host ''
+Write-Host 'Odicto runs in the background. Its icon is next to the clock.'
 if ('autostart' -in $failed) { Write-Host 'It does not start by itself when you sign in.' }
 elseif (-not $chosen) { Write-Host 'It starts by itself when you sign in.' }
-Write-Host 'To type with your voice: click in a text box, press Ctrl and the ` key (left of 1), speak, then press them again.'
-if ('setup' -in $failed) { Write-Host 'Odicto Setup did not open.' }
-else { Write-Host 'Your browser shows Odicto Setup.' }
+if ('setup' -in $failed) { Write-Host 'Odicto Setup did not open. Open it from the Start Menu: Odicto Setup.' }
+else { Write-Host 'Your browser shows Odicto Setup. Change the microphone or the keys there.' }
 if ($items) { Write-Host 'Odicto, Odicto Setup and Stop Odicto are in the Start Menu.' }
 elseif ($migrated) { Write-Host 'The Odicto items in the Start Menu open your old folder, which hands over to this copy.' }
 else { Write-Host 'The Start Menu items were not made. To stop Odicto, right-click the Odicto icon next to the clock and click Quit Odicto.' }

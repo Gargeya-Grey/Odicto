@@ -8,6 +8,8 @@
 
 <p align="center"><b>Tap a hotkey. Speak. Tap again. Your words appear at the cursor.</b></p>
 
+<p align="center"><a href="https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd"><b>Download for Windows</b></a> · free · no account · <a href="#windows-no-terminal">how to install</a></p>
+
 Odicto is free, open-source voice typing for Windows, macOS and Linux X11. It runs
 quietly in the background and works with the editor, browser or chat app you are
 already using. Local Whisper is the default; cloud speech and AI features are optional.
@@ -17,10 +19,14 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 ### Windows, no terminal
 
 1. Download [Install-Odicto.cmd](https://github.com/Gargeya-Grey/Odicto/releases/latest/download/Install-Odicto.cmd).
-2. Double-click it. The file is not signed, so Windows can show "Windows protected your PC".
-   Click **More info**, then **Run anyway**. Your browser can also ask you to keep the file.
-3. Wait a few minutes. The installer installs Odicto, sets it to start when you sign in, starts it,
-   and opens Setup in your browser. Press a key to close the window when it says so.
+   Your browser can ask if you want to keep the file. Choose **Keep**.
+2. Double-click the file.
+3. Windows can show a blue box, "Windows protected your PC". Click **More info**, then **Run anyway**.
+   Windows shows this box for apps from a publisher that has not bought a code-signing certificate.
+   Odicto is free and has no certificate yet. Its code is public in this repository.
+4. A window shows three steps and takes a few minutes. You do not need to type anything.
+   At the end, Odicto is running, it starts when you sign in, and Setup opens in your browser.
+5. Try it: click in a text box, press **Ctrl** and **\`** (the key under Esc), speak, and press them again.
 
 If a copy of Odicto that you installed from its folder is on the computer, the installer installs
 the new copy but does not start it, because two copies must never run together. Follow

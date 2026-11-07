@@ -123,6 +123,9 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(calls, ["autostart", "start", "setup"])
         self.assertIn("It starts by itself when you sign in.", done.stdout)
         self.assertIn("Your browser shows Odicto Setup.", done.stdout)
+        self.assertIn("Step 3 of 3", done.stdout)
+        self.assertIn("Odicto is ready.", done.stdout)
+        self.assertIn("Try it now:", done.stdout)
         self.assertIn("are in the Start Menu", done.stdout)
 
     def test_repair_keeps_the_sign_in_choice(self):
@@ -235,6 +238,8 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 1)
         self.assertIn("Odicto Setup did not open.", done.stdout)
+        self.assertIn("Some steps did not finish.", done.stdout)
+        self.assertNotIn("Odicto is ready.", done.stdout)
         self.assertNotIn("Your browser shows", done.stdout)
 
     def test_real_bootstrap_payload_parses(self):
