@@ -58,8 +58,9 @@ GATE = {
     # Plus 3 for its review fixes: an update while Odicto runs, a failed check, the help rows: 1246.
     # Plus 24 for the no-terminal Windows path: the double-click installer (4 on every platform,
     # 14 Windows-only runs of the built file) and the Start Menu shortcuts (6 Windows-only): 1270.
-    # Plus 4 for the session keyboard-hook lock across two installs, on every platform: 1274.
-    "floor": 1274,
+    # Plus 8 for the session keyboard-hook lock: two installs (4), the Linux display key (2), the
+    # busy exit code shared with the updater (1), and no rollback when another copy runs (1): 1278.
+    "floor": 1278,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -171,6 +172,12 @@ def main() -> int:
             result = runner.run(suite)
     finally:
         faulthandler.cancel_dump_traceback_later()
+        if sys.platform == "darwin":  # the run's own hook-lock file (Linux uses no file)
+            try:
+                from platforms import base
+                os.remove(base.hook_lock_path())
+            except (ImportError, OSError):
+                pass
 
     problems = []
     if result.failures or result.errors:

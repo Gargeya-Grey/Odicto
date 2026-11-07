@@ -502,7 +502,7 @@ graph TD
     Mutex --> LockFile["msvcrt lockfile on dictation.lock"]
     LockFile --> HookMutex["Session hook mutex<br/>Local Odicto_KeyboardHooks, every install"]
     Lock -->|macOS / Linux| Flock["fcntl.flock LOCK_EX and LOCK_NB<br/>on dictation.lock, pid written inside"]
-    Flock --> HookFlock["Per-user hook flock<br/>XDG_RUNTIME_DIR or ~/.cache/odicto"]
+    Flock --> HookFlock["Session hook lock<br/>Linux: abstract socket per X display<br/>macOS: flock in Application Support"]
     HookMutex --> Held["_INSTANCE_LOCK_HELD = True"]
     HookFlock --> Held
     Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
@@ -523,9 +523,15 @@ with Right Alt (AltGr injects one) use the library, which names the injected eve
 **Never install hooks without the lock.** The install lock is scoped to one data root, so it
 cannot see another install (a source checkout beside the managed install). The session hook lock
 is the same for every install of this user session, so a second install is refused too.
-`platforms.lock_is_held()` is true only when both are held. An elevated owner's hook mutex cannot
-be opened from a normal process, which counts as held. Copies older than 1.5.0 do not take the
-hook lock. `ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run).
+`platforms.lock_is_held()` is true only when both are held. Windows: a `Local\` mutex, one per
+logon session; an elevated owner's mutex that a normal process cannot open counts as held. Linux:
+an abstract Unix socket named for the X display (`:0`, `:0.0` and `unix:0` are one display), so it
+has no file, root and the desktop user share it, and the kernel frees it when the process dies.
+macOS: an flock on a file under the account's Application Support folder, found through the
+account database, not HOME. A refused owner exits with `EXIT_ANOTHER_OWNER` (75); the managed
+updater reports "another copy is running" and keeps the new release instead of rolling back. Copies
+older than 1.5.0 do not take the hook lock, and a 1.4.x updater still rolls back on any refusal.
+`ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run).
 
 ## 8. Threads and locks
 

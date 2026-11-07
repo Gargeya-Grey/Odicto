@@ -487,6 +487,10 @@ foreach ($entry in ($env:ODICTO_SHORTCUTS | ConvertFrom-Json)) {
 """
 
 
+# The owner's exit code when another Odicto holds the lock (app/main.py). The release is fine.
+EXIT_ANOTHER_OWNER = 75
+
+
 def default_home() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Odicto"
@@ -943,7 +947,9 @@ runpy.run_path(str(script), run_name='__main__')
             else:
                 result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
                                         cwd=directory, env=self.environment()).returncode
-        if result and command[0] == "start" and before and current["directory"] != before["directory"]:
+        if result == EXIT_ANOTHER_OWNER and command[0] == "start":
+            print("Another copy of Odicto is running. Quit it, then start Odicto again.", file=sys.stderr)
+        elif result and command[0] == "start" and before and current["directory"] != before["directory"]:
             try:
                 with file_lock(self.home / "manager.lock"):
                     if self.active()["directory"] == current["directory"]:
@@ -1189,7 +1195,7 @@ runpy.run_path(str(script), run_name='__main__')
                 status = process.poll()
                 if status is not None:
                     confirmed = True
-                    if command == "start":
+                    if command == "start" and status != EXIT_ANOTHER_OWNER:
                         print(f"Odicto exited during startup (code {status}); see {self.data / 'dictation.log'}.",
                               file=sys.stderr)
                     return status if status else (0 if command == "setup" else 1)

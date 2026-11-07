@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import os
 import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -27,6 +28,7 @@ except ImportError:  # pragma: no cover
 
 _lock_file_obj = None
 _hook_lock_fd: Optional[int] = None
+_hook_lock_socket = None
 
 
 class _VerifiedPid(int):
@@ -190,8 +192,27 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
 
 
 def _try_acquire_hook_lock() -> bool:
-    """Take the per-user keyboard-hook flock that every install shares."""
-    global _hook_lock_fd
+    """Take the keyboard-hook lock that every install shares.
+
+    Linux: an abstract Unix socket named for the X display. It has no file to delete or to own,
+    root and the desktop user share it, and the kernel frees it when the process dies.
+    macOS: an flock on a file whose path comes from the account database (base.hook_lock_path).
+    """
+    global _hook_lock_fd, _hook_lock_socket
+
+    if sys.platform.startswith("linux"):
+        import socket
+
+        name = "\0odicto-keyboard-hooks-%s-%s" % (
+            base.hook_lock_scope(), base.hook_lock_display_key(os.environ.get("DISPLAY", "")))
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(name)
+        except OSError:
+            sock.close()
+            return False
+        _hook_lock_socket = sock
+        return True
 
     path = base.hook_lock_path()
     try:
@@ -202,6 +223,10 @@ def _try_acquire_hook_lock() -> bool:
         return False
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # A file replaced between open and lock is a different lock: refuse, never guess.
+        held, named = os.fstat(fd), os.stat(path)
+        if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
+            raise OSError("keyboard-hook lock file was replaced")
     except OSError:
         os.close(fd)
         return False
@@ -210,8 +235,14 @@ def _try_acquire_hook_lock() -> bool:
 
 
 def _release_hook_lock() -> None:
-    global _hook_lock_fd
+    global _hook_lock_fd, _hook_lock_socket
 
+    if _hook_lock_socket is not None:
+        try:
+            _hook_lock_socket.close()
+        except Exception:
+            pass
+        _hook_lock_socket = None
     if _hook_lock_fd is not None:
         try:
             fcntl.flock(_hook_lock_fd, fcntl.LOCK_UN)
@@ -282,7 +313,7 @@ def release_lock() -> None:
 
 
 def lock_is_held() -> bool:
-    return _lock_file_obj is not None and _hook_lock_fd is not None
+    return _lock_file_obj is not None and (_hook_lock_fd is not None or _hook_lock_socket is not None)
 
 
 def spawn_detached(args) -> subprocess.Popen:

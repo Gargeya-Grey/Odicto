@@ -82,12 +82,47 @@ class TestSessionHookLock(unittest.TestCase):
         second, state = self.owner("install-b")
         self.assertEqual(state, "held")
 
+    def tearDown(self):
+        if sys.platform == "darwin":  # macOS keeps a lock file; Linux uses an abstract socket
+            from unittest.mock import patch
+            import platforms.base as base
+            with patch.dict(os.environ, {"ODICTO_HOOK_LOCK_SCOPE": self.scope}):
+                Path(base.hook_lock_path()).unlink(missing_ok=True)
+
     def test_another_scope_is_not_blocked(self):
         first, state = self.owner("install-a")
         self.assertEqual(state, "held")
         self.scope = "test-" + uuid.uuid4().hex
         second, state = self.owner("install-b")
         self.assertEqual(state, "held")
+
+
+class TestRefusalExitCode(unittest.TestCase):
+    def test_the_owner_and_the_updater_agree_on_the_busy_exit_code(self):
+        import importlib.util
+        import main
+        spec = importlib.util.spec_from_file_location("odicto_manager_exit_code", ROOT / "tools" / "distribution" / "manager.py")
+        manager = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = manager
+        spec.loader.exec_module(manager)
+        self.assertEqual(main.EXIT_ANOTHER_OWNER, 75)
+        self.assertEqual(manager.EXIT_ANOTHER_OWNER, 75)
+
+
+class TestLinuxDisplayKey(unittest.TestCase):
+    """On Linux the hooks belong to one X server, so the lock is keyed to the display."""
+
+    def test_spellings_of_one_local_display_share_a_key(self):
+        import platforms.base as base
+        keys = {base.hook_lock_display_key(value) for value in (":0", ":0.0", "unix:0", "unix:0.1")}
+        self.assertEqual(keys, {"local-0"})
+
+    def test_other_displays_have_other_keys(self):
+        import platforms.base as base
+        self.assertEqual(base.hook_lock_display_key(":1"), "local-1")
+        self.assertEqual(base.hook_lock_display_key("localhost:10.0"), "localhost-10")
+        self.assertEqual(base.hook_lock_display_key(""), "none")
+        self.assertEqual(base.hook_lock_display_key("bad name:x/1"), "badname-x1")
 
 
 if __name__ == "__main__":

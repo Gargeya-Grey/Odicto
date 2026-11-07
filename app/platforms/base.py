@@ -47,10 +47,25 @@ def hook_lock_scope() -> str:
 
 
 def hook_lock_path() -> str:
-    """POSIX: the per-user file whose flock is the keyboard-hook lock."""
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    folder = runtime if runtime and os.path.isdir(runtime) else os.path.join(os.path.expanduser("~"), ".cache", "odicto")
-    return os.path.join(folder, f"odicto-keyboard-hooks-{hook_lock_scope()}.lock")
+    """macOS: the file whose flock is the keyboard-hook lock. The folder comes from the account
+    database, not from HOME, so every launch of this user finds the same file, and no cache
+    cleaner removes it."""
+    import pwd
+
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    return os.path.join(home, "Library", "Application Support", "Odicto", f"keyboard-hooks-{hook_lock_scope()}.lock")
+
+
+def hook_lock_display_key(display: str) -> str:
+    """Linux: hooks belong to one X server, so the lock is keyed to the display, not to the user.
+    ':0', ':0.0' and 'unix:0' are one local server; ':1' (a second session) is another."""
+    if not display:
+        return "none"
+    host, _, rest = display.rpartition(":")
+    host = "local" if host in ("", "unix") else host
+    number = rest.split(".", 1)[0]
+    clean = lambda value: "".join(c for c in value if c.isalnum() or c in "-_")  # noqa: E731
+    return f"{clean(host)}-{clean(number)}"
 
 
 def pid_file_path() -> str:
