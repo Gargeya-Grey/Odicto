@@ -56,7 +56,9 @@ GATE = {
     # Plus 4 for the review fixes: a grey custom colour (3) and the page maths run in Node (1): 1239.
     # Plus 4 for the update screen: tool output in update.log, steps and result, up to date, failure: 1243.
     # Plus 3 for its review fixes: an update while Odicto runs, a failed check, the help rows: 1246.
-    "floor": 1246,
+    # Plus 24 for the no-terminal Windows path: the double-click installer (4 on every platform,
+    # 14 Windows-only runs of the built file) and the Start Menu shortcuts (6 Windows-only): 1270.
+    "floor": 1270,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -75,6 +77,8 @@ GATE = {
             "tests.test_windows_admin.TestHelperParses.*",
             "tests.test_windows_admin.TestQuitEventRoundTrip.*",
             "tests.test_launchers.TestBatFilesRun.*",
+            "tests.test_easy_install.TestWindowsEasyInstallerRuns.*",
+            "tests.test_easy_install.TestWindowsStartMenuShortcuts.*",
             "tests.test_resource_use.TestBlasThreads.test_importing_main_commits_little_memory_on_windows",
             "tests.test_reliability.*.test_win32_input_union_size_and_partial_input_never_retried",
             "tests.test_process_lifecycle.TestWindowsStop.*",
