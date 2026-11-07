@@ -548,6 +548,13 @@ print('NATIVE DEPENDENCY PASS')
         self.assertEqual(self.manager.active()["version"], newer.tag)
         self.assertNotIn("blocked_version", self.manager._read_json(self.manager.marker))
 
+    def test_a_restart_refused_by_another_running_copy_says_why(self):
+        self.initial()
+        with patch.object(self.manager, "_launch", return_value=dist.EXIT_ANOTHER_OWNER), \
+                patch.object(dist.sys, "stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(self.manager.run(["restart"]), dist.EXIT_ANOTHER_OWNER)
+        self.assertIn("Another copy of Odicto is running", error.getvalue())
+
     def test_failed_new_start_rolls_back_and_does_not_retry_bad_release_automatically(self):
         old = self.initial()
         self.add_release("v1.3.0")

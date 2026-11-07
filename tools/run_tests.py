@@ -60,7 +60,9 @@ GATE = {
     # 14 Windows-only runs of the built file) and the Start Menu shortcuts (6 Windows-only): 1270.
     # Plus 8 for the session keyboard-hook lock: two installs (4), the Linux display key (2), the
     # busy exit code shared with the updater (1), and no rollback when another copy runs (1): 1278.
-    "floor": 1278,
+    # Plus 9 for its second review: the Linux X selection (3) replaces the display key (-2), the
+    # macOS path (3), no hook on release (2), busy or error (2), a refused restart (1): 1287.
+    "floor": 1287,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -172,7 +174,7 @@ def main() -> int:
             result = runner.run(suite)
     finally:
         faulthandler.cancel_dump_traceback_later()
-        if sys.platform == "darwin":  # the run's own hook-lock file (Linux uses no file)
+        if sys.platform == "darwin":  # the run's own hook-lock file (Linux uses an X selection)
             try:
                 from platforms import base
                 os.remove(base.hook_lock_path())

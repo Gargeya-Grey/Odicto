@@ -947,7 +947,7 @@ runpy.run_path(str(script), run_name='__main__')
             else:
                 result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
                                         cwd=directory, env=self.environment()).returncode
-        if result == EXIT_ANOTHER_OWNER and command[0] == "start":
+        if result == EXIT_ANOTHER_OWNER and command[0] in {"start", "restart"}:
             print("Another copy of Odicto is running. Quit it, then start Odicto again.", file=sys.stderr)
         elif result and command[0] == "start" and before and current["directory"] != before["directory"]:
             try:

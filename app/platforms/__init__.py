@@ -48,6 +48,7 @@ __all__ = [
     "acquire_lock",
     "release_lock",
     "lock_is_held",
+    "lock_refusal",
     "kill_other_odicto_processes",
     "keep_responsive",
     "spawn_detached",

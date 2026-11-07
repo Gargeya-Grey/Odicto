@@ -502,10 +502,10 @@ graph TD
     Mutex --> LockFile["msvcrt lockfile on dictation.lock"]
     LockFile --> HookMutex["Session hook mutex<br/>Local Odicto_KeyboardHooks, every install"]
     Lock -->|macOS / Linux| Flock["fcntl.flock LOCK_EX and LOCK_NB<br/>on dictation.lock, pid written inside"]
-    Flock --> HookFlock["Session hook lock<br/>Linux: abstract socket per X display<br/>macOS: flock in Application Support"]
+    Flock --> HookFlock["Session hook lock<br/>Linux: X selection on the X server<br/>macOS: flock beside the managed home"]
     HookMutex --> Held["_INSTANCE_LOCK_HELD = True"]
     HookFlock --> Held
-    Lock -->|cannot take| Exit["sys.exit(2), hooks NOT installed"]
+    Lock -->|cannot take| Exit["exit 75 if another copy holds it, else 2;<br/>hooks NOT installed"]
     Held --> Kill["platforms.kill_other_odicto_processes<br/>reap verified orphan script processes"]
     Kill --> Keep["platforms.keep_responsive()<br/>Windows: above-normal priority, normal memory and I/O priority,<br/>no EcoQoS, 192 MB hard minimum working set"]
     Keep --> Bind["_bind_hotkeys()"]
@@ -525,11 +525,17 @@ cannot see another install (a source checkout beside the managed install). The s
 is the same for every install of this user session, so a second install is refused too.
 `platforms.lock_is_held()` is true only when both are held. Windows: a `Local\` mutex, one per
 logon session; an elevated owner's mutex that a normal process cannot open counts as held. Linux:
-an abstract Unix socket named for the X display (`:0`, `:0.0` and `unix:0` are one display), so it
-has no file, root and the desktop user share it, and the kernel frees it when the process dies.
-macOS: an flock on a file under the account's Application Support folder, found through the
-account database, not HOME. A refused owner exits with `EXIT_ANOTHER_OWNER` (75); the managed
-updater reports "another copy is running" and keeps the new release instead of rolling back. Copies
+an X selection (`ODICTO_KEYBOARD_HOOKS_<scope>`) on the X server the hooks grab keys on, taken under
+a server grab. Every DISPLAY spelling, SSH forward, user and root reach the same selection on one
+server, a second server (VNC, a second session) has its own, and the server frees it when the
+owner's connection closes. macOS: an flock on `.odicto-keyboard-hooks-<scope>.lock` directly in the
+desktop user's Application Support folder, beside the managed home and never inside it, found
+through the account database, not HOME; a sudo copy uses the file of the user who ran sudo
+(`SUDO_UID`) and leaves it owned by that user. `platforms.lock_refusal()` says why a lock failed:
+"busy" (another copy holds it) exits with `EXIT_ANOTHER_OWNER` (75), and the managed updater reports
+"another copy is running" for start and restart and keeps the new release instead of rolling back;
+"error" (the lock cannot be made) exits with 2, a failed start. A process that never hooked does
+not call `keyboard.unhook_all()`, because that call starts the listener, which installs a hook. Copies
 older than 1.5.0 do not take the hook lock, and a 1.4.x updater still rolls back on any refusal.
 `ODICTO_HOOK_LOCK_SCOPE` gives tests their own lock (the gate sets it per run).
 

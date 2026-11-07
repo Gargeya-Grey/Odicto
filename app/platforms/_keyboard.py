@@ -103,9 +103,15 @@ def hook_key(key: str, handler, suppress: bool) -> None:
 
 
 def unhook_all() -> None:
+    """Remove this process's hooks. keyboard.unhook_all() starts the listener first, and that
+    installs a system-wide hook, so a process that never hooked (a refused copy, a lock-only
+    test) skips the call instead of installing a hook to remove nothing."""
     try:
-        if keyboard is not None:
-            keyboard.unhook_all()
+        if keyboard is None:
+            return
+        if getattr(getattr(keyboard, "_listener", None), "listening", True) is False:
+            return
+        keyboard.unhook_all()
     except Exception:
         pass
 

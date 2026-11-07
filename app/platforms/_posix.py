@@ -28,7 +28,9 @@ except ImportError:  # pragma: no cover
 
 _lock_file_obj = None
 _hook_lock_fd: Optional[int] = None
-_hook_lock_socket = None
+_hook_lock_display = None  # Linux: the X connection that owns the hook-lock selection
+# Why the last acquire_lock() failed: "busy" (another copy holds a lock) or "error".
+_REFUSAL: str = ""
 
 
 class _VerifiedPid(int):
@@ -191,28 +193,67 @@ def kill_other_odicto_processes(pid_file: Optional[str] = None) -> list:
     return killed
 
 
+def _refuse(reason: str) -> bool:
+    global _REFUSAL
+
+    _REFUSAL = reason
+    return False
+
+
+def lock_refusal() -> str:
+    """Why the last acquire_lock() failed: "busy" (another copy holds a lock), "error" or ""."""
+    return _REFUSAL
+
+
+def _try_acquire_x_selection() -> bool:
+    """Linux: own an X selection on the X server that the hooks grab keys on.
+
+    A selection belongs to one X server, whatever DISPLAY spelling, user or SSH forward reached
+    it, and the server frees it when the owner's connection closes, also when the process dies.
+    The server grab makes "nobody owns it, so take it" one step for every client."""
+    global _hook_lock_display
+
+    try:
+        from Xlib import X, display as xdisplay
+
+        connection = xdisplay.Display()
+    except Exception as e:
+        print(f"Warning: keyboard-hook lock unavailable (no X display): {e}")
+        return _refuse("error")
+    try:
+        atom = connection.intern_atom("ODICTO_KEYBOARD_HOOKS_" + base.hook_lock_scope())
+        window = connection.screen().root.create_window(-1, -1, 1, 1, 0, X.CopyFromParent)
+        connection.grab_server()
+        try:
+            owner = connection.get_selection_owner(atom)
+            free = getattr(owner, "id", owner) == X.NONE
+            if free:
+                window.set_selection_owner(atom, X.CurrentTime)
+        finally:
+            connection.ungrab_server()
+            connection.sync()
+        held = free and getattr(connection.get_selection_owner(atom), "id", None) == window.id
+    except Exception as e:
+        print(f"Warning: keyboard-hook lock failed: {e}")
+        connection.close()
+        return _refuse("error")
+    if not held:
+        connection.close()
+        return _refuse("busy")
+    _hook_lock_display = connection
+    return True
+
+
 def _try_acquire_hook_lock() -> bool:
     """Take the keyboard-hook lock that every install shares.
 
-    Linux: an abstract Unix socket named for the X display. It has no file to delete or to own,
-    root and the desktop user share it, and the kernel frees it when the process dies.
-    macOS: an flock on a file whose path comes from the account database (base.hook_lock_path).
+    Linux: an X selection (_try_acquire_x_selection). macOS: an flock on a file whose path comes
+    from the account database (base.hook_lock_path); under sudo it is the desktop user's file.
     """
-    global _hook_lock_fd, _hook_lock_socket
+    global _hook_lock_fd
 
     if sys.platform.startswith("linux"):
-        import socket
-
-        name = "\0odicto-keyboard-hooks-%s-%s" % (
-            base.hook_lock_scope(), base.hook_lock_display_key(os.environ.get("DISPLAY", "")))
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.bind(name)
-        except OSError:
-            sock.close()
-            return False
-        _hook_lock_socket = sock
-        return True
+        return _try_acquire_x_selection()
 
     path = base.hook_lock_path()
     try:
@@ -220,29 +261,40 @@ def _try_acquire_hook_lock() -> bool:
         fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except OSError as e:
         print(f"Warning: keyboard-hook lock unavailable: {e}")
-        return False
+        return _refuse("error")
+    owner = base.hook_lock_owner_uid()
+    if os.getuid() == 0 and owner != 0:
+        try:  # a root copy leaves the file usable by the desktop user it runs for
+            os.fchown(fd, owner, -1)
+        except OSError:
+            pass
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        return _refuse("busy" if e.errno in (errno.EACCES, errno.EAGAIN) else "error")
+    try:
         # A file replaced between open and lock is a different lock: refuse, never guess.
         held, named = os.fstat(fd), os.stat(path)
-        if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
-            raise OSError("keyboard-hook lock file was replaced")
+        replaced = (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
     except OSError:
+        replaced = True
+    if replaced:
         os.close(fd)
-        return False
+        return _refuse("error")
     _hook_lock_fd = fd
     return True
 
 
 def _release_hook_lock() -> None:
-    global _hook_lock_fd, _hook_lock_socket
+    global _hook_lock_fd, _hook_lock_display
 
-    if _hook_lock_socket is not None:
+    if _hook_lock_display is not None:
         try:
-            _hook_lock_socket.close()
+            _hook_lock_display.close()
         except Exception:
             pass
-        _hook_lock_socket = None
+        _hook_lock_display = None
     if _hook_lock_fd is not None:
         try:
             fcntl.flock(_hook_lock_fd, fcntl.LOCK_UN)
@@ -257,8 +309,11 @@ def _release_hook_lock() -> None:
 
 def acquire_lock(timeout_ms: int = 8000) -> bool:
     """Take the exclusive ``dictation.lock`` byte-lock, then the per-user hook lock."""
+    global _REFUSAL
+
     if fcntl is None:
         return True  # Windows path never reaches here; keep import-safe.
+    _REFUSAL = ""
     if not _acquire_install_lock():
         return False
     if not _try_acquire_hook_lock():
@@ -279,7 +334,7 @@ def _acquire_install_lock() -> bool:
         except OSError as e:
             if e.errno in (errno.EACCES, errno.EAGAIN):
                 fh.close()
-                return False
+                return _refuse("busy")
             raise
         try:
             fh.seek(0)
@@ -292,7 +347,7 @@ def _acquire_install_lock() -> bool:
         return True
     except Exception as e:
         print(f"Warning: lock file acquire failed: {e}")
-        return False
+        return _refuse("error")
 
 
 def release_lock() -> None:
@@ -313,7 +368,7 @@ def release_lock() -> None:
 
 
 def lock_is_held() -> bool:
-    return _lock_file_obj is not None and (_hook_lock_fd is not None or _hook_lock_socket is not None)
+    return _lock_file_obj is not None and (_hook_lock_fd is not None or _hook_lock_display is not None)
 
 
 def spawn_detached(args) -> subprocess.Popen:

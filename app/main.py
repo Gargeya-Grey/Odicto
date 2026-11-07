@@ -302,7 +302,13 @@ def acquire_single_instance_lock(timeout_ms: int = 8000) -> bool:
     global _INSTANCE_LOCK_HELD, _LOCK_REFUSED
 
     if not platforms.acquire_lock(timeout_ms):
-        _LOCK_REFUSED = True
+        # Only a lock another copy holds is "busy" (exit 75); an error is a failed start.
+        _LOCK_REFUSED = platforms.lock_refusal() == "busy"
+        if not _LOCK_REFUSED:
+            print("!!! FATAL: Could not create the Odicto single-instance lock (see the warning "
+                  "above). No other copy holds it; Odicto did not start.", flush=True)
+            _INSTANCE_LOCK_HELD = False
+            return False
         print(
             "!!! FATAL: Could not acquire Odicto single-instance lock.\n"
             "    Two copies would stack system-wide keyboard hooks and double every\n"

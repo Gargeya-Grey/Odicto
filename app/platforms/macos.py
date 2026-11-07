@@ -24,6 +24,7 @@ from platforms._posix import (  # noqa: F401,F403
     keep_responsive,
     kill_process_tree,
     lock_is_held,
+    lock_refusal,
     release_lock,
     spawn_detached,
     terminate_process_tree,
