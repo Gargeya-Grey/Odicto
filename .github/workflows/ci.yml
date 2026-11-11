@@ -15,7 +15,6 @@ on:
       - '!.*/**.md'
       - 'CHANGELOG.md'
       - 'docs/architecture.md'
-      - 'docs/engineering-notes.md'
       - 'tools/release/release-notes.md'
 
 permissions:
