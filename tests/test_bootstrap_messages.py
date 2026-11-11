@@ -40,7 +40,7 @@ class TestDownloadMessages(unittest.TestCase):
         for error in (http_error(403, "0"), http_error(429)):
             message = run_payload(error)
             self.assertIn("too many requests", message)
-            self.assertIn("Nothing was installed", message)
+            self.assertIn("Odicto was not installed", message)
 
     def test_other_http_error_names_the_code(self):
         message = run_payload(http_error(503))
@@ -74,17 +74,24 @@ class TestSetupCommand(unittest.TestCase):
 if os.name != "nt":
     class TestWaylandStopsBeforeSudo(unittest.TestCase):
         def run_bootstrap(self, **session):
+            # Every program that could change the machine is a stub, uv included, and HOME and
+            # the install folders are temporary: the real uv and managed home are never reached.
             with tempfile.TemporaryDirectory() as directory:
-                stubs = Path(directory)
-                marker = stubs / "touched"
+                root = Path(directory)
+                stubs = root / "stubs"
+                stubs.mkdir()
+                marker = root / "touched"
                 for name, body in {"uname": "printf 'Linux\\n'",
                                    "sudo": f"touch '{marker}'", "apt-get": f"touch '{marker}'",
-                                   "dpkg-query": f"touch '{marker}'", "curl": f"touch '{marker}'"}.items():
+                                   "dpkg-query": f"touch '{marker}'", "curl": f"touch '{marker}'",
+                                   "uv": f"touch '{marker}'"}.items():
                     (stubs / name).write_text("#!/bin/sh\n" + body + "\n")
                     (stubs / name).chmod(0o700)
                 environment = {key: value for key, value in os.environ.items()
-                               if key not in ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY")}
-                environment.update(session, PATH=str(stubs) + ":/usr/bin:/bin")
+                               if key not in ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "XDG_DATA_HOME",
+                                              "UV_INSTALL_DIR", "ODICTO_DATA_ROOT", "ODICTO_MANAGED_HOME")}
+                environment.update(session, PATH=str(stubs) + ":/usr/bin:/bin", HOME=str(root / "home"),
+                                   XDG_DATA_HOME=str(root / "data"), UV_INSTALL_DIR=str(root / "uv"))
                 result = subprocess.run(["/bin/bash", str(DISTRIBUTION / "bootstrap.sh")], env=environment,
                                         capture_output=True, text=True, timeout=15)
                 return result, marker.exists()
@@ -100,6 +107,7 @@ if os.name != "nt":
 
         def test_an_x11_session_goes_on_to_the_package_check(self):
             result, touched = self.run_bootstrap(XDG_SESSION_TYPE="x11")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn("Wayland session", result.stderr)
             self.assertTrue(touched)
 

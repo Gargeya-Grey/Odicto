@@ -36,10 +36,10 @@ def get(url, maximum):
             data = response.read(maximum + 1)
     except urllib.error.HTTPError as error:
         if error.code == 429 or (error.code == 403 and (error.headers or {}).get('X-RateLimit-Remaining') == '0'):
-            raise SystemExit('GitHub refused the download for now: too many requests from this network. Wait one hour, then run the installer again. Nothing was installed.')
-        raise SystemExit(f'The download failed: GitHub answered HTTP {error.code}. Run the installer again later. Nothing was installed.')
+            raise SystemExit('GitHub refused the download for now: too many requests from this network. Wait one hour, then run the installer again. Odicto was not installed.')
+        raise SystemExit(f'The download failed: GitHub answered HTTP {error.code}. Run the installer again later. Odicto was not installed.')
     except (urllib.error.URLError, OSError) as error:
-        raise SystemExit(f'The download failed: no connection to GitHub ({getattr(error, "reason", error)}). Check the internet connection, then run the installer again. Nothing was installed.')
+        raise SystemExit(f'The download failed: no connection to GitHub ({getattr(error, "reason", error)}). Check the internet connection, then run the installer again. Odicto was not installed.')
     if len(data) > maximum: raise SystemExit('Download exceeds size limit')
     return data
 metadata = json.loads(get(f'https://api.github.com/repos/{repo}/releases/latest', 2*1024*1024))
