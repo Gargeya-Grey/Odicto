@@ -1,9 +1,22 @@
 name: CI
 
 on:
+  # Every push runs every job: the release gate needs a full push run on the exact main commit.
   push:
     branches: [main, feature/*]
+  # A pull request that changes only Markdown skips CI. The Markdown files that the test gate
+  # reads stay in, and tests/test_ci_paths.py keeps this list complete.
   pull_request:
+    paths:
+      - '**'
+      - '.*'
+      - '.*/**'
+      - '!**.md'
+      - '!.*/**.md'
+      - 'CHANGELOG.md'
+      - 'docs/architecture.md'
+      - 'docs/engineering-notes.md'
+      - 'tools/release/release-notes.md'
 
 permissions:
   contents: read
