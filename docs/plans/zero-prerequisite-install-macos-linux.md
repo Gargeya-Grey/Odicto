@@ -130,10 +130,10 @@ Minimum set. D2 and D3 in section 8 can add to it.
 | --- | --- | --- | --- | --- |
 | X1 | The release zip has no file that a person can double-click. Each script in it needs a terminal that is open in the extracted folder. The Windows one-file installer is a separate release asset, not in the zip. | Confirmed (code): `release.yml` packs `git archive`; the repository root has only `install-managed.ps1`, `install-managed.sh`, `install.ps1`, `install.sh`. | List the zip of v1.5.0. | Publish one entry per system as a release asset (as Windows does). Decide in D4 if the zip stays a user download at all. |
 | X2 | The bootstrap ignores the zip that it came in. It downloads the latest stable release again. An old zip installs the newest version, and nothing installs without internet. | Confirmed (code): `bootstrap.sh` reads `releases/latest`. | Read the script. | Accept it and say it in the docs, or stop telling users to download the zip (see M2, L4). |
-| X3 | The bootstrap calls `api.github.com` without a token. GitHub limits such calls per network address. On a shared network the install can fail. | Confirmed (code) for the call. To verify for the failure text. | Run the bootstrap after the limit is used up (a loop of 60 `curl` calls to the same endpoint). Read the message that the user gets. | Resolve the version through `https://github.com/<repo>/releases/latest` (a redirect, not the API), or print a plain message: "GitHub is busy for this network. Try again in an hour." |
+| X3 | The bootstrap calls `api.github.com` without a token. GitHub limits such calls per network address. On a shared network the install can fail. | Confirmed (code) for the call. To verify for the failure text. | Do not use up the real limit: everyone on the same network address shares it, CI included. Give the embedded verifier a fake HTTP 403 rate-limit answer in a test (as `tests/test_managed_distribution.py` fakes downloads) and read the message that the user gets. | Resolve the version through `https://github.com/<repo>/releases/latest` (a redirect, not the API), or print a plain message: "GitHub is busy for this network. Try again in an hour." |
 | X4 | No uninstall command exists. The docs do not say how to remove Odicto. | Confirmed (code): no `uninstall` in `manager.py` or `app/odicto.py`. | `odicto help`. | Add `odicto uninstall` (stop, remove the startup entry, the menu entries and the command, then the home; ask before the settings). Document it. |
 | X5 | The docs give no install size and no time. | Confirmed (docs). | Measure in Phase 0. | Put the measured numbers in `docs/install.md`. |
-| X6 | The installer prints the Setup command without quotes. On macOS the path has a space (`Application Support`), so a pasted command fails. | Confirmed (code): `manager.py`, the `Configure with:` line. | Paste the printed line in Terminal on a Mac. | Print the `~/.local/bin/odicto` path, or quote the path. |
+| X6 | The installer prints the Setup command without quotes. On macOS the path has a space (`Application Support`), so a pasted command fails. | Confirmed (code): `manager.py`, the `Configure with:` line. | Paste the printed line in Terminal on a Mac. | Print the managed-home command in quotes. Do not print `~/.local/bin/odicto` as the only way: `expose_command` keeps an unrelated command of that name, so that path can run another program. |
 
 ### macOS
 
@@ -144,12 +144,13 @@ Minimum set. D2 and D3 in section 8 can add to it.
 | M3 | `bootstrap.sh` was never run through a pipe (`curl ... \| bash`). A step that reads standard input can eat the rest of the script. On Linux `sudo apt-get` is such a step. | To verify. | In a clean VM run `curl -fsSL https://raw.githubusercontent.com/Gargeya-Grey/Odicto/main/tools/distribution/bootstrap.sh \| bash`. Compare the result with a run from a file. | Wrap the script body in a function that is called on the last line, and give `apt-get` `</dev/null`. Or tell the person to download the script and run `bash <file>`. |
 | M4 | The installer does not start Odicto, does not open Setup and does not turn on start at login. The Windows one-file installer does all three. | Confirmed (code): the bootstrap ends after `install`; compare `tools/distribution/build_easy_installer.py`, `AFTER`. | Read the last lines of an install run. | A POSIX easy installer: bootstrap, then `odicto autostart` (new installs only), `odicto start`, `odicto setup`, with the same rules as the Windows one (existing source copy: install but do not start). |
 | M5 | `~/.local/bin` is not on the default macOS `PATH`. A new Terminal window says `odicto: command not found`. | To verify. The `uv` installer can add this folder to the shell profile; check if it does, and if a new window is needed. | After a clean install, open a new Terminal window and type `odicto version`. | With M4 and M7 the person never needs the command. Else print the full quoted path (X6). Do not edit shell profiles (`tools/distribution/README.md` promises that). |
-| M6 | Odicto needs Accessibility, Input Monitoring and Microphone consent. The app has probes for the first two only. No probe or message exists for a refused microphone. | Confirmed (code): `app/platforms/preflight.py`, `_MACOS_PROBES` has two entries. | Refuse the microphone box on a real Mac. Start Odicto and dictate. Record what the indicator and `odicto run status` say. | Add a microphone probe (AVFoundation authorization status) with an indicator label, as the two others have. |
+| M6 | Odicto needs Accessibility, Input Monitoring and Microphone consent. The app has probes for the first two only. No probe or message exists for a refused microphone. | Confirmed (code): `app/platforms/preflight.py`, `_MACOS_PROBES` has two entries. | Refuse the microphone box on a real Mac. Start Odicto and dictate. Record what the indicator and `odicto run status` say. | Add a microphone check (AVFoundation authorization status). A probe with severity `error` shows nothing: see M13. Solve M13 first, then give the microphone the same visible path. |
 | M7 | The name in the permission lists is not "Odicto". A start from Terminal makes macOS ask for **Terminal**. A start from the login item runs `python` from the release folder, so macOS asks for a different program, with a name the person does not know. | To verify. Record the exact name in each of the three lists for (a) a start from Terminal and (b) a start at login. | Real Mac, both starts, screenshots of the three lists. | A small `Odicto.app` bundle in `~/Applications` with a stable path and bundle id, whose executable starts the stable launcher. Then the lists say "Odicto", and Launchpad and Spotlight can start it (also closes M9). Check that consent follows the bundle and not the Python file inside it. |
 | M8 | Each update makes a new release folder with a new Python environment. macOS can then treat Odicto as a new program and ask for all permissions again. The README says an update "can require renewing OS permissions". | To verify: how often, and for which permission. | Real Mac: grant all three, run `odicto update` to a newer release (or stage a test release), dictate again. | The stable `Odicto.app` of M7, signed with a stable identity (D1). An ad-hoc signature may not keep consent across updates; measure it. |
 | M9 | Nothing in Launchpad, the Dock or Spotlight starts Odicto, stops it or opens Setup. Each needs a terminal. | Confirmed (code): `manager.py` makes shortcuts on Windows only (`install_shortcuts`). | Search "Odicto" in Spotlight after an install. | The `Odicto.app` of M7. Check that the menu-bar icon shows and has **Quit Odicto** (`app/indicator.py` makes a tray icon when the system has a tray). Add **Open Setup** to that menu if it is missing. |
 | M10 | CI installs PortAudio with Homebrew before the smoke test. A Mac without Homebrew is not proved. | Confirmed (CI): `.github/workflows/ci.yml`, "Install macOS audio dependency". To verify: does the `sounddevice` wheel carry its own PortAudio on both Mac architectures. | Remove that CI step on a branch and run CI. Also run `python -c "import sounddevice; print(sounddevice.query_devices())"` in a clean VM without Homebrew. | When the wheel is enough: delete the CI step, so CI matches a real user. When it is not: ship or install PortAudio in the bootstrap. |
 | M11 | A clean Mac has no Xcode Command Line Tools. A script that calls `git`, `python3`, `make` or `cc` opens Apple's "install developer tools" box. | To verify. The bootstrap seems to use only `bash`, `curl`, `mktemp`, `uname`, `id` and `sh`. | Run the full acceptance journey in a clean VM and watch for that box. Search the POSIX scripts for such calls. | Remove the call. |
+| M13 | A Mac without Accessibility or Input Monitoring consent cannot start Odicto at all. `main.py` prints `Cannot start Odicto [...]` to the error stream and exits with 2 before it makes the indicator. The probes only read the state (`AXIsProcessTrusted`, `IOHIDCheckAccess`); they do not ask, so macOS may add no entry to the lists. A start at login shows nothing. The indicator labels **Allow Accessibility** and **Allow Input Monitoring** are then never seen. | Confirmed (code): `app/main.py`, `startup_blockers` and `sys.exit(2)`; `app/platforms/preflight.py`. To verify: what the person sees, and which entry appears in each list. | Real Mac, clean user: `odicto start` from Terminal and from the login item. Record the text, the lists and each box. | (a) Ask instead of only reading: `AXIsProcessTrustedWithOptions` with the prompt option and `IOHIDRequestAccess`, then open the right System Settings pane. (b) Let the app start far enough to show a window that names the missing permission and has a button to the pane, with no keyboard hook bound until consent exists. (c) A first-run page in Setup that walks through the three permissions and checks them again. This gap blocks acceptance steps 5 to 7. |
 | M12 | The first dictation downloads the Whisper model. The person sees no progress. | To verify. | Clean Mac, first dictation, time it and record what the indicator shows. | Download the model in the installer (the Windows source installer warms Whisper), or show a state in the indicator. |
 
 ### Linux
@@ -194,7 +195,7 @@ Steps for each row, on a clean snapshot or user:
 1. Follow `docs/install.md` for that system exactly as written. Do not fix anything on the way.
 2. Record each point where the written step does not match what the screen shows.
 3. Record the full terminal text of the installer.
-4. Run `~/.local/bin/odicto run status` after the start and record it.
+4. Run the managed-home command with `run status` after the start and record it.
 5. Measure: time from the first command to "is active", and `du -sh` of the managed home.
 
 Then do the **Check** of every gap in section 6 and set its status to `Confirmed` or `Rejected`
@@ -249,17 +250,22 @@ without a terminal step, add it as a second way.
 
 Acceptance: section 4, steps 1 to 5, on each Linux target that offers an Xorg session.
 
-### 3d. After-install parity with Windows (M4, M7, M9, L5, L6, M6, M12)
+### 3d. After-install parity with Windows (M4, M7, M9, M13, L5, L6, M6, M12)
 
 1. The easy installer turns on start at login for a new install, starts Odicto, and opens Setup.
    It keeps the choice of an existing install. It starts nothing when a source copy's startup
    entry exists (`~/Library/LaunchAgents/com.odicto.plist`, `~/.config/autostart/odicto.desktop`;
-   see `app/odicto.py`), unless a finished migration receipt exists. Mirror each rule and each test
-   of the Windows installer.
+   see `app/odicto.py`), unless a finished migration receipt exists. A startup entry is not enough:
+   a source copy that was started by hand has none, and a copy older than 1.5.0 does not take the
+   session hook lock. So before any start, the installer also looks for a running owner (a process
+   that runs an Odicto `main.py` outside the managed home) and starts nothing when it finds one.
+   When it cannot tell, it asks the person to confirm that no other Odicto runs. Mirror each rule
+   and each test of the Windows installer. The Windows installer reads two shortcuts only and has
+   the same hole; give it the same check.
 2. The manager's `install` writes app-menu entries on Linux and an `Odicto.app` on macOS, as it
    writes Start Menu shortcuts on Windows. Same ownership rule: keep what Odicto did not write.
-3. macOS: a microphone probe and label (M6). Permission texts name the real entry that the person
-   must turn on (M7).
+3. macOS: a visible way to grant the permissions on a first start (M13), then the microphone (M6).
+   Permission texts name the real entry that the person must turn on (M7).
 4. First-run model download has a visible state or happens in the installer (M12).
 5. `odicto uninstall` (X4).
 

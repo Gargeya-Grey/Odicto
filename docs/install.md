@@ -35,6 +35,11 @@ Did you use Odicto before from a source folder (a copy made with Git)? Read
 A person has not yet done these steps on a real Mac and reported the result. If a step
 does not work, please [open an issue](https://github.com/Gargeya-Grey/Odicto/issues/new).
 
+Did you use Odicto before from a source folder (a copy made with Git)? Stop that copy and turn off
+its start at login before you continue, then follow
+[Moving from a source checkout](../README.md#moving-from-a-source-checkout) after step 5.
+Two copies must never run together: each letter that you type would show twice.
+
 1. Open the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest). Under **Assets**,
    click `Odicto-v<version>.zip`.
 2. Open your **Downloads** folder. If you see the zip file and no `Odicto` folder, double-click the zip file.
@@ -49,36 +54,36 @@ does not work, please [open an issue](https://github.com/Gargeya-Grey/Odicto/iss
    ```
 
    Wait a few minutes. The last line says `Odicto v<version> is active.`
-6. Open Setup. Paste this line and press **Return**:
+6. Give Odicto its permissions. Without them Odicto does not start, and macOS does not always ask
+   by itself. Open **System Settings > Privacy & Security**.
+   - Open **Accessibility**. Turn on **Terminal**. If Terminal is not in the list, click **+**,
+     choose **Applications > Utilities > Terminal** and turn it on.
+   - Open **Input Monitoring**. Do the same for **Terminal**.
+
+   Accessibility lets Odicto put text at the cursor. Input Monitoring lets Odicto see its shortcut keys.
+   Then quit Terminal (**Command + Q**) and open it again.
+7. Open Setup. Paste this line, with its quotation marks, and press **Return**:
 
    ```bash
-   ~/.local/bin/odicto setup
+   "$HOME/Library/Application Support/Odicto/bin/odicto" setup
    ```
 
    Your browser shows Odicto Setup. Choose your microphone and click **Save**.
    Local Whisper works without a key or an account.
-7. Start Odicto:
+8. Start Odicto:
 
    ```bash
-   ~/.local/bin/odicto start
+   "$HOME/Library/Application Support/Odicto/bin/odicto" start
    ```
 
-8. macOS asks for permissions. Odicto needs three, all in **System Settings > Privacy & Security**:
-   - **Accessibility**, so that Odicto can put text at the cursor.
-   - **Input Monitoring**, so that Odicto can see its shortcut keys.
-   - **Microphone**, so that Odicto can hear you.
-
-   Turn on the entry that macOS shows for Odicto. Its name can be **Terminal** or **Python**.
-   Then restart Odicto:
-
-   ```bash
-   ~/.local/bin/odicto restart
-   ```
-
+   If the answer has `Cannot start Odicto [macos_accessibility]` or `[macos_input_monitoring]`,
+   that permission is still off. Do step 6 again. If the list in System Settings now shows an entry
+   named **Python** or **Odicto**, turn that entry on too. Then give the start command again.
+   When macOS asks for the **Microphone**, click **Allow**.
 9. Optional. To start Odicto each time you log in:
 
    ```bash
-   ~/.local/bin/odicto autostart
+   "$HOME/Library/Application Support/Odicto/bin/odicto" autostart
    ```
 
 Go to [Your first dictation](#your-first-dictation).
@@ -86,6 +91,11 @@ Go to [Your first dictation](#your-first-dictation).
 ## Ubuntu or Debian
 
 Odicto needs an **X11** session. It does not work in a Wayland session.
+
+Did you use Odicto before from a source folder (a copy made with Git)? Stop that copy and turn off
+its start at login before you continue, then follow
+[Moving from a source checkout](../README.md#moving-from-a-source-checkout) after step 6.
+Two copies must never run together: each letter that you type would show twice.
 
 1. Open a terminal: press **Ctrl + Alt + T**.
 2. Check your session. Paste this line and press **Enter**:
@@ -116,20 +126,20 @@ Odicto needs an **X11** session. It does not work in a Wayland session.
 7. Open Setup:
 
    ```bash
-   ~/.local/bin/odicto setup
+   ~/.local/share/odicto/bin/odicto setup
    ```
 
    Your browser shows Odicto Setup. Choose your microphone and click **Save**.
 8. Start Odicto:
 
    ```bash
-   ~/.local/bin/odicto start
+   ~/.local/share/odicto/bin/odicto start
    ```
 
 9. Optional. To start Odicto each time you log in:
 
    ```bash
-   ~/.local/bin/odicto autostart
+   ~/.local/share/odicto/bin/odicto autostart
    ```
 
 Do not run the installer with `sudo`, and do not run Odicto as root.
@@ -137,7 +147,8 @@ Do not run the installer with `sudo`, and do not run Odicto as root.
 ## Your first dictation
 
 1. Click in a text box, for example a new email.
-2. Press **Ctrl** and **\`** together. The **\`** key is under **Esc**, left of **1**.
+2. Press **Ctrl** and **\`** together. On a US or UK keyboard the **\`** key is under **Esc**, left of **1**.
+   On another keyboard layout, use the key that types **\`**, or choose another shortcut in Odicto Setup.
    A small indicator shows at the bottom of the screen.
 3. Speak.
 4. Press **Ctrl** and **\`** again. Your words appear at the cursor.
@@ -152,19 +163,20 @@ First, ask Odicto. It lists the problems that it can see:
 
 | System | Command |
 | --- | --- |
-| Windows | Press **Windows key + R**, type `cmd /k %LOCALAPPDATA%\Odicto\bin\odicto.cmd run status` and press **Enter** |
-| macOS, Linux | `~/.local/bin/odicto run status` |
+| Windows | Press **Windows key + R**, type `cmd /k ""%LOCALAPPDATA%\Odicto\bin\odicto.cmd" run status"` and press **Enter** |
+| macOS | `"$HOME/Library/Application Support/Odicto/bin/odicto" run status` |
+| Linux | `~/.local/share/odicto/bin/odicto run status` |
 
 | What you see | What to do |
 | --- | --- |
 | Windows: "Windows protected your PC" | Click **More info**, then **Run anyway**. |
 | Windows: "Another copy of Odicto is running" | Right-click the Odicto icon near the clock and choose **Quit Odicto**. Then open **Odicto** from the Start Menu. |
-| Every letter that you type shows twice | Two copies of Odicto run. Stop Odicto, check that no Odicto icon stays, then start it one time. |
-| macOS: the indicator says **Allow Accessibility** or **Allow Input Monitoring** | Do step 8 of the macOS list again, then restart Odicto. |
+| Every letter that you type shows twice | Two copies of Odicto run. Stop each copy: this copy with **Stop Odicto** or the `stop` command, a source copy with its own stop script. Turn off the source copy's start at login. Check that none is left: on Windows, Task Manager (Details) shows no `pythonw.exe`; on macOS and Linux, `pgrep -fl main.py` prints nothing. Then start one copy, one time. |
+| macOS: `Cannot start Odicto [macos_accessibility]` or `[macos_input_monitoring]` | Do step 6 of the macOS list again, then give the start command again. |
 | macOS: the indicator shows, but no words appear | Check **System Settings > Privacy & Security > Microphone**. |
 | Linux: the installer says it supports Ubuntu and Debian | Your distribution is not supported by this installer yet. |
 | Linux: Odicto says Wayland is not supported | Log in to an Xorg session (step 2 of the Linux list). |
-| `odicto: command not found` | Use the full path: `~/.local/bin/odicto`. |
+| `odicto: command not found` | Use the full command from this guide. On macOS keep its quotation marks. |
 | The installer stops with a download error | Check the internet connection and run the same installer again. A second run is safe. |
 
 Still stuck? [Open an issue](https://github.com/Gargeya-Grey/Odicto/issues/new). Give your operating
