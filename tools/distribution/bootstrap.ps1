@@ -17,7 +17,7 @@ if ($uvCommand) {
     if (-not (Test-Path -LiteralPath $uv)) { $uv = Join-Path $env:USERPROFILE '.cargo\bin\uv.exe' }
 }
 $bootstrap = @'
-import hashlib, io, json, stat, sys, urllib.parse, urllib.request, zipfile
+import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile
 repo = 'Gargeya-Grey/Odicto'
 hosts = {'api.github.com', 'github.com', 'release-assets.githubusercontent.com',
          'objects.githubusercontent.com', 'github-releases.githubusercontent.com'}
@@ -31,8 +31,15 @@ class Redirect(urllib.request.HTTPRedirectHandler):
 def get(url, maximum):
     if not trusted(url): raise SystemExit('Untrusted download URL')
     request = urllib.request.Request(url, headers={'User-Agent': 'Odicto-bootstrap/1'})
-    with urllib.request.build_opener(Redirect()).open(request, timeout=30) as response:
-        data = response.read(maximum + 1)
+    try:
+        with urllib.request.build_opener(Redirect()).open(request, timeout=30) as response:
+            data = response.read(maximum + 1)
+    except urllib.error.HTTPError as error:
+        if error.code == 429 or (error.code == 403 and (error.headers or {}).get('X-RateLimit-Remaining') == '0'):
+            raise SystemExit('GitHub refused the download for now: too many requests from this network. Wait one hour, then run the installer again. Nothing was installed.')
+        raise SystemExit(f'The download failed: GitHub answered HTTP {error.code}. Run the installer again later. Nothing was installed.')
+    except (urllib.error.URLError, OSError) as error:
+        raise SystemExit(f'The download failed: no connection to GitHub ({getattr(error, "reason", error)}). Check the internet connection, then run the installer again. Nothing was installed.')
     if len(data) > maximum: raise SystemExit('Download exceeds size limit')
     return data
 metadata = json.loads(get(f'https://api.github.com/repos/{repo}/releases/latest', 2*1024*1024))

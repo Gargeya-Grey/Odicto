@@ -491,6 +491,13 @@ foreach ($entry in ($env:ODICTO_SHORTCUTS | ConvertFrom-Json)) {
 EXIT_ANOTHER_OWNER = 75
 
 
+def setup_command(home: Path) -> str:
+    """The Setup command line as the user can paste it; a macOS home has a space in its path."""
+    if os.name == "nt":
+        return subprocess.list2cmdline([str(home / "bin" / "odicto.cmd"), "setup"])
+    return shlex.join([str(home / "bin" / "odicto"), "setup"])
+
+
 def default_home() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Odicto"
@@ -1570,7 +1577,7 @@ def main(argv=None) -> int:
                                 print(line)
                         except (DistributionError, OSError, subprocess.SubprocessError) as error:
                             print(f"Start Menu unchanged: {error}", file=sys.stderr)
-                    print(f"Configure with: {manager.home / 'bin' / ('odicto.cmd' if os.name == 'nt' else 'odicto')} setup")
+                    print(f"Configure with: {setup_command(manager.home)}")
                 print(f"Odicto {record['version']} is active.")
         return 0
     except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:

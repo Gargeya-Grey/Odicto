@@ -157,6 +157,14 @@ def installed(root: Path, evidence: Path, sha: str) -> int:
         for name in ("sounddevice", "soundfile", "faster_whisper", "PySide6.QtWidgets"):
             importlib.import_module(name)
         report["checks"]["native_imports"] = "pass"
+        import sounddevice
+        # A user's Mac has no Homebrew: prove that the wheel's own PortAudio loads.
+        report["portaudio_library"] = os.path.basename(str(sounddevice._libname))
+        if sys.platform == "darwin":
+            if "_sounddevice_data" not in str(sounddevice._libname):
+                raise RuntimeError("PortAudio did not load from the sounddevice wheel: "
+                                   + report["portaudio_library"])
+            report["checks"]["bundled_portaudio"] = "pass"
         import numpy as np
         from faster_whisper.vad import get_speech_timestamps
         if get_speech_timestamps(np.zeros(16000, dtype=np.float32)):

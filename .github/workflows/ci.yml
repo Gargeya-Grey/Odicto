@@ -48,9 +48,8 @@ jobs:
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=odicto_ci
           pactl set-default-source odicto_ci.monitor
-      - name: Install macOS audio dependency
-        if: runner.os == 'macOS'
-        run: brew list portaudio >/dev/null 2>&1 || brew install portaudio
+      # No Homebrew PortAudio on macOS: the sounddevice wheel bundles libportaudio.dylib,
+      # and a user's Mac has no Homebrew either.
       - name: Fresh committed archive, real installer, native smoke and test gate
         shell: pwsh
         run: |

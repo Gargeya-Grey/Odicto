@@ -10,7 +10,9 @@ keyboard hook. Installation ends with the command to open Setup; the user choose
 when to start the application. On Ubuntu/Debian, missing native audio, clipboard
 and display packages are installed through the user's normal sudo prompt. The
 application itself is never started as root. Other Linux distributions receive an
-actionable prerequisite message before a managed install is created. macOS wheels
+actionable prerequisite message before a managed install is created. A Linux Wayland session stops the bootstrap before `sudo` and before any
+download, with the advice to log in to an Xorg session. A GitHub rate limit or a lost
+connection stops it with a plain message, and nothing is installed. macOS wheels
 are checked for native imports; Homebrew is not installed automatically. OS
 permissions remain prerequisites. An import failure leaves the staged version
 inactive. Linux Wayland sessions are unsupported. Windows Admin mode uses a stable
