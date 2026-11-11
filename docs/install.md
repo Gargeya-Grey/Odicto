@@ -175,7 +175,7 @@ First, ask Odicto. It lists the problems that it can see:
 | macOS: `Cannot start Odicto [macos_accessibility]` or `[macos_input_monitoring]` | Do step 6 of the macOS list again, then give the start command again. |
 | macOS: the indicator shows, but no words appear | Check **System Settings > Privacy & Security > Microphone**. |
 | Linux: the installer says it supports Ubuntu and Debian | Your distribution is not supported by this installer yet. |
-| Linux: Odicto says Wayland is not supported | Log in to an Xorg session (step 2 of the Linux list). |
+| Linux: the installer or Odicto says the desktop runs a Wayland session | Log in to an Xorg session (step 2 of the Linux list). |
 | `odicto: command not found` | Use the full command from this guide. On macOS keep its quotation marks. |
 | The installer stops with a download error | Check the internet connection and run the same installer again. A second run is safe. |
 

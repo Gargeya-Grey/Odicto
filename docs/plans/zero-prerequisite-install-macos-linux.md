@@ -50,6 +50,18 @@ Each gap in section 6 has the same fields:
 - **Check**: the exact way to confirm or reject it.
 - **Fix options**: possible fixes. Do not start a fix before Phase 1 and Phase 2 end.
 
+## Progress
+
+Update this table when a gap changes status. The register in section 6 keeps the original evidence.
+
+| Gap | Status | Evidence or pull request |
+| --- | --- | --- |
+| M10 | Confirmed, fix in review | The lock pins `sounddevice-0.5.6-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl`, and that wheel holds `_sounddevice_data/portaudio-binaries/libportaudio.dylib` (read 11 Nov 2026). #36 removes Homebrew PortAudio from CI and makes the macOS smoke fail unless the bundled library loads. |
+| L2 | Fix in review | #36: Wayland stops `bootstrap.sh` before `sudo` and any download. |
+| X3 | Fix in review | #36: plain messages for a rate limit, another HTTP error and a lost connection. The test fakes the answers; the real quota is not used. |
+| X6 | Fix in review | #36: the printed Setup command is quoted. |
+| CI | Fix in review | 11 Nov 2026: the Ubuntu jobs failed before their tests (mirror names did not resolve, some `amd64v3` packages answered 404). #35 retries the package installs. |
+
 ## 3. Rules for the agent that does this work
 
 1. Read `AGENTS.md`, `docs/architecture.md` and `tools/distribution/README.md` first.
