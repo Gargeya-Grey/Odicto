@@ -69,7 +69,8 @@ GATE = {
     # error (2, Windows only): 1293.
     # Plus 4 for the installer messages on every platform: rate limit, other HTTP error, no
     # connection, the quoted Setup command (the 2 Wayland tests are macOS/Linux only): 1297.
-    "floor": 1297,
+    # Plus 5 for the CI pull-request path filter (tests/test_ci_paths.py, every platform): 1302.
+    "floor": 1302,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

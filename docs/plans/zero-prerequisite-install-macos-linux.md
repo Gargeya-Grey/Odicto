@@ -56,11 +56,11 @@ Update this table when a gap changes status. The register in section 6 keeps the
 
 | Gap | Status | Evidence or pull request |
 | --- | --- | --- |
-| M10 | Confirmed, fix in review | The lock pins `sounddevice-0.5.6-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl`, and that wheel holds `_sounddevice_data/portaudio-binaries/libportaudio.dylib` (read 11 Nov 2026). #36 removes Homebrew PortAudio from CI and makes the macOS smoke fail unless the bundled library loads. |
-| L2 | Fix in review | #36: Wayland stops `bootstrap.sh` before `sudo` and any download. |
-| X3 | Fix in review | #36: plain messages for a rate limit, another HTTP error and a lost connection. The test fakes the answers; the real quota is not used. |
-| X6 | Fix in review | #36: the printed Setup command is quoted. |
-| CI | Fix in review | 11 Nov 2026: the Ubuntu jobs failed before their tests (mirror names did not resolve, some `amd64v3` packages answered 404). #35 retries the package installs. |
+| M10 | Closed, #36 | The lock pins `sounddevice-0.5.6-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl`, and that wheel holds `_sounddevice_data/portaudio-binaries/libportaudio.dylib` (read 11 Nov 2026). #36 removes Homebrew PortAudio from CI. Its macOS smoke jobs report `bundled_portaudio: pass` and load the library from `_sounddevice_data`. |
+| L2 | Closed, #36 | Wayland stops `bootstrap.sh` before `sudo` and any download. A test runs the script with stubbed `sudo`, `apt-get`, `curl` and `uv` and checks that none is called. |
+| X3 | Closed, #36 | Plain messages for a rate limit, another HTTP error and a lost connection. The test fakes the answers; the real quota is not used. |
+| X6 | Closed, #36 | The printed Setup command is quoted. |
+| CI | Closed, #35 | 11 Nov 2026: the Ubuntu jobs failed before their tests (mirror names did not resolve, some `amd64v3` packages answered 404). #35 retries the package installs and skips CI for a pull request that changes only Markdown the tests do not read. |
 
 ## 3. Rules for the agent that does this work
 
