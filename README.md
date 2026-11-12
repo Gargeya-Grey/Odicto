@@ -16,6 +16,9 @@ already using. Local Whisper is the default; cloud speech and AI features are op
 
 ## Install
 
+New to this? The [step-by-step install guide](docs/install.md) covers Windows, macOS and
+Linux from the download to your first dictation, with a list of fixes for common problems.
+
 ### Windows, no terminal
 
 Do you already use Odicto from a source folder (a copy you set up with Git)? Then quit it first
@@ -73,6 +76,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 ```bash
 bash install-managed.sh
 ```
+
+The [install guide](docs/install.md#macos) shows each click for macOS and Linux, including how to
+open a terminal in the folder.
 
 The installer supplies Python, verifies the release and installs the `odicto`
 command. You do not need Git, Node, npm or a preinstalled Python. It does not start
@@ -241,6 +247,8 @@ The repository holds application code in `app/`, UI assets in `assets/`, tests i
 `tests/`, OS helpers in `scripts/`, distribution tooling in `tools/distribution/`,
 and documentation in `docs/`. Daily use goes through the installed `odicto` command.
 
+- [Step-by-step install guide](docs/install.md)
+- [Plan: zero-prerequisite install on macOS and Linux](docs/plans/zero-prerequisite-install-macos-linux.md)
 - [Development and advanced configuration](docs/development.md)
 - [Architecture and invariants](docs/architecture.md)
 - [Engineering notes](docs/engineering-notes.md)

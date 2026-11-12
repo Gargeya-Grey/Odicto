@@ -1,9 +1,21 @@
 name: CI
 
 on:
+  # Every push runs every job: the release gate needs a full push run on the exact main commit.
   push:
     branches: [main, feature/*]
+  # A pull request that changes only Markdown skips CI. The Markdown files that the test gate
+  # reads stay in, and tests/test_ci_paths.py keeps this list complete.
   pull_request:
+    paths:
+      - '**'
+      - '.*'
+      - '.*/**'
+      - '!**.md'
+      - '!.*/**.md'
+      - 'CHANGELOG.md'
+      - 'docs/architecture.md'
+      - 'tools/release/release-notes.md'
 
 permissions:
   contents: read
@@ -43,8 +55,7 @@ jobs:
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          bash tools/ci_apt_install.sh libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=odicto_ci
           pactl set-default-source odicto_ci.monitor
@@ -80,8 +91,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install isolated VM tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils ovmf acl
+          bash tools/ci_apt_install.sh qemu-system-x86 qemu-utils cloud-image-utils ovmf acl
       - name: Fresh-install and test real Ubuntu 26.10 guest
         run: bash tools/ci_latest_linux.sh
       - name: Retain actual guest OS/kernel and installation evidence

@@ -65,8 +65,18 @@ repository="$2"
 . /etc/os-release
 test "$ID" = ubuntu && test "$VERSION_ID" = 26.10
 sudo cloud-init status --wait
-sudo apt-get update
-sudo apt-get install -y git curl ca-certificates nodejs libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils \
+# The same retries as tools/ci_apt_install.sh (the guest has no checkout yet).
+apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+apt_install() {
+  for try in 1 2 3; do
+    timeout 180 sudo apt-get "${apt_options[@]}" update </dev/null || echo "apt-get update failed (try $try of 3)"
+    if timeout 420 sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y "$@" </dev/null; then return 0; fi
+    echo "apt-get install failed (try $try of 3)"
+    [ "$try" = 3 ] || sleep 30
+  done
+  return 1
+}
+apt_install git curl ca-certificates nodejs libportaudio2 pulseaudio xclip xdotool xvfb xauth x11-utils \
   libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
   libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
 pulseaudio --start --exit-idle-time=-1
