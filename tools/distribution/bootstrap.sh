@@ -9,6 +9,14 @@ fi
 
 case "$(uname -s)" in
   Linux)
+    # Odicto refuses a Wayland session when it starts. Say it now, before sudo and the download.
+    session="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ "$session" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      echo "This desktop runs a Wayland session. Odicto needs an X11 (Xorg) session; it does not work in Wayland yet." >&2
+      echo "Log out. On the login screen, choose a session with Xorg in its name, log in, and run this installer again." >&2
+      echo "Nothing was installed." >&2
+      exit 1
+    fi
     if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
       echo "The managed Linux bootstrap currently supports Ubuntu and Debian." >&2
       echo "On another distribution, install PortAudio, xdotool, xclip and Qt's X11/EGL libraries with your package manager, then use the source installer." >&2
@@ -50,7 +58,7 @@ fi
 
 export PATH="$(dirname "$UV"):$PATH"
 "$UV" run --python 3.12 --no-project --no-config python - "$@" <<'PY'
-import hashlib, io, json, stat, sys, urllib.parse, urllib.request, zipfile
+import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile
 repo = 'Gargeya-Grey/Odicto'
 hosts = {'api.github.com', 'github.com', 'release-assets.githubusercontent.com',
          'objects.githubusercontent.com', 'github-releases.githubusercontent.com'}
@@ -64,8 +72,15 @@ class Redirect(urllib.request.HTTPRedirectHandler):
 def get(url, maximum):
     if not trusted(url): raise SystemExit('Untrusted download URL')
     request = urllib.request.Request(url, headers={'User-Agent': 'Odicto-bootstrap/1'})
-    with urllib.request.build_opener(Redirect()).open(request, timeout=30) as response:
-        data = response.read(maximum + 1)
+    try:
+        with urllib.request.build_opener(Redirect()).open(request, timeout=30) as response:
+            data = response.read(maximum + 1)
+    except urllib.error.HTTPError as error:
+        if error.code == 429 or (error.code == 403 and (error.headers or {}).get('X-RateLimit-Remaining') == '0'):
+            raise SystemExit('GitHub refused the download for now: too many requests from this network. Wait one hour, then run the installer again. Odicto was not installed.')
+        raise SystemExit(f'The download failed: GitHub answered HTTP {error.code}. Run the installer again later. Odicto was not installed.')
+    except (urllib.error.URLError, OSError) as error:
+        raise SystemExit(f'The download failed: no connection to GitHub ({getattr(error, "reason", error)}). Check the internet connection, then run the installer again. Odicto was not installed.')
     if len(data) > maximum: raise SystemExit('Download exceeds size limit')
     return data
 metadata = json.loads(get(f'https://api.github.com/repos/{repo}/releases/latest', 2*1024*1024))
