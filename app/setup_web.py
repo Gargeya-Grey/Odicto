@@ -471,6 +471,22 @@ def restart_odicto() -> RestartMessage:
             raise RuntimeError("Settings saved, but managed restart could not be confirmed; run odicto status.") from error
         if result.returncode:
             raise RuntimeError(f"Settings saved, but managed restart failed (exit code {result.returncode}); run odicto status.")
+        # The restart succeeds while Odicto still waits for a microphone or its speech model.
+        # One more look says so; a failure of the look keeps the plain message.
+        waiting = None
+        try:
+            probe = subprocess.run(
+                [sys.executable, launcher, "run", "--no-auto-updates", "wait-ready", "--timeout", "0",
+                 "--report-waiting"], capture_output=True, timeout=20)
+            waiting = probe.returncode
+        except Exception:
+            pass
+        if waiting == 20:
+            return RestartMessage("Settings saved. Odicto is running, but it waits for a microphone "
+                                  "or its speech model.", started=True)
+        if waiting == 21:
+            return RestartMessage("Settings saved. Odicto is running and still downloads its speech model.",
+                                  started=True)
         return RestartMessage("Settings saved. Odicto is ready with the new settings.", started=True)
     from windows_admin import run_if_needed
 

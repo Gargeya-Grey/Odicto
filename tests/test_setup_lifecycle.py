@@ -194,7 +194,8 @@ class StartOdictoTests(unittest.TestCase):
              mock.patch("platforms.preflight.environment_problems", return_value=[]):
             result = setup_web.start_odicto()
         self.assertTrue(result["ok"], result)
-        self.assertEqual(run.call_args.args[0][-3:], ["run", "--no-auto-updates", "restart"])
+        # The restart is the first call; a second call only asks whether Odicto still waits.
+        self.assertEqual(run.call_args_list[0].args[0][-3:], ["run", "--no-auto-updates", "restart"])
 
     def test_managed_supervisor_failure_still_reports_failure(self) -> None:
         with mock.patch.dict(os.environ, {"ODICTO_MANAGED_HOME": "/fake-managed"}), \

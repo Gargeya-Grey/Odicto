@@ -95,10 +95,13 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.bin = self.local / "Odicto" / "bin"
         self.fake = self.root / "fake-odicto.cmd"
         self.calls = self.root / "calls.txt"
+        self.waits = self.root / "wait.txt"
         self.fake_odicto()
 
-    def fake_odicto(self, failing=""):
-        lines = ["@echo off", '>>"%T_CALLS%" echo %*']
+    def fake_odicto(self, failing="", waiting=0):
+        """`waiting` is the exit code of `wait-ready`; its calls go to wait.txt, not to calls.txt."""
+        lines = ["@echo off", 'if "%1"=="wait-ready" (', '  >>"%T_WAIT%" echo %*', f"  exit /b {waiting}", ")",
+                 '>>"%T_CALLS%" echo %*']
         if failing:
             lines.append(f'if "%1"=="{failing}" exit /b 3')
         lines.append("exit /b 0")
@@ -110,10 +113,12 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
 
     def run_installer(self, bootstrap=None):
         self.calls.unlink(missing_ok=True)
+        self.waits.unlink(missing_ok=True)
         installer = self.folder / "Install-Odicto.cmd"
         installer.write_bytes(builder.build(self.INSTALL if bootstrap is None else bootstrap))
         environment = dict(os.environ, LOCALAPPDATA=str(self.local), APPDATA=str(self.roaming),
-                           T_BIN=str(self.bin), T_FAKE=str(self.fake), T_CALLS=str(self.calls))
+                           T_BIN=str(self.bin), T_FAKE=str(self.fake), T_CALLS=str(self.calls),
+                           T_WAIT=str(self.waits))
         done = subprocess.run(["cmd.exe", "/d", "/c", str(installer)], env=environment, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
         calls = self.calls.read_text(encoding="ascii").split() if self.calls.exists() else []
@@ -224,6 +229,76 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertEqual(calls, ["autostart", "start"])
         self.assertIn("Odicto did not start", done.stdout)
+
+    def wait_calls(self):
+        return self.waits.read_text(encoding="ascii").splitlines() if self.waits.exists() else []
+
+    def test_after_a_good_start_it_asks_once_and_a_ready_owner_gets_the_green_summary(self):
+        self.managed_links()
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.wait_calls(), ["wait-ready --timeout 0 --report-waiting"])
+        self.assertIn("Odicto is ready.", done.stdout)
+        self.assertIn("Try it now:", done.stdout)
+        self.assertNotIn("not ready to dictate yet", done.stdout)
+        self.assertNotIn("When it is ready:", done.stdout)
+        self.assertNotIn("ODICTO-WAITING", done.stdout)  # the answer is not shown
+
+    def test_a_waiting_owner_gets_the_yellow_summary_and_setup_still_opens(self):
+        for code in (20, 21):
+            with self.subTest(code=code):
+                self.managed_links()
+                self.fake_odicto(waiting=code)
+                done, calls = self.run_installer()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(calls[-2:], ["start", "setup"])  # the second pass is a repair
+                self.assertEqual(self.wait_calls(), ["wait-ready --timeout 0 --report-waiting"])
+                self.assertIn("Odicto is running. It is not ready to dictate yet.", done.stdout)
+                self.assertIn("The lines above say what it waits for. It gets ready by itself.", done.stdout)
+                self.assertIn("When it is ready:", done.stdout)
+                self.assertIn("  1. Click in any text box, for example a new email.", done.stdout)
+                self.assertNotIn("Try it now:", done.stdout)
+                self.assertNotIn("Odicto is ready.", done.stdout)
+                self.assertIn("Your browser shows Odicto Setup.", done.stdout)
+                self.assertNotIn("Some steps did not finish.", done.stdout)
+
+    def test_any_other_answer_of_the_check_is_not_waiting(self):
+        for code in (1, 3, 19, 22):
+            with self.subTest(code=code):
+                self.managed_links()
+                self.fake_odicto(waiting=code)
+                done, _ = self.run_installer()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("Odicto is ready.", done.stdout)
+                self.assertNotIn("not ready to dictate yet", done.stdout)
+
+    def test_a_waiting_owner_with_another_failed_step_still_exits_non_zero(self):
+        self.managed_links()
+        self.fake_odicto(failing="setup", waiting=20)
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Odicto is running. It is not ready to dictate yet.", done.stdout)
+        self.assertIn("Some steps did not finish.", done.stdout)
+        self.assertIn("Odicto Setup did not open.", done.stdout)
+
+    def test_the_summary_is_yellow_when_waiting_and_the_check_runs_only_after_a_good_start(self):
+        self.assertIn("$colour = if ($failed.Count -or $waiting) { 'Yellow' } else { 'Green' }",
+                      builder.build((DISTRIBUTION / "bootstrap.ps1").read_text(encoding="utf-8")).decode("ascii"))
+        self.managed_links()
+        self.fake_odicto(failing="start", waiting=20)
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.wait_calls(), [])  # a failed start never asks
+
+    def test_a_failed_start_blames_nothing_and_says_how_to_try_again(self):
+        self.managed_links()
+        self.fake_odicto(failing="start")
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Odicto did not start. The lines above say why.", done.stdout)
+        self.assertIn("open the Start Menu and click Odicto to try again.", done.stdout)
+        self.assertNotIn("another copy", done.stdout)
+        self.assertNotIn("Step 3 of 3", done.stdout)
 
     def test_failed_autostart_still_starts_and_says_so(self):
         self.managed_links()

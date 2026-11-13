@@ -97,25 +97,44 @@ if (-not $chosen) {
 & $odicto start
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''
-    Write-Host 'Odicto did not start. If another copy of Odicto is running, quit it first.'
-    Write-Host 'Then open the Start Menu and click Odicto.'
+    Write-Host 'Odicto did not start. The lines above say why.'
+    Write-Host 'After you fix that, open the Start Menu and click Odicto to try again.'
     exit 1
 }
+# Odicto can run and still wait for a microphone or its speech model. The start said so above;
+# this asks again, with its output discarded, so the summary does not claim more than is true.
+$waiting = $false
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & $odicto wait-ready --timeout 0 --report-waiting *> $null
+    if ($LASTEXITCODE -in 20, 21) { $waiting = $true }
+} catch { }
+$ErrorActionPreference = $previous
 Step 3 'Opening Odicto Setup in your browser'
 & $odicto setup
 if ($LASTEXITCODE -ne 0) { $failed += 'setup' }
 $items = (Test-OdictoLink 'Odicto\Odicto.lnk') -and (Test-OdictoLink 'Odicto\Odicto Setup.lnk') -and
     (Test-OdictoLink 'Odicto\Stop Odicto.lnk')
 if (-not $items -and -not $migrated) { $failed += 'shortcuts' }
-$colour = if ($failed.Count) { 'Yellow' } else { 'Green' }
+$colour = if ($failed.Count -or $waiting) { 'Yellow' } else { 'Green' }
 try { $Host.UI.RawUI.WindowTitle = 'Odicto installer - done' } catch { }
 Write-Host ''
 Write-Host '  ==========================================' -ForegroundColor $colour
-if ($failed.Count) { Write-Host '  Odicto is running. Some steps did not finish.' -ForegroundColor $colour }
+if ($waiting) {
+    Write-Host '  Odicto is running. It is not ready to dictate yet.' -ForegroundColor $colour
+    if ($failed.Count) { Write-Host '  Some steps did not finish.' -ForegroundColor $colour }
+}
+elseif ($failed.Count) { Write-Host '  Odicto is running. Some steps did not finish.' -ForegroundColor $colour }
 else { Write-Host '  Odicto is ready.' -ForegroundColor $colour }
 Write-Host '  ==========================================' -ForegroundColor $colour
 Write-Host ''
-Write-Host 'Try it now:'
+if ($waiting) {
+    Write-Host 'The lines above say what it waits for. It gets ready by itself.'
+    Write-Host ''
+    Write-Host 'When it is ready:'
+}
+else { Write-Host 'Try it now:' }
 Write-Host '  1. Click in any text box, for example a new email.'
 Write-Host '  2. Press Ctrl and the ` key together (the key under Esc, left of 1).'
 Write-Host '  3. Speak. Then press Ctrl and ` again. Your words appear.'
