@@ -116,6 +116,12 @@ jobs:
           .venv\Scripts\python.exe tools/distribution/build_easy_installer.py out/Install-Odicto.cmd
           if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
 
+      # The installer and the updater read this file before the rate-limited GitHub API.
+      - name: Build the release manifest
+        run: |
+          .venv\Scripts\python.exe tools/distribution/build_release_manifest.py '${{ steps.version.outputs.tag }}' out/odicto-release.json
+          if ($LASTEXITCODE -ne 0) { throw 'release manifest build failed' }
+
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,9 +130,9 @@ jobs:
           $name = '${{ steps.package.outputs.name }}'
           $flags = @()
           $assets = @("out/$name", "out/$name.sha256", "out/platform-gate.json")
-          # The installer always fetches the latest stable release, so a pre-release does not get it.
+          # The installer and the manifest always describe the latest stable release, so a pre-release gets neither.
           if ('${{ inputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
-          else { $assets += 'out/Install-Odicto.cmd' }
+          else { $assets += 'out/Install-Odicto.cmd', 'out/odicto-release.json' }
           gh release create $tag @assets `
             --target $env:GITHUB_SHA --title "Odicto $tag" `
             --notes-file out/notes.md --generate-notes @flags

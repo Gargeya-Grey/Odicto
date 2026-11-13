@@ -804,3 +804,29 @@ instead of patching lines:
 - **A managed start that ends early writes one line**: failures in the startup guard and
   launch receipt, a closed launcher pipe, and an exception or nonzero exit from main. OS errors
   keep their message; other exception types are named only (`session_log.failure_text`).
+
+## Microphone host buffers (November)
+
+Date: 13 November 2026. Machine: the owner's, with a USB microphone on the MME host API, 16 kHz,
+block 1024. Every figure below is a measurement on that one machine.
+
+- **Field evidence.** The installed copy's log held 46 gap warnings in about 870 captures. Each
+  `input overflow` came right after a capture started.
+- **Probe under load.** Six-second runs with 4 threads that hold the GIL. `latency="low"` lost
+  2.31 s and 0.25 s of audio (13 and 4 overflows). `latency=1.0` lost none. With no load, every
+  setting delivered one block each 64 ms, so the deeper buffer adds no delay. With 8 threads every
+  setting lost audio.
+- **Probe at a random stop.** With 3 and 4 threads, delivered audio with `"low"` was 214 ms and
+  1730 ms behind the stop (median), with 3 and 23 overflows. With `1.0` it was at most 59 ms
+  behind (under one block) and had no overflow. So on this microphone and these loads the deeper
+  buffer added no delay at the end of a capture, and no wait was added to `stop()`. `stop()` still
+  does not drain audio that the callback has not delivered yet (unchanged): the claim rests on the
+  callback staying near real time, which the probe showed here and nowhere else.
+- **Decision.** Windows MME opens with 1.0 s of host buffers (`AudioRecorder.MME_LATENCY_SECONDS`).
+  WASAPI, WDM-KS, macOS and Linux keep `"low"`: nobody measured them. A failed read of the device
+  or host API keeps `"low"`. If the deep open raises (the open or the start), the same attempt
+  closes that stream, then tries `"low"` once, so a driver that refuses the deep buffer still
+  records. A close that fails still ends the attempt with no second open. One helper decides; the
+  reconnect path uses it too.
+- **Limit.** Heavy starvation still loses audio (8 threads lost it at every setting). The gap flag
+  and "Mic gap · check text" still report it. The probe ran on one machine and one microphone.

@@ -1,4 +1,5 @@
 from collections import deque
+import sys
 import threading
 import time
 from time import monotonic
@@ -41,6 +42,10 @@ class AudioRecorder:
     BANDS_FLOOR_DB: float = -60.0
     BANDS_CEIL_DB: float = -22.0
     BANDS_TILT_DB: float = 2.0
+    # Host buffer (seconds) for the Windows MME host API. With "low", 4 busy threads cost
+    # 0.25 to 2.3 s of audio in 6 s; with 1.0 they cost none (docs/engineering-notes.md,
+    # "Microphone host buffers"). Other host APIs were not measured and keep "low".
+    MME_LATENCY_SECONDS: float = 1.0
 
     def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0) -> None:
         """Initializes the audio recorder and opens the persistent input stream.
@@ -106,6 +111,22 @@ class AudioRecorder:
         # so retry with backoff instead of failing the whole app on first try.
         self._open_persistent_stream()
 
+    def _input_latency(self):
+        """Latency for the device about to open: deep for Windows MME, else "low".
+
+        Metadata queries only; this never opens a stream. Any failure gives "low".
+        """
+        if sys.platform != "win32":
+            return "low"
+        try:
+            index = self._device_index
+            info = sd.query_devices(kind="input") if index is None else sd.query_devices(index)
+            if str(sd.query_hostapis(info["hostapi"])["name"]) == "MME":
+                return self.MME_LATENCY_SECONDS
+        except Exception:
+            pass
+        return "low"
+
     def _open_persistent_stream(self, delays=(0.0, 0.5, 1.0, 2.0, 4.0)) -> None:
         """Open and start the always-on input stream, retrying a cold audio stack."""
         last_error: Optional[BaseException] = None
@@ -122,53 +143,57 @@ class AudioRecorder:
             def bound_callback(indata, frames, time_info, status, _gen=generation):
                 self._callback(indata, frames, time_info, status, _generation=_gen)
 
-            try:
-                stream = sd.InputStream(
-                    device=self._device_index,
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    callback=bound_callback,
-                    dtype="float32",
-                    blocksize=1024,
-                    latency="low",
-                )
-                if self._closed.is_set():
-                    stream.close()
-                    return
-                stream.start()
-                self._stream = stream
-                # Metadata only, off the audio callback; no second capture stream.
+            preferred = self._input_latency()
+            # A driver may refuse the deep buffer; the same attempt then tries "low".
+            for latency in ((preferred, "low") if preferred != "low" else ("low",)):
+                stream = None
                 try:
-                    index = stream.device
-                    if isinstance(index, (int, np.integer)):
-                        self._device_index = int(index)
-                        info = sd.query_devices(int(index))
-                        self._device_info = {"index": int(index), "name": str(info["name"]),
-                                             "host_api": str(sd.query_hostapis(info["hostapi"])["name"]),
-                                             "sample_rate": self.sample_rate, "channels": self.channels}
-                except Exception:
-                    self._device_info = {}
-                if attempt:
-                    print(
-                        f"Microphone ready after {attempt + 1} attempts.",
-                        flush=True,
+                    stream = sd.InputStream(
+                        device=self._device_index,
+                        samplerate=self.sample_rate,
+                        channels=self.channels,
+                        callback=bound_callback,
+                        dtype="float32",
+                        blocksize=1024,
+                        latency=latency,
                     )
-                return
-            except Exception as e:
-                last_error = e
-                print(f"Microphone not ready ({e}); retrying...", flush=True)
-                if stream is not None:
+                    if self._closed.is_set():
+                        stream.close()
+                        return
+                    stream.start()
+                    self._stream = stream
+                    # Metadata only, off the audio callback; no second capture stream.
                     try:
-                        stream.abort()
+                        index = stream.device
+                        if isinstance(index, (int, np.integer)):
+                            self._device_index = int(index)
+                            info = sd.query_devices(int(index))
+                            self._device_info = {"index": int(index), "name": str(info["name"]),
+                                                 "host_api": str(sd.query_hostapis(info["hostapi"])["name"]),
+                                                 "sample_rate": self.sample_rate, "channels": self.channels}
                     except Exception:
-                        pass
-                    # A failed close propagates unchanged: it must never
-                    # authorize another open (see _MicrophoneOpenFailed).
-                    try:
-                        stream.close(ignore_errors=False)
-                    except Exception:
-                        self._stale_streams.append(stream)
-                        raise
+                        self._device_info = {}
+                    if attempt:
+                        print(
+                            f"Microphone ready after {attempt + 1} attempts.",
+                            flush=True,
+                        )
+                    return
+                except Exception as e:
+                    last_error = e
+                    print(f"Microphone not ready ({e}); retrying...", flush=True)
+                    if stream is not None:
+                        try:
+                            stream.abort()
+                        except Exception:
+                            pass
+                        # A failed close propagates unchanged: it must never
+                        # authorize another open (see _MicrophoneOpenFailed).
+                        try:
+                            stream.close(ignore_errors=False)
+                        except Exception:
+                            self._stale_streams.append(stream)
+                            raise
         raise _MicrophoneOpenFailed(
             f"Could not open microphone after {len(delays)} attempts: {last_error}"
         ) from last_error

@@ -16,6 +16,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import urllib.error
 import zipfile
 
 
@@ -24,6 +25,14 @@ SPEC = importlib.util.spec_from_file_location("odicto_distribution_tested", MODU
 dist = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = dist
 SPEC.loader.exec_module(dist)
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def archive_for(tag="v1.2.0", extras=()):
@@ -69,10 +78,13 @@ class TestManagedDistribution(unittest.TestCase):
         self.network[dist.RELEASE_API] = json.dumps({"tag_name": tag, "draft": False, "prerelease": False,
             "assets": [{"name": name, "browser_download_url": release.archive_url},
                        {"name": name + ".sha256", "browser_download_url": release.checksum_url}]}).encode()
+        self.network[dist.RELEASE_MANIFEST] = self.network[dist.RELEASE_API]
         return release
 
     def fetch(self, url, maximum):
         self.requests.append(url)
+        if url not in self.network:  # what the real download raises for a missing file
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO())
         value = self.network[url]
         if len(value) > maximum:
             raise dist.DistributionError("fixture exceeds limit")
@@ -266,6 +278,63 @@ print('NATIVE DEPENDENCY PASS')
         metadata["assets"].append(metadata["assets"][0])
         with self.assertRaises(dist.DistributionError):
             dist.Release.from_metadata(metadata)
+
+    def test_the_manifest_is_used_and_the_api_is_not_asked(self):
+        self.requests.clear()
+        self.assertEqual(dist.latest_release(self.fetch), self.release)
+        self.assertEqual(self.requests, [dist.RELEASE_MANIFEST])
+
+    def test_a_missing_manifest_falls_back_to_the_api(self):
+        del self.network[dist.RELEASE_MANIFEST]
+        self.requests.clear()
+        self.assertEqual(dist.latest_release(self.fetch), self.release)
+        self.assertEqual(self.requests, [dist.RELEASE_MANIFEST, dist.RELEASE_API])
+
+    def test_an_invalid_manifest_falls_back_to_the_api(self):
+        good = json.loads(self.network[dist.RELEASE_API])
+        for invalid in (b"not json", bytes([255, 254]), b"[]", b'"v1.2.0"', json.dumps({**good, "draft": True}).encode(),
+                        json.dumps({**good, "assets": []}).encode(), json.dumps({**good, "tag_name": "1.2"}).encode()):
+            with self.subTest(manifest=invalid):
+                self.network[dist.RELEASE_MANIFEST] = invalid
+                self.requests.clear()
+                self.assertEqual(dist.latest_release(self.fetch), self.release)
+                self.assertEqual(self.requests, [dist.RELEASE_MANIFEST, dist.RELEASE_API])
+
+    def test_a_connection_error_on_the_manifest_does_not_try_the_api(self):
+        for error in (urllib.error.URLError("name resolution failed"), TimeoutError("timed out"), OSError("offline")):
+            requests = []
+            def offline(url, maximum, error=error):
+                requests.append(url)
+                raise error
+            with self.subTest(error=error), self.assertRaises(OSError):
+                dist.latest_release(offline)
+            self.assertEqual(requests, [dist.RELEASE_MANIFEST])
+
+    def test_an_invalid_manifest_and_an_invalid_api_answer_is_an_error(self):
+        self.network[dist.RELEASE_MANIFEST] = b"{}"
+        self.network[dist.RELEASE_API] = b"{}"
+        with self.assertRaises(dist.DistributionError):
+            dist.latest_release(self.fetch)
+
+    def test_the_manifest_builder_output_is_accepted_by_the_reader(self):
+        builder = _load("odicto_manifest_builder_tested", MODULE_PATH.with_name("build_release_manifest.py"))
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "odicto-release.json"
+            self.assertEqual(builder.main(["v1.5.1", str(target)]), 0)
+            release = dist.latest_release(lambda url, maximum: target.read_bytes())
+        self.assertEqual(release.tag, "v1.5.1")
+        self.assertEqual(release.archive_url, f"https://github.com/{dist.REPOSITORY}/releases/download/v1.5.1/Odicto-v1.5.1.zip")
+
+    def test_the_manifest_builder_refuses_an_invalid_tag(self):
+        builder = _load("odicto_manifest_builder_tested", MODULE_PATH.with_name("build_release_manifest.py"))
+        with tempfile.TemporaryDirectory() as folder:
+            for tag in ("1.5.1", "v1.5", "v01.5.1", "v1.5.1-rc1", "v1.5.1/../x", ""):
+                target = Path(folder) / "odicto-release.json"
+                with self.subTest(tag=tag), patch.object(sys, "stderr", new_callable=io.StringIO):
+                    self.assertEqual(builder.main([tag, str(target)]), 1)
+                    self.assertFalse(target.exists())
+            with patch.object(sys, "stderr", new_callable=io.StringIO):
+                self.assertEqual(builder.main(["v1.5.1"]), 2)
 
     def test_direct_release_records_cannot_select_another_trusted_github_repository(self):
         with self.assertRaises(dist.DistributionError):
