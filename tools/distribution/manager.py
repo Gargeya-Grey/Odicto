@@ -25,14 +25,18 @@ import zipfile
 
 REPOSITORY = "Gargeya-Grey/Odicto"
 RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+# The Release workflow publishes this file for a stable release. Unlike the API it has no hourly limit.
+RELEASE_MANIFEST = f"https://github.com/{REPOSITORY}/releases/latest/download/odicto-release.json"
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
 MAX_ENTRIES = 10000
 CHECK_INTERVAL = 8 * 60 * 60
 STARTUP_TIMEOUT = 60.0
 CANCEL_TIMEOUT = 10.0
+CLEANUP_BUDGET = 15.0
 _VERSION = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 _RELEASE_DIR = re.compile(r"v\d+\.\d+\.\d+-[a-f0-9]{12}-[a-f0-9]{8}\Z")
+_TRASH = ".trash-"
 _DOWNLOAD_HOSTS = {"api.github.com", "github.com", "release-assets.githubusercontent.com",
                    "objects.githubusercontent.com", "github-releases.githubusercontent.com"}
 
@@ -148,14 +152,24 @@ def _update_result(before: dict | None, after: dict | None) -> str:
             "  Start it:   odicto start")
 
 
-def latest_release(fetch: Callable = download) -> Release:
+def _release_from_json(data: bytes) -> Release:
     try:
-        metadata = json.loads(fetch(RELEASE_API, 2 * 1024 * 1024))
+        metadata = json.loads(data)
     except (ValueError, UnicodeError) as error:
         raise DistributionError("Release metadata is invalid") from error
     if not isinstance(metadata, dict):
         raise DistributionError("Release metadata is invalid")
     return Release.from_metadata(metadata)
+
+
+def latest_release(fetch: Callable = download) -> Release:
+    """The manifest first. The rate-limited API is the fallback for an HTTP error or an invalid manifest.
+
+    A connection error is not an HTTP error: offline, the API would only add a second wait."""
+    try:
+        return _release_from_json(fetch(RELEASE_MANIFEST, 2 * 1024 * 1024))
+    except (urllib.error.HTTPError, DistributionError):
+        return _release_from_json(fetch(RELEASE_API, 2 * 1024 * 1024))
 
 
 def verified_archive(release: Release, fetch: Callable = download) -> tuple[bytes, str]:
@@ -506,6 +520,64 @@ def default_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "odicto"
 
 
+def _real_folder(path) -> bool:
+    """A folder that is not a symlink, a junction or another reparse point."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+            and not getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+class _BudgetEnded(Exception):
+    pass
+
+
+def _make_writable(path: str, directory: bool) -> None:
+    mode = stat.S_IMODE(os.lstat(path).st_mode)
+    os.chmod(path, mode | stat.S_IRUSR | stat.S_IWUSR | (stat.S_IXUSR if directory else 0))
+
+
+def _remove_once(action, path: str, parent: str | None, directory: bool | None) -> None:
+    """Run action(path). A read-only file or folder is made writable, then it is tried once more.
+    directory=None marks a link: chmod would follow it, so only its parent is changed."""
+    try:
+        action(path)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        if directory is not None:
+            _make_writable(path, directory)
+        if parent:
+            _make_writable(parent, True)
+        action(path)
+
+
+def _remove_link(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        os.rmdir(path)  # a junction
+
+
+def _remove_tree(path: str, parent: str | None, deadline: float, clock: Callable[[], float]) -> None:
+    """Delete path and everything in it. A link is removed itself and never followed."""
+    if not _real_folder(path):
+        if os.path.islink(path) or os.path.isdir(path):
+            _remove_once(_remove_link, path, parent, None)
+        else:
+            _remove_once(os.unlink, path, parent, False)
+        return
+    with os.scandir(path) as entries:
+        children = [entry.path for entry in entries]
+    for child in children:
+        if clock() >= deadline:
+            raise _BudgetEnded
+        _remove_tree(child, path, deadline, clock)
+    _remove_once(os.rmdir, path, parent, True)
+
+
 class Manager:
     def __init__(self, home: Path, *, fetch: Callable = download, installer: Callable | None = None):
         self.home = Path(home).expanduser().resolve()
@@ -754,6 +826,112 @@ class Manager:
         self.activate(staged)
         return self.active()
 
+    def _referenced_releases(self) -> set[str] | None:
+        """The folders the pointers name, or None when one cannot be read: then nothing is retired."""
+        try:
+            active = self._read_json(self.pointer)
+            records = [active]
+            if active.get("previous") is not None:
+                records.append(active["previous"])
+            pending = self.home / "pending.json"
+            if os.path.lexists(pending):
+                records.append(self._read_json(pending))
+        except DistributionError:
+            return None
+        names = set()
+        for record in records:
+            name = record.get("directory") if isinstance(record, dict) else None
+            if not isinstance(name, str) or not _RELEASE_DIR.fullmatch(name):
+                return None
+            names.add(name)
+        return names
+
+    def _log(self, text: str) -> None:
+        try:
+            self.update_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.update_log.open("a", encoding="utf-8", errors="replace") as log:
+                log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+        except OSError:
+            pass
+
+    def retire_old_releases(self) -> list[str]:
+        """Rename each release folder that nothing needs to .trash-<name>. Call it with manager.lock held.
+
+        Kept: the active release, its previous one, the pending one, and the newest folder that is not
+        ready (the evidence of a failed stage). A rename that fails is skipped: on Windows a file in use
+        blocks it. Nothing is deleted here. It never raises."""
+        retired: list[str] = []
+        try:
+            keep = self._referenced_releases()
+            if keep is None or not _real_folder(self.releases):
+                return retired
+            found, unready = [], []
+            for name in sorted(os.listdir(self.releases)):
+                path = self.releases / name
+                if not _RELEASE_DIR.fullmatch(name) or not _real_folder(path):
+                    continue
+                try:
+                    modified = os.lstat(path).st_mtime
+                except OSError:
+                    continue
+                found.append(name)
+                if not os.path.lexists(path / ".odicto-ready.json"):
+                    unready.append((modified, name))
+            if unready:
+                keep.add(max(unready)[1])
+            for name in found:
+                target = self.releases / (_TRASH + name)
+                if name in keep or os.path.lexists(target):
+                    continue
+                try:
+                    os.rename(self.releases / name, target)
+                except OSError:
+                    continue
+                retired.append(name)
+                self._log(f"retired old release {name}")
+        except Exception:
+            pass
+        return retired
+
+    def delete_trash(self, budget: float = CLEANUP_BUDGET, *,
+                     clock: Callable[[], float] = time.monotonic) -> int:
+        """Delete the .trash-<release> folders until the budget (seconds) ends; a later run does the rest.
+
+        Call it with manager.lock released. A link is removed itself, never followed. It never raises.
+        Returns how many folders are gone."""
+        deleted = 0
+        try:
+            deadline = clock() + budget
+            if not _real_folder(self.releases):
+                return deleted
+            for name in sorted(os.listdir(self.releases)):
+                path = self.releases / name
+                if (not name.startswith(_TRASH) or not _RELEASE_DIR.fullmatch(name[len(_TRASH):])
+                        or not _real_folder(path)):
+                    continue
+                if clock() >= deadline:
+                    break
+                try:
+                    _remove_tree(str(path), None, deadline, clock)
+                    deleted += 1
+                except _BudgetEnded:
+                    break
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        return deleted
+
+    def _tidy_releases(self) -> None:
+        """After a successful start: retire under manager.lock (skipped while another command holds it),
+        then delete with the lock released."""
+        try:
+            with file_lock(self.home / "manager.lock"):
+                self.retire_old_releases()
+        except Exception:
+            pass
+        self.delete_trash()
+
     def initialize_settings(self, record: dict) -> None:
         example = self.release_path(record) / ".env.example"
         destination = self.data / ".env"
@@ -904,6 +1082,7 @@ runpy.run_path(str(script), run_name='__main__')
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
             raise DistributionError("Unsupported managed Odicto command")
+        requested = command[0]  # an admin restart is rewritten to start below
         self.initialize()
         if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
             self._migration_guard()
@@ -964,6 +1143,8 @@ runpy.run_path(str(script), run_name='__main__')
                 print("The new release did not start; the previous version is active again.", file=sys.stderr)
             except BusyError:
                 print("The new runtime still owns its lock; rollback was deferred.", file=sys.stderr)
+        elif result == 0 and requested == "start":
+            self._tidy_releases()
         return result
 
     def configure_admin(self, enabled: bool) -> None:
@@ -1519,6 +1700,7 @@ def main(argv=None) -> int:
             print(json.dumps(result.as_dict() if hasattr(result, "as_dict") else result, indent=2))
             return 0
         manager.initialize()
+        cleanup = False
         with file_lock(manager.home / "manager.lock"):
             if args.command == "status":
                 print(json.dumps(manager.active(), indent=2))
@@ -1562,7 +1744,6 @@ def main(argv=None) -> int:
                 steps.end(" done")
                 if args.command == "update":
                     print(_update_result(before, record))
-                    return 0
                 if args.command == "install":
                     manager.initialize_settings(record)
                     manager.install_launchers()
@@ -1578,7 +1759,12 @@ def main(argv=None) -> int:
                         except (DistributionError, OSError, subprocess.SubprocessError) as error:
                             print(f"Start Menu unchanged: {error}", file=sys.stderr)
                     print(f"Configure with: {setup_command(manager.home)}")
-                print(f"Odicto {record['version']} is active.")
+                    print(f"Odicto {record['version']} is active.")
+                if before is None or record.get("directory") != before.get("directory"):
+                    manager.retire_old_releases()
+                    cleanup = True
+        if cleanup:
+            manager.delete_trash()
         return 0
     except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         print(f"Odicto: {error}", file=sys.stderr)

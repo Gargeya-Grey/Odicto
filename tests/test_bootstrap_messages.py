@@ -1,5 +1,6 @@
 """The bootstrap says what went wrong in words a user can act on, before it changes anything."""
 import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -52,6 +53,85 @@ class TestDownloadMessages(unittest.TestCase):
         for error in (urllib.error.URLError("name resolution failed"), TimeoutError("timed out")):
             message = run_payload(error)
             self.assertIn("Check the internet connection", message)
+
+
+MANIFEST = "https://github.com/Gargeya-Grey/Odicto/releases/latest/download/odicto-release.json"
+API = "https://api.github.com/repos/Gargeya-Grey/Odicto/releases/latest"
+CHECKSUM = "https://github.com/Gargeya-Grey/Odicto/releases/download/v1.2.0/Odicto-v1.2.0.zip.sha256"
+
+
+def release_json(**changes) -> bytes:
+    prefix = "https://github.com/Gargeya-Grey/Odicto/releases/download/v1.2.0/"
+    value = {"tag_name": "v1.2.0", "draft": False, "prerelease": False,
+             "assets": [{"name": "Odicto-v1.2.0.zip", "browser_download_url": prefix + "Odicto-v1.2.0.zip"},
+                        {"name": "Odicto-v1.2.0.zip.sha256",
+                         "browser_download_url": prefix + "Odicto-v1.2.0.zip.sha256"}]}
+    return json.dumps({**value, **changes}).encode()
+
+
+def run_answers(answers: dict):
+    """Run the payload with one answer per URL: bytes are served, an exception is raised.
+    Returns (what the bootstrap stopped with, the URLs it asked for, in order)."""
+    asked = []
+
+    def answer(request, timeout):
+        asked.append(request.full_url)
+        value = answers[request.full_url]
+        if isinstance(value, Exception):
+            raise value
+        return io.BytesIO(value)
+
+    with patch.object(urllib.request, "build_opener", return_value=SimpleNamespace(open=answer)):
+        try:
+            exec(compile(payload(), "bootstrap-test", "exec"), {"__name__": "bootstrap"})
+        except SystemExit as stopped:
+            return str(stopped.code), asked
+    raise AssertionError("the bootstrap did not stop")
+
+
+class TestReleaseManifest(unittest.TestCase):
+    """The manifest comes first. The rate-limited API answers only for an HTTP error or bad content."""
+
+    # The checksum answer is wrong on purpose: the run stops right after the release is chosen.
+    BAD_CHECKSUM = {CHECKSUM: b"not a checksum"}
+
+    def test_a_served_manifest_is_used_and_the_api_is_not_called(self):
+        message, asked = run_answers({MANIFEST: release_json(), **self.BAD_CHECKSUM})
+        self.assertEqual(message, "Invalid release checksum")
+        self.assertEqual(asked, [MANIFEST, CHECKSUM])
+
+    def test_a_missing_manifest_falls_back_to_the_api(self):
+        message, asked = run_answers({MANIFEST: http_error(404), API: release_json(), **self.BAD_CHECKSUM})
+        self.assertEqual(message, "Invalid release checksum")
+        self.assertEqual(asked, [MANIFEST, API, CHECKSUM])
+
+    def test_an_invalid_manifest_falls_back_to_the_api(self):
+        for bad in (b"not json", b"[]", release_json(draft=True), release_json(assets=[]), release_json(tag_name="1.2")):
+            with self.subTest(manifest=bad):
+                message, asked = run_answers({MANIFEST: bad, API: release_json(), **self.BAD_CHECKSUM})
+                self.assertEqual(asked, [MANIFEST, API, CHECKSUM])
+                self.assertEqual(message, "Invalid release checksum")
+
+    def test_an_invalid_manifest_and_an_invalid_api_answer_stop_with_a_message(self):
+        message, asked = run_answers({MANIFEST: b"not json", API: release_json(assets=[])})
+        self.assertEqual(message, "Release archive or checksum is missing")
+        self.assertEqual(asked, [MANIFEST, API])
+
+    def test_a_rate_limited_api_after_a_missing_manifest_says_to_wait(self):
+        message, asked = run_answers({MANIFEST: http_error(404), API: http_error(403, "0")})
+        self.assertIn("too many requests", message)
+        self.assertEqual(asked, [MANIFEST, API])
+
+    def test_a_failing_api_after_a_missing_manifest_names_the_code(self):
+        message, asked = run_answers({MANIFEST: http_error(404), API: http_error(503)})
+        self.assertIn("HTTP 503", message)
+        self.assertEqual(asked, [MANIFEST, API])
+
+    def test_a_connection_error_on_the_manifest_does_not_call_the_api(self):
+        for error in (urllib.error.URLError("name resolution failed"), TimeoutError("timed out")):
+            message, asked = run_answers({MANIFEST: error})
+            self.assertIn("Check the internet connection", message)
+            self.assertEqual(asked, [MANIFEST])
 
 
 class TestSetupCommand(unittest.TestCase):
