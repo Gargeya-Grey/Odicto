@@ -143,6 +143,7 @@ managed-home/
     dictation.lock
   releases/vX.Y.Z-HASH-ID/   immutable final code directory and final-location .venv
     .odicto-ready.json      written only after installation and hook-free checks
+  releases/.trash-vX.Y.Z-HASH-ID/   a retired release, deleted after the lock is released
 ```
 
 `ODICTO_DATA_ROOT` is the absolute `data` path and `ODICTO_MANAGED_HOME` is the
@@ -199,8 +200,29 @@ still proceed.
   The manager uses `uv pip sync
   --require-hashes`; it refuses an unlocked dependency release.
 - Build each virtual environment in its final unique release directory. No venv
-  directory is moved after creation. Interrupted and failed staging evidence stays
-  in place; it is never a ready release and is not automatically deleted.
+  directory is moved after creation. Failed staging evidence is never a ready release.
+  It stays in place until a newer folder without `.odicto-ready.json` replaces it as the
+  newest one; then the old-release rule below retires it.
+- Retire old releases. Odicto keeps the active release, its `previous` one, the `pending`
+  one, and the newest folder without `.odicto-ready.json`. Every other
+  `releases/vX.Y.Z-HASH-ID` folder that is a real folder (not a link or a junction) is
+  renamed to `.trash-<name>` under `manager.lock`; a rename that fails is skipped. After
+  the lock is released, `.trash-*` folders are deleted, and what is left goes on the next
+  run. The retire and delete steps share one budget of 15 seconds (`CLEANUP_BUDGET`). The
+  time is checked before every file operation, so no operation starts after it; one call
+  into the file system that blocks is not interrupted. The delete never trusts an earlier
+  check: on Windows it holds each folder open while it empties it (a held folder, and every
+  folder above it, cannot be renamed or replaced), and on macOS and Linux every step is
+  relative to an open folder and never goes through a link. This runs after `odicto start` returned success (not
+  after `restart` or `setup`) and after `odicto update` or `install` activated a release.
+  A pointer that cannot be read retires nothing. Each retired folder is one line in
+  `<data>/update.log`.
+- Publish `odicto-release.json` with every stable release (not a pre-release). The
+  bootstrap and `odicto update` read it first, from
+  `https://github.com/Gargeya-Grey/Odicto/releases/latest/download/odicto-release.json`.
+  The GitHub API answers only when that request gets an HTTP error or the file is
+  invalid. A lost connection does not try the API. `tools/distribution/build_release_manifest.py`
+  builds it.
 - An admin-enabled home activates or rolls back only to releases declaring
   `managed_admin_mode: true`. Its stable task and data-root quit event must remain
   usable across a version switch. No update silently downgrades elevation.

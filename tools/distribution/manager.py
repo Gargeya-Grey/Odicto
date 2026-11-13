@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
@@ -25,14 +26,18 @@ import zipfile
 
 REPOSITORY = "Gargeya-Grey/Odicto"
 RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+# The Release workflow publishes this file for a stable release. Unlike the API it has no hourly limit.
+RELEASE_MANIFEST = f"https://github.com/{REPOSITORY}/releases/latest/download/odicto-release.json"
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
 MAX_ENTRIES = 10000
 CHECK_INTERVAL = 8 * 60 * 60
 STARTUP_TIMEOUT = 60.0
 CANCEL_TIMEOUT = 10.0
+CLEANUP_BUDGET = 15.0
 _VERSION = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 _RELEASE_DIR = re.compile(r"v\d+\.\d+\.\d+-[a-f0-9]{12}-[a-f0-9]{8}\Z")
+_TRASH = ".trash-"
 _DOWNLOAD_HOSTS = {"api.github.com", "github.com", "release-assets.githubusercontent.com",
                    "objects.githubusercontent.com", "github-releases.githubusercontent.com"}
 
@@ -148,14 +153,24 @@ def _update_result(before: dict | None, after: dict | None) -> str:
             "  Start it:   odicto start")
 
 
-def latest_release(fetch: Callable = download) -> Release:
+def _release_from_json(data: bytes) -> Release:
     try:
-        metadata = json.loads(fetch(RELEASE_API, 2 * 1024 * 1024))
+        metadata = json.loads(data)
     except (ValueError, UnicodeError) as error:
         raise DistributionError("Release metadata is invalid") from error
     if not isinstance(metadata, dict):
         raise DistributionError("Release metadata is invalid")
     return Release.from_metadata(metadata)
+
+
+def latest_release(fetch: Callable = download) -> Release:
+    """The manifest first. The rate-limited API is the fallback for an HTTP error or an invalid manifest.
+
+    A connection error is not an HTTP error: offline, the API would only add a second wait."""
+    try:
+        return _release_from_json(fetch(RELEASE_MANIFEST, 2 * 1024 * 1024))
+    except (urllib.error.HTTPError, DistributionError):
+        return _release_from_json(fetch(RELEASE_API, 2 * 1024 * 1024))
 
 
 def verified_archive(release: Release, fetch: Callable = download) -> tuple[bytes, str]:
@@ -506,6 +521,176 @@ def default_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "odicto"
 
 
+def _real_folder(path) -> bool:
+    """A folder that is not a symlink, a junction or another reparse point."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+            and not getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+class _BudgetEnded(Exception):
+    pass
+
+
+def _within(deadline: float, clock: Callable[[], float]) -> None:
+    if clock() >= deadline:
+        raise _BudgetEnded
+
+
+# The delete code below never trusts a path it checked earlier. A folder is deleted through an
+# open handle to it, so another program cannot put a link in its place between the check and the
+# delete (measured on Windows: a held folder and every folder above it refuse a rename).
+
+@contextmanager
+def _held_folder(path: str):
+    """Windows: hold path open and yield whether it is a real folder.
+
+    The handle shares read and write, not delete: until it closes, nobody can rename or replace
+    this folder or a folder above it, so what is listed is what was checked. A link is opened
+    itself, never its target, and yields False."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    # FILE_LIST_DIRECTORY; FILE_SHARE_READ | FILE_SHARE_WRITE; OPEN_EXISTING;
+    # FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT.
+    handle = kernel32.CreateFileW(path, 0x0001, 0x0003, None, 3, 0x02000000 | 0x00200000, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except OSError:
+        kernel32.CloseHandle(handle)
+        raise
+    try:
+        attributes = os.fstat(descriptor).st_file_attributes
+        yield bool(attributes & 0x10) and not attributes & 0x400
+    finally:
+        os.close(descriptor)
+
+
+def _is_link(info) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def _unlink(path: str) -> None:
+    """Windows: remove one file or one link. A read-only file is made writable, once."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        info = os.lstat(path)
+        if _is_link(info):
+            os.rmdir(path)  # a folder link: this removes the link, never what it points at
+        else:
+            os.chmod(path, stat.S_IMODE(info.st_mode) | stat.S_IWRITE)
+            os.unlink(path)
+
+
+def _rmdir(path: str) -> None:
+    """Windows: remove one empty folder. A read-only folder is made writable, once."""
+    try:
+        os.rmdir(path)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        info = os.lstat(path)
+        if _is_link(info) or not stat.S_ISDIR(info.st_mode):
+            raise
+        os.chmod(path, stat.S_IMODE(info.st_mode) | stat.S_IWRITE)
+        os.rmdir(path)
+
+
+def _delete_held(path: str, deadline: float, clock: Callable[[], float], top: bool = False) -> None:
+    """Windows: delete the folder at path and everything in it, while a handle holds each level."""
+    _within(deadline, clock)
+    with _held_folder(path) as real:
+        if real:
+            with os.scandir(path) as entries:
+                children = []
+                for entry in entries:
+                    _within(deadline, clock)
+                    children.append((entry.path, entry.is_dir(follow_symlinks=False)))
+            for child, folder in children:
+                _within(deadline, clock)
+                if folder:
+                    _delete_held(child, deadline, clock)
+                else:
+                    _unlink(child)
+    _within(deadline, clock)
+    if real:
+        _rmdir(path)  # the handle is closed; a link put here now is removed itself by a later run
+    elif top:
+        raise OSError(errno.ENOTDIR, "not a real folder", path)
+    else:
+        _unlink(path)
+
+
+def _in_folder(action, name: str, folder: int) -> None:
+    """POSIX: action(name) inside the open folder. A folder that is not writable is made so, once."""
+    try:
+        action(name, dir_fd=folder)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        os.fchmod(folder, stat.S_IMODE(os.fstat(folder).st_mode) | stat.S_IRWXU)
+        action(name, dir_fd=folder)
+
+
+def _delete_in(parent: int, name: str, deadline: float, clock: Callable[[], float], top: bool = False) -> None:
+    """POSIX: delete the folder `name` inside the open folder `parent`, and everything in it.
+
+    Every step is relative to an open folder and never goes through a link (O_NOFOLLOW)."""
+    _within(deadline, clock)
+    try:
+        folder = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        if top or error.errno not in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+            raise
+        _in_folder(os.unlink, name, parent)  # it is a link or a file now: remove that entry itself
+        return
+    try:
+        with os.scandir(folder) as entries:
+            children = []
+            for entry in entries:
+                _within(deadline, clock)
+                children.append((entry.name, entry.is_dir(follow_symlinks=False)))
+        for child, is_folder in children:
+            _within(deadline, clock)
+            if is_folder:
+                _delete_in(folder, child, deadline, clock)
+            else:
+                _in_folder(os.unlink, child, folder)
+    finally:
+        os.close(folder)
+    _within(deadline, clock)
+    _in_folder(os.rmdir, name, parent)
+
+
+def _delete_trash_folder(releases: str, name: str, deadline: float, clock: Callable[[], float]) -> None:
+    """Delete releases/name and everything in it. Raises OSError when it is not a real folder,
+    and _BudgetEnded at the first check after the deadline."""
+    if os.name == "nt":
+        _delete_held(os.path.join(releases, name), deadline, clock, top=True)
+        return
+    parent = os.open(releases, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _delete_in(parent, name, deadline, clock, top=True)
+    finally:
+        os.close(parent)
+
+
 class Manager:
     def __init__(self, home: Path, *, fetch: Callable = download, installer: Callable | None = None):
         self.home = Path(home).expanduser().resolve()
@@ -754,6 +939,118 @@ class Manager:
         self.activate(staged)
         return self.active()
 
+    def _referenced_releases(self) -> set[str] | None:
+        """The folders the pointers name, or None when one cannot be read: then nothing is retired."""
+        try:
+            active = self._read_json(self.pointer)
+            records = [active]
+            if active.get("previous") is not None:
+                records.append(active["previous"])
+            pending = self.home / "pending.json"
+            if os.path.lexists(pending):
+                records.append(self._read_json(pending))
+        except DistributionError:
+            return None
+        names = set()
+        for record in records:
+            name = record.get("directory") if isinstance(record, dict) else None
+            if not isinstance(name, str) or not _RELEASE_DIR.fullmatch(name):
+                return None
+            names.add(name)
+        return names
+
+    def _log(self, text: str) -> None:
+        try:
+            self.update_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.update_log.open("a", encoding="utf-8", errors="replace") as log:
+                log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+        except OSError:
+            pass
+
+    def retire_old_releases(self, *, deadline: float | None = None,
+                            clock: Callable[[], float] = time.monotonic) -> list[str]:
+        """Rename each release folder that nothing needs to .trash-<name>. Call it with manager.lock held.
+
+        Kept: the active release, its previous one, the pending one, and the newest folder that is not
+        ready (the evidence of a failed stage). A rename that fails is skipped: on Windows a file in use
+        blocks it. Nothing is deleted here. It stops at the deadline, when one is given. It never raises."""
+        retired: list[str] = []
+        try:
+            keep = self._referenced_releases()
+            if keep is None or not _real_folder(self.releases):
+                return retired
+            found, unready = [], []
+            for name in sorted(os.listdir(self.releases)):
+                path = self.releases / name
+                if not _RELEASE_DIR.fullmatch(name) or not _real_folder(path):
+                    continue
+                try:
+                    modified = os.lstat(path).st_mtime
+                except OSError:
+                    continue
+                found.append(name)
+                if not os.path.lexists(path / ".odicto-ready.json"):
+                    unready.append((modified, name))
+            if unready:
+                keep.add(max(unready)[1])
+            for name in found:
+                target = self.releases / (_TRASH + name)
+                if name in keep or os.path.lexists(target):
+                    continue
+                if deadline is not None and clock() >= deadline:
+                    break
+                try:
+                    os.rename(self.releases / name, target)
+                except OSError:
+                    continue
+                retired.append(name)
+                self._log(f"retired old release {name}")
+        except Exception:
+            pass
+        return retired
+
+    def delete_trash(self, budget: float = CLEANUP_BUDGET, *, deadline: float | None = None,
+                     clock: Callable[[], float] = time.monotonic) -> int:
+        """Delete the .trash-<release> folders until the budget (seconds) ends; a later run does the rest.
+
+        Call it with manager.lock released. The time is checked before every file operation; one
+        call into the file system that blocks is not interrupted. `deadline` replaces the budget
+        when the retire step already used part of it. A link is removed itself, never followed.
+        It never raises. Returns how many folders are gone."""
+        deleted = 0
+        try:
+            if deadline is None:
+                deadline = clock() + budget
+            if not _real_folder(self.releases):
+                return deleted
+            for name in sorted(os.listdir(self.releases)):
+                if (not name.startswith(_TRASH) or not _RELEASE_DIR.fullmatch(name[len(_TRASH):])
+                        or not _real_folder(self.releases / name)):
+                    continue
+                if clock() >= deadline:
+                    break
+                try:
+                    _delete_trash_folder(str(self.releases), name, deadline, clock)
+                    deleted += 1
+                except _BudgetEnded:
+                    break
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        return deleted
+
+    def _tidy_releases(self) -> None:
+        """After a successful start: retire under manager.lock (skipped while another command holds it),
+        then delete with the lock released. Both steps share one deadline."""
+        deadline = time.monotonic() + CLEANUP_BUDGET
+        try:
+            with file_lock(self.home / "manager.lock"):
+                self.retire_old_releases(deadline=deadline)
+        except Exception:
+            pass
+        self.delete_trash(deadline=deadline)
+
     def initialize_settings(self, record: dict) -> None:
         example = self.release_path(record) / ".env.example"
         destination = self.data / ".env"
@@ -904,6 +1201,7 @@ runpy.run_path(str(script), run_name='__main__')
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
             raise DistributionError("Unsupported managed Odicto command")
+        requested = command[0]  # an admin restart is rewritten to start below
         self.initialize()
         if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
             self._migration_guard()
@@ -964,6 +1262,8 @@ runpy.run_path(str(script), run_name='__main__')
                 print("The new release did not start; the previous version is active again.", file=sys.stderr)
             except BusyError:
                 print("The new runtime still owns its lock; rollback was deferred.", file=sys.stderr)
+        elif result == 0 and requested == "start":
+            self._tidy_releases()
         return result
 
     def configure_admin(self, enabled: bool) -> None:
@@ -1519,6 +1819,7 @@ def main(argv=None) -> int:
             print(json.dumps(result.as_dict() if hasattr(result, "as_dict") else result, indent=2))
             return 0
         manager.initialize()
+        cleanup_deadline = None
         with file_lock(manager.home / "manager.lock"):
             if args.command == "status":
                 print(json.dumps(manager.active(), indent=2))
@@ -1562,7 +1863,6 @@ def main(argv=None) -> int:
                 steps.end(" done")
                 if args.command == "update":
                     print(_update_result(before, record))
-                    return 0
                 if args.command == "install":
                     manager.initialize_settings(record)
                     manager.install_launchers()
@@ -1578,7 +1878,12 @@ def main(argv=None) -> int:
                         except (DistributionError, OSError, subprocess.SubprocessError) as error:
                             print(f"Start Menu unchanged: {error}", file=sys.stderr)
                     print(f"Configure with: {setup_command(manager.home)}")
-                print(f"Odicto {record['version']} is active.")
+                    print(f"Odicto {record['version']} is active.")
+                if before is None or record.get("directory") != before.get("directory"):
+                    cleanup_deadline = time.monotonic() + CLEANUP_BUDGET
+                    manager.retire_old_releases(deadline=cleanup_deadline)
+        if cleanup_deadline is not None:
+            manager.delete_trash(deadline=cleanup_deadline)
         return 0
     except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         print(f"Odicto: {error}", file=sys.stderr)

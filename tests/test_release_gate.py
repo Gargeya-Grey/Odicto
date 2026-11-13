@@ -373,5 +373,30 @@ class TestSmokeFailureIsVisibleInTheLog(unittest.TestCase):
         self.assertNotIn("line 39\n", shown)
 
 
+class TestReleaseWorkflowPublishesTheManifest(unittest.TestCase):
+    """The installer and the updater read odicto-release.json before the rate-limited GitHub API."""
+
+    def setUp(self):
+        self.workflow = (path.parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        publish = self.workflow.split("- name: Publish the GitHub Release", 1)[1]
+        self.base = publish.split("$assets = @(", 1)[1].splitlines()[0]
+        branches = publish.split("-eq 'true')", 1)[1].split("gh release create", 1)[0]
+        self.prerelease, self.stable = branches.split("else {", 1)
+
+    def test_the_manifest_is_built_from_the_release_tag(self):
+        self.assertIn("tools/distribution/build_release_manifest.py '${{ steps.version.outputs.tag }}' out/odicto-release.json",
+                      self.workflow)
+        self.assertLess(self.workflow.index("build_release_manifest.py"),
+                        self.workflow.index("- name: Publish the GitHub Release"))
+
+    def test_only_a_stable_release_publishes_it(self):
+        self.assertNotIn("odicto-release.json", self.base)
+        self.assertNotIn("odicto-release.json", self.prerelease)
+        self.assertIn("'out/odicto-release.json'", self.stable)
+        self.assertIn("--prerelease", self.prerelease)
+        # The installer file follows the same rule, so the two assets stay together.
+        self.assertIn("'out/Install-Odicto.cmd'", self.stable)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -62,7 +62,9 @@ root; managed versions share a stable data directory outside release folders.
 `ROOT` always identifies the current release's code and assets.
 
 `tools/distribution/manager.py` owns release staging, activation, rollback and
-stable launch reservations. `migration.py` represents a source handoff with typed
+stable launch reservations. It also reads the release manifest before the GitHub API and
+retires old release folders (renamed to `.trash-` under `manager.lock`, deleted after the
+lock is released). `migration.py` represents a source handoff with typed
 plans and reciprocal transaction receipts. It leases both roots, copies only
 known configuration files without interpreting them, and retires only proven
 startup ownership. `app/migration_guard.py` blocks pending source launches and
