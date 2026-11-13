@@ -120,7 +120,12 @@ starts; the internal Windows launcher also supports explicit `/restart`.
 closes. `install.ps1` refreshes the Start Menu folder "Odicto" (Odicto, Odicto Setup, Stop
 Odicto, with `assets/odicto.ico`) unless `-NoShortcuts` is given.
 The launcher waits for a fresh heartbeat from the verified owner and recent
-microphone callbacks before reporting ready (`odicto.py wait-ready`). A Windows
+microphone callbacks before reporting ready (`odicto.py wait-ready`). A managed start that
+does not follow an update also counts a verified owner that is still starting but runs: it
+waits for a microphone (`mic`), its speech model did not load (`speech`) or it downloads the
+model (`speech-download`). `wait-ready --report-waiting` names that state (`ODICTO-WAITING
+<state>`, exit 20 or 21), and the start succeeds with a one-line notice. A start after an
+update stays strict: only a fully ready owner counts, or the update rolls back. A Windows
 virtual environment normally has a launcher PID and a child interpreter PID;
 stop output counts processes, not independent app instances. Any failed or
 unconfirmed termination cancels restart and retains ownership metadata.
@@ -191,7 +196,10 @@ announce recording only after capture starts. Failed starts appear in the HUD.
 PID, readiness, capture state, microphone closure state and callback age.
 Published readiness is false when callbacks are stale or input is closed; the
 internal initialized state still permits the next hotkey to reconnect input.
-Device name, host API and input peak/RMS are included; last completed capture
+The heartbeat publishes that state as `initialized`, and what start-up waits for as
+`init` (`stage`: `mic`, `speech`, `speech-download`, `ai` or `hotkeys` while a step runs;
+`reason`: the code of the last failed attempt, cleared when that step works). `odicto run
+status` prints one `Start-up:` line from it. Device name, host API and input peak/RMS are included; last completed capture
 duration and RMS survive ordinary pipeline cleanup. These are magnitude
 statistics, not recorded audio or a speech-quality verdict. Status reads never change
 the stream; only a hotkey press can reconnect a dead-quiet one. The obsolete status-command-local lock flag is
@@ -747,7 +755,13 @@ not deterministic substitutions.
 
 Managed releases use a private startup pipe and token-bound health record before
 releasing `launch.lock`. Setup hands off to `data/setup.lock`; a failed or unknown
-owner keeps activation deferred until its exit is established. See
+owner keeps activation deferred until its exit is established. A start that follows an
+activation (`strict`) hands off only a fully ready owner and otherwise rolls back; any
+other start also hands off an owner that waits for a microphone or its speech model, through
+the same hand-off. The admin request records `strict`; a request without it stays strict.
+`odicto install` downloads the speech model in its own step, so the first start does not wait
+for it; a failed download only delays it to the first start. On the start that updates from
+1.5.0 the old manager supervises the new app, so this applies from the next start. See
 `tools/distribution/README.md` for the pointer, ownership and rollback protocol.
 X11 grabs the configured modifier masks plus lock-key variants, preserving desktop
 shortcuts on unrelated masks. Typed text uses private stdin. Non-ASCII or control

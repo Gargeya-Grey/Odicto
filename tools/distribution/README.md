@@ -27,7 +27,11 @@ and waits for a key. It starts nothing when the Start Menu item `Odicto` runs an
 or a Startup `Odicto.lnk` exists (a source checkout), unless `migration.json` says the
 migration is complete; the user migrates first. The check reads only those two shortcuts, under
 `%APPDATA%`: a source copy without them, or a running source owner, is not detected. It reports
-each failed step and exits 1. Pre-releases do not get the file, because it installs the latest
+each failed step and exits 1. After a start that worked it asks `odicto wait-ready --timeout 0
+--report-waiting`; when Odicto still waits for a microphone or its speech model (exit 20 or 21),
+the summary is yellow ("Odicto is running. It is not ready to dictate yet."), Setup still
+opens, and the exit code stays 0. A failed start says "Odicto did not start. The lines above say
+why." and to click Odicto in the Start Menu after the cause is fixed. Pre-releases do not get the file, because it installs the latest
 stable release.
 It is not signed. On Windows, install also writes the Start Menu folder `Odicto` with
 Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
@@ -180,12 +184,49 @@ verified release. This switches the updater and app together. A failed start can
 restore the prior pointer only after the failed owner has released its lock. It
 does not pretend a failure-returning but still-running owner has exited.
 
-Managed startup keeps its launch lease until the exact child reports a live
-microphone and readiness with the matching launch token and code root. A private
-pipe cancels unconfirmed children if the supervising command disappears. An
-uncertain child keeps activation deferred. Setup hands off to its writer lease,
-so an open page blocks version switching while another start or Setup command can
-still proceed.
+Managed startup keeps its launch lease until the exact child proves it runs, with the
+matching launch token and code root. A private pipe cancels unconfirmed children if the
+supervising command disappears. An uncertain child keeps activation deferred. Setup hands
+off to its writer lease, so an open page blocks version switching while another start or
+Setup command can still proceed.
+
+What counts as started depends on the start. The owner publishes `initialized` (its own
+ready flag, before the microphone clause) and `init` (`stage` and `reason`) in
+`dictation-health.json`; `stage` is `speech-download` while the speech model is not in the
+local cache. `odicto.py wait-ready --report-waiting` reads them for a verified owner (same
+pid, token, code root, heartbeat age and process checks as a ready owner). It prints
+`ODICTO-WAITING <state>` and exits 20 for `mic` and `speech`, or 21 for `speech-download`.
+The manager accepts a state only when the exit code and the marker line agree; a dead probe,
+a timeout or any other code is `none`.
+
+- A start that follows an activation (an update) is strict. Only a fully ready owner counts;
+  anything else cancels the child and rolls back, as before. The admin launcher writes
+  `"strict": true` in `admin-request.json`, and the admin task reads it. A request without the
+  field is strict.
+- Any other start accepts `mic` and `speech` at once, and `speech-download` after 45 seconds
+  (`DOWNLOAD_ACCEPT_SECONDS`; the admin launcher gives up at 70 seconds and Setup Save at 90).
+  The hand-off is the same as for a ready owner (the `R` byte under `launch-intent.lock`, the
+  admin `released` state). The command exits 0 and prints one line on stderr that says what the
+  owner waits for. The admin task stores the state as `notice` in its result file, and the
+  launcher prints it. The "already running" checks and the recovery of a launcher killed after
+  the hand-off accept the same states, so a waiting owner never blocks `odicto stop` or an update.
+- A child that exits, a crash, any other stage and a missing heartbeat still fail the start.
+
+The launcher deletes `admin-result-<32 hex>.json` files of earlier admin launches when a new
+one starts, and deletes its own result file after it reads it. `managed_admin.helper` deletes
+its `admin-receipt-<uuid>.json` after it reads it. `launch-receipt-*` files go only together
+with their intent.
+
+`odicto install` also gets the speech model, in the step "Getting the speech model", after the
+settings exist. It runs the hidden app command `_prepare-speech` with the release's Python and
+the managed environment (time limit 900 seconds; output goes to `<data>/update.log`). The
+command downloads the configured `WHISPER_MODEL_SIZE` for every speech provider, because local
+Whisper is also the backup of the cloud engines, unless the value is an existing folder. If the
+step fails or times out, the install prints "The speech model was not downloaded now. Odicto
+downloads it at its first start." and continues.
+
+Known limit: on the start that updates from 1.5.0, the old manager supervises the new app. The
+rules above apply from the next start.
 
 ## Release and integration requirements
 
