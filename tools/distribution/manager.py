@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
@@ -534,48 +535,160 @@ class _BudgetEnded(Exception):
     pass
 
 
-def _make_writable(path: str, directory: bool) -> None:
-    mode = stat.S_IMODE(os.lstat(path).st_mode)
-    os.chmod(path, mode | stat.S_IRUSR | stat.S_IWUSR | (stat.S_IXUSR if directory else 0))
+def _within(deadline: float, clock: Callable[[], float]) -> None:
+    if clock() >= deadline:
+        raise _BudgetEnded
 
 
-def _remove_once(action, path: str, parent: str | None, directory: bool | None) -> None:
-    """Run action(path). A read-only file or folder is made writable, then it is tried once more.
-    directory=None marks a link: chmod would follow it, so only its parent is changed."""
+# The delete code below never trusts a path it checked earlier. A folder is deleted through an
+# open handle to it, so another program cannot put a link in its place between the check and the
+# delete (measured on Windows: a held folder and every folder above it refuse a rename).
+
+@contextmanager
+def _held_folder(path: str):
+    """Windows: hold path open and yield whether it is a real folder.
+
+    The handle shares read and write, not delete: until it closes, nobody can rename or replace
+    this folder or a folder above it, so what is listed is what was checked. A link is opened
+    itself, never its target, and yields False."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    # FILE_LIST_DIRECTORY; FILE_SHARE_READ | FILE_SHARE_WRITE; OPEN_EXISTING;
+    # FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT.
+    handle = kernel32.CreateFileW(path, 0x0001, 0x0003, None, 3, 0x02000000 | 0x00200000, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
-        action(path)
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except OSError:
+        kernel32.CloseHandle(handle)
+        raise
+    try:
+        attributes = os.fstat(descriptor).st_file_attributes
+        yield bool(attributes & 0x10) and not attributes & 0x400
+    finally:
+        os.close(descriptor)
+
+
+def _is_link(info) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def _unlink(path: str) -> None:
+    """Windows: remove one file or one link. A read-only file is made writable, once."""
+    try:
+        os.unlink(path)
     except FileNotFoundError:
         pass
     except PermissionError:
-        if directory is not None:
-            _make_writable(path, directory)
-        if parent:
-            _make_writable(parent, True)
-        action(path)
-
-
-def _remove_link(path: str) -> None:
-    try:
-        os.unlink(path)
-    except OSError:
-        os.rmdir(path)  # a junction
-
-
-def _remove_tree(path: str, parent: str | None, deadline: float, clock: Callable[[], float]) -> None:
-    """Delete path and everything in it. A link is removed itself and never followed."""
-    if not _real_folder(path):
-        if os.path.islink(path) or os.path.isdir(path):
-            _remove_once(_remove_link, path, parent, None)
+        info = os.lstat(path)
+        if _is_link(info):
+            os.rmdir(path)  # a folder link: this removes the link, never what it points at
         else:
-            _remove_once(os.unlink, path, parent, False)
+            os.chmod(path, stat.S_IMODE(info.st_mode) | stat.S_IWRITE)
+            os.unlink(path)
+
+
+def _rmdir(path: str) -> None:
+    """Windows: remove one empty folder. A read-only folder is made writable, once."""
+    try:
+        os.rmdir(path)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        info = os.lstat(path)
+        if _is_link(info) or not stat.S_ISDIR(info.st_mode):
+            raise
+        os.chmod(path, stat.S_IMODE(info.st_mode) | stat.S_IWRITE)
+        os.rmdir(path)
+
+
+def _delete_held(path: str, deadline: float, clock: Callable[[], float], top: bool = False) -> None:
+    """Windows: delete the folder at path and everything in it, while a handle holds each level."""
+    _within(deadline, clock)
+    with _held_folder(path) as real:
+        if real:
+            with os.scandir(path) as entries:
+                children = []
+                for entry in entries:
+                    _within(deadline, clock)
+                    children.append((entry.path, entry.is_dir(follow_symlinks=False)))
+            for child, folder in children:
+                _within(deadline, clock)
+                if folder:
+                    _delete_held(child, deadline, clock)
+                else:
+                    _unlink(child)
+    _within(deadline, clock)
+    if real:
+        _rmdir(path)  # the handle is closed; a link put here now is removed itself by a later run
+    elif top:
+        raise OSError(errno.ENOTDIR, "not a real folder", path)
+    else:
+        _unlink(path)
+
+
+def _in_folder(action, name: str, folder: int) -> None:
+    """POSIX: action(name) inside the open folder. A folder that is not writable is made so, once."""
+    try:
+        action(name, dir_fd=folder)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        os.fchmod(folder, stat.S_IMODE(os.fstat(folder).st_mode) | stat.S_IRWXU)
+        action(name, dir_fd=folder)
+
+
+def _delete_in(parent: int, name: str, deadline: float, clock: Callable[[], float], top: bool = False) -> None:
+    """POSIX: delete the folder `name` inside the open folder `parent`, and everything in it.
+
+    Every step is relative to an open folder and never goes through a link (O_NOFOLLOW)."""
+    _within(deadline, clock)
+    try:
+        folder = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    except FileNotFoundError:
         return
-    with os.scandir(path) as entries:
-        children = [entry.path for entry in entries]
-    for child in children:
-        if clock() >= deadline:
-            raise _BudgetEnded
-        _remove_tree(child, path, deadline, clock)
-    _remove_once(os.rmdir, path, parent, True)
+    except OSError as error:
+        if top or error.errno not in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+            raise
+        _in_folder(os.unlink, name, parent)  # it is a link or a file now: remove that entry itself
+        return
+    try:
+        with os.scandir(folder) as entries:
+            children = []
+            for entry in entries:
+                _within(deadline, clock)
+                children.append((entry.name, entry.is_dir(follow_symlinks=False)))
+        for child, is_folder in children:
+            _within(deadline, clock)
+            if is_folder:
+                _delete_in(folder, child, deadline, clock)
+            else:
+                _in_folder(os.unlink, child, folder)
+    finally:
+        os.close(folder)
+    _within(deadline, clock)
+    _in_folder(os.rmdir, name, parent)
+
+
+def _delete_trash_folder(releases: str, name: str, deadline: float, clock: Callable[[], float]) -> None:
+    """Delete releases/name and everything in it. Raises OSError when it is not a real folder,
+    and _BudgetEnded at the first check after the deadline."""
+    if os.name == "nt":
+        _delete_held(os.path.join(releases, name), deadline, clock, top=True)
+        return
+    parent = os.open(releases, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _delete_in(parent, name, deadline, clock, top=True)
+    finally:
+        os.close(parent)
 
 
 class Manager:
@@ -854,12 +967,13 @@ class Manager:
         except OSError:
             pass
 
-    def retire_old_releases(self) -> list[str]:
+    def retire_old_releases(self, *, deadline: float | None = None,
+                            clock: Callable[[], float] = time.monotonic) -> list[str]:
         """Rename each release folder that nothing needs to .trash-<name>. Call it with manager.lock held.
 
         Kept: the active release, its previous one, the pending one, and the newest folder that is not
         ready (the evidence of a failed stage). A rename that fails is skipped: on Windows a file in use
-        blocks it. Nothing is deleted here. It never raises."""
+        blocks it. Nothing is deleted here. It stops at the deadline, when one is given. It never raises."""
         retired: list[str] = []
         try:
             keep = self._referenced_releases()
@@ -883,6 +997,8 @@ class Manager:
                 target = self.releases / (_TRASH + name)
                 if name in keep or os.path.lexists(target):
                     continue
+                if deadline is not None and clock() >= deadline:
+                    break
                 try:
                     os.rename(self.releases / name, target)
                 except OSError:
@@ -893,26 +1009,28 @@ class Manager:
             pass
         return retired
 
-    def delete_trash(self, budget: float = CLEANUP_BUDGET, *,
+    def delete_trash(self, budget: float = CLEANUP_BUDGET, *, deadline: float | None = None,
                      clock: Callable[[], float] = time.monotonic) -> int:
         """Delete the .trash-<release> folders until the budget (seconds) ends; a later run does the rest.
 
-        Call it with manager.lock released. A link is removed itself, never followed. It never raises.
-        Returns how many folders are gone."""
+        Call it with manager.lock released. The time is checked before every file operation; one
+        call into the file system that blocks is not interrupted. `deadline` replaces the budget
+        when the retire step already used part of it. A link is removed itself, never followed.
+        It never raises. Returns how many folders are gone."""
         deleted = 0
         try:
-            deadline = clock() + budget
+            if deadline is None:
+                deadline = clock() + budget
             if not _real_folder(self.releases):
                 return deleted
             for name in sorted(os.listdir(self.releases)):
-                path = self.releases / name
                 if (not name.startswith(_TRASH) or not _RELEASE_DIR.fullmatch(name[len(_TRASH):])
-                        or not _real_folder(path)):
+                        or not _real_folder(self.releases / name)):
                     continue
                 if clock() >= deadline:
                     break
                 try:
-                    _remove_tree(str(path), None, deadline, clock)
+                    _delete_trash_folder(str(self.releases), name, deadline, clock)
                     deleted += 1
                 except _BudgetEnded:
                     break
@@ -924,13 +1042,14 @@ class Manager:
 
     def _tidy_releases(self) -> None:
         """After a successful start: retire under manager.lock (skipped while another command holds it),
-        then delete with the lock released."""
+        then delete with the lock released. Both steps share one deadline."""
+        deadline = time.monotonic() + CLEANUP_BUDGET
         try:
             with file_lock(self.home / "manager.lock"):
-                self.retire_old_releases()
+                self.retire_old_releases(deadline=deadline)
         except Exception:
             pass
-        self.delete_trash()
+        self.delete_trash(deadline=deadline)
 
     def initialize_settings(self, record: dict) -> None:
         example = self.release_path(record) / ".env.example"
@@ -1700,7 +1819,7 @@ def main(argv=None) -> int:
             print(json.dumps(result.as_dict() if hasattr(result, "as_dict") else result, indent=2))
             return 0
         manager.initialize()
-        cleanup = False
+        cleanup_deadline = None
         with file_lock(manager.home / "manager.lock"):
             if args.command == "status":
                 print(json.dumps(manager.active(), indent=2))
@@ -1761,10 +1880,10 @@ def main(argv=None) -> int:
                     print(f"Configure with: {setup_command(manager.home)}")
                     print(f"Odicto {record['version']} is active.")
                 if before is None or record.get("directory") != before.get("directory"):
-                    manager.retire_old_releases()
-                    cleanup = True
-        if cleanup:
-            manager.delete_trash()
+                    cleanup_deadline = time.monotonic() + CLEANUP_BUDGET
+                    manager.retire_old_releases(deadline=cleanup_deadline)
+        if cleanup_deadline is not None:
+            manager.delete_trash(deadline=cleanup_deadline)
         return 0
     except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
         print(f"Odicto: {error}", file=sys.stderr)

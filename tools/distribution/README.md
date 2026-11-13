@@ -207,8 +207,13 @@ still proceed.
   one, and the newest folder without `.odicto-ready.json`. Every other
   `releases/vX.Y.Z-HASH-ID` folder that is a real folder (not a link or a junction) is
   renamed to `.trash-<name>` under `manager.lock`; a rename that fails is skipped. After
-  the lock is released, `.trash-*` folders are deleted for at most 15 seconds, and what
-  is left goes on the next run. This runs after `odicto start` returned success (not
+  the lock is released, `.trash-*` folders are deleted, and what is left goes on the next
+  run. The retire and delete steps share one budget of 15 seconds (`CLEANUP_BUDGET`). The
+  time is checked before every file operation, so no operation starts after it; one call
+  into the file system that blocks is not interrupted. The delete never trusts an earlier
+  check: on Windows it holds each folder open while it empties it (a held folder, and every
+  folder above it, cannot be renamed or replaced), and on macOS and Linux every step is
+  relative to an open folder and never goes through a link. This runs after `odicto start` returned success (not
   after `restart` or `setup`) and after `odicto update` or `install` activated a release.
   A pointer that cannot be read retires nothing. Each retired folder is one line in
   `<data>/update.log`.

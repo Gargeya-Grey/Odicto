@@ -191,6 +191,38 @@ class TestLinksAreRefused(Cleanup):
         self.assertFalse(os.path.lexists(self.trash(name)))
         self.assertEqual((self.outside / "precious.txt").read_text(encoding="utf-8"), "keep")
 
+    def test_a_folder_swapped_for_a_link_after_the_check_is_never_followed(self):
+        # Another program replaces a folder inside the trash with a link to a folder outside, at the
+        # worst moment: when the delete is about to list that folder (its second listing).
+        name = self.folder()
+        os.rename(self.releases / name, self.trash(name))
+        victim = self.trash(name) / "app"
+        moved = self.fixture.root / "moved-away"
+        self.addCleanup(remove_link, victim)
+        real_scandir = os.scandir
+        listings, swapped = [], []
+
+        def scandir(target):
+            listings.append(target)
+            if len(listings) == 2:
+                try:
+                    os.rename(victim, moved)
+                    make_link(victim, self.outside)
+                    swapped.append(True)
+                except OSError:
+                    swapped.append(False)
+            return real_scandir(target)
+
+        with patch.object(dist.os, "scandir", side_effect=scandir):
+            self.manager.delete_trash()
+        self.assertEqual((self.outside / "precious.txt").read_text(encoding="utf-8"), "keep")
+        # Windows: the folder is held open, so the swap is refused. Elsewhere the swap happens, and
+        # the delete goes on in the folder it opened, never through the new link.
+        self.assertEqual(swapped, [os.name != "nt"])
+        self.manager.delete_trash()  # a later run removes what the swap left behind
+        self.assertFalse(os.path.lexists(self.trash(name)))
+        self.assertEqual((self.outside / "precious.txt").read_text(encoding="utf-8"), "keep")
+
     def test_a_reparse_point_is_not_a_real_folder_on_any_platform(self):
         folder = SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_file_attributes=0x10)
         reparse = SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_file_attributes=0x410)
@@ -272,47 +304,74 @@ class TestDeleteBudget(Cleanup):
         self.assertEqual(self.manager.delete_trash(0), 0)
         self.assertEqual(self.names(), sorted(".trash-" + name for name in names))
 
-    def test_the_budget_ends_between_folders_and_a_later_run_finishes(self):
-        names = self.make_trash(3)
-        now = [0.0]
-        removed = []
+    def entries(self):
+        return sum(len(folders) + len(files) for _, folders, files in os.walk(self.releases))
 
-        def remove(path, parent, deadline, clock):
-            now[0] += 10
-            removed.append(Path(path).name)
-            import shutil
-            shutil.rmtree(path)
-
-        with patch.object(dist, "_remove_tree", side_effect=remove):
-            self.assertEqual(self.manager.delete_trash(15, clock=lambda: now[0]), 2)
-        self.assertEqual(len(removed), 2)
-        self.assertEqual(len(self.names()), 1)
-        self.assertEqual(self.manager.delete_trash(), 1)
+    def test_no_file_operation_starts_after_the_deadline(self):
+        # The clock moves one second each time it is read, and it is read before every file
+        # operation. So a budget of 40 allows fewer than 40 operations, across all folders.
+        for name in self.make_trash(3):
+            for index in range(10):
+                (self.trash(name) / f"file{index}.txt").write_text("x", encoding="utf-8")
+        before = self.entries()
+        ticks = iter(range(10 ** 6))
+        self.manager.delete_trash(40, clock=lambda: next(ticks))
+        removed = before - self.entries()
+        self.assertGreater(removed, 0)
+        self.assertLess(removed, 40)
+        self.assertGreater(self.entries(), 0)  # the budget ended before the work did
+        self.manager.delete_trash()
         self.assertEqual(self.names(), [])
 
     def test_the_budget_ends_inside_a_large_folder_and_a_later_run_finishes(self):
         (name,) = self.make_trash(1)
-        for index in range(40):
+        for index in range(60):
             (self.trash(name) / "app" / f"file{index}.txt").write_text("x", encoding="utf-8")
+        before = self.entries()
         ticks = iter(range(10 ** 6))
-        self.assertEqual(self.manager.delete_trash(5, clock=lambda: next(ticks)), 0)
-        left = sum(len(files) for _, _, files in os.walk(self.trash(name)))
+        self.assertEqual(self.manager.delete_trash(100, clock=lambda: next(ticks)), 0)
         self.assertTrue(self.trash(name).is_dir())
-        self.assertLess(left, 43)
-        self.assertGreater(left, 0)
+        self.assertLess(self.entries(), before)
+        self.assertGreater(self.entries(), 20)
         self.assertEqual(self.manager.delete_trash(), 1)
         self.assertEqual(self.names(), [])
 
+    def test_retire_and_delete_share_one_deadline(self):
+        self.fixture.initial()
+        names = [self.folder(modified=100 + index) for index in range(4)]
+        ticks = iter(range(10 ** 6))
+
+        def clock():
+            return next(ticks)
+        with dist.file_lock(self.manager.home / "manager.lock"):
+            retired = self.manager.retire_old_releases(deadline=2, clock=clock)
+        self.assertEqual(len(retired), 2)  # the third read of the clock is at the deadline
+        self.assertEqual(self.manager.delete_trash(deadline=2, clock=clock), 0)  # nothing is left of the budget
+        self.assertEqual(len(self.names()), 5)
+        retired, deleted = self.tidy()
+        self.assertEqual((len(retired), deleted), (2, 4))
+        self.assertEqual(self.names(), [self.manager.active()["directory"]])
+        self.assertEqual(len(names), 4)
+
+    def test_a_start_gives_both_steps_the_same_deadline(self):
+        self.fixture.initial()
+        with patch.object(self.manager, "retire_old_releases", return_value=[]) as retire, \
+                patch.object(self.manager, "delete_trash", return_value=0) as delete, \
+                patch.object(dist.time, "monotonic", return_value=100.0):
+            self.manager._tidy_releases()
+        expected = {"deadline": 100.0 + dist.CLEANUP_BUDGET}
+        self.assertEqual((retire.call_args.kwargs, delete.call_args.kwargs), (expected, expected))
+
     def test_an_error_in_one_folder_does_not_stop_the_others(self):
         first, second = self.make_trash(2)
-        real = dist._remove_tree
+        real = dist._delete_trash_folder
 
-        def remove(path, parent, deadline, clock):
-            if Path(path).name == ".trash-" + first:
+        def remove(releases, name, deadline, clock):
+            if name == ".trash-" + first:
                 raise PermissionError("in use")
-            return real(path, parent, deadline, clock)
+            return real(releases, name, deadline, clock)
 
-        with patch.object(dist, "_remove_tree", side_effect=remove):
+        with patch.object(dist, "_delete_trash_folder", side_effect=remove):
             self.assertEqual(self.manager.delete_trash(), 1)
         self.assertEqual(self.names(), [".trash-" + first])
 
@@ -399,9 +458,9 @@ class TestWhenItRuns(Cleanup):
             except dist.BusyError:
                 return True
 
-        def retiring():
+        def retiring(*args, **kwargs):
             events.append("retire while the lock is " + ("held" if held() else "free"))
-            return retire()
+            return retire(*args, **kwargs)
 
         def deleting(*args, **kwargs):
             events.append("delete while the lock is " + ("held" if held() else "free"))
