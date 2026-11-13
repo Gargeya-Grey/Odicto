@@ -161,7 +161,7 @@ class TestCaptureReconnect(unittest.TestCase):
             "recorder.sd.InputStream", side_effect=[old, RuntimeError("bad index"), new]
         ), patch("recorder.sd._terminate", side_effect=OSError("x")), patch(
             "recorder.sd._initialize", side_effect=OSError("y")
-        ):
+        ), patch.object(AudioRecorder, "_input_latency", return_value="low"):
             recorder = AudioRecorder()
             try:
                 recorder._last_callback -= 4
@@ -176,7 +176,9 @@ class TestCaptureReconnect(unittest.TestCase):
         with patch(
             "recorder.sd.InputStream",
             side_effect=[old, RuntimeError("bad index"), RuntimeError("no default")],
-        ) as opened, patch("recorder.sd._terminate"), patch("recorder.sd._initialize"):
+        ) as opened, patch("recorder.sd._terminate"), patch("recorder.sd._initialize"), patch.object(
+            AudioRecorder, "_input_latency", return_value="low"
+        ):
             recorder = AudioRecorder()
             try:
                 recorder._last_callback -= 4

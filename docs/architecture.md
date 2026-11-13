@@ -175,6 +175,11 @@ fresh stream on the same device read normally. Native stream operations are seri
 against shutdown; an unsuccessful close cannot authorize a second stream. There is no
 background reopening: both checks run only at the next hotkey. Status reads never alter input.
 Healthy hotkeys reuse the stream and pre-roll without opening a device.
+On Windows, a stream on the MME host API opens with `AudioRecorder.MME_LATENCY_SECONDS` (1.0 s)
+of host buffers; every other host API and system keeps `latency="low"`. A refused deep open tries
+`"low"` in the same attempt (`_input_latency`, `_open_persistent_stream`). The deeper buffer stops
+the overflows that a busy interpreter causes, but heavy starvation still loses audio, and the
+gap flag still reports it (`docs/engineering-notes.md`, "Microphone host buffers").
 Input overflow or a callback gap keeps the captured audio and flags the capture; Stop
 processes it and the HUD shows "Mic gap · check text". Only a dead stream with no audio
 errors. A capture longer than `MAX_RECORDING_SECONDS` stops itself and is processed.
