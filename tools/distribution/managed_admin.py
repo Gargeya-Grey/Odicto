@@ -78,8 +78,15 @@ def helper(manager, action: str, *, source: Path | None = None, transaction: Pat
         command += ["-SourceRoot", str(source)]
     if transaction is not None:
         command += ["-TransactionPath", str(transaction)]
-    result = subprocess.run(command, timeout=180, creationflags=0x08000000, capture_output=True)
-    value = json.loads(result.stdout.decode("utf-8-sig")) if action == "Inspect" else (manager._read_json(receipt) if receipt.exists() else {})
+    try:
+        result = subprocess.run(command, timeout=180, creationflags=0x08000000, capture_output=True)
+        value = json.loads(result.stdout.decode("utf-8-sig")) if action == "Inspect" else (manager._read_json(receipt) if receipt.exists() else {})
+    finally:
+        # The receipt only carries this call's answer; nothing reads it afterwards.
+        try:
+            receipt.unlink(missing_ok=True)
+        except OSError:
+            pass
     if result.returncode or value.get("ok") is not True or value.get("home") != str(manager.home):
         raise RuntimeError(value.get("error") or "Administrator change was cancelled or could not be verified")
     return value.get("result", {})
