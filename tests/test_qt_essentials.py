@@ -33,7 +33,14 @@ def _call_name(node: ast.Call) -> str:
 def qt_violations(source: str, filename: str = "<source>") -> list:
     """Return one line per import outside Essentials and per metadata read of the PySide6 package."""
     found = []
-    for node in ast.walk(ast.parse(source, filename)):
+    tree = ast.parse(source, filename)
+    # `from importlib.metadata import version as v` binds another name to a metadata call.
+    metadata_calls = set(METADATA_CALLS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("importlib.metadata", "importlib_metadata"):
+            metadata_calls.update(alias.asname for alias in node.names
+                                  if alias.asname and alias.name in METADATA_CALLS)
+    for node in ast.walk(tree):
         where = "%s:%d" % (filename, getattr(node, "lineno", 0))
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             parts = node.module.split(".")
@@ -52,11 +59,12 @@ def qt_violations(source: str, filename: str = "<source>") -> list:
                 if parts[0] == "PySide6" and len(parts) > 1 and parts[1] not in ALLOWED_MODULES:
                     found.append("%s imports %s" % (where, alias.name))
         elif isinstance(node, ast.Call):
-            first = node.args[0] if node.args else None
+            first = node.args[0] if node.args else next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "distribution_name"), None)
             if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
                 continue
             name = _call_name(node)
-            if name in METADATA_CALLS and _normalized(first.value) == "pyside6":
+            if name in metadata_calls and _normalized(first.value) == "pyside6":
                 found.append("%s reads the metadata of the PySide6 package" % where)
             elif name == "import_module" and first.value.split(".")[0] == "PySide6":
                 parts = first.value.split(".")
@@ -127,6 +135,8 @@ class TestScannerCatchesWhatItShould(unittest.TestCase):
             "from importlib.metadata import version\nversion('PySide6')",
             "from importlib.metadata import distribution\ndistribution('pyside6')",
             "import importlib.metadata as md\nmd.version('PySide6')",
+            "from importlib.metadata import version as v\nv('PySide6')",
+            "from importlib.metadata import version\nversion(distribution_name='PySide6')",
         ):
             with self.subTest(source=source):
                 self.assertTrue(qt_violations(source), source)
@@ -142,6 +152,7 @@ class TestScannerCatchesWhatItShould(unittest.TestCase):
             "'''from PySide6 import QtPdf'''",
             "from other import PySide6\nPySide6.QtSvg",
             "version('sounddevice')",
+            "from importlib.metadata import version as v\nv('PySide6-Essentials')\nw('PySide6')",
         ):
             with self.subTest(source=source):
                 self.assertEqual([], qt_violations(source), source)
