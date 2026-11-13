@@ -203,7 +203,7 @@ cp .env.example .env
 | `openai` | OpenAI-compatible client for Ollama / OpenRouter |
 | `requests` | HTTP + keep-alive for Meta API (`/v1/responses`) |
 | `python-dotenv` | Load `.env` |
-| `PySide6` | Always-on-top HUD overlay |
+| `PySide6-Essentials` | Always-on-top HUD overlay |
 | `psutil` | Cross-platform process enumeration |
 
 ### 4. Models that get downloaded
