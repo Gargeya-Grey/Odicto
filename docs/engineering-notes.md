@@ -818,8 +818,10 @@ block 1024. Every figure below is a measurement on that one machine.
   setting lost audio.
 - **Probe at a random stop.** With 3 and 4 threads, delivered audio with `"low"` was 214 ms and
   1730 ms behind the stop (median), with 3 and 23 overflows. With `1.0` it was at most 59 ms
-  behind (under one block) and had no overflow. So the deeper buffer does not cut the end of a
-  capture, and `stop()` needs no wait.
+  behind (under one block) and had no overflow. So on this microphone and these loads the deeper
+  buffer added no delay at the end of a capture, and no wait was added to `stop()`. `stop()` still
+  does not drain audio that the callback has not delivered yet (unchanged): the claim rests on the
+  callback staying near real time, which the probe showed here and nowhere else.
 - **Decision.** Windows MME opens with 1.0 s of host buffers (`AudioRecorder.MME_LATENCY_SECONDS`).
   WASAPI, WDM-KS, macOS and Linux keep `"low"`: nobody measured them. A failed read of the device
   or host API keeps `"low"`. If the deep open raises (the open or the start), the same attempt
