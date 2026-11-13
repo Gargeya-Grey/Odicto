@@ -34,6 +34,9 @@ CANCEL_TIMEOUT = 10.0
 # A launch that is not strict accepts an owner that still downloads its speech model after
 # this long. The admin launcher gives up at 70 s and Setup Save at 90 s.
 DOWNLOAD_ACCEPT_SECONDS = 45.0
+# A child that never got the hand-off byte ends itself when its launcher's pipe closes; it polls
+# that pipe every 0.05 s. One that still runs this long after the launcher is gone was handed off.
+HANDOFF_SETTLE = 1.0
 # What a running owner may still wait for (see `odicto.py wait-ready --report-waiting`), with the
 # exit code that goes with each state. A state counts only when the code and the marker agree.
 _WAITING_CODES = {"mic": 20, "speech": 20, "speech-download": 21}
@@ -1208,12 +1211,15 @@ runpy.run_path(str(script), run_name='__main__')
                                     and state.get("supervisor_pid") == record.get("supervisor_pid")
                                     and state.get("state") == "released"
                                 )
-                        # A launcher killed after it handed off may have left an owner that still
-                        # waits for a microphone or its speech model. That owner is running, so it
-                        # must not block `odicto stop` and updates for ever.
-                        safe = (admin_release if admin_release is not None
-                                else self._started_state(directory, self._python(directory), token,
-                                                         strict=False) != "none")
+                        if admin_release is not None:
+                            safe = admin_release
+                        else:
+                            # A launcher killed after it handed off may have left an owner that
+                            # still waits for a microphone or its speech model. It must not block
+                            # `odicto stop` and updates for ever, but a waiting owner counts only
+                            # with proof of the hand-off; a ready owner is the rule from before.
+                            state = self._started_state(directory, self._python(directory), token, strict=False)
+                            safe = state == "ready" or (state != "none" and self._outlived_its_launcher(record, child))
             else:
                 safe = not self._pid_alive(record.get("supervisor_pid")) and (
                     record.get("child_pid") is None or not self._pid_alive(record.get("child_pid")))
@@ -1221,6 +1227,16 @@ runpy.run_path(str(script), run_name='__main__')
                 raise BusyError("A managed startup has not confirmed exit; activation and rollback remain deferred")
             intent.unlink()
             receipt.unlink(missing_ok=True)
+
+    def _outlived_its_launcher(self, record: dict, child: dict) -> bool:
+        """True when the child still runs a moment after its supervising launcher is gone.
+
+        Without the hand-off byte the child exits when the launcher's pipe closes
+        (`odicto.py`, `_managed_startup_guard`), so a survivor was handed off."""
+        if self._pid_alive(record.get("supervisor_pid")):
+            return False
+        time.sleep(HANDOFF_SETTLE)
+        return self._pid_alive(child.get("pid"))
 
     def _startup_state(self, directory: Path, python: Path, token: str = "") -> str:
         """`ready`, `mic`, `speech`, `speech-download` or `none`, from one `wait-ready` probe.
@@ -1241,10 +1257,10 @@ runpy.run_path(str(script), run_name='__main__')
         text = getattr(done, "stdout", None)
         if done.returncode not in _WAITING_CODES.values() or not isinstance(text, str):
             return "none"
-        marks = [line.split(None, 1)[1].strip() for line in text.splitlines()
-                 if line.startswith(_WAITING_MARKER + " ")]
-        if len(marks) == 1 and _WAITING_CODES.get(marks[0]) == done.returncode:
-            return marks[0]
+        marks = [words for words in (line.split() for line in text.splitlines())
+                 if words[:1] == [_WAITING_MARKER]]
+        if len(marks) == 1 and len(marks[0]) == 2 and _WAITING_CODES.get(marks[0][1]) == done.returncode:
+            return marks[0][1]
         return "none"
 
     def _ready(self, directory: Path, python: Path, token: str = "") -> bool:
@@ -1483,9 +1499,11 @@ def _app_parser() -> argparse.ArgumentParser:
         "when one is due.")
     add("start", "Start dictation in the background",
         "Odicto runs in the background and shows a small indicator at the bottom of the\n"
-        "screen. This command returns when Odicto is ready. If Odicto already runs and is\n"
-        "ready, nothing changes. Odicto checks for an update first when one is due. Run\n"
-        "only one Odicto install at a time: two installs would each hook the keyboard.")
+        "screen. This command returns when Odicto is ready. It also returns when Odicto\n"
+        "runs but still waits for a microphone or its speech model, and says which. If\n"
+        "Odicto already runs, nothing changes. Odicto checks for an update first when one\n"
+        "is due. Run only one Odicto install at a time: two installs would each hook the\n"
+        "keyboard.")
     add("restart", "Stop Odicto, then start it again",
         "Like 'odicto stop' followed by 'odicto start', except that it does not check for\n"
         "an update. A ready update is applied by 'odicto start' or 'odicto update'.")

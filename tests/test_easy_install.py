@@ -237,7 +237,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.managed_links()
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.wait_calls(), ["wait-ready --timeout 0 --report-waiting"])
+        self.assertEqual(self.wait_calls(), ["wait-ready --timeout 5 --report-waiting"])
         self.assertIn("Odicto is ready.", done.stdout)
         self.assertIn("Try it now:", done.stdout)
         self.assertNotIn("not ready to dictate yet", done.stdout)
@@ -252,7 +252,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
                 done, calls = self.run_installer()
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual(calls[-2:], ["start", "setup"])  # the second pass is a repair
-                self.assertEqual(self.wait_calls(), ["wait-ready --timeout 0 --report-waiting"])
+                self.assertEqual(self.wait_calls(), ["wait-ready --timeout 5 --report-waiting"])
                 self.assertIn("Odicto is running. It is not ready to dictate yet.", done.stdout)
                 self.assertIn("The lines above say what it waits for. It gets ready by itself.", done.stdout)
                 self.assertIn("When it is ready:", done.stdout)
@@ -262,15 +262,29 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
                 self.assertIn("Your browser shows Odicto Setup.", done.stdout)
                 self.assertNotIn("Some steps did not finish.", done.stdout)
 
-    def test_any_other_answer_of_the_check_is_not_waiting(self):
+    def test_any_other_answer_of_the_check_leaves_readiness_unconfirmed(self):
+        # Only exit 0 may say "ready": an owner that ended after the start answers 1.
         for code in (1, 3, 19, 22):
             with self.subTest(code=code):
                 self.managed_links()
                 self.fake_odicto(waiting=code)
-                done, _ = self.run_installer()
+                done, calls = self.run_installer()
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-                self.assertIn("Odicto is ready.", done.stdout)
+                self.assertEqual(calls[-2:], ["start", "setup"])
+                self.assertIn("Odicto started. It did not confirm that it is ready.", done.stdout)
+                self.assertIn("If dictation does not work, open the Start Menu and click Odicto.", done.stdout)
+                self.assertIn("Try it now:", done.stdout)
+                self.assertNotIn("Odicto is ready.", done.stdout)
                 self.assertNotIn("not ready to dictate yet", done.stdout)
+                self.assertNotIn("Some steps did not finish.", done.stdout)
+
+    def test_an_unconfirmed_owner_with_another_failed_step_still_exits_non_zero(self):
+        self.managed_links()
+        self.fake_odicto(failing="setup", waiting=1)
+        done, _ = self.run_installer()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Odicto started. It did not confirm that it is ready.", done.stdout)
+        self.assertIn("Some steps did not finish.", done.stdout)
 
     def test_a_waiting_owner_with_another_failed_step_still_exits_non_zero(self):
         self.managed_links()
@@ -282,7 +296,7 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertIn("Odicto Setup did not open.", done.stdout)
 
     def test_the_summary_is_yellow_when_waiting_and_the_check_runs_only_after_a_good_start(self):
-        self.assertIn("$colour = if ($failed.Count -or $waiting) { 'Yellow' } else { 'Green' }",
+        self.assertIn("$colour = if ($failed.Count -or $state -ne 'ready') { 'Yellow' } else { 'Green' }",
                       builder.build((DISTRIBUTION / "bootstrap.ps1").read_text(encoding="utf-8")).decode("ascii"))
         self.managed_links()
         self.fake_odicto(failing="start", waiting=20)

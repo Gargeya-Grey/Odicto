@@ -168,9 +168,11 @@ def cmd_prepare_speech(_args) -> int:
     try:
         from faster_whisper.utils import download_model
 
-        try:
-            download_model(size, local_files_only=True)  # a repair finds it cached and asks no server
+        try:  # a repair finds it cached and asks no server
+            cached = os.path.isfile(os.path.join(download_model(size, local_files_only=True), "model.bin"))
         except Exception:
+            cached = False
+        if not cached:
             download_model(size)
     except Exception as error:
         print(f"The speech model was not downloaded ({type(error).__name__}).", file=sys.stderr)

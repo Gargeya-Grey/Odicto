@@ -193,7 +193,9 @@ class TestStartupState(unittest.TestCase):
         for code, text in ((20, "ODICTO-WAITING speech-download\n"), (21, "ODICTO-WAITING mic\n"),
                            (21, "ODICTO-WAITING speech\n"), (20, "ODICTO-WAITING bogus\n"),
                            (3, "ODICTO-WAITING mic\n"), (1, "ODICTO-WAITING speech\n"),
-                           (20, "ODICTO-WAITING mic\nODICTO-WAITING speech\n"), (20, "ODICTO-WAITING\n")):
+                           (20, "ODICTO-WAITING mic\nODICTO-WAITING speech\n"), (20, "ODICTO-WAITING\n"),
+                           (20, "ODICTO-WAITING \n"), (21, " \nODICTO-WAITING\t\n"),
+                           (20, "ODICTO-WAITING mic extra\n"), (20, "ODICTO-WAITINGmic\n")):
             with self.subTest(code=code, text=text):
                 self.assertEqual(self.state(code, text)[0], "none")
 
@@ -425,7 +427,7 @@ class TestSetupSaveMessage(unittest.TestCase):
         self.assertTrue(message.started)
         probe = execute.call_args_list[1]
         self.assertEqual(probe.args[0], [sys.executable, str(launcher), "run", "--no-auto-updates",
-                                         "wait-ready", "--timeout", "0", "--report-waiting"])
+                                         "wait-ready", "--timeout", "5", "--report-waiting"])
         self.assertTrue(probe.kwargs["capture_output"])
         self.assertEqual(probe.kwargs["timeout"], 20)
 
@@ -434,12 +436,19 @@ class TestSetupSaveMessage(unittest.TestCase):
         self.assertEqual(message, "Settings saved. Odicto is running and still downloads its speech model.")
         self.assertTrue(message.started)
 
-    def test_anything_else_keeps_todays_message(self):
-        for probe in (SimpleNamespace(returncode=0), SimpleNamespace(returncode=1), SimpleNamespace(returncode=3),
+    def test_only_a_confirmed_owner_is_called_ready(self):
+        message, _, _ = self.save(SimpleNamespace(returncode=0))
+        self.assertEqual(message, "Settings saved. Odicto is ready with the new settings.")
+        self.assertTrue(message.started)
+
+    def test_any_other_answer_leaves_readiness_unconfirmed(self):
+        # An owner that ended after the restart answers 1; a look that cannot run answers nothing.
+        for probe in (SimpleNamespace(returncode=1), SimpleNamespace(returncode=3),
                       subprocess.TimeoutExpired("wait-ready", 20), OSError("no python")):
             with self.subTest(probe=probe):
                 message, _, _ = self.save(probe)
-                self.assertEqual(message, "Settings saved. Odicto is ready with the new settings.")
+                self.assertEqual(message, "Settings saved. Odicto restarted, but it did not confirm that it "
+                                          "is ready. Run odicto status if dictation does not work.")
                 self.assertTrue(message.started)
 
 
@@ -629,11 +638,17 @@ class TestModelDownloadPending(unittest.TestCase):
         self.real = RealModel
         self.calls = []
 
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        self.cache = cache.name
+
         def download_model(size, **kwargs):
             self.calls.append((size, kwargs))
             if self.cached is False:
                 raise OSError("not in the cache")
-            return "cache path"
+            if self.cached is True:
+                Path(self.cache, "model.bin").write_bytes(b"weights")
+            return self.cache
         self.cached = False
         utils = type(sys)("faster_whisper.utils")
         utils.download_model = download_model
@@ -673,6 +688,21 @@ class TestModelDownloadPending(unittest.TestCase):
         self.build()
         self.assertEqual([seen for _, _, seen in self.real.built], [False])
 
+    def test_a_folder_without_its_weights_is_a_download(self):
+        self.cached = "partial"  # an interrupted download left the folder, not model.bin
+        self.build()
+        self.assertEqual([seen for _, _, seen in self.real.built], [True])
+
+    def test_the_flag_is_down_again_before_the_gpu_warmup(self):
+        seen = []
+        with patch.object(Config, "WHISPER_DEVICE", "cuda"), \
+                patch.object(transcriber, "wait_for_cuda_driver", return_value=True), \
+                patch.object(transcriber.WhisperTranscriber, "_warmup_gpu",
+                             lambda _self: seen.append(transcriber.model_download_pending())):
+            self.build()
+        self.assertEqual([built for _, _, built in self.real.built], [True])  # the constructor saw it
+        self.assertEqual(seen, [False])  # a hang in the warmup is not a download
+
     def test_the_cache_check_makes_no_network_call(self):
         self.cached = False
         self.build()
@@ -703,19 +733,33 @@ class TestModelDownloadPending(unittest.TestCase):
         self.assertEqual([seen for _, _, seen in self.real.built], [False])
 
     def test_two_builds_at_once_keep_the_count(self):
-        gate, entered = threading.Event(), threading.Event()
+        gates = [threading.Event(), threading.Event()]
+        entered = [threading.Event(), threading.Event()]
+        order = iter(range(2))
+        claim = threading.Lock()
 
         class Slow(self.real):
             def __init__(self, size, **kwargs):
-                entered.set()
-                gate.wait(5)
+                with claim:
+                    number = next(order)
+                entered[number].set()
+                gates[number].wait(5)
         with patch.object(transcriber, "WhisperModel", Slow), patch.object(transcriber, "_REAL_WHISPER_MODEL", Slow):
-            thread = threading.Thread(target=self.build)
-            thread.start()
-            self.assertTrue(entered.wait(5))
+            threads = [threading.Thread(target=self.build) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            self.assertTrue(entered[0].wait(5) and entered[1].wait(5))
+            self.assertEqual(transcriber._DOWNLOADS_PENDING, 2)
+            gates[0].set()
+            deadline = time.monotonic() + 5
+            while transcriber._DOWNLOADS_PENDING != 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            # One build is done; the other still downloads. A plain flag would be down here.
+            self.assertEqual(transcriber._DOWNLOADS_PENDING, 1)
             self.assertTrue(transcriber.model_download_pending())
-            gate.set()
-            thread.join(5)
+            gates[1].set()
+            for thread in threads:
+                thread.join(5)
         self.assertFalse(transcriber.model_download_pending())
 
 

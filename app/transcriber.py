@@ -360,8 +360,8 @@ def _model_files_missing(model_size: str) -> bool:
     try:
         from faster_whisper.utils import download_model
 
-        download_model(model_size, local_files_only=True)
-        return False
+        # An interrupted download leaves the folder without its weights.
+        return not os.path.isfile(os.path.join(download_model(model_size, local_files_only=True), "model.bin"))
     except Exception:
         return True
 
@@ -412,17 +412,19 @@ class WhisperTranscriber:
                 "(skips CUDA context; set WHISPER_DEVICE=cuda to force GPU).",
                 flush=True,
             )
-        downloading = _model_files_missing(model_size)
-        if downloading:
-            with _DOWNLOADS_LOCK:
-                _DOWNLOADS_PENDING += 1
-        try:
-            for device, compute_type in devices_to_try:
+        for device, compute_type in devices_to_try:
+            try:
+                print(
+                    f"Attempting to load Whisper model '{model_size}' on {device} ({compute_type})..."
+                )
+                start_time = time.time()
+                # The flag covers the constructor only (it downloads, then loads): a hang in the
+                # GPU warmup after it must not look like a download.
+                downloading = _model_files_missing(model_size)
+                if downloading:
+                    with _DOWNLOADS_LOCK:
+                        _DOWNLOADS_PENDING += 1
                 try:
-                    print(
-                        f"Attempting to load Whisper model '{model_size}' on {device} ({compute_type})..."
-                    )
-                    start_time = time.time()
                     self.model = WhisperModel(
                         model_size,
                         device=device,
@@ -431,24 +433,24 @@ class WhisperTranscriber:
                         cpu_threads=max(1, (os.cpu_count() or 4) // 2),
                         num_workers=1,
                     )
-                    self.device = device
-                    self.compute_type = compute_type
-                    elapsed = time.time() - start_time
-                    print(
-                        f"Whisper model loaded successfully on {device} in {elapsed:.2f} seconds."
-                    )
-                    if device == "cuda":
-                        self._warmup_gpu()
-                    return
-                except Exception as e:
-                    last_error = e
-                    print(f"Warning: Failed to load Whisper on {device} ({compute_type}): {e}")
-                    if device == "cpu" or configured_device == device:
-                        raise e
-        finally:
-            if downloading:
-                with _DOWNLOADS_LOCK:
-                    _DOWNLOADS_PENDING -= 1
+                finally:
+                    if downloading:
+                        with _DOWNLOADS_LOCK:
+                            _DOWNLOADS_PENDING -= 1
+                self.device = device
+                self.compute_type = compute_type
+                elapsed = time.time() - start_time
+                print(
+                    f"Whisper model loaded successfully on {device} in {elapsed:.2f} seconds."
+                )
+                if device == "cuda":
+                    self._warmup_gpu()
+                return
+            except Exception as e:
+                last_error = e
+                print(f"Warning: Failed to load Whisper on {device} ({compute_type}): {e}")
+                if device == "cpu" or configured_device == device:
+                    raise e
 
         if not self.model:
             raise RuntimeError(

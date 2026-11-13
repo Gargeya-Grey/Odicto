@@ -755,7 +755,8 @@ not deterministic substitutions.
 
 Managed releases use a private startup pipe and token-bound health record before
 releasing `launch.lock`. Setup hands off to `data/setup.lock`; a failed or unknown
-owner keeps activation deferred until its exit is established. A start that follows an
+owner keeps activation deferred until its exit is established (a waiting owner left by a
+killed launcher counts as handed off only when it still runs after that launcher is gone). A start that follows an
 activation (`strict`) hands off only a fully ready owner and otherwise rolls back; any
 other start also hands off an owner that waits for a microphone or its speech model, through
 the same hand-off. The admin request records `strict`; a request without it stays strict.

@@ -136,9 +136,18 @@ class TestPrepareSpeechCommand(unittest.TestCase):
 
     def test_a_cached_model_needs_no_download(self):
         calls = []
-        code, output, _ = self.run_command("tiny.en", lambda size, **k: calls.append((size, k)) or "path")
+        with tempfile.TemporaryDirectory() as cache:
+            Path(cache, "model.bin").write_bytes(b"weights")
+            code, output, _ = self.run_command("tiny.en", lambda size, **k: calls.append((size, k)) or cache)
         self.assertEqual((code, calls), (0, [("tiny.en", {"local_files_only": True})]))
         self.assertIn("ready", output)
+
+    def test_a_cached_folder_without_its_weights_is_downloaded_again(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as cache:  # an interrupted download left no model.bin
+            code, _, errors = self.run_command("tiny.en", lambda size, **k: calls.append((size, k)) or cache)
+        self.assertEqual((code, errors), (0, ""))
+        self.assertEqual(calls, [("tiny.en", {"local_files_only": True}), ("tiny.en", {})])
 
     def test_a_model_that_is_not_cached_is_downloaded_with_download_model(self):
         calls = []

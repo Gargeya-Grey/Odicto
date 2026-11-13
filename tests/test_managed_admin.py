@@ -777,7 +777,8 @@ foreach($present in @($false,$true)) {
                             admin.helper(manager, "Enable")
                 self.assertFalse(list(manager.home.glob("admin-receipt-*")))
 
-    def test_the_helper_deletes_its_receipt_when_the_command_fails_to_run(self):
+    def test_the_helper_keeps_a_receipt_it_could_not_read(self):
+        # After a timeout the receipt is the only record of what the elevated helper did.
         with tempfile.TemporaryDirectory() as tmp:
             manager = dist.Manager(Path(tmp) / "managed")
             manager.initialize()
@@ -791,7 +792,18 @@ foreach($present in @($false,$true)) {
                     patch.object(admin.subprocess, "run", side_effect=run):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     admin.helper(manager, "Enable")
-            self.assertFalse(list(manager.home.glob("admin-receipt-*")))
+            self.assertEqual(len(list(manager.home.glob("admin-receipt-*"))), 1)
+
+            def unreadable(command, **kwargs):
+                Path(command[command.index("-ReceiptPath") + 1]).write_text("{", encoding="utf-8")
+                return SimpleNamespace(returncode=0, stdout=b"")
+            with patch.object(manager, "active", return_value={}), \
+                    patch.object(manager, "release_path", return_value=Path("release")), \
+                    patch.object(admin, "_windows_admin", return_value=SimpleNamespace(_powershell_exe=lambda: "fake-powershell")), \
+                    patch.object(admin.subprocess, "run", side_effect=unreadable):
+                with self.assertRaises(RuntimeError):
+                    admin.helper(manager, "Enable")
+            self.assertEqual(len(list(manager.home.glob("admin-receipt-*"))), 2)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell parser")
     def test_powershell_helpers_parse_without_execution(self):

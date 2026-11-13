@@ -27,10 +27,11 @@ and waits for a key. It starts nothing when the Start Menu item `Odicto` runs an
 or a Startup `Odicto.lnk` exists (a source checkout), unless `migration.json` says the
 migration is complete; the user migrates first. The check reads only those two shortcuts, under
 `%APPDATA%`: a source copy without them, or a running source owner, is not detected. It reports
-each failed step and exits 1. After a start that worked it asks `odicto wait-ready --timeout 0
+each failed step and exits 1. After a start that worked it asks `odicto wait-ready --timeout 5
 --report-waiting`; when Odicto still waits for a microphone or its speech model (exit 20 or 21),
 the summary is yellow ("Odicto is running. It is not ready to dictate yet."), Setup still
-opens, and the exit code stays 0. A failed start says "Odicto did not start. The lines above say
+opens, and the exit code stays 0. Any answer other than 0, 20 or 21 gives a yellow "Odicto
+started. It did not confirm that it is ready."; only exit 0 gives "Odicto is ready." A failed start says "Odicto did not start. The lines above say
 why." and to click Odicto in the Start Menu after the cause is fixed. Pre-releases do not get the file, because it installs the latest
 stable release.
 It is not signed. On Windows, install also writes the Start Menu folder `Odicto` with
@@ -208,13 +209,17 @@ a timeout or any other code is `none`.
   The hand-off is the same as for a ready owner (the `R` byte under `launch-intent.lock`, the
   admin `released` state). The command exits 0 and prints one line on stderr that says what the
   owner waits for. The admin task stores the state as `notice` in its result file, and the
-  launcher prints it. The "already running" checks and the recovery of a launcher killed after
-  the hand-off accept the same states, so a waiting owner never blocks `odicto stop` or an update.
+  launcher prints it. The "already running" checks accept the same states. The recovery of a
+  launcher killed after the hand-off accepts a waiting owner only with proof of that hand-off:
+  the supervising launcher is gone and the child still runs `HANDOFF_SETTLE` (1 second) later.
+  A child that never got the `R` byte ends itself when the launcher's pipe closes, so it does
+  not pass. So a waiting owner does not block `odicto stop` or an update for ever.
 - A child that exits, a crash, any other stage and a missing heartbeat still fail the start.
 
 The launcher deletes `admin-result-<32 hex>.json` files of earlier admin launches when a new
 one starts, and deletes its own result file after it reads it. `managed_admin.helper` deletes
-its `admin-receipt-<uuid>.json` after it reads it. `launch-receipt-*` files go only together
+its `admin-receipt-<uuid>.json` after it reads it; after a timeout or an unreadable receipt the
+file stays as the record of what the elevated helper did. `launch-receipt-*` files go only together
 with their intent.
 
 `odicto install` also gets the speech model, in the step "Getting the speech model", after the
@@ -225,8 +230,17 @@ Whisper is also the backup of the cloud engines, unless the value is an existing
 step fails or times out, the install prints "The speech model was not downloaded now. Odicto
 downloads it at its first start." and continues.
 
-Known limit: on the start that updates from 1.5.0, the old manager supervises the new app. The
-rules above apply from the next start.
+Known limits:
+
+- On the start that updates from 1.5.0, the old manager supervises the new app. The rules above
+  apply from the next start.
+- A start is strict only when the same command activated the release (`odicto start` with a due
+  update). After a separate `odicto update`, or an update that `odicto setup` applied, the next
+  start is not strict. Those starts never rolled back before this rule either; they now succeed
+  with a notice when Odicto waits for a microphone or its speech model. A marker for "this
+  release has not had a fully ready start yet" would close the gap; it does not exist.
+- The download state covers the model constructor (download, then load). A load that hangs
+  inside it after the download still shows as `speech-download`.
 
 ## Release and integration requirements
 
