@@ -192,7 +192,7 @@ def installed(root: Path, evidence: Path, sha: str) -> int:
             report["checks"]["emulated_audio_capture"] = "pass"
             report["audio_source"] = "CI PulseAudio null-sink monitor; not a physical microphone"
         report["dependencies"] = {name: importlib.metadata.version(name)
-                                  for name in ("PySide6", "sounddevice", "faster-whisper", "google-genai")}
+                                  for name in ("PySide6-Essentials", "sounddevice", "faster-whisper", "google-genai")}
         from PySide6.QtWidgets import QApplication, QLabel
         app = QApplication.instance() or QApplication([])
         widget = QLabel("Odicto installed native Qt smoke")
