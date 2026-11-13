@@ -152,6 +152,33 @@ def cmd_managed_owner(_args) -> int:
     return 0
 
 
+def cmd_prepare_speech(_args) -> int:
+    """Download the configured Whisper model now (the managed install runs this once).
+
+    Local Whisper is also the backup of the cloud engines, so every provider needs it.
+    A value that is an existing folder is a local model: nothing to download. The error line
+    names only the class of the failure, never a path or a key.
+    """
+    from config import Config
+
+    size = str(Config.WHISPER_MODEL_SIZE or "").strip()
+    if os.path.isdir(size):
+        print("The speech model is a local folder. Nothing to download.")
+        return 0
+    try:
+        from faster_whisper.utils import download_model
+
+        try:
+            download_model(size, local_files_only=True)  # a repair finds it cached and asks no server
+        except Exception:
+            download_model(size)
+    except Exception as error:
+        print(f"The speech model was not downloaded ({type(error).__name__}).", file=sys.stderr)
+        return 1
+    print(f"The speech model '{size}' is ready.")
+    return 0
+
+
 def cmd_managed_setup(_args) -> int:
     import setup_web
     import webbrowser
@@ -243,14 +270,35 @@ def _stop_processes() -> int:
     return 0
 
 
+# `wait-ready --report-waiting` exits with these when a verified owner runs but is not ready.
+# No runtime produces them (3 is the Windows abort code). The marker line names the state.
+WAITING_EXIT_CODES = {"mic": 20, "speech": 20, "speech-download": 21}
+WAITING_MARKER = "ODICTO-WAITING"
+
+
+def _waiting_state(health: dict) -> str | None:
+    """What a running owner still waits for, from its heartbeat. None means: nothing named."""
+    init = health.get("init") if isinstance(health.get("init"), dict) else {}
+    if init.get("reason") == "mic" or health.get("initialized") is True:
+        return "mic"  # initialized: only the microphone clause of readiness fails
+    if init.get("reason") == "speech":
+        return "speech"
+    if init.get("stage") == "speech-download":
+        return "speech-download"
+    return None
+
+
 def cmd_wait_ready(args) -> int:
     """Wait for the actual owner and microphone, not just an early PID file.
 
     Reading the heartbeat needs no elevation, so a normal process can wait for an elevated owner.
+    With --report-waiting, a verified owner that is not ready but waits for a microphone or its
+    speech model ends the wait too: it prints `ODICTO-WAITING <state>` and exits 20 or 21.
     """
     import psutil
     from platforms.base import is_odicto_command
 
+    report_waiting = bool(getattr(args, "report_waiting", False))
     deadline = time.monotonic() + max(0.0, args.timeout)
     while True:
         try:
@@ -262,13 +310,17 @@ def cmd_wait_ready(args) -> int:
             age = time.time() - health["updated_at"]
             expected_token = getattr(args, "launch_token", None)
             expected_root = getattr(args, "expected_root", None)
-            if (health["pid"] == pid and 0 <= age < 10 and health["ready"]
-                    and (not expected_token or health.get("launch_token") == expected_token)
-                    and (not expected_root or os.path.normcase(os.path.realpath(health.get("code_root", "")))
-                         == os.path.normcase(os.path.realpath(expected_root)))
-                    and mic and not mic.get("closed", True)
-                    and mic.get("callback_count", 0) > 0
-                    and 0 <= mic.get("callback_age_s", 10) + age < 3):
+            # The same owner checks decide a ready owner and a waiting one.
+            verified_owner = (health["pid"] == pid and 0 <= age < 10
+                              and (not expected_token or health.get("launch_token") == expected_token)
+                              and (not expected_root or os.path.normcase(os.path.realpath(health.get("code_root", "")))
+                                   == os.path.normcase(os.path.realpath(expected_root))))
+            ready = (verified_owner and health["ready"]
+                     and mic and not mic.get("closed", True)
+                     and mic.get("callback_count", 0) > 0
+                     and 0 <= mic.get("callback_age_s", 10) + age < 3)
+            waiting = _waiting_state(health) if report_waiting and verified_owner and not ready else None
+            if ready or waiting:
                 owner = psutil.Process(pid)
                 try:
                     cwd = owner.cwd()
@@ -278,8 +330,11 @@ def cmd_wait_ready(args) -> int:
                     cwd = None
                 if (owner.create_time() <= health["updated_at"]
                         and is_odicto_command(owner.cmdline(), cwd)):
-                    print(f"Odicto ready (app PID {pid}); microphone receiving audio.")
-                    return 0
+                    if ready:
+                        print(f"Odicto ready (app PID {pid}); microphone receiving audio.")
+                        return 0
+                    print(f"{WAITING_MARKER} {waiting}")
+                    return WAITING_EXIT_CODES[waiting]
         except (OSError, ValueError, KeyError, TypeError, psutil.Error):
             pass
         remaining = deadline - time.monotonic()
@@ -288,6 +343,26 @@ def cmd_wait_ready(args) -> int:
                   "Run odicto.py status; check dictation.log if this persists.", file=sys.stderr)
             return 1
         time.sleep(min(0.1, remaining))
+
+
+_STARTUP_NAMES = {"mic": "the microphone", "speech": "the speech model",
+                  "speech-download": "the speech model (downloading it)", "ai": "the AI engine",
+                  "hotkeys": "the keyboard shortcuts"}
+
+
+def _print_startup(health: dict) -> None:
+    """One line that says what start-up waits for, so a waiting owner is not a mystery."""
+    init = health.get("init") if isinstance(health.get("init"), dict) else {}
+    stage, reason = init.get("stage"), init.get("reason")
+    parts = []
+    if stage:
+        parts.append(f"working on {_STARTUP_NAMES.get(stage, stage)}")
+    if reason:
+        parts.append(f"the last try failed at {_STARTUP_NAMES.get(reason, reason)}; Odicto tries again by itself")
+    if not parts and health.get("initialized") is True and not health.get("ready"):
+        parts.append("finished, and waiting for audio from the microphone")
+    if parts:
+        print("Start-up:    " + "; ".join(parts))
 
 
 def cmd_status(_args) -> int:
@@ -322,6 +397,7 @@ def cmd_status(_args) -> int:
             print("Health:      stale or unavailable (restart may be needed)")
         else:
             print(f"Health:      {health['state']} ready={health['ready']} (heartbeat {age:.1f}s ago)")
+            _print_startup(health)
             mic = health.get("microphone")
             if mic:
                 print(f"Microphone:  closed={mic.get('closed', True)} callback_age={mic['callback_age_s']}s")
@@ -461,7 +537,8 @@ def cmd_remove_autostart(_args) -> int:
 
 
 def main() -> int:
-    internal = {"_managed-owner": cmd_managed_owner, "_managed-setup": cmd_managed_setup}
+    internal = {"_managed-owner": cmd_managed_owner, "_managed-setup": cmd_managed_setup,
+                "_prepare-speech": cmd_prepare_speech}
     if len(sys.argv) == 2 and sys.argv[1] in internal:
         return internal[sys.argv[1]](None)
     parser = argparse.ArgumentParser(prog="odicto")
@@ -475,6 +552,7 @@ def main() -> int:
     wait_ready.add_argument("--timeout", type=float, default=30.0)
     wait_ready.add_argument("--launch-token", help=argparse.SUPPRESS)
     wait_ready.add_argument("--expected-root", help=argparse.SUPPRESS)
+    wait_ready.add_argument("--report-waiting", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("config", help="Show resolved configuration and where each value came from")
     sub.add_parser("version", help="Show the Odicto version (the VERSION file)")
     sub.add_parser("autostart", help="Install autostart entry")

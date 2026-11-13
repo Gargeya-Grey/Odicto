@@ -33,6 +33,12 @@ _google_genai_import_tried = False
 
 # Filled on first Whisper load so Gemini-only boots skip ctranslate2 import.
 WhisperModel = None  # type: ignore
+# The faster-whisper class itself, kept when it is first imported. Only that class (never a
+# test double) may trigger the model cache check.
+_REAL_WHISPER_MODEL = None  # type: ignore
+# Real model builds that would download files right now (a count: backups load in threads).
+_DOWNLOADS_PENDING = 0
+_DOWNLOADS_LOCK = threading.Lock()
 
 _genai_client_lock = threading.Lock()
 # Serialises every local Whisper decode in the process (see WhisperTranscriber.transcribe).
@@ -333,6 +339,33 @@ def _ctranslate2_loaded() -> bool:
     return "ctranslate2" in sys.modules
 
 
+def model_download_pending() -> bool:
+    """True while a real faster-whisper model is built and its files are not cached.
+
+    A launcher reads this (through the heartbeat) to tell a long first download from a
+    fault. It imports nothing: the check itself runs inside ``_load_model``.
+    """
+    return _DOWNLOADS_PENDING > 0
+
+
+def _model_files_missing(model_size: str) -> bool:
+    """True when building the real model would download files. Makes no network call.
+
+    A test double, or an existing folder, never counts. Called only after ``_load_model``
+    has imported faster-whisper, so the import below is already in ``sys.modules``.
+    """
+    real = _REAL_WHISPER_MODEL
+    if real is None or WhisperModel is not real or os.path.isdir(model_size):
+        return False
+    try:
+        from faster_whisper.utils import download_model
+
+        download_model(model_size, local_files_only=True)
+        return False
+    except Exception:
+        return True
+
+
 class WhisperTranscriber:
     def __init__(self, backup: bool = False) -> None:
         """Initializes the Whisper model with hardware acceleration detection and safety fallbacks.
@@ -358,13 +391,15 @@ class WhisperTranscriber:
         )
 
         last_error: Optional[Exception] = None
-        global WhisperModel
+        global WhisperModel, _REAL_WHISPER_MODEL, _DOWNLOADS_PENDING
         if WhisperModel is None:
             if getattr(self, "_backup", False):
                 _backup_only_mkl_settings()
             from faster_whisper import WhisperModel as _WhisperModel
 
             WhisperModel = _WhisperModel
+            if str(getattr(_WhisperModel, "__module__", "")).startswith("faster_whisper"):
+                _REAL_WHISPER_MODEL = _WhisperModel
         if any(device == "cuda" for device, _ in devices_to_try):
             if configured_device == "auto":
                 if sys.platform == "darwin" or not wait_for_cuda_driver(max_wait_s=0.0):
@@ -377,34 +412,43 @@ class WhisperTranscriber:
                 "(skips CUDA context; set WHISPER_DEVICE=cuda to force GPU).",
                 flush=True,
             )
-        for device, compute_type in devices_to_try:
-            try:
-                print(
-                    f"Attempting to load Whisper model '{model_size}' on {device} ({compute_type})..."
-                )
-                start_time = time.time()
-                self.model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type,
-                    # Reduce CPU oversubscription when using GPU; still fine on CPU.
-                    cpu_threads=max(1, (os.cpu_count() or 4) // 2),
-                    num_workers=1,
-                )
-                self.device = device
-                self.compute_type = compute_type
-                elapsed = time.time() - start_time
-                print(
-                    f"Whisper model loaded successfully on {device} in {elapsed:.2f} seconds."
-                )
-                if device == "cuda":
-                    self._warmup_gpu()
-                return
-            except Exception as e:
-                last_error = e
-                print(f"Warning: Failed to load Whisper on {device} ({compute_type}): {e}")
-                if device == "cpu" or configured_device == device:
-                    raise e
+        downloading = _model_files_missing(model_size)
+        if downloading:
+            with _DOWNLOADS_LOCK:
+                _DOWNLOADS_PENDING += 1
+        try:
+            for device, compute_type in devices_to_try:
+                try:
+                    print(
+                        f"Attempting to load Whisper model '{model_size}' on {device} ({compute_type})..."
+                    )
+                    start_time = time.time()
+                    self.model = WhisperModel(
+                        model_size,
+                        device=device,
+                        compute_type=compute_type,
+                        # Reduce CPU oversubscription when using GPU; still fine on CPU.
+                        cpu_threads=max(1, (os.cpu_count() or 4) // 2),
+                        num_workers=1,
+                    )
+                    self.device = device
+                    self.compute_type = compute_type
+                    elapsed = time.time() - start_time
+                    print(
+                        f"Whisper model loaded successfully on {device} in {elapsed:.2f} seconds."
+                    )
+                    if device == "cuda":
+                        self._warmup_gpu()
+                    return
+                except Exception as e:
+                    last_error = e
+                    print(f"Warning: Failed to load Whisper on {device} ({compute_type}): {e}")
+                    if device == "cpu" or configured_device == device:
+                        raise e
+        finally:
+            if downloading:
+                with _DOWNLOADS_LOCK:
+                    _DOWNLOADS_PENDING -= 1
 
         if not self.model:
             raise RuntimeError(
