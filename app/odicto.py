@@ -279,8 +279,10 @@ WAITING_MARKER = "ODICTO-WAITING"
 def _waiting_state(health: dict) -> str | None:
     """What a running owner still waits for, from its heartbeat. None means: nothing named."""
     init = health.get("init") if isinstance(health.get("init"), dict) else {}
-    if init.get("reason") == "mic" or health.get("initialized") is True:
-        return "mic"  # initialized: only the microphone clause of readiness fails
+    # Initialized and, by the owner's own account, not ready: only the microphone clause fails.
+    # An owner that says ready is never "waiting", even when this reader finds its heartbeat old.
+    if init.get("reason") == "mic" or (health.get("initialized") is True and health.get("ready") is False):
+        return "mic"
     if init.get("reason") == "speech":
         return "speech"
     if init.get("stage") == "speech-download":

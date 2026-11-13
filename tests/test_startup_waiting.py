@@ -97,6 +97,12 @@ class TestWaitReadyReportsWaiting(unittest.TestCase):
         self.assertIn("Odicto ready", output)
         self.assertNotIn("ODICTO-WAITING", output)
 
+    def test_a_ready_owner_with_an_old_heartbeat_is_not_reported_as_waiting(self):
+        # The owner says it is ready; only this reader's freshness window failed.
+        health = self.health(ready=True, initialized=True, updated_at=time.time() - 4,
+                             microphone={"closed": False, "callback_age_s": 0.05, "callback_count": 4})
+        self.assertEqual(self.check(health)[:2], (1, ""))
+
     def test_without_the_flag_a_waiting_owner_is_still_not_ready(self):
         for report in (False, None):  # None: a namespace that never had the attribute
             for update in ({"init": {"stage": None, "reason": "mic"}}, {"initialized": True},
