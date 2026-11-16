@@ -196,8 +196,23 @@ same file (device and inode); a new entry is made with a link that fails if anyt
 that appeared meanwhile is never overwritten. On Windows the same four names are Start Menu shortcuts
 (`Remove Odicto` opens a normal window; the others run minimized). macOS has no menu entries.
 
+Each start (`start`, `setup`, and an activation) also reconciles the Linux menu: a missing entry is made
+when its name is free, an out-of-date entry that Odicto wrote is rewritten, and a current menu is not
+touched. On Windows, a start or an update adds the `Remove Odicto` shortcut that an older install lacks,
+when the other three shortcuts are Odicto's (best effort). On POSIX, a home that an older Odicto
+installed gets its `launcher.py` refreshed with the other launchers.
+
+**Threat model of `odicto uninstall`.** It protects against accidents: a link or junction where a
+folder should be, a mount point inside the home, a file of the same name that Odicto did not write, two
+commands at once, a crash or a failed delete halfway, a file that cannot be read, a home that was
+moved. It does not try to win a race against a hostile program that already runs as the same user: such
+a program can already change `launcher.py`. So a menu file, the start entry, the `odicto` command and a
+shortcut are checked by hash and then deleted in two steps, and a swap between them is not stopped.
+A folder on another device than the home, or a mount point below it (Linux: read from
+`/proc/self/mountinfo`, bind mounts included), is never entered; the stage fails and keeps it whole.
+
 `odicto uninstall` (`--all` to delete the settings too, `--ask` to be asked) works in this order and
-prints one line for each step:
+prints one line for each step. It stops at the first stage that fails and runs nothing after it:
 
 1. Refuse, before anything changes, a home that is a link (the launcher passes the home as it was
    reached in `ODICTO_LAUNCHER_HOME`, because the manager itself only sees the resolved path), a home with
@@ -206,6 +221,8 @@ prints one line for each step:
    never runs `schtasks` or `admin_mode.ps1`). The checked folder stays open to the end: POSIX keeps a
    folder descriptor (`O_NOFOLLOW`) and every later call is relative to it, Windows keeps a handle that
    forbids a rename of the folder and of every folder above it. The marker is read through it too.
+   Before the locks, before the stop and before every stage, the path of the home must still name the
+   held folder, else the command stops and deletes nothing more (a moved home).
 2. Take `manager.lock` and `launch.lock` and hold them to the end, so a start, an update and a
    rollback find them busy. Stop Odicto with the active release's own `stop` (not the managed `run`,
    which would take the same locks). A release record that cannot be read ends the command with nothing
@@ -216,16 +233,21 @@ prints one line for each step:
    uninstall` finishes the job, and `odicto install` clears it.
 4. Remove the start-at-sign-in entry (`managed_autostart.remove`; on macOS the LaunchAgent is first
    booted out of launchd, and only when launchd says it was loaded from this very file), the Start Menu
-   shortcuts or menu entries, and `~/.local/bin/odicto` (or `odicto.cmd`). Each is deleted only when it is
-   still Odicto's own. A foreign item stays and is not a failure. An owned item that cannot be deleted
-   is a failure: the command says so, deletes nothing more, keeps the receipts and exits 1.
+   shortcuts or menu entries, and `~/.local/bin/odicto` (or `odicto.cmd`), in that order. Each is deleted
+   only when it is still Odicto's own. A foreign item (another program's file of that name) stays and is
+   not a failure. "Could not check" is not "foreign": an unreadable file or receipt, a failed `launchctl
+   print` or `bootout`, an exception or a timeout, or an owned item that cannot be deleted, is a
+   failure. The command says so, deletes nothing more, keeps the receipts and exits 1.
 5. Delete the home's entries, every link as a link and never through it, in this order: everything
-   except the files that run this command again, the old releases, (`--all`) `data/`, then the active
-   release and `bin`, `launcher.py`, `active.json`. Without `--all`, `data/` and the marker stay (the
-   marker is rewritten to the bare ownership record); with `--all` the marker and the home folder go
-   last. The lock files, any folder that a racing command made again, and the notice go after the locks
-   are released. An entry that cannot be removed (Windows: a file that a running program holds) is
-   named, the command says to run it again, and the exit code is 1.
+   except the files that run this command again, the releases other than the active one, (`--all`)
+   `data/`, then the final group: the active release, `bin`, `launcher.py`, `active.json`, the private uv,
+   whatever is left, the marker (rewritten to the bare ownership record without `--all`; deleted with
+   it), then the two lock files and the notice. The locks and the notice are held to the last delete
+   (Windows cannot delete an open file, so there the locks are released just before). With `--all` the
+   home folder goes last. A stage before the final group that fails is named, and `odicto uninstall`
+   finishes the job when run again. From the final group on, the command that would run again is
+   gone, so a failure there prints the full path of the home and says to delete it by hand (the `data`
+   folder first moved aside when the settings are to stay).
 
 ## On-disk contract
 

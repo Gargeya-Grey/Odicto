@@ -5,6 +5,7 @@ Nothing here stops a real Odicto, touches the real Start Menu, sign-in entries, 
 """
 from contextlib import ExitStack
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import io
@@ -17,6 +18,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 import managed_autostart
@@ -89,6 +91,8 @@ class Installed(unittest.TestCase):
         self.context.enter_context(patch.object(managed_autostart, "_location", return_value=self.startup))
         self.context.enter_context(patch.object(dist.Manager, "_autostart_module",
                                                 staticmethod(lambda: managed_autostart)))
+        # Never ask launchctl, whatever this machine is. TestMacLaunchAgentUnload tests the real function.
+        self.context.enter_context(patch.object(managed_autostart, "_unload", lambda target, strict=False: None))
         self.manager = dist.Manager(self.root / "Odicto home 100%")
         self.manager.platform = "linux"
         self.home = self.manager.home
@@ -830,17 +834,19 @@ class TestMacLaunchAgentUnload(unittest.TestCase):
         managed_autostart.configure(self.home, True)
         self.assertTrue(self.target.is_file())
 
-    def fake_launchctl(self, loaded_from, *, error=None):
+    def fake_launchctl(self, loaded_from, *, error=None, print_code=None, bootout_code=0):
         def run(command, **options):
             self.calls.append((list(command), self.target.exists()))
             if error:
                 raise error
             if command[1] == "print":
+                if print_code is not None:
+                    return subprocess.CompletedProcess(command, print_code, "", "Operation not permitted")
                 if loaded_from is None:
                     return subprocess.CompletedProcess(command, 113, "", "Could not find service")
                 return subprocess.CompletedProcess(
                     command, 0, f"gui/501/{self.LABEL} = {{\n\tstate = running\n\tpath = {loaded_from}\n}}\n", "")
-            return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, bootout_code, "", "" if bootout_code == 0 else "Boot-out failed")
         return patch.object(managed_autostart.subprocess, "run", run)
 
     def test_its_own_loaded_job_is_booted_out_before_the_file_is_deleted(self):
@@ -862,12 +868,48 @@ class TestMacLaunchAgentUnload(unittest.TestCase):
             self.assertTrue(managed_autostart.remove(self.home))
         self.assertEqual([call[0][1] for call in self.calls], ["print"])
 
-    def test_a_launchctl_that_fails_does_not_stop_the_removal(self):
+    # Review 2, finding 8. The test that stood here ("a launchctl that fails does not stop the removal")
+    # held the opposite premise, that a failed unload is ignored. A job that stays loaded would start a program
+    # that is gone, so the removal now fails closed and keeps the file and its receipt.
+    def test_a_launchctl_that_fails_or_times_out_keeps_the_file_and_the_receipt(self):
         for error in (OSError("no launchctl"), subprocess.TimeoutExpired("launchctl", 10)):
             with self.subTest(error=type(error).__name__):
                 managed_autostart.configure(self.home, True)
                 with self.fake_launchctl(self.target, error=error):
-                    self.assertTrue(managed_autostart.remove(self.home))
+                    with self.assertRaises((OSError, subprocess.SubprocessError)):
+                        managed_autostart.remove(self.home)
+                self.assertTrue(self.target.exists())
+                self.assertTrue((self.home / "autostart.json").is_file())
+
+    def test_a_print_that_fails_for_another_reason_than_not_loaded_is_indeterminate(self):
+        with self.fake_launchctl(self.target, print_code=1):
+            with self.assertRaises(OSError):
+                managed_autostart.remove(self.home)
+        self.assertEqual([call[0][1] for call in self.calls], ["print"])
+        self.assertTrue(self.target.exists())
+
+    def test_a_bootout_that_fails_keeps_the_file_and_the_receipt(self):
+        with self.fake_launchctl(self.target, bootout_code=5):
+            with self.assertRaises(OSError):
+                managed_autostart.remove(self.home)
+        self.assertEqual([call[0][1] for call in self.calls], ["print", "bootout"])
+        self.assertTrue(self.target.exists())
+        self.assertTrue((self.home / "autostart.json").is_file())
+
+    def test_a_retry_after_a_failed_unload_finishes(self):
+        with self.fake_launchctl(self.target, bootout_code=5):
+            with self.assertRaises(OSError):
+                managed_autostart.remove(self.home)
+        with self.fake_launchctl(self.target):
+            self.assertTrue(managed_autostart.remove(self.home))
+        self.assertFalse(self.target.exists())
+
+    def test_turning_start_at_sign_in_off_in_setup_is_still_best_effort(self):
+        for error in (OSError("no launchctl"), subprocess.TimeoutExpired("launchctl", 10)):
+            with self.subTest(error=type(error).__name__):
+                managed_autostart.configure(self.home, True)
+                with self.fake_launchctl(self.target, error=error):
+                    managed_autostart.configure(self.home, False)
                 self.assertFalse(self.target.exists())
 
     def test_a_foreign_file_is_never_unloaded(self):
@@ -1226,6 +1268,618 @@ class TestTheStableLauncherPassesTheHomeAsReached(unittest.TestCase):
         self.assertIn("it is a link or not a folder", done.stderr)
         self.assertEqual(snapshot(self.home), before)
         self.assertEqual((self.home / "data" / ".env").read_text(encoding="ascii"), "settings")
+
+
+# ---------------------------------------------------------------------------
+# Review 2, fix cycle 2. The threat model (see Manager.uninstall): accidents, not a hostile program that
+# already runs as this user inside the user's folders.
+# ---------------------------------------------------------------------------
+OLD_RELEASE = "v0.9.0-cccccccccccc-dddddddd"
+
+# The manager that the launcher starts in a retry: the real manager, with every place outside the home
+# (the start entry, the menu, the command folder, launchctl, the admin switch, the stop) redirected.
+RETRY_MANAGER = """
+import importlib.util, os, sys
+from pathlib import Path
+sys.path.insert(0, {app!r})
+import managed_autostart
+managed_autostart._location = lambda: Path(os.environ['T_STARTUP'])
+managed_autostart._unload = lambda target, strict=False: None
+spec = importlib.util.spec_from_file_location('odicto_real_manager', {manager!r})
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.Manager._autostart_module = staticmethod(lambda: managed_autostart)
+module.Manager.admin_enabled = lambda self: False
+module.Manager._stop_for_uninstall = lambda self: None
+module.Manager.remove_shortcuts = lambda self, folder=None: self.remove_menu(Path(os.environ['T_MENU']))
+_remove = module.Manager._remove_command
+module.Manager._remove_command = lambda self, directory=None: _remove(self, Path(os.environ['T_COMMANDS']))
+raise SystemExit(module.main(sys.argv[1:]))
+"""
+
+
+class Staged(Installed):
+    """An install with an active release that holds the retry manager, an older release, the private uv
+    and the real launcher text, so that a failed removal can be run again through `launcher.py`."""
+
+    def setUp(self):
+        super().setUp()
+        self.activate_release()
+        old = self.home / "releases" / OLD_RELEASE / "x"
+        old.mkdir(parents=True)
+        (old / "old.bin").write_bytes(b"old")
+        (self.home / "tools" / "uv").mkdir(parents=True)
+        (self.home / "tools" / "uv" / "uv").write_bytes(b"uv")
+        (self.home / "launcher.py").write_text(dist.LAUNCHER_PY, encoding="utf-8")
+        folder = self.home / "releases" / RELEASE / "tools" / "distribution"
+        folder.mkdir(parents=True)
+        (folder / "manager.py").write_text(
+            RETRY_MANAGER.format(app=str(ROOT / "app"), manager=str(MANAGER)), encoding="utf-8")
+
+    def denied(self, target, allowed):
+        real = Path.unlink
+
+        def unlink(path, *args, **options):
+            if path == target and not allowed():
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        return patch.object(Path, "unlink", unlink)
+
+    def failing_calls(self, predicate):
+        """_delete_children reports a failure for the calls that the predicate picks, and runs the others."""
+        real = dist.Manager._delete_children
+        calls = []
+
+        def spy(manager, held, relative, **options):
+            calls.append(relative)
+            if predicate(len(calls), relative, options):
+                return [("releases", OSError(13, "Permission denied"))]
+            return real(manager, held, relative, **options)
+
+        return patch.object(dist.Manager, "_delete_children", spy)
+
+    def retry(self, *arguments):
+        """The advertised retry: the real launcher text, run, as `odicto uninstall` runs it."""
+        environment = dict(os.environ, HOME=str(self.user), USERPROFILE=str(self.user),
+                           XDG_DATA_HOME=str(self.user / "share"), T_STARTUP=str(self.startup),
+                           T_MENU=str(self.menu), T_COMMANDS=str(self.commands))
+        environment.pop("ODICTO_LAUNCHER_HOME", None)
+        return subprocess.run([sys.executable, str(self.home / "launcher.py"), "uninstall", *arguments],
+                              env=environment, capture_output=True, text=True, timeout=120)
+
+    def retry_files(self):
+        return {"bin": (self.home / "bin" / "odicto").is_file(), "launcher": (self.home / "launcher.py").is_file(),
+                "pointer": (self.home / "active.json").is_file(), "tools": (self.home / "tools" / "uv" / "uv").is_file(),
+                "release": (self.home / "releases" / RELEASE / ".odicto-ready.json").is_file(),
+                "marker": (self.home / ".odicto-managed.json").is_file(),
+                "notice": (self.home / dist.REMOVAL_NOTICE).is_file()}
+
+    def assert_the_retry_works_and_finishes(self, *arguments):
+        self.assertEqual(self.retry_files(), dict.fromkeys(self.retry_files(), True))
+        done = self.retry(*arguments)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(self.startup.exists())
+        self.assertEqual(snapshot(self.menu), {})
+        self.assertFalse(os.path.lexists(self.command))
+        if arguments:
+            self.assertFalse(self.home.exists())
+        else:
+            self.assertEqual(sorted(path.name for path in self.home.iterdir()), [".odicto-managed.json", "data"])
+            self.assertEqual((self.home / "data" / ".env").read_text(encoding="ascii"), "GEMINI_API_KEY=secret-key\n")
+        self.assertEqual((self.outside / "keep.txt").read_text(encoding="ascii"), "not Odicto's")
+
+
+class TestTheHomeStaysTheFolderThatWasChecked(Installed):
+    """Review 2, finding 1: the locks, the stop and the final removal act on the path of the home, the
+    delete on the held folder. When the path names another folder, nothing more is done."""
+
+    def moved(self):
+        state = {"moved": False}
+        real = dist._identity_of
+
+        def fake(path):
+            if Path(path) == self.home and state["moved"]:
+                return (-1, -1)  # another folder now stands where the home was
+            return real(path)
+
+        return state, patch.object(dist, "_identity_of", fake)
+
+    def test_a_home_replaced_before_the_locks_stops_before_any_lock_or_stop(self):
+        state, patched = self.moved()
+        calls = []
+        before = snapshot(self.root)
+        with patched, patch.object(dist.Manager, "_take_locks", lambda *arguments: calls.append("locks")):
+            with self.assertRaises(dist.DistributionError) as caught:
+                self.uninstall(ask=lambda: state.update(moved=True) or "keep", stop=lambda: calls.append("stop"))
+        self.assertEqual(calls, [])
+        self.assertIn("is not the folder that was checked", str(caught.exception))
+        self.assertIn("Nothing more was removed", str(caught.exception))
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_a_home_replaced_after_the_locks_stops_before_the_stop(self):
+        state, patched = self.moved()
+        calls = []
+        before = snapshot(self.root)
+        real = dist.Manager._take_locks
+
+        def take(manager, locks):
+            real(manager, locks)
+            state["moved"] = True
+
+        with patched, patch.object(dist.Manager, "_take_locks", take):
+            with self.assertRaises(dist.DistributionError) as caught:
+                self.uninstall(stop=lambda: calls.append("stop"))
+        self.assertEqual(calls, [])
+        self.assertIn("is not the folder that was checked", str(caught.exception))
+        self.assertEqual(snapshot(self.root), before)
+        with dist.file_lock(self.home / "manager.lock"):  # the locks were released again
+            pass
+
+    def test_a_home_replaced_before_the_final_group_keeps_the_command_that_runs_it_again(self):
+        state, patched = self.moved()
+        real = dist.Manager._delete_children
+
+        def spy(manager, held, relative, **options):
+            result = real(manager, held, relative, **options)
+            if relative == "releases":
+                state["moved"] = True  # after the stages before the final group
+            return result
+
+        with patched, patch.object(dist.Manager, "_delete_children", spy):
+            with self.assertRaises(dist.DistributionError) as caught:
+                self.uninstall()
+        self.assertIn("is not the folder that was checked", str(caught.exception))
+        for name in ("bin/odicto", "launcher.py", ".odicto-managed.json", dist.REMOVAL_NOTICE):
+            self.assertTrue((self.home / name).is_file(), name)
+        self.assertTrue((self.home / "data" / ".env").is_file())
+
+    def test_the_final_removal_of_the_home_folder_checks_its_identity_too(self):
+        state, patched = self.moved()
+        real = dist.Manager._delete_children
+        moved = self.root / "moved-home"
+
+        def spy(manager, held, relative, **options):
+            result = real(manager, held, relative, **options)
+            if options.get("only") == frozenset({dist.REMOVAL_NOTICE}):
+                # After the last delete, before the home folder goes: another folder takes its place.
+                if os.name == "nt":
+                    state["moved"] = True  # Windows holds the folder, so a rename is refused: the fake stands in
+                else:
+                    os.rename(self.home, moved)
+                    self.home.mkdir()
+            return result
+
+        said = []
+        with patched, patch.object(dist.Manager, "_delete_children", spy):
+            done = self.manager.uninstall(everything=True, stop=lambda: None, say=said.append, programs=self.menu,
+                                          command_directory=self.commands)
+        self.assertFalse(done)
+        self.assertTrue(self.home.is_dir(), "a folder that is not the checked one is never removed")
+        self.assertTrue(any("by hand" in line for line in said), said)
+        self.assertNotIn("Removed Odicto and its settings.", said)
+
+    def test_a_home_really_moved_and_replaced_is_never_touched(self):
+        moved = self.root / "moved-home"
+        swapped = []
+
+        def ask():
+            try:
+                os.rename(self.home, moved)
+            except OSError:
+                swapped.append(False)  # Windows holds the folder: the rename is refused
+                return "keep"
+            self.home.mkdir()
+            (self.home / "stranger.txt").write_text("not Odicto's", encoding="ascii")
+            swapped.append(True)
+            return "keep"
+
+        try:
+            done, error = self.uninstall(ask=ask)[0], None
+        except dist.DistributionError as caught:
+            done, error = None, str(caught)
+        if swapped == [True]:
+            self.assertIn("is not the folder that was checked", error)
+            self.assertEqual(sorted(path.name for path in self.home.iterdir()), ["stranger.txt"])
+            self.assertTrue((moved / "data" / ".env").is_file())
+            self.assertTrue((moved / "bin" / "odicto").is_file())
+        else:
+            self.assertTrue(done)
+
+
+class TestAFolderOnAnotherDiskIsNeverEntered(Staged):
+    """Review 2, finding 2: a mount point inside the home is not Odicto's to empty. A refused mount fails
+    the stage and keeps the removal; the stage before the final group can be run again."""
+
+    def test_the_mount_points_below_the_home_are_read_with_their_escapes(self):
+        text = (b"22 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+                b"40 22 8:2 / /home/u/odicto/data/my\\040disk rw,noatime shared:1 - ext4 /dev/sdb1 rw\n"
+                b"41 22 8:3 /sub /home/u/odicto/releases/v1 rw - ext4 /dev/sda1 rw\n"  # a bind mount: same device
+                b"42 22 8:4 / /home/u/odicto rw - ext4 /dev/sdc1 rw\n"  # the home itself is not below it
+                b"43 22 8:5 / /home/u/odicto2/data rw - ext4 /dev/sdd1 rw\n"  # a sibling with the same prefix
+                b"44 22 8:6 / /home/u/odicto/data/caf\\303\\251 rw - ext4 /dev/sde1 rw\n"  # UTF-8 bytes
+                b"garbage\n")
+        self.assertEqual(dist._parse_mountinfo(text, "/home/u/odicto"),
+                         {"/home/u/odicto/data/my disk", "/home/u/odicto/releases/v1", "/home/u/odicto/data/café"})
+
+    def test_only_linux_reads_the_list(self):
+        with patch.object(dist.sys, "platform", "darwin"):
+            self.assertEqual(dist._mount_points_under("/Users/u/Library/Application Support/Odicto"), frozenset())
+
+    def test_the_guard_refuses_another_device_and_a_listed_mount_point(self):
+        listed = os.path.join(str(self.home), "data", "disk")
+        with patch.object(dist, "_mount_points_under", return_value=frozenset({listed})):
+            guard = dist._MountGuard(str(self.home), 7)
+        guard.admit(os.path.join(str(self.home), "data"), 7)
+        for path, device in ((os.path.join(str(self.home), "data", "other"), 8), (listed, 7)):
+            with self.assertRaises(OSError) as caught:
+                guard.admit(path, device)
+            self.assertEqual(caught.exception.errno, errno.EBUSY)
+            self.assertIn("mount point or on another disk", str(caught.exception))
+
+    def test_a_mount_point_in_an_old_release_fails_that_stage_and_the_retry_finishes(self):
+        mount = self.home / "releases" / OLD_RELEASE / "x"
+        with patch.object(dist, "_mount_points_under", return_value=frozenset({str(mount)})):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertEqual((mount / "old.bin").read_bytes(), b"old", "the mounted folder is kept whole")
+        self.assertTrue(any("Could not remove" in line and "mount point or on another disk" in line for line in said), said)
+        self.assertEqual(self.retry_files(), dict.fromkeys(self.retry_files(), True))
+        self.assertTrue((self.home / "data" / ".env").is_file())
+        # The disk is unmounted: the same command goes through.
+        done, _ = self.uninstall()
+        self.assertTrue(done)
+        self.assertEqual(sorted(path.name for path in self.home.iterdir()), [".odicto-managed.json", "data"])
+
+    def test_a_folder_on_another_device_is_not_entered(self):
+        real = dist._folder_device
+
+        def other_device(descriptor, path):
+            if os.path.normpath(path).endswith(os.path.join("data", "sub")):
+                return 999999
+            return real(descriptor, path)
+
+        with patch.object(dist, "_folder_device", other_device):
+            done, said = self.uninstall(everything=True)
+        self.assertFalse(done)
+        self.assertEqual((self.home / "data" / "sub" / "history.json").read_text(encoding="ascii"), "{}")
+        self.assertTrue(any("Could not remove data: it is a mount point or on another disk" in line for line in said), said)
+        self.assertEqual(self.retry_files(), dict.fromkeys(self.retry_files(), True))
+        self.assertIn("run odicto uninstall --all again.", " ".join(said))
+
+    def test_a_list_of_mounts_that_cannot_be_read_refuses_before_anything_is_removed(self):
+        before = snapshot(self.root)
+        with patch.object(dist, "_mount_points_under", side_effect=PermissionError(13, "Permission denied")):
+            with self.assertRaises(dist.DistributionError) as caught:
+                self.uninstall()
+        self.assertIn("cannot read the list of mounted disks", str(caught.exception))
+        self.assertIn("Nothing was removed", str(caught.exception))
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_on_linux_the_list_comes_from_proc_self_mountinfo(self):
+        text = b"40 22 8:2 / /data/odicto/data/disk rw - ext4 /dev/sdb1 rw\n"
+        with patch.object(dist.sys, "platform", "linux"), \
+                patch.object(dist, "open", unittest.mock.mock_open(read_data=text), create=True) as opened:
+            found = dist._mount_points_under("/data/odicto")
+        opened.assert_called_once_with("/proc/self/mountinfo", "rb")
+        self.assertEqual(found, {"/data/odicto/data/disk"})
+
+
+class TestEachStageStopsTheRemovalAndTheRetryFinishesIt(Staged):
+    """Review 2, finding 5. The order: stop, start entry, menu entries, command, the rest of the home, the
+    old releases, (--all) data, then the final group. A failure ends the run at once. Until the final group
+    starts, `odicto uninstall` (the real launcher text) still runs and finishes."""
+
+    def test_a_start_entry_that_cannot_go_stops_before_the_menu_and_the_rest(self):
+        with self.denied(self.startup, lambda: False):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(self.startup.exists())
+        self.assertTrue((self.menu / "odicto.desktop").exists(), "the menu stage did not run")
+        self.assertTrue(os.path.lexists(self.command))
+        self.assertTrue((self.home / "odicto.png").exists())
+        self.assertTrue((self.home / "releases" / OLD_RELEASE).exists())
+        self.assertIn("run odicto uninstall again.", said[-1])
+        self.assert_the_retry_works_and_finishes()
+
+    def test_a_menu_entry_that_cannot_go_stops_before_the_command(self):
+        target = self.menu / "odicto-setup.desktop"
+        real = dist.os.unlink
+
+        def unlink(path, *args, **options):
+            if Path(path) == target:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        with patch.object(dist.os, "unlink", unlink):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertFalse(self.startup.exists(), "the stage before it ran")
+        self.assertTrue(target.exists())
+        self.assertTrue(os.path.lexists(self.command), "the command stage did not run")
+        self.assertTrue((self.home / "odicto.png").exists())
+        self.assertTrue((self.home / "releases" / OLD_RELEASE).exists())
+        self.assert_the_retry_works_and_finishes()
+
+    def test_a_command_that_cannot_go_stops_before_the_rest_of_the_home(self):
+        with self.denied(self.command, lambda: False):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(os.path.lexists(self.command))
+        self.assertEqual(snapshot(self.menu), {}, "the stages before it ran")
+        self.assertTrue((self.home / "odicto.png").exists())
+        self.assertTrue((self.home / "releases" / OLD_RELEASE).exists())
+        self.assert_the_retry_works_and_finishes()
+
+    def test_the_rest_of_the_home_that_cannot_go_stops_before_the_old_releases(self):
+        with self.failing_calls(lambda number, relative, options: number == 1):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue((self.home / "releases" / OLD_RELEASE).exists(), "the next stage did not run")
+        self.assertTrue((self.home / "data" / ".env").is_file())
+        self.assertIn("Could not remove releases: Permission denied", said)
+        self.assert_the_retry_works_and_finishes()
+
+    def test_an_old_release_that_cannot_go_stops_before_the_settings_and_the_final_group(self):
+        with self.failing_calls(lambda number, relative, options: relative == "releases"):
+            done, said = self.uninstall(everything=True)
+        self.assertFalse(done)
+        self.assertFalse((self.home / "odicto.png").exists(), "the stage before it ran")
+        self.assertTrue((self.home / "data" / ".env").is_file(), "the settings stage did not run")
+        self.assertIn("run odicto uninstall --all again.", " ".join(said))
+        self.assert_the_retry_works_and_finishes("--all")
+
+    def test_the_settings_that_cannot_go_stop_before_the_final_group(self):
+        with self.failing_calls(lambda number, relative, options: options.get("only") == frozenset({"data"})):
+            done, said = self.uninstall(everything=True)
+        self.assertFalse(done)
+        self.assertFalse((self.home / "releases" / OLD_RELEASE).exists(), "the stage before it ran")
+        self.assertTrue((self.home / "data" / ".env").is_file())
+        self.assert_the_retry_works_and_finishes("--all")
+
+    def test_a_failure_in_the_final_group_names_the_folder_to_delete_by_hand(self):
+        with self.failing_calls(lambda number, relative, options: options.get("only") == frozenset({"bin"})):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        text = "\n".join(said)
+        self.assertIn(f"Delete the folder {self.home} by hand.", text)
+        self.assertIn("The folder data inside it holds your settings", text)
+        self.assertNotIn("again.", text, "the command that runs it again is gone: there is no retry to name")
+        self.assertTrue((self.home / "data" / ".env").is_file())
+        self.assertFalse((self.home / "launcher.py").exists())
+        self.assertTrue((self.home / dist.REMOVAL_NOTICE).is_file(), "nothing starts in between")
+
+    def test_with_all_the_final_message_does_not_talk_about_settings(self):
+        with self.failing_calls(lambda number, relative, options: options.get("only") == frozenset({"active.json"})):
+            done, said = self.uninstall(everything=True)
+        self.assertFalse(done)
+        text = "\n".join(said)
+        self.assertIn(f"Delete the folder {self.home} by hand.", text)
+        self.assertNotIn("holds your settings", text)
+
+    def test_the_final_group_order_is_release_loader_bin_pointer_tools_then_the_marker_locks_notice(self):
+        order = []
+        real = dist.Manager._delete_children
+
+        def spy(manager, held, relative, **options):
+            order.append(tuple(sorted(options.get("only") or ())))
+            return real(manager, held, relative, **options)
+
+        with patch.object(dist.Manager, "_delete_children", spy):
+            done, _ = self.uninstall(everything=True)
+        self.assertTrue(done)
+        final = [step for step in order if len(step) == 1]
+        self.assertEqual([step[0] for step in final if step[0] in ("releases", "launcher.py", "bin", "active.json", "tools")],
+                         ["releases", "launcher.py", "bin", "active.json", "tools"])
+        self.assertLess(final.index(("tools",)), final.index((".odicto-managed.json",)))
+        self.assertEqual(order[-1], (dist.REMOVAL_NOTICE,))
+        self.assertEqual(order[-2], tuple(sorted(dist._LOCK_FILES)))
+
+
+class TestTheLocksAndTheNoticeStayToTheEnd(Staged):
+    """Review 2, finding 4: an install that runs during the last deletes finds manager.lock and launch.lock
+    busy and the notice in place, until the last delete."""
+
+    def test_every_delete_runs_with_the_locks_held_and_the_notice_standing(self):
+        seen = []
+        real = dist.Manager._delete_children
+
+        def spy(manager, held, relative, **options):
+            names = options.get("only") or frozenset()
+            states = {}
+            if all((self.home / name).exists() for name in dist._LOCK_FILES):  # a probe must not make one again
+                for name in dist._LOCK_FILES:
+                    try:
+                        with dist.file_lock(self.home / name):
+                            states[name] = "free"
+                    except dist.BusyError:
+                        states[name] = "busy"
+            seen.append((names, states, (self.home / dist.REMOVAL_NOTICE).exists()))
+            return real(manager, held, relative, **options)
+
+        with patch.object(dist.Manager, "_delete_children", spy):
+            done, _ = self.uninstall(everything=True)
+        self.assertTrue(done)
+        self.assertTrue(all(notice for _, _, notice in seen), "the notice stood at every delete, the last one included")
+        self.assertEqual(seen[-1][0], frozenset({dist.REMOVAL_NOTICE}))
+        for names, states, _ in seen:
+            if names == frozenset(dist._LOCK_FILES) and os.name == "nt":
+                continue  # Windows cannot delete a file that is open: the locks are released for that one delete
+            for name, state in states.items():
+                self.assertEqual(state, "busy", (sorted(names), name))
+        self.assertEqual([s for names, s, _ in seen if names == frozenset({"bin"})],
+                         [{"manager.lock": "busy", "launch.lock": "busy"}])
+        self.assertFalse((self.home / "manager.lock").exists() or (self.home / "launch.lock").exists())
+        self.assertFalse(self.home.exists())
+
+    def test_the_install_command_cannot_clear_the_notice_while_the_locks_are_held(self):
+        refused = []
+        real = dist.Manager._delete_children
+
+        def spy(manager, held, relative, **options):
+            if options.get("only") == frozenset({"bin"}):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    refused.append(dist.main(["--home", str(self.home), "install"]))
+                refused.append(errors.getvalue())
+            return real(manager, held, relative, **options)
+
+        with patch.object(dist.Manager, "_delete_children", spy):
+            done, _ = self.uninstall()
+        self.assertTrue(done)
+        self.assertEqual(refused[0], 1)
+        self.assertIn("owns manager.lock", refused[1])
+
+
+class TestCouldNotCheckIsNotNotOurs(Installed):
+    """Review 2, finding 6: an item that was read and is not Odicto's is kept and is no failure. An item
+    that could not be read or checked fails the uninstall and keeps its receipt."""
+
+    def test_a_menu_entry_that_cannot_be_read_fails_the_uninstall_and_keeps_the_receipt(self):
+        target = self.menu / "odicto-setup.desktop"
+        real = dist.os.open
+
+        def deny(path, *args, **options):
+            if "dir_fd" not in options and isinstance(path, (str, os.PathLike)) and Path(path) == target:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        with patch.object(dist.os, "open", deny):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(target.exists())
+        self.assertTrue(any("Could not remove the menu entry Odicto Setup (Permission denied)" in line for line in said), said)
+        self.assertNotIn("Kept Odicto Setup (it is not an Odicto file)", said)
+        recorded = json.loads((self.home / ".odicto-managed.json").read_text(encoding="utf-8"))["menu_entries"]
+        self.assertIn("odicto-setup.desktop", recorded)
+        self.assertTrue(os.path.lexists(self.command), "nothing after the failed stage ran")
+        done, _ = self.uninstall()
+        self.assertTrue(done)
+        self.assertFalse(target.exists())
+
+    def test_a_menu_entry_that_was_read_and_is_not_ours_is_kept_and_is_no_failure(self):
+        (self.menu / "odicto-setup.desktop").write_bytes(b"[Desktop Entry]\nName=Mine\n")
+        done, said = self.uninstall()
+        self.assertTrue(done)
+        self.assertIn("Kept Odicto Setup (it is not an Odicto file)", said)
+
+    def test_a_folder_or_a_link_in_the_place_of_an_entry_is_kept_and_is_no_failure(self):
+        target = self.menu / "odicto-stop.desktop"
+        target.unlink()
+        target.mkdir()
+        done, said = self.uninstall()
+        self.assertTrue(done)
+        self.assertIn("Kept Stop Odicto (it is not an Odicto file)", said)
+        self.assertTrue(target.is_dir())
+
+    def test_a_command_that_cannot_be_looked_at_fails_the_uninstall(self):
+        real = dist.os.lstat
+
+        def deny(path, *args, **options):
+            if isinstance(path, (str, os.PathLike)) and Path(path) == self.command:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        with patch.object(dist.os, "lstat", deny):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(any("Could not remove the odicto command: Permission denied" in line for line in said), said)
+        self.assertTrue((self.home / "bin" / "odicto").is_file())
+        done, _ = self.uninstall()
+        self.assertTrue(done)
+
+    def test_a_command_that_is_a_link_loop_is_not_ours_and_not_a_failure(self):
+        if WINDOWS:
+            return  # a symbolic link loop needs POSIX
+        self.command.unlink()
+        os.symlink(self.command, self.command)
+        done, said = self.uninstall()
+        self.assertTrue(done)
+        self.assertIn(f"Kept {self.command} (it is not Odicto's command)", said)
+
+    def keep_receipt(self):
+        receipt = self.home / "autostart.json"
+        return receipt, receipt.read_bytes()
+
+    def test_a_start_receipt_that_is_damaged_fails_the_uninstall_and_keeps_the_entry(self):
+        receipt, good = self.keep_receipt()
+        for bad in (b"{not json", b"[]", b"\xff\xfe\x00", b'"text"'):
+            with self.subTest(bad=bad):
+                receipt.write_bytes(bad)
+                done, said = self.uninstall()
+                self.assertFalse(done)
+                self.assertTrue(self.startup.is_file())
+                self.assertTrue(any("Could not remove the start-at-sign-in entry: autostart.json is damaged" in line
+                                    for line in said), said)
+                self.assertFalse(any(line.startswith("Kept the start-at-sign-in entry") for line in said))
+                self.assertTrue(os.path.lexists(self.command), "nothing after the failed stage ran")
+        receipt.write_bytes(good)
+        done, _ = self.uninstall()
+        self.assertTrue(done)
+        self.assertFalse(self.startup.exists())
+
+    def test_a_start_receipt_that_cannot_be_read_fails_the_uninstall(self):
+        receipt, good = self.keep_receipt()
+        real = Path.read_text
+
+        def deny(path, *args, **options):
+            if path == receipt:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        with patch.object(Path, "read_text", deny):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(any("autostart.json cannot be read (Permission denied)" in line for line in said), said)
+        self.assertTrue(self.startup.is_file())
+        self.assertEqual(receipt.read_bytes(), good)
+
+    def test_a_damaged_receipt_with_no_entry_is_no_problem(self):
+        receipt, _ = self.keep_receipt()
+        receipt.write_bytes(b"{not json")
+        self.startup.unlink()
+        done, said = self.uninstall()
+        self.assertTrue(done)
+        self.assertIn("Start at sign-in was off.", said)
+
+    def test_a_start_entry_that_cannot_be_read_fails_the_uninstall(self):
+        real = Path.read_bytes
+
+        def deny(path, *args, **options):
+            if path == self.startup:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **options)
+
+        with patch.object(Path, "read_bytes", deny):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertTrue(any("Could not remove the start-at-sign-in entry: Permission denied" in line for line in said), said)
+        self.assertTrue(self.startup.is_file())
+
+    def test_a_launchagent_that_stays_loaded_fails_the_uninstall_and_keeps_the_entry(self):
+        # macOS: launchctl cannot be asked. The real _unload runs here, against a fake launchctl.
+        calls = []
+
+        def run(command, **options):
+            calls.append(command[1])
+            raise subprocess.TimeoutExpired("launchctl", 10)
+
+        with patch.object(managed_autostart, "_unload", _REAL_UNLOAD), \
+                patch.object(managed_autostart, "sys", SimpleNamespace(platform="darwin")), \
+                patch.object(managed_autostart.subprocess, "run", run), \
+                patch.object(managed_autostart.os, "getuid", lambda: 501, create=True):
+            done, said = self.uninstall()
+        self.assertFalse(done)
+        self.assertEqual(calls, ["print"])
+        self.assertTrue(self.startup.is_file())
+        self.assertTrue((self.home / "autostart.json").is_file())
+        self.assertTrue(any("Could not remove the start-at-sign-in entry" in line for line in said), said)
+        done, _ = self.uninstall()  # launchctl is not asked any more (the fixture's no-op): the retry finishes
+        self.assertTrue(done)
+
+
+_REAL_UNLOAD = managed_autostart._unload
 
 
 if __name__ == "__main__":

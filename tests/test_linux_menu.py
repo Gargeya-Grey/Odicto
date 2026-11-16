@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -360,7 +361,10 @@ class TestAFileThatChangesUnderneathIsNeverTouched(MenuFixture):
         self.assertFalse((self.folder / "odicto.desktop").exists(), "the entries nobody touched are removed")
 
     def test_a_file_replaced_before_the_rewrite_is_not_overwritten(self):
+        # An entry that is current is not rewritten any more, so there is no rewrite to race. This one
+        # is out of date (the release icon arrives after it was written), so it is rewritten.
         self.manager.install_menu(self.folder)
+        self.with_release_icon()
         target = self.folder / "odicto.desktop"
         real = dist.Manager._put
 
@@ -522,6 +526,128 @@ class TestTheUpdateCommandRefreshesTheMenu(MenuFixture):
         self.assertEqual(code, 0)
         self.assertIn("Menu entries unchanged: ", errors)
         self.assertIn("is ready.", output)
+
+
+class TestTheMenuIsReconciledAtEachStart(MenuFixture):
+    """Review 2, finding 9. The refresh after an update was lost when an older manager made the update (it
+    ran no menu code) and when manager.lock was busy. Each successful start now makes the menu match."""
+
+    def start(self, before_reconcile=None):
+        """A successful `odicto start`, with everything that would launch something replaced."""
+        self.with_release_icon()
+        output = io.StringIO()
+        hold = before_reconcile or (lambda: None)
+        with patch.object(self.manager, "initialize"), patch.object(self.manager, "_migration_guard"), \
+                patch.object(self.manager, "admin_enabled", return_value=False), \
+                patch.object(self.manager, "_launch", return_value=0), \
+                patch.object(self.manager, "_tidy_releases"), \
+                patch.object(self.manager, "_refresh_launchers", side_effect=hold), \
+                patch.object(self.manager, "support", return_value=SimpleNamespace(elevated=lambda directory: False)), \
+                patch.object(type(self.manager), "_menu_folder", return_value=self.folder), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            result = self.manager.run(["start"], automatic_updates=False)
+        return result, output.getvalue()
+
+    def state(self):
+        return {path.name: (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
+                for path in self.folder.iterdir()}
+
+    def test_a_home_that_an_older_manager_upgraded_gets_its_entries_at_the_next_start(self):
+        self.assertNotIn("menu_entries", self.marker())  # what the old manager left: no menu code ever ran
+        result, output = self.start()
+        self.assertEqual(result, 0)
+        self.assertEqual(output.splitlines(), ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto",
+                                               "Menu: Remove Odicto"])
+        self.assertEqual(len(self.names()), 4)
+        self.assertEqual(sorted(self.marker()["menu_entries"]), sorted(dist.MENU_FILES.values()))
+
+    def test_a_start_that_finds_the_manager_lock_busy_works_and_the_next_start_reconciles(self):
+        held = contextlib.ExitStack()
+        self.addCleanup(held.close)
+        # Another command takes manager.lock between the start's own work and the reconcile.
+        result, output = self.start(before_reconcile=lambda: held.enter_context(dist.file_lock(self.home / "manager.lock")))
+        held.close()
+        self.assertEqual((result, output), (0, ""))
+        self.assertEqual(self.names(), [])
+        self.assertIn("were not reconciled", self.manager.update_log.read_text(encoding="utf-8"))
+        result, output = self.start()
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.names()), 4)
+        self.assertIn("Menu: Odicto", output)
+
+    def test_a_start_writes_nothing_when_every_entry_is_current(self):
+        self.start()
+        before, marker = self.state(), (self.home / ".odicto-managed.json").read_bytes()
+        result, output = self.start()
+        self.assertEqual((result, output), (0, ""))
+        self.assertEqual(self.state(), before, "no entry was written again")
+        self.assertEqual((self.home / ".odicto-managed.json").read_bytes(), marker, "the marker was not written again")
+
+    def test_an_entry_that_is_odictos_and_out_of_date_is_rewritten_and_the_others_are_not(self):
+        self.start()
+        target = self.folder / "odicto.desktop"
+        old = b"[Desktop Entry]\nType=Application\nName=Odicto\nExec=/old/place start\n"
+        marker = self.marker()
+        marker["menu_entries"]["odicto.desktop"].append(hashlib.sha256(old).hexdigest())
+        dist.atomic_json(self.home / ".odicto-managed.json", marker)
+        target.write_bytes(old)
+        before = self.state()
+        result, output = self.start()
+        self.assertEqual(output.splitlines(), ["Menu: Odicto"])
+        after = self.state()
+        self.assertNotEqual(after["odicto.desktop"][2], old)
+        for name in before:
+            if name != "odicto.desktop":
+                self.assertEqual(after[name], before[name], name)
+
+    def test_an_entry_that_the_user_deleted_comes_back_when_its_name_is_free(self):
+        self.start()
+        (self.folder / "odicto-stop.desktop").unlink()
+        result, output = self.start()
+        self.assertEqual(output.splitlines(), ["Menu: Stop Odicto"])
+        self.assertEqual(len(self.names()), 4)
+
+    def test_a_file_of_another_author_stays_and_a_start_says_nothing_about_it(self):
+        self.folder.mkdir(parents=True)
+        foreign = b"[Desktop Entry]\nName=Mine\n"
+        (self.folder / "odicto-setup.desktop").write_bytes(foreign)
+        result, output = self.start()
+        self.assertEqual(result, 0)
+        self.assertEqual((self.folder / "odicto-setup.desktop").read_bytes(), foreign)
+        self.assertNotIn("Kept", output)
+        self.assertEqual(sorted(line for line in output.splitlines()),
+                         ["Menu: Odicto", "Menu: Remove Odicto", "Menu: Stop Odicto"])
+        self.assertNotIn("odicto-setup.desktop", self.marker()["menu_entries"])
+        result, output = self.start()
+        self.assertEqual(output, "", "a second start has nothing to say about it either")
+
+    def test_a_home_with_deferred_launchers_is_not_reconciled(self):
+        self.launcher.unlink()
+        result, output = self.start()
+        self.assertEqual((result, output), (0, ""))
+        self.assertEqual(self.names(), [])
+
+    def test_the_icon_is_not_written_again_when_it_is_current(self):
+        self.start()
+        icon = self.home / "odicto.png"
+        before = (icon.stat().st_ino, icon.stat().st_mtime_ns)
+        self.start()
+        self.assertEqual((icon.stat().st_ino, icon.stat().st_mtime_ns), before)
+        self.with_release_icon(b"a new icon")
+        self.manager.install_menu(self.folder)
+        self.assertEqual(icon.read_bytes(), b"a new icon")
+
+    def test_other_systems_do_nothing_at_a_start(self):
+        self.manager.platform = "darwin"
+        result, output = self.start()
+        self.assertEqual((result, output), (0, ""))
+        self.assertEqual(self.names(), [])
+
+    def test_changes_only_returns_no_line_for_a_current_or_kept_entry(self):
+        self.manager.install_menu(self.folder)
+        (self.folder / "odicto-stop.desktop").write_bytes(b"theirs")
+        self.assertEqual(self.manager.install_menu(self.folder, changes_only=True), [])
+        self.assertEqual(len(self.manager.install_menu(self.folder)), 4)
 
 
 class TestInstallCommandPrintsTheMenu(unittest.TestCase):

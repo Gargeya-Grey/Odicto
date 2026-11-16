@@ -219,3 +219,7 @@ refuses to delete it; nothing was removed.
 If the command says that it could not remove a file, close the program that uses it and run the same
 command again. Do not delete the whole Odicto folder: it holds the `data` folder with your settings.
 Odicto does not start while a removal is unfinished; run the command again to finish it.
+
+The command stops at the first thing it cannot remove and leaves the rest as it was. If its last lines
+say "Delete the folder ... by hand", the command can no longer run again. Move the `data` folder out
+of that folder first if you want to keep your settings, then delete the folder.
