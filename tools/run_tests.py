@@ -218,8 +218,10 @@ def main() -> int:
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
     places = _user_install_places()
     before = _fingerprint(places)
-    # Capture thread stacks from a long-running suite before the parent deadline.
-    faulthandler.dump_traceback_later(160, repeat=True)
+    # Capture thread stacks once, shortly before the parent deadline (tools/ci_platform_smoke.py
+    # gives the gate 600 s). A dump reads every thread's frames while they run, and on Windows it
+    # crashed the run once (access violation) when an earlier, repeating dump met a normal run.
+    faulthandler.dump_traceback_later(540, repeat=False)
     try:
         with _elevation_probe_boundary(), _source_migration_boundary():
             result = runner.run(suite)
