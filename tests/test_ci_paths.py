@@ -7,7 +7,8 @@ characters and `*` for any characters except `/`.
 The Markdown files that the test gate reads must still start CI. A read is found in Python
 code under app/, tests/, tools/ and scripts/: a string value (not a comment or a docstring)
 that names a Markdown file, in a statement that builds a path from a name that holds ROOT or
-REPO (for example `ROOT / "CHANGELOG.md"` or `os.path.join(REPO, "docs", "x.md")`). Each
+REPO (for example `ROOT / "CHANGELOG.md"`, `ROOT / "docs/install.md"` or
+`os.path.join(REPO, "docs", "x.md")`). A value may hold folders of the path itself; each other
 folder of the file must be a string value of the same statement; when several files fit, the
 deepest one counts. A fixture under a temporary folder is not a read.
 """
@@ -89,8 +90,8 @@ def markdown_reads(source: str, markdown: list) -> set:
                   and id(n) not in skip}
         for name in values:
             if name.endswith(".md"):
-                fits = [path for path in markdown if path.split("/")[-1] == name
-                        and all(part in values for part in path.split("/")[:-1])]
+                fits = [path for path in markdown if (path == name or path.endswith("/" + name))
+                        and all(part in values for part in path[:-len(name)].split("/")[:-1])]
                 if fits:
                     reads.add(max(fits, key=lambda path: path.count("/")))
     return reads
@@ -116,12 +117,13 @@ class TestCiPathFilter(unittest.TestCase):
         self.assertEqual(missing, [], "add these to on.pull_request.paths in ci.yml")
 
     def test_only_real_reads_count(self):
-        md = ["docs/summary" + ".md", "docs/notes" + ".md", "summary" + ".md"]
+        md = ["docs/summary" + ".md", "docs/notes" + ".md", "summary" + ".md", "docs/guide" + ".md"]
         source = "\n".join(['"""See docs/notes' + '.md."""',
                             "# docs/notes" + ".md",
                             "path = Path(folder) / 'summary" + ".md'",
-                            "DOC = os.path.join(REPO, 'docs', 'summary" + ".md')", ""])
-        self.assertEqual(markdown_reads(source, md), {"docs/summary" + ".md"})
+                            "DOC = os.path.join(REPO, 'docs', 'summary" + ".md')",
+                            "GUIDE = (ROOT / 'docs/guide" + ".md').read_text()", ""])
+        self.assertEqual(markdown_reads(source, md), {"docs/summary" + ".md", "docs/guide" + ".md"})
 
     def test_code_workflow_and_dot_files_run_ci(self):
         for path in ("app/main.py", "tests/test_units.py", "requirements.txt", "VERSION",
@@ -130,7 +132,7 @@ class TestCiPathFilter(unittest.TestCase):
             self.assertTrue(runs_ci(path, self.patterns), path)
 
     def test_other_markdown_skips_ci(self):
-        for path in ("README" + ".md", "docs/install" + ".md", "docs/plans/x" + ".md",
+        for path in ("AGENTS" + ".md", "docs/development" + ".md", "docs/plans/x" + ".md",
                      "docs/engineering-notes" + ".md", "docs/summary" + ".md",
                      ".agents/skills/verify-odicto/SKILL" + ".md"):
             self.assertFalse(runs_ci(path, self.patterns), path)

@@ -235,9 +235,10 @@ def main() -> int:
     # The keyboard-hook lock is per user session. A gate run must never meet the owner's real
     # one (it would refuse) or hold it (the owner could not start); child processes inherit this.
     os.environ["ODICTO_HOOK_LOCK_SCOPE"] = "gate-%d" % os.getpid()
-    # A gate run inside WSL must not make every test see WSL: the bootstrap and Odicto read only
-    # these two variables, and a test that models WSL sets them itself.
-    for name in ("WSL_DISTRO_NAME", "WSL_INTEROP"):
+    # A gate run inside WSL or a Wayland desktop must not make every test see that session, as
+    # CI never does: the bootstrap and Odicto read only these variables to find WSL and Wayland,
+    # and a test that models WSL or Wayland sets them itself.
+    for name in ("WSL_DISTRO_NAME", "WSL_INTEROP", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"):
         os.environ.pop(name, None)
     for stream in (sys.stdout, sys.stderr):
         try:  # a cp1252 console must not crash on non-ASCII text in a traceback
