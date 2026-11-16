@@ -344,6 +344,20 @@ class TestPosixInstallerRuns(unittest.TestCase):
         self.assertIn("another copy of Odicto is on this computer", out)
         self.assertIn("https://github.com/Gargeya-Grey/Odicto#moving-from-a-source-checkout", out)
 
+    def test_python_options_and_launchers_before_the_script_do_not_hide_a_source_owner(self):
+        checkout = self.source_checkout()
+        for command in ("/usr/bin/python3 -W ignore " + posix(checkout) + "/main.py",
+                        "/usr/bin/python3.12 -X utf8 -u " + posix(checkout) + "/main.py --debug",
+                        "/usr/bin/env python3 " + posix(checkout) + "/main.py",
+                        "/home/me/.local/bin/uv run python " + posix(checkout) + "/main.py",
+                        "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python "
+                        + posix(checkout) + "/main.py"):
+            with self.subTest(command=command):
+                self.ps.write_text("  4242 " + command + "\n", encoding="ascii")
+                done = self.run_installer()
+                self.assertEqual(self.calls(), [], self.output(done))
+                self.assertIn("That copy is running now: " + posix(checkout) + "/main.py", self.output(done))
+
     def test_a_running_app_main_of_a_source_copy_is_found_too(self):
         checkout = self.source_checkout()
         (checkout / "app").mkdir()
@@ -364,6 +378,7 @@ class TestPosixInstallerRuns(unittest.TestCase):
             "  3 /usr/bin/python3 -m http.server",
             "  4 /usr/bin/python3 " + posix(checkout) + "/mainxpy",
             "  5 /usr/bin/python3 /does/not/exist/main.py",
+            "  6 /usr/bin/less " + posix(checkout) + "/main.py /usr/bin/python3",  # Python after the script
         ]) + "\n", encoding="ascii")
         done = self.run_installer()
         self.assertEqual(done.returncode, 0, self.output(done))
@@ -428,7 +443,7 @@ class TestPosixInstallerRuns(unittest.TestCase):
         self.assertEqual(self.calls(), ["autostart", "start"])  # no check, no setup
         out = self.output(done)
         self.assertIn("Odicto did not start. The lines above say why.", out)
-        self.assertIn("After you fix that, run this line to try again:", out)
+        self.assertIn("After you fix that, paste the install line again. It starts Odicto and opens Setup.", out)
         self.assertNotIn("Step 3 of 3", out)
         self.assertNotIn("Odicto is ready.", out)
         self.assertNotIn("Your browser shows", out)

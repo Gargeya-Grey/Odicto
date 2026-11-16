@@ -52,7 +52,7 @@ Two copies must never run together: each letter that you type would show twice.
    Wait a few minutes. Odicto installs, it starts when you log in, it starts now, and Odicto Setup
    opens in your browser.
 3. If the last lines say `Odicto did not start`, a permission is off. Do step 6 of the list below,
-   then run the line that the installer printed.
+   then paste the install line again. It starts Odicto and opens Setup.
 4. If the installer says that another copy of Odicto is on this computer, it did not start the new
    copy. Follow [Moving from a source checkout](../README.md#moving-from-a-source-checkout).
 

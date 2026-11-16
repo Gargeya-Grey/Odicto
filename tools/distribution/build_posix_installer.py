@@ -71,34 +71,62 @@ odicto_process_cwd() {
   fi
 }
 
+# odicto_owner_script PID SCRIPT INSIDE: prints SCRIPT, made absolute with the process's folder,
+# and returns 0 when it is a main.py with an odicto.py beside it, outside the folder INSIDE.
+odicto_owner_script() {
+  local script="$2" dir cwd
+  case "$script" in
+    /*) ;;
+    *)
+      cwd="$(odicto_process_cwd "$1")" || cwd=""
+      [ -n "$cwd" ] || return 1
+      script="$cwd/${script#./}" ;;
+  esac
+  dir="${script%/*}"
+  [ -f "$dir/odicto.py" ] || return 1
+  dir="$(cd -P "$dir" 2>/dev/null && pwd)" || return 1
+  case "$dir" in "$3"|"$3"/*) return 1 ;; esac
+  printf '%s\n' "$script"
+}
+
 # odicto_source_owner HOME: prints the main.py of a running Odicto outside HOME and returns 0.
 # A copy older than 1.5.0 takes no session hook lock, so a start entry is not the only sign.
-# A process counts when it is a Python that runs a main.py with an odicto.py beside it. Best
-# effort: ps shows a command as one line, so a main.py path that holds a space is read greedily,
-# and a machine with no ps shows no process.
+# A process counts when a word of its command names a Python (python3, python3.12, Python, pypy)
+# and a later run of words is a main.py with an odicto.py beside it. Every run is tried, so options
+# before the script (-W ignore, -X utf8), launchers (env, uv run) and a space in the path do not
+# hide it. Best effort: ps joins the words with one space, so a path with two spaces in a row is
+# missed, and a machine with no ps shows no process.
 odicto_source_owner() {
-  local listing pid cmd script dir cwd inside pattern
-  pattern='(^|/)([Pp]ython|pypy)[0-9.]*[^ /]*( -[BuIEsSO]+)* (.*main\.py)( |$)'
+  local listing pid cmd inside words count python first last script
   listing="$(ps -axww -o pid= -o command= 2>/dev/null)" || return 1
   inside="$(cd -P "$1" 2>/dev/null && pwd)" || inside="$1"
+  set -f
   while read -r pid cmd; do
-    [[ "$cmd" =~ $pattern ]] || continue
-    script="${BASH_REMATCH[4]}"
-    case "$script" in main.py|*/main.py) ;; *) continue ;; esac
-    case "$script" in
-      /*) ;;
-      *)
-        cwd="$(odicto_process_cwd "$pid")" || cwd=""
-        [ -n "$cwd" ] || continue
-        script="$cwd/${script#./}" ;;
-    esac
-    dir="${script%/*}"
-    [ -f "$dir/odicto.py" ] || continue
-    dir="$(cd -P "$dir" 2>/dev/null && pwd)" || continue
-    case "$dir" in "$inside"|"$inside"/*) continue ;; esac
-    printf '%s\n' "$script"
-    return 0
+    words=($cmd)
+    count=${#words[@]}
+    python=0
+    while [ "$python" -lt "$count" ]; do
+      case "${words[$python]##*/}" in
+        [Pp]ython|[Pp]ython[0-9]*|pypy|pypy[0-9]*) break ;;
+      esac
+      python=$((python + 1))
+    done
+    first=$((python + 1))
+    while [ "$first" -lt "$count" ]; do
+      script=""
+      last=$first
+      while [ "$last" -lt "$count" ]; do
+        script="${script:+$script }${words[$last]}"
+        case "${words[$last]}" in
+          main.py|*/main.py)
+            if odicto_owner_script "$pid" "$script" "$inside"; then set +f; return 0; fi ;;
+        esac
+        last=$((last + 1))
+      done
+      first=$((first + 1))
+    done
   done <<<"$listing"
+  set +f
   return 1
 }
 
@@ -161,7 +189,7 @@ odicto_install_main() {
       odicto_say 'On a Mac, a missing permission is the usual cause. Open System Settings, Privacy & Security,' \
         'and turn on Accessibility and Input Monitoring for Terminal.'
     fi
-    odicto_say 'After you fix that, run this line to try again:' "  \"$odicto\" start"
+    odicto_say 'After you fix that, paste the install line again. It starts Odicto and opens Setup.'
     exit 1
   fi
   # Odicto can run and still wait for a microphone or its speech model. The start said so above;
