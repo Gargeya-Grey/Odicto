@@ -89,16 +89,21 @@ jobs:
           uv run --no-project --python 3.12 tools/distribution/build_posix_installer.py "$work/install-odicto.sh"
           if [ "$(uname -s)" = Darwin ]; then
             managed="$work/home/Library/Application Support/Odicto"
+            private_uv="$work/home/Library/Caches/Odicto-bootstrap/uv"
           else
             managed="$work/home/.local/share/odicto"
+            private_uv="$work/home/.cache/odicto-bootstrap/uv"
           fi
+          mkdir -p "$private_uv"
           cat > "$work/fake-odicto" <<'FAKE'
           #!/bin/sh
           echo "$*" >> "$T_LOG"
           exit 0
           FAKE
-          cat > "$work/fakes/uv" <<'FAKE'
+          # The bootstrap uses only its own uv in its cache folder; a uv on PATH is a trap.
+          cat > "$private_uv/uv" <<'FAKE'
           #!/bin/sh
+          [ "$1" = --version ] && { echo 'uv 0.0 (fake)'; exit 0; }
           cat > /dev/null
           mkdir -p "$T_HOME/bin"
           cp "$T_FAKE" "$T_HOME/bin/odicto"
@@ -106,10 +111,10 @@ jobs:
           FAKE
           printf '#!/bin/sh\nprintf installed\n' > "$work/fakes/dpkg-query"
           printf '#!/bin/sh\nexit 0\n' > "$work/fakes/ps"
-          for name in curl sudo apt-get; do
+          for name in curl uv sudo apt-get; do
             printf '#!/bin/sh\necho "unexpected %s" >&2\nexit 1\n' "$name" > "$work/fakes/$name"
           done
-          chmod +x "$work/fake-odicto" "$work"/fakes/*
+          chmod +x "$work/fake-odicto" "$private_uv/uv" "$work"/fakes/*
           : > "$work/log"
           cat "$work/install-odicto.sh" | env -i HOME="$work/home" PATH="$work/fakes:/usr/bin:/bin" \
             XDG_SESSION_TYPE=x11 T_HOME="$managed" T_LOG="$work/log" T_FAKE="$work/fake-odicto" bash \
