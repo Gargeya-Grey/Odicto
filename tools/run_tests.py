@@ -158,7 +158,8 @@ def _user_install_places() -> list[Path]:
                    local / "Odicto" / "launcher.py"]
     if os.environ.get("APPDATA"):
         programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd"]
+        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd",
+                   programs / "Startup" / "Odicto.lnk"]
     return places
 
 
@@ -208,6 +209,21 @@ def _elevation_probe_boundary():
         return
     import windows_admin  # tests/__init__ put app/ on sys.path during discovery
     with unittest.mock.patch.object(windows_admin, "_is_user_an_admin", return_value=True):
+        yield
+
+
+@contextlib.contextmanager
+def _microphone_consent_boundary():
+    """Keep start-up off the host's macOS microphone consent.
+
+    Start-up waits while macOS refuses the microphone (main.macos_microphone_problem). The older
+    start-up tests (tests/test_units.py, hash-frozen) do not replace that query, so on a Mac that
+    refused the test runner's microphone they would wait instead of starting. The whole run
+    therefore sees "not refused"; the waiting tests (tests/test_startup_waiting.py) patch the query
+    themselves, which overrides this default. preflight's own tests call preflight and are unchanged.
+    """
+    import main  # tests/__init__ put app/ on sys.path; the start-up tests already imported it
+    with unittest.mock.patch.object(main, "macos_microphone_problem", return_value=None):
         yield
 
 
@@ -263,7 +279,7 @@ def main() -> int:
     # crashed the run once (access violation) when an earlier, repeating dump met a normal run.
     faulthandler.dump_traceback_later(540, repeat=False)
     try:
-        with _elevation_probe_boundary(), _source_migration_boundary():
+        with _elevation_probe_boundary(), _microphone_consent_boundary(), _source_migration_boundary():
             result = runner.run(suite)
     finally:
         faulthandler.cancel_dump_traceback_later()

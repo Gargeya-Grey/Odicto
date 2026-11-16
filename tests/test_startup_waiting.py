@@ -296,9 +296,14 @@ class TestLaunchAcceptsAWaitingOwner(unittest.TestCase):
         self.assertLess(errors.index("Microphone access is off"), errors.index(dist._LAUNCH_NOTICES["mic"]))
 
     def test_the_notice_texts_are_the_plain_lines(self):
+        # Re-check of 1.6.0: a later start of a Mac owner that waits on a refusal must still say where
+        # the switch is.
+        mac = (" On a Mac, also open System Settings > Privacy & Security > Microphone and turn on the "
+               "switch for your terminal or Python.")
+        self.assertEqual(dist._MAC_MICROPHONE_HINT, mac)
         self.assertEqual(dist._LAUNCH_NOTICES, {
             "mic": "Odicto is running, but it cannot hear a microphone. Connect one or choose one in "
-                   "Odicto Setup. Odicto tries again by itself.",
+                   "Odicto Setup. Odicto tries again by itself." + (mac if sys.platform == "darwin" else ""),
             "speech": "Odicto is running, but its speech model did not load. Check the internet "
                       "connection. Odicto tries again by itself.",
             "speech-download": "Odicto is running and still downloads its speech model. Dictation works "
@@ -544,6 +549,35 @@ class TestInitStage(_Base):
         with patch("main.AudioRecorder", return_value=MagicMock()):
             self.assertIsNone(app._init_attempt())
         self.assertIsNotNone(app.recorder)
+
+    def test_a_refusal_during_the_first_open_closes_the_microphone_and_waits(self):
+        # Re-check of 1.6.0: the first open shows the macOS prompt; a "Don't Allow" then gave "ready".
+        app = self.app()
+        refusal = preflight.Problem("warning", "macos_microphone", "Microphone access is off")
+        self.refused.side_effect = [None, refusal]
+        recorder = MagicMock()
+        with patch("main.AudioRecorder", return_value=recorder):
+            self.assertEqual(app._init_attempt(), "mic")
+        self.assertIsNone(app.recorder)
+        recorder.close.assert_called_once_with()
+        self.assertIn("Microphone access is off", sys.stderr.getvalue())
+        self.refused.side_effect = None
+        self.refused.return_value = None
+        with patch("main.AudioRecorder", return_value=MagicMock()):
+            self.assertIsNone(app._init_attempt())
+        self.assertIsNotNone(app.recorder)
+
+    def test_the_gate_keeps_start_up_off_the_hosts_microphone_consent(self):
+        # Re-check of 1.6.0: tests/test_units.py (hash-frozen) starts Odicto without replacing the
+        # macOS query, so a Mac that refused the test runner's microphone made it wait.
+        from tools import run_tests
+        refusal = [preflight.Problem("warning", "macos_microphone", "Microphone access is off")]
+        with patch.object(sys, "platform", "darwin"), \
+                patch.object(preflight, "_macos_microphone", return_value=refusal), \
+                patch.object(main, "macos_microphone_problem", preflight.macos_microphone_problem):
+            self.assertIsNotNone(main.macos_microphone_problem())
+            with run_tests._microphone_consent_boundary():
+                self.assertIsNone(main.macos_microphone_problem())
 
     def test_the_stage_clears_on_every_exit_of_an_attempt(self):
         app = self.app()

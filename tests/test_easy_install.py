@@ -155,20 +155,37 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(calls, ["start", "setup"])
 
-    def test_source_menu_items_after_a_finished_migration_do_not_block(self):
+    def test_the_migrated_checkouts_menu_item_after_a_finished_migration_does_not_block(self):
         other = self.root / "checkout" / "start_dictation.bat"
         other.parent.mkdir()
         other.write_text("@exit /b 0\r\n", encoding="ascii")
         self.managed_links((self.menu / "Odicto" / "Odicto.lnk", other))
         (self.local / "Odicto").mkdir(parents=True)
         receipt = self.local / "Odicto" / "migration.json"
-        receipt.write_text('{"state": "complete"}', encoding="ascii")
+        record = {"state": "complete", "source": str(other.parent)}
+        receipt.write_text(json.dumps(record), encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(calls, ["start", "setup"])
-        receipt.write_text('{"state": "copying"}', encoding="ascii")
+        receipt.write_text(json.dumps(dict(record, state="copying")), encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(calls, [])
+
+    def test_another_checkouts_menu_item_blocks_even_after_a_finished_migration(self):
+        # Re-check of 1.6.0: only the migrated checkout forwards to the managed copy.
+        other = self.root / "checkout2" / "start_dictation.bat"
+        other.parent.mkdir()
+        other.write_text("@exit /b 0\r\n", encoding="ascii")
+        self.managed_links((self.menu / "Odicto" / "Odicto.lnk", other))
+        (self.local / "Odicto").mkdir(parents=True)
+        receipt = self.local / "Odicto" / "migration.json"
+        for record in ({"state": "complete", "source": str(self.root / "checkout")}, {"state": "complete"}):
+            with self.subTest(record=record):
+                receipt.write_text(json.dumps(record), encoding="ascii")
+                done, calls = self.run_installer()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(calls, [])
+                self.assertIn("another copy of Odicto is on this computer", done.stdout)
 
     def test_a_source_sign_in_shortcut_blocks_even_after_a_finished_migration(self):
         # The migration retires the source sign-in shortcut, so this one belongs to another copy.

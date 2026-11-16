@@ -8,7 +8,7 @@ section as the release notes and refuses a version that has no section.
 
 ### Added
 
-- Install on macOS and Linux with one line. Open a terminal and paste one line: on a Mac `curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash`, on Ubuntu, Debian or Linux Mint `wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` (Ubuntu has `wget`, not `curl`). You need nothing installed first. It installs Odicto and what it needs, turns on start at sign-in, starts Odicto and opens Setup. It says "Odicto is ready." only when Odicto confirmed it. If a copy installed from a source checkout is on the computer, it starts nothing and links to the migration steps.
+- Install on macOS and Linux with one line. Open a terminal and paste one line: on a Mac `curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash`, on Ubuntu, Debian or Linux Mint `wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` (Ubuntu has `wget`, not `curl`). You need nothing installed first. It installs Odicto and what it needs, turns on start at sign-in, starts Odicto and opens Setup. It says "Odicto is ready." only when Odicto confirmed it. If a copy installed from a source checkout is on the computer, it starts nothing and links to the migration steps.
 
 ### Fixed
 

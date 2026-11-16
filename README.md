@@ -73,7 +73,7 @@ On Ubuntu, Debian or Linux Mint, press **Ctrl + Alt + T** to open a terminal. Pa
 **Enter** (it uses `wget`, because Ubuntu has no `curl` until the installer adds it):
 
 ```bash
-wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
 ```
 
 It takes a few minutes. It installs Odicto, turns on start at login, starts Odicto and opens Setup in

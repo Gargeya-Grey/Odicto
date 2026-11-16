@@ -41,7 +41,7 @@ curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/insta
 On Ubuntu, Debian or Linux Mint, paste this line and press Enter (Ubuntu has `wget`, not `curl`):
 
 ```bash
-wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
 ```
 
 It needs no Python, Homebrew or Git. Linux asks for your password once, only to install system

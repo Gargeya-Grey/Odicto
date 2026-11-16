@@ -867,10 +867,19 @@ class DictationApp:
                     max_seconds=Config.MAX_RECORDING_SECONDS,
                 )
                 recorder.set_limit_callback(self._on_recording_limit)
-                self.recorder = recorder
             except Exception as e:
                 print(f"!!! Microphone init error: {e}", file=sys.stderr)
                 return "mic"
+            # The first open shows the macOS prompt, and the answer can come during the open.
+            refused = macos_microphone_problem()
+            if refused is not None:
+                try:
+                    recorder.close()
+                except Exception as e:
+                    print(f"!!! Microphone close error: {e}", file=sys.stderr)
+                print(f"!!! Microphone init error: {refused.message}", file=sys.stderr)
+                return "mic"
+            self.recorder = recorder
             self._init_step_done("mic")
         if self.transcriber is None:
             self._init_stage = "speech"

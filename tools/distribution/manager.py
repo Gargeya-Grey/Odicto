@@ -45,9 +45,14 @@ HANDOFF_SETTLE = 1.0
 # exit code that goes with each state. A state counts only when the code and the marker agree.
 _WAITING_CODES = {"mic": 20, "speech": 20, "speech-download": 21}
 _WAITING_MARKER = "ODICTO-WAITING"
+# A Mac that refused the microphone also gives "mic". The owner's own words reach only the start that
+# launched it, so a later start (the install line pasted again) needs the place of the switch here.
+_MAC_MICROPHONE_HINT = (" On a Mac, also open System Settings > Privacy & Security > Microphone and turn "
+                        "on the switch for your terminal or Python.")
 _LAUNCH_NOTICES = {
     "mic": "Odicto is running, but it cannot hear a microphone. Connect one or choose one in "
-           "Odicto Setup. Odicto tries again by itself.",
+           "Odicto Setup. Odicto tries again by itself."
+           + (_MAC_MICROPHONE_HINT if sys.platform == "darwin" else ""),
     "speech": "Odicto is running, but its speech model did not load. Check the internet "
               "connection. Odicto tries again by itself.",
     "speech-download": "Odicto is running and still downloads its speech model. Dictation works "

@@ -29,9 +29,14 @@ $managed = Join-Path $env:LOCALAPPDATA 'Odicto'
 $odicto = Join-Path $managed 'bin\odicto.cmd'
 $installed = Test-Path -LiteralPath $odicto
 $migrated = $false
+$migratedSource = ''
 $receipt = Join-Path $managed 'migration.json'
 if (Test-Path -LiteralPath $receipt) {
-    try { $migrated = (Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json).state -eq 'complete' } catch { }
+    try {
+        $journal = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+        $migrated = $journal.state -eq 'complete'
+        if ($migrated -and $journal.source -is [string]) { $migratedSource = $journal.source }
+    } catch { }
 }
 # A new install turns on start at sign-in. An existing one keeps its choice (on or off), except
 # an unfinished attempt: a pending receipt is tried again.
@@ -77,10 +82,18 @@ function Test-OdictoLink([string]$Name) {
     return ($target -and [string]::Equals([IO.Path]::GetFullPath($target), [IO.Path]::GetFullPath($odicto),
         [StringComparison]::OrdinalIgnoreCase))
 }
+function Test-MigratedSourceLink([string]$Name) {
+    if (-not $migratedSource) { return $false }
+    $target = [string]$shell.CreateShortcut((Join-Path $menu $Name)).TargetPath
+    if (-not $target) { return $false }
+    $root = [IO.Path]::GetFullPath($migratedSource).TrimEnd('\') + '\'
+    return [IO.Path]::GetFullPath($target).StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+}
 # A source checkout's Start Menu item or sign-in shortcut: two copies must never run together.
-# After a finished migration the source Start Menu items forward to this install, so they are fine.
+# After a finished migration the migrated checkout forwards to this install, so an item that runs a
+# file of that checkout is fine; an item of any other checkout is another copy.
 # The migration retires the source sign-in shortcut, so one found now belongs to another copy.
-if ((-not $migrated -and (Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false) -or
+if (((Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false -and -not (Test-MigratedSourceLink 'Odicto\Odicto.lnk')) -or
         (Test-Path -LiteralPath (Join-Path $menu 'Startup\Odicto.lnk'))) {
     Write-Host ''
     Write-Host 'Odicto is installed, but another copy of Odicto is on this computer.'

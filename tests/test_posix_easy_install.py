@@ -589,7 +589,7 @@ class TestTheDocsGiveTheLines(unittest.TestCase):
     def test_every_guide_gives_the_mac_line_and_the_linux_line(self):
         # Review of 1.6.0: one curl line for both failed on Ubuntu, whose desktop has wget but no curl.
         self.assertTrue(builder.MAC_LINE.startswith("curl -fsSL https://"))
-        self.assertTrue(builder.LINUX_LINE.startswith("wget -qO- https://"))
+        self.assertTrue(builder.LINUX_LINE.startswith("wget -nv -O- https://"))
         for name in ("README.md", "docs/install.md", "tools/release/release-notes.md",
                      "tools/distribution/README.md", "CHANGELOG.md"):
             text = (ROOT / name).read_text(encoding="utf-8")

@@ -69,9 +69,10 @@ for the WSLg microphone). A test hides WSL by clearing both variables (the test 
 On Windows, the release also has `Install-Odicto.cmd`. It holds `bootstrap.ps1` unchanged
 (built by `build_easy_installer.py` in the Release workflow). Double-clicked, it runs that
 bootstrap, then `odicto autostart` (new installs only), `odicto start` and `odicto setup`,
-and waits for a key. It starts nothing when the Start Menu item `Odicto` runs another program
-or a Startup `Odicto.lnk` exists (a source checkout), unless `migration.json` says the
-migration is complete; the user migrates first. The check reads only those two shortcuts, under
+and waits for a key. It starts nothing when a Startup `Odicto.lnk` exists (a source checkout;
+the migration retires the migrated checkout's one), or when the Start Menu item `Odicto` runs
+another program, except a file of the checkout that a complete `migration.json` names as its
+`source` (that checkout forwards to this install); the user migrates first. The check reads only those two shortcuts, under
 `%APPDATA%`: a source copy without them, or a running source owner, is not detected. It reports
 each failed step and exits 1. After a start that worked it asks `odicto wait-ready --timeout 5
 --report-waiting`; when Odicto still waits for a microphone or its speech model (exit 20 or 21),
@@ -87,7 +88,7 @@ the same name that runs another program is kept.
 On macOS and Linux, a stable release also has `install-odicto.sh` (built by
 `build_posix_installer.py` in the Release workflow; a pre-release does not get it). A user pastes
 `curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` on a Mac, or
-`wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` on Linux
+`wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` on Linux
 (`MAC_LINE` and `LINUX_LINE` in that file; Ubuntu's desktop has `wget` but no `curl`, and the bootstrap
 installs `curl` with the other packages) in a terminal. The file holds `bootstrap.sh` unchanged inside a shell function, then the same steps as
 the Windows installer. Every line is inside a function and the call is the last line, so bash has read

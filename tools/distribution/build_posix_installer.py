@@ -17,7 +17,7 @@ URL = "https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-o
 # The lines that the docs give. Ubuntu's desktop has wget but no curl (the 24.04.3 and 26.04 desktop
 # manifests, read 16 Nov 2026); the bootstrap installs curl with the other packages. macOS has curl.
 MAC_LINE = f"curl -fsSL {URL} | bash"
-LINUX_LINE = f"wget -qO- {URL} | bash"
+LINUX_LINE = f"wget -nv -O- {URL} | bash"
 
 HEADER = f"""#!/usr/bin/env bash
 # Odicto installer for macOS and Linux. Built by tools/distribution/build_posix_installer.py.
