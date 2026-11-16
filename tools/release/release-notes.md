@@ -28,7 +28,25 @@ Open PowerShell in the extracted `Odicto` directory and run:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 ```
 
-### macOS / Ubuntu / Debian
+### macOS, Ubuntu, Debian and Linux Mint: one line
+
+Stable releases only: the file always installs the latest stable release. Open a terminal
+(on a Mac: press Command + Space, type `Terminal`, press Return), paste this line and press Return:
+
+```bash
+curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+```
+
+It needs no Python, Homebrew or Git. Linux asks for your password once, only to install system
+packages. In a few minutes Odicto starts at sign-in, it is running, and Setup opens in your browser.
+On a Mac, macOS asks for Accessibility and Input Monitoring: turn both on, then paste the line again.
+When the installer finds a source copy of Odicto (its start-at-sign-in entry, or a copy that runs
+now), it installs the new copy but does not start it. Then follow "Existing source installations" below.
+
+Linux needs an X11 (Xorg) desktop. Ubuntu 25.10 and newer have no Xorg session, so they are not
+supported yet. Odicto in WSL is for testing only: its keys work only while a Linux window has focus.
+
+### macOS and Linux, from the release ZIP
 
 Download the release ZIP below, extract it, open a terminal in the extracted `Odicto`
 directory and run:
@@ -39,7 +57,6 @@ bash install-managed.sh
 
 Use the command path printed by the installer to run `odicto setup`, then
 `odicto start`. On macOS, grant Accessibility and Input Monitoring when requested.
-Linux requires an X11 desktop. Wayland is unsupported.
 
 ### Updates and rollback
 
