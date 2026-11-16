@@ -8,7 +8,9 @@ if [ "${EUID:-$(id -u)}" -eq 0 ]; then
 fi
 
 wsl=0
-if [ -e "${ODICTO_WSL_INTEROP_FILE:-/proc/sys/fs/binfmt_misc/WSLInterop}" ] || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+# The rule of running_in_wsl in app/platforms/preflight.py: the two variables that WSL's init sets.
+# Both must agree, or the bootstrap would install for a session that Odicto then refuses.
+if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
   wsl=1
 fi
 

@@ -146,7 +146,7 @@ Git or Python is needed.
 5. Sign out and in. Expect Odicto to run again without Terminal (the LaunchAgent
    `com.odicto.managed`), and dictation to work. This is the first proof that the permissions hold
    for a start at sign-in.
-6. `~/Library/Application Support/Odicto/bin/odicto update`. Expect "is up to date" or a working
+6. `"$HOME/Library/Application Support/Odicto/bin/odicto" update`. Expect "is up to date" or a working
    update, also when Terminal's PATH has no `~/.local/bin`.
 7. Clean up: `odicto stop`, then delete the test user.
 

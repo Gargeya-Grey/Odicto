@@ -62,11 +62,18 @@ than 1.5.0 does not do this check, so never run it beside the new copy.
 
 ### macOS and Linux, one line
 
-Open a terminal. On a Mac, press **Command + Space**, type `Terminal` and press **Return**. On Ubuntu
-or Debian, press **Ctrl + Alt + T**. Paste this line and press **Enter**:
+On a Mac, open Terminal: press **Command + Space**, type `Terminal` and press **Return**. Paste this
+line and press **Return**:
 
 ```bash
 curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+```
+
+On Ubuntu, Debian or Linux Mint, press **Ctrl + Alt + T** to open a terminal. Paste this line and press
+**Enter** (it uses `wget`, because Ubuntu has no `curl` until the installer adds it):
+
+```bash
+wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
 ```
 
 It takes a few minutes. It installs Odicto, turns on start at login, starts Odicto and opens Setup in

@@ -78,9 +78,10 @@ function Test-OdictoLink([string]$Name) {
         [StringComparison]::OrdinalIgnoreCase))
 }
 # A source checkout's Start Menu item or sign-in shortcut: two copies must never run together.
-# After a finished migration the source shortcuts forward to this install, so they are fine.
-if (-not $migrated -and ((Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false -or
-        (Test-Path -LiteralPath (Join-Path $menu 'Startup\Odicto.lnk')))) {
+# After a finished migration the source Start Menu items forward to this install, so they are fine.
+# The migration retires the source sign-in shortcut, so one found now belongs to another copy.
+if ((-not $migrated -and (Test-OdictoLink 'Odicto\Odicto.lnk') -eq $false) -or
+        (Test-Path -LiteralPath (Join-Path $menu 'Startup\Odicto.lnk'))) {
     Write-Host ''
     Write-Host 'Odicto is installed, but another copy of Odicto is on this computer.'
     Write-Host 'Two copies must never run together, so the new copy was not started.'

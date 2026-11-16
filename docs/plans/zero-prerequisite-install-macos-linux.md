@@ -267,7 +267,8 @@ Acceptance: section 4, steps 1 to 5, on the three macOS targets.
 
 ### 3c. One-step entry for Ubuntu and Debian on X11 (L4)
 
-The same `install-odicto.sh` and the same pasted line. The guide says how to open a terminal
+The same `install-odicto.sh`, pasted with `wget -qO- <url> | bash`: the Ubuntu 24.04.3 and 26.04 desktop
+manifests have `wget` but no `curl` (read 16 Nov 2026). The guide says how to open a terminal
 (Ctrl+Alt+T). When Phase 1 shows that a double-click launcher works on the target desktops
 without a terminal step, add it as a second way.
 

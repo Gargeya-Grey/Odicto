@@ -133,21 +133,25 @@ def _user_install_places() -> list[Path]:
     home = Path.home()
 
     def xdg(name, default):
+        """The XDG folder and the default one: a writer that ignores the variable (managed_autostart
+        writes ~/.config/autostart) still lands in a watched place."""
         value = os.environ.get(name, "")
-        return Path(value) if value and os.path.isabs(value) else home / default
+        return sorted({Path(value) if value and os.path.isabs(value) else home / default, home / default})
 
-    share, cache, config = xdg("XDG_DATA_HOME", ".local/share"), xdg("XDG_CACHE_HOME", ".cache"), \
-        xdg("XDG_CONFIG_HOME", ".config")
     support = home / "Library" / "Application Support" / "Odicto"
     places = [home / ".local" / "bin" / "odicto", home / ".local" / "bin" / "odicto.cmd",
-              share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py",
-              cache / "odicto-bootstrap", support / "bin", support / "tools", support / "launcher.py",
+              support / "bin", support / "tools", support / "launcher.py",
               home / "Library" / "Caches" / "Odicto-bootstrap",
               home / "Library" / "LaunchAgents" / "com.odicto.managed.plist",
-              home / "Library" / "LaunchAgents" / "com.odicto.plist",
-              config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
-    places += [share / "applications" / name for name in
-               ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
+              home / "Library" / "LaunchAgents" / "com.odicto.plist"]
+    for share in xdg("XDG_DATA_HOME", ".local/share"):
+        places += [share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py"]
+        places += [share / "applications" / name for name in
+                   ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
+    for cache in xdg("XDG_CACHE_HOME", ".cache"):
+        places.append(cache / "odicto-bootstrap")
+    for config in xdg("XDG_CONFIG_HOME", ".config"):
+        places += [config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
     if os.environ.get("LOCALAPPDATA"):
         local = Path(os.environ["LOCALAPPDATA"])
         places += [local / "Odicto-bootstrap", local / "Odicto" / "bin", local / "Odicto" / "tools",
@@ -231,6 +235,10 @@ def main() -> int:
     # The keyboard-hook lock is per user session. A gate run must never meet the owner's real
     # one (it would refuse) or hold it (the owner could not start); child processes inherit this.
     os.environ["ODICTO_HOOK_LOCK_SCOPE"] = "gate-%d" % os.getpid()
+    # A gate run inside WSL must not make every test see WSL: the bootstrap and Odicto read only
+    # these two variables, and a test that models WSL sets them itself.
+    for name in ("WSL_DISTRO_NAME", "WSL_INTEROP"):
+        os.environ.pop(name, None)
     for stream in (sys.stdout, sys.stderr):
         try:  # a cp1252 console must not crash on non-ASCII text in a traceback
             stream.reconfigure(errors="replace")

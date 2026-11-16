@@ -155,11 +155,11 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(calls, ["start", "setup"])
 
-    def test_source_shortcuts_after_a_finished_migration_do_not_block(self):
+    def test_source_menu_items_after_a_finished_migration_do_not_block(self):
         other = self.root / "checkout" / "start_dictation.bat"
         other.parent.mkdir()
         other.write_text("@exit /b 0\r\n", encoding="ascii")
-        self.managed_links((self.menu / "Startup" / "Odicto.lnk", other))
+        self.managed_links((self.menu / "Odicto" / "Odicto.lnk", other))
         (self.local / "Odicto").mkdir(parents=True)
         receipt = self.local / "Odicto" / "migration.json"
         receipt.write_text('{"state": "complete"}', encoding="ascii")
@@ -169,6 +169,19 @@ class TestWindowsEasyInstallerRuns(unittest.TestCase):
         receipt.write_text('{"state": "copying"}', encoding="ascii")
         done, calls = self.run_installer()
         self.assertEqual(calls, [])
+
+    def test_a_source_sign_in_shortcut_blocks_even_after_a_finished_migration(self):
+        # The migration retires the source sign-in shortcut, so this one belongs to another copy.
+        other = self.root / "checkout" / "start_dictation.bat"
+        other.parent.mkdir()
+        other.write_text("@exit /b 0\r\n", encoding="ascii")
+        self.managed_links((self.menu / "Startup" / "Odicto.lnk", other))
+        (self.local / "Odicto").mkdir(parents=True)
+        (self.local / "Odicto" / "migration.json").write_text('{"state": "complete"}', encoding="ascii")
+        done, calls = self.run_installer()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn("another copy of Odicto is on this computer", done.stdout)
 
     def test_a_source_checkout_shortcut_stops_before_anything_starts(self):
         other = self.root / "checkout" / "start_dictation.bat"

@@ -123,10 +123,11 @@ Two copies must never run together: each letter that you type would show twice.
 ### One line
 
 1. Open a terminal: press **Ctrl + Alt + T**.
-2. Paste this line and press **Enter**:
+2. Paste this line and press **Enter**. It uses `wget`, because Ubuntu has no `curl` until the
+   installer adds it:
 
    ```bash
-   curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+   wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
    ```
 
    The installer can ask for your password. It uses the password only to install system

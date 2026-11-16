@@ -31,10 +31,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-managed.ps1
 ### macOS, Ubuntu, Debian and Linux Mint: one line
 
 Stable releases only: the file always installs the latest stable release. Open a terminal
-(on a Mac: press Command + Space, type `Terminal`, press Return), paste this line and press Return:
+(on a Mac: press Command + Space, type `Terminal`, press Return; on Linux: press Ctrl + Alt + T).
+On a Mac, paste this line and press Return:
 
 ```bash
 curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+```
+
+On Ubuntu, Debian or Linux Mint, paste this line and press Enter (Ubuntu has `wget`, not `curl`):
+
+```bash
+wget -qO- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
 ```
 
 It needs no Python, Homebrew or Git. Linux asks for your password once, only to install system

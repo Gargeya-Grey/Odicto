@@ -21,6 +21,7 @@ import odicto
 import transcriber
 from app_state import AppState
 from config import Config
+from platforms import preflight
 from tests import test_managed_distribution as fixtures
 from tests.test_managed_launch import Child
 from tests.test_pipeline_deadlines import _Base
@@ -271,6 +272,29 @@ class TestLaunchAcceptsAWaitingOwner(unittest.TestCase):
                     self.assertEqual(self.manager.launch_notice, state)
                     self.assertEqual(errors.strip(), dist._LAUNCH_NOTICES[state])
 
+    def test_a_start_shows_the_preflight_warnings_that_the_owner_logged(self):
+        # Review of 1.6.0: a refused Mac microphone is a warning in dictation.log, and the installer
+        # shows only the output of the start.
+        log = self.manager.data / "dictation.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("2026-01-01 00:00:00 Preflight warning: an earlier run\n", encoding="utf-8")
+
+        calls = []
+
+        def probe(directory, python, token=""):
+            calls.append(token)
+            if len(calls) == 1:
+                return "none"  # the check for a running owner, before the launch
+            if len(calls) == 2:
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write("2026-01-01 00:00:01 Preflight warning: Microphone access is off; open System Settings\n")
+            return "mic"
+        result, errors, _ = self.start(self.child(), probe)
+        self.assertEqual(result, 0)
+        self.assertIn("Warning: Microphone access is off; open System Settings", errors.splitlines())
+        self.assertNotIn("an earlier run", errors)
+        self.assertLess(errors.index("Microphone access is off"), errors.index(dist._LAUNCH_NOTICES["mic"]))
+
     def test_the_notice_texts_are_the_plain_lines(self):
         self.assertEqual(dist._LAUNCH_NOTICES, {
             "mic": "Odicto is running, but it cannot hear a microphone. Connect one or choose one in "
@@ -470,6 +494,7 @@ class TestInitStage(_Base):
         self.stack.enter_context(patch("main.WhisperTranscriber"))
         self.stack.enter_context(patch("main.TextRefiner"))
         self.stack.enter_context(patch("main.environment_problems", return_value=[]))
+        self.refused = self.stack.enter_context(patch("main.macos_microphone_problem", return_value=None))
         self.stack.enter_context(patch("main.platforms.unhook_all"))
         self.bind = self.stack.enter_context(patch.object(app, "_bind_hotkeys"))
         self.seen = []
@@ -506,6 +531,19 @@ class TestInitStage(_Base):
             self.assertIsNone(app._init_attempt())
         self.assertEqual(stages, ["ai"])
         self.assertIsNone(app._init_stage)
+
+    def test_a_microphone_that_macos_refuses_waits_like_one_that_does_not_answer(self):
+        # Review of 1.6.0: macOS records silence then, so a "ready" Odicto would type nothing.
+        app = self.app()
+        self.refused.return_value = preflight.Problem("warning", "macos_microphone", "Microphone access is off")
+        with patch("main.AudioRecorder", side_effect=AssertionError("no capture while macOS refuses it")):
+            self.assertEqual(app._init_attempt(), "mic")
+        self.assertIsNone(app.recorder)
+        self.assertIn("Microphone access is off", sys.stderr.getvalue())
+        self.refused.return_value = None
+        with patch("main.AudioRecorder", return_value=MagicMock()):
+            self.assertIsNone(app._init_attempt())
+        self.assertIsNotNone(app.recorder)
 
     def test_the_stage_clears_on_every_exit_of_an_attempt(self):
         app = self.app()
