@@ -13,8 +13,9 @@ if os.name != "nt":
                 root = Path(directory).resolve()
                 stubs = root / "stubs"
                 stubs.mkdir()
-                # The bootstrap installs uv in the managed home, whatever UV_INSTALL_DIR says outside.
-                installed = root / "home" / "Library" / "Application Support" / "Odicto" / "tools" / "uv"
+                # The bootstrap installs uv in its own cache folder, whatever UV_INSTALL_DIR says outside,
+                # and never in the managed home.
+                installed = root / "home" / "Library" / "Caches" / "Odicto-bootstrap" / "uv"
                 programs = {
                     "uname": "#!/bin/sh\nprintf 'Darwin\\n'\n",
                     "curl": "#!/bin/sh\nfor argument do destination=$argument; done\n"
@@ -37,3 +38,4 @@ if os.name != "nt":
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertTrue((installed / "uv").is_file())
+                self.assertFalse((root / "home" / "Library" / "Application Support").exists())

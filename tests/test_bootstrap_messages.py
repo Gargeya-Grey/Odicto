@@ -161,7 +161,7 @@ if os.name != "nt":
                 stubs = root / "stubs"
                 stubs.mkdir()
                 marker = root / "touched"
-                # The curl stub writes an installer that makes a stub uv in UV_INSTALL_DIR, the private copy.
+                # The curl stub writes an installer that makes a stub uv in UV_INSTALL_DIR, the bootstrap's own folder.
                 installer = ("printf '%s\\n' '#!/bin/sh' 'mkdir -p \"$UV_INSTALL_DIR\"' "
                              "'printf \"#!/bin/sh\\\\nexit 0\\\\n\" > \"$UV_INSTALL_DIR/uv\"' "
                              "'chmod +x \"$UV_INSTALL_DIR/uv\"' > \"$destination\"")

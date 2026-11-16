@@ -1,6 +1,7 @@
 # Managed Odicto installation
 
-The bootstrap scripts install their own `uv` in the managed home (see "Private uv"), obtain its managed Python 3.12,
+The bootstrap scripts install their own `uv` in a bootstrap folder outside the managed home (see "Private
+uv"), obtain its managed Python 3.12,
 and verify the stable GitHub release ZIP against its adjacent SHA-256 file before
 executing the installer from that archive. No system Python, Git, Node or npm is
 required. Both scripts run the same embedded bootstrap verifier.
@@ -20,24 +21,48 @@ managed task, so updating application files does not change the task's target.
 
 ## Private uv, and WSL
 
-The bootstrap installs `uv` only in `<home>/tools/uv/` (`<home>` is `--home` when given, else the
-managed default), and it never uses a `uv` that is already on `PATH`. So the version is the one Odicto
-installs, and no shell profile, `PATH` entry or `~/.local/bin` file is written for it. It runs the Astral
-installer with `UV_INSTALL_DIR` and `UV_UNMANAGED_INSTALL` set to that folder, and with `UV_NO_MODIFY_PATH`
-and `UV_DISABLE_UPDATE` on (`UV_UNMANAGED_INSTALL` alone also stops the profile edit, the env script and
-the updater receipt; the others guard against a change in the installer). The manager (`find_uv` in
-`manager.py`) looks in that folder first, then on `PATH` for a home that an older bootstrap made. So an
-update that starts at sign-in, from a macOS LaunchAgent or a desktop autostart with a minimal `PATH`, finds
-`uv`. A home that holds only `tools/uv` still counts as empty for the first install.
+The bootstrap never touches the managed home. It installs `uv` in its own folder, outside the home:
+Linux `${XDG_CACHE_HOME:-~/.cache}/odicto-bootstrap/uv` (an `XDG_CACHE_HOME` that is not absolute is
+ignored), macOS `~/Library/Caches/Odicto-bootstrap/uv`, Windows `%LOCALAPPDATA%\Odicto-bootstrap\uv`. It never
+uses a `uv` that is already on `PATH`, so the version is the one Odicto installs. A `uv` that already sits in
+that folder and answers `--version` is reused, because the folder is the user's own cache. The Astral
+installer runs with `UV_INSTALL_DIR` and `UV_UNMANAGED_INSTALL` set to that folder, and with
+`UV_NO_MODIFY_PATH`, `INSTALLER_NO_MODIFY_PATH` and `UV_DISABLE_UPDATE` on (`UV_UNMANAGED_INSTALL` alone
+also stops the profile edit, the env script and the updater receipt; the others guard against a change in
+the installer). So no shell profile, `PATH` entry or `~/.local/bin` file is written for `uv`. For the
+install process only, the bootstrap puts that folder first on `PATH` and sets `ODICTO_BOOTSTRAP_UV` to the
+absolute path of its `uv`; `bootstrap.ps1` puts `PATH` and the variable back in a `finally` block, also
+when the install fails.
+
+The manager makes the home first, with its private-directory policy and its ownership marker. Then
+`ensure_private_uv` copies the `uv` it was started with (`ODICTO_BOOTSTRAP_UV`, else the `uv` on `PATH`; on
+Windows a `uv.exe` file) into `<home>/tools/uv/` (a private folder; copy under a temporary name, then an
+atomic rename; `uvx` too when it sits beside `uv`). It does this when it installs dependencies (install and
+update) and when it writes the launchers, only when the copy is missing. `find_uv(home)` looks in
+`<home>/tools/uv/` first, then on `PATH`, so an update that starts at sign-in, from a macOS LaunchAgent or a
+desktop autostart with a minimal `PATH`, finds `uv`. A home that holds `tools/uv` before Odicto has made its
+marker is not empty: the installer refuses it, as it refuses any other file.
+
+Versions work together both ways. An older manager (v1.5.x) knows no `tools/uv`. The new bootstrap leaves
+the home alone, so that manager finds an empty or missing home, takes `uv` from `PATH` (the bootstrap
+folder is first) and writes that absolute path into its launchers, which stays valid. A newer manager
+started by an older bootstrap copies the `uv` on `PATH`. If the user clears the bootstrap folder, an old
+manager's launchers need the installer run again; a newer manager's launchers point into the home.
+
+The POSIX launcher `bin/odicto` holds the absolute, quoted paths of `uv` and of `<home>/launcher.py`. It
+does not derive them from `$0`, because `~/.local/bin/odicto` is a link to it. The Windows `.cmd` and
+`.ps1` launchers need no such fix: the user-level `.cmd` calls the absolute `<home>\bin\odicto.cmd`, and
+`%~dp0` and `$PSScriptRoot` then point into the home.
 
 On Linux, `sudo apt-get` and the `uv` installer read no input (`</dev/null`), so the bootstrap works when
 the script comes through a pipe.
 
 WSL (the file `/proc/sys/fs/binfmt_misc/WSLInterop` exists, or `WSL_DISTRO_NAME` is set) is for testing.
-WSLg sets `WAYLAND_DISPLAY` but runs an X server, so with `DISPLAY` set the bootstrap goes on, says that
-the shortcuts work only while a Linux window has focus and that Odicto types only into Linux (X11) apps,
-and adds `libasound2-plugins` (the ALSA `pulse` device for the WSLg microphone). Without `DISPLAY` it stops
-and names `wsl --update`. A tester can point `ODICTO_WSL_INTEROP_FILE` at another file to fake or hide WSL.
+It is checked on its own, before `sudo` and any download: without `DISPLAY` the bootstrap stops, whatever
+the Wayland variables say, and names `wsl --update`. WSLg sets `WAYLAND_DISPLAY` but runs an X server, so
+with `DISPLAY` set the bootstrap goes on, says that the shortcuts work only while a Linux window has focus
+and that Odicto types only into Linux (X11) apps, and adds `libasound2-plugins` (the ALSA `pulse` device
+for the WSLg microphone). A tester can point `ODICTO_WSL_INTEROP_FILE` at another file to fake or hide WSL.
 
 ## Install
 
@@ -159,6 +184,7 @@ works.
 managed-home/
   .odicto-managed.json       ownership and update preferences
   launcher.py               stable entry selecting the active app and updater
+  tools/uv/                 the manager's private copy of uv (uv, uvx); the bootstrap never writes it
   bin/odicto[.cmd/.ps1]      shell entry points
   active.json               atomically replaced ready-release pointer
   pending.json              complete staged release awaiting activation

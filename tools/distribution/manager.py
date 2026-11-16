@@ -540,16 +540,36 @@ def default_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "odicto"
 
 
+# The files of the private uv in <home>/tools/uv: uv itself, then uvx (optional).
+PRIVATE_UV_NAMES = ("uv.exe", "uvx.exe") if os.name == "nt" else ("uv", "uvx")
+
+
 def find_uv(home) -> str | None:
-    """The uv that the bootstrap installed in the managed home, else a uv on PATH.
+    """The uv that the manager keeps in the managed home, else a uv on PATH.
 
     The private copy comes first, so an update that a LaunchAgent or a desktop autostart starts with a
-    minimal PATH still finds it. A home made by an older bootstrap has none and uses PATH.
+    minimal PATH still finds it. A home that has none (an older install) uses PATH.
     """
-    private = Path(home) / "tools" / "uv" / ("uv.exe" if os.name == "nt" else "uv")
+    private = Path(home) / "tools" / "uv" / PRIVATE_UV_NAMES[0]
     if private.is_file() and not private.is_symlink() and os.access(private, os.X_OK):
         return str(private)
     return shutil.which("uv")
+
+
+def bootstrap_uv() -> Path | None:
+    """The uv that this install was started with, to copy into the managed home.
+
+    The bootstrap passes its absolute path in ODICTO_BOOTSTRAP_UV and puts its folder first on PATH. An
+    older bootstrap passes nothing, and then the uv on PATH is the one. Only an absolute path to a file
+    that can run is used; a uv found on PATH must also be a real uv.exe on Windows, not a .cmd shim."""
+    given = os.environ.get("ODICTO_BOOTSTRAP_UV") or ""
+    found = shutil.which("uv") or ""
+    for candidate, from_path in ((given, False), (found, True)):
+        path = Path(candidate) if candidate else None
+        if (path is not None and path.is_absolute() and path.is_file() and os.access(path, os.X_OK)
+                and not (from_path and os.name == "nt" and path.name.lower() != "uv.exe")):
+            return path
+    return None
 
 
 def _real_folder(path) -> bool:
@@ -778,16 +798,8 @@ class Manager:
             if self._read_json(path).get("state") != "complete":
                 raise DistributionError("Migration is unfinished. Resume odicto migrate with the same --source before starting or changing versions")
 
-    def _has_foreign_files(self) -> bool:
-        """True when the home holds anything but the private uv that the bootstrap put there first."""
-        for entry in self.home.iterdir():
-            if entry.name == "tools" and _real_folder(entry) and [p.name for p in entry.iterdir()] == ["uv"] and _real_folder(entry / "uv"):
-                continue
-            return True
-        return False
-
     def initialize(self) -> None:
-        if self.home.exists() and not self.marker.exists() and self._has_foreign_files():
+        if self.home.exists() and not self.marker.exists() and any(self.home.iterdir()):
             raise DistributionError("Destination is not an empty managed installation; existing files were preserved")
         private_directory(self.home, parents=True, exist_ok=True)
         if self.marker.exists():
@@ -848,7 +860,50 @@ class Manager:
         environment["ODICTO_MANAGED_HOME"] = str(self.home)
         return environment
 
+    def ensure_private_uv(self) -> Path | None:
+        """Keep a copy of the uv this install started with in <home>/tools/uv, unless one is there.
+
+        Call it with the home initialized: the home, its marker and its private-directory policy come
+        first, and this makes only the two folders below it, with the same policy. The copy is made under
+        a temporary name and renamed, so a stop in the middle leaves no half file that find_uv accepts.
+        Returns the private uv, or None when there is no uv to copy or the copy failed (find_uv then
+        falls back to PATH). A folder that is a link is refused and left as it is."""
+        folder = self.home / "tools" / "uv"
+        private = folder / PRIVATE_UV_NAMES[0]
+        if private.is_file() and not private.is_symlink() and os.access(private, os.X_OK):
+            return private
+        source = bootstrap_uv()
+        if source is None:
+            return None
+        for directory in (self.home / "tools", folder):
+            if os.path.lexists(directory):
+                if not _real_folder(directory):
+                    raise DistributionError(f"{directory} is not a real folder; it was preserved")
+            else:
+                private_directory(directory)
+        if private.is_dir() and not private.is_symlink():
+            raise DistributionError(f"{private} is a folder; it was preserved")
+        # uvx first and uv last: uv is the file that find_uv looks for.
+        extra = source.parent / PRIVATE_UV_NAMES[1]
+        pairs = ([(extra, folder / PRIVATE_UV_NAMES[1])] if extra.is_file() else []) + [(source, private)]
+        try:
+            for origin, destination in pairs:
+                temporary = destination.with_name(destination.name + ".new-" + uuid.uuid4().hex)
+                try:
+                    shutil.copyfile(origin, temporary)
+                    if os.name != "nt":
+                        temporary.chmod(0o755)
+                    os.replace(temporary, destination)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        except OSError as error:
+            self._log(f"uv was not copied into the managed home: {error}")
+            return None
+        self._log(f"uv copied into the managed home from {source}")
+        return private
+
     def _install_dependencies(self, directory: Path, environment: dict) -> None:
+        self.ensure_private_uv()
         uv = find_uv(self.home)
         if not uv:
             raise DistributionError("uv was not found; rerun the bootstrap installer")
@@ -1124,6 +1179,7 @@ class Manager:
                 temporary.unlink()
 
     def install_launchers(self) -> None:
+        self.ensure_private_uv()
         uv = find_uv(self.home)
         if not uv:
             raise DistributionError("uv was not found; launcher creation was deferred")
@@ -1158,9 +1214,11 @@ runpy.run_path(str(script), run_name='__main__')
                       "$launcher = Join-Path (Split-Path -Parent $PSScriptRoot) 'launcher.py'\n"
                       f"& {powershell_uv} run --python 3.12 --no-project --no-config $launcher @args\n"
                       "exit $LASTEXITCODE\n")
+        # Both paths are absolute: expose_command links ~/.local/bin/odicto to this file, and a path taken
+        # from $0 would then point into ~/.local.
         shell = ("#!/bin/sh\nset -eu\n"
-                 'script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\n'
-                 f'exec {shlex.quote(uv)} run --python 3.12 --no-project --no-config "$script_dir/../launcher.py" "$@"\n')
+                 f'exec {shlex.quote(uv)} run --python 3.12 --no-project --no-config '
+                 f'{shlex.quote(str(self.home / "launcher.py"))} "$@"\n')
         command = ('@"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
                    '-NoProfile -ExecutionPolicy Bypass -File "%~dp0odicto.ps1" %*\r\n')
         files = {"launcher.py": loader.encode(), "bin/odicto": shell.encode(),

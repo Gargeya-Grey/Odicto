@@ -7,28 +7,6 @@ if [ "${EUID:-$(id -u)}" -eq 0 ]; then
   exit 1
 fi
 
-# The managed home is the --home argument when given, else the default that manager.py's default_home() gives.
-# The private uv goes in it (see below), so find it before anything is installed.
-home=""
-previous=""
-for argument in "$@"; do
-  if [ "$previous" = "--home" ]; then home="$argument"; fi
-  case "$argument" in --home=*) home="${argument#--home=}" ;; esac
-  previous="$argument"
-done
-if [ -z "$home" ]; then
-  case "$(uname -s)" in
-    Darwin) home="$HOME/Library/Application Support/Odicto" ;;
-    *) home="${XDG_DATA_HOME:-$HOME/.local/share}/odicto" ;;
-  esac
-fi
-case "$home" in
-  "~") home="$HOME" ;;
-  "~/"*) home="$HOME/${home#\~/}" ;;
-esac
-case "$home" in /*) ;; *) home="$PWD/$home" ;; esac
-uv_dir="$home/tools/uv"
-
 wsl=0
 if [ -e "${ODICTO_WSL_INTEROP_FILE:-/proc/sys/fs/binfmt_misc/WSLInterop}" ] || [ -n "${WSL_DISTRO_NAME:-}" ]; then
   wsl=1
@@ -38,22 +16,21 @@ case "$(uname -s)" in
   Linux)
     # Odicto refuses a Wayland session when it starts. Say it now, before sudo and the download.
     session="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
-    if [ "$session" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-      # WSLg sets WAYLAND_DISPLAY but also runs an X server (DISPLAY), which Odicto uses.
-      if [ "$wsl" = 1 ] && [ -n "${DISPLAY:-}" ]; then
-        :
-      elif [ "$wsl" = 1 ]; then
+    if [ "$wsl" = 1 ]; then
+      # WSLg runs an X server and sets DISPLAY, and Odicto uses it, even when WAYLAND_DISPLAY is also set.
+      # Without DISPLAY Odicto cannot start, so stop now, whatever the Wayland variables say.
+      if [ -z "${DISPLAY:-}" ]; then
         echo "This Linux in WSL has no display. Odicto needs the WSLg display that current WSL provides." >&2
         echo "In Windows, run: wsl --update, then wsl --shutdown. Open this Linux again and run this installer again." >&2
         echo "Nothing was installed." >&2
         exit 1
-      else
-        echo "This desktop runs a Wayland session. Odicto needs an X11 (Xorg) session; it does not work in Wayland yet." >&2
-        echo "If your login screen offers a session with Xorg in its name, choose it, log in, and run this installer again." >&2
-        echo "Ubuntu 25.10 and newer have no Xorg session, and Odicto does not support them yet." >&2
-        echo "Nothing was installed." >&2
-        exit 1
       fi
+    elif [ "$session" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      echo "This desktop runs a Wayland session. Odicto needs an X11 (Xorg) session; it does not work in Wayland yet." >&2
+      echo "If your login screen offers a session with Xorg in its name, choose it, log in, and run this installer again." >&2
+      echo "Ubuntu 25.10 and newer have no Xorg session, and Odicto does not support them yet." >&2
+      echo "Nothing was installed." >&2
+      exit 1
     fi
     if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
       echo "The managed Linux bootstrap currently supports Ubuntu and Debian." >&2
@@ -91,13 +68,24 @@ case "$(uname -s)" in
   *) echo "Use bootstrap.ps1 on Windows; this installer supports macOS and Linux." >&2; exit 1 ;;
 esac
 
-# Odicto uses its own copy of uv, in <home>/tools/uv, and never a uv that is already on PATH, so the
-# version is the one Odicto installs and the manager finds it without PATH (find_uv in manager.py).
+# The bootstrap never touches the managed home. It keeps its own uv in a folder of the user's cache, and the
+# manager copies that uv into <home>/tools/uv after it has made the home (ensure_private_uv in manager.py).
+# A uv that is already on PATH is not used, so the version is the one Odicto installs.
+# The folder is the user's own cache, not the managed home, so a uv that already sits there may be reused.
+case "$(uname -s)" in
+  Darwin) uv_dir="$HOME/Library/Caches/Odicto-bootstrap/uv" ;;
+  *)
+    cache="${XDG_CACHE_HOME:-}"
+    case "$cache" in /*) ;; *) cache="$HOME/.cache" ;; esac
+    uv_dir="$cache/odicto-bootstrap/uv"
+    ;;
+esac
 # Options of the Astral installer (https://astral.sh/uv/install.sh; read 2026-11-16):
 #   UV_INSTALL_DIR         the folder that gets uv and uvx (flat); it wins over every other folder variable.
 #   UV_UNMANAGED_INSTALL   the same folder; also turns off the PATH edit, the env script and the updater
-#                          receipt, so nothing outside <home> is written.
+#                          receipt, so nothing outside that folder is written.
 #   UV_NO_MODIFY_PATH      no edit of ~/.profile, ~/.bashrc and the like; the second guard, if the first changes.
+#   INSTALLER_NO_MODIFY_PATH  the same, under the name of the older installers.
 #   UV_DISABLE_UPDATE      no uv updater and no receipt in ~/.config/uv.
 # CARGO_DIST_FORCE_INSTALL_DIR is cleared because it would rank after UV_INSTALL_DIR but above the default.
 UV="$uv_dir/uv"
@@ -114,6 +102,9 @@ if ! { [ -x "$UV" ] && "$UV" --version >/dev/null 2>&1; }; then
   fi
 fi
 
+# An older manager looks for uv on PATH and bakes that path into its launchers; a newer one copies
+# ODICTO_BOOTSTRAP_UV into the managed home. Both are served from here.
+export ODICTO_BOOTSTRAP_UV="$UV"
 export PATH="$uv_dir:$PATH"
 "$UV" run --python 3.12 --no-project --no-config python - "$@" <<'PY'
 import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile
