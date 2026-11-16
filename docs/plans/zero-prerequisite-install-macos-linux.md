@@ -66,6 +66,12 @@ Update this table when a gap changes status. The register in section 6 keeps the
 | L1 | Confirmed (sources) | Ubuntu 25.10 removed the GNOME Xorg session, and Ubuntu 26.04 LTS ships Wayland-only for GNOME (Ubuntu Discourse, "Ubuntu 25.10 drops support for GNOME on Xorg"). So a default current Ubuntu desktop cannot run Odicto until it has a Wayland backend (D2). |
 | WSL | Found 16 Nov 2026 | WSLg sets `WAYLAND_DISPLAY`, so the bootstrap stops and tells the person to choose an Xorg login, which WSL does not have. PortAudio in WSL sees no input device (no ALSA bridge to the WSLg PulseAudio server). 1.5.0 then stops itself after 60 s; #40 fixes that part. |
 | CI | Closed, #35 | 11 Nov 2026: the Ubuntu jobs failed before their tests (mirror names did not resolve, some `amd64v3` packages answered 404). #35 retries the package installs and skips CI for a pull request that changes only Markdown the tests do not read. |
+| M3 | Closed, #43 and #44 | `sudo apt-get` and the `uv` installer read `/dev/null`, and every line of `install-odicto.sh` is inside a function that the last line calls. Tests pipe the built file into `bash` with greedy fakes. 16 Nov 2026, WSL Ubuntu 24.04, a new user: the built file piped into `bash` installed in 37 s. |
+| M4, L5 | Closed, #44 | `install-odicto.sh` turns on start at sign-in (new installs), starts Odicto, waits for `wait-ready` and opens Setup. CI pipes the built file into `bash` on every macOS and Linux job. |
+| M6, M13 | Closed in code, #42 | Odicto asks macOS for the consent prompts, opens the Settings pane and says what to turn on; a denied microphone gets a warning. To verify on a Mac: the real prompts and the names in the lists. |
+| Update | Closed, #43 | The bootstrap keeps its own `uv`, the manager copies it into the home, and the launchers hold absolute paths. A 1.5.x copy's first update still runs its old code (see the 1.6.0 changelog). |
+| WSL | Closed, #42 and #43 | With `DISPLAY` set, Odicto runs on the WSLg X server, the bootstrap adds `libasound2-plugins`, and a microphone without a default is found (`pulse` first). Shortcuts work only while a Linux window has focus. |
+| X4, L6, M9 | Open | Unit G (Linux menu entries, a Remove Odicto shortcut, `odicto uninstall`) stopped after its third review found the same class of defect (a failed uninstall and the way to retry it). It waits for the owner's design decision on branch `feat/menu-and-uninstall-v2`. |
 
 ## 3. Rules for the agent that does this work
 

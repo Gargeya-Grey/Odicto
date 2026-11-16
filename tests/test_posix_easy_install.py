@@ -106,7 +106,9 @@ FAKES = {
 
 # The pasted line is `curl ... | bash`: the shell reads the script from a pipe.
 RUNNER = ('export HOME="$T_ROOT/home" PATH="$T_FAKES:/usr/bin:/bin:$PATH" XDG_SESSION_TYPE="${T_SESSION:-x11}"\n'
-          'unset XDG_DATA_HOME XDG_CACHE_HOME WAYLAND_DISPLAY DISPLAY\n'
+          # No WSL: a developer may run these tests inside WSL, and the bootstrap checks for it.
+          'export ODICTO_WSL_INTEROP_FILE="$T_ROOT/no-such-file"\n'
+          'unset XDG_DATA_HOME XDG_CACHE_HOME WAYLAND_DISPLAY DISPLAY WSL_DISTRO_NAME\n'
           'for d in "$HOME/.cache/odicto-bootstrap/uv" "$HOME/Library/Caches/Odicto-bootstrap/uv"; do\n'
           '  mkdir -p "$d" && cp "$T_FAKES/private-uv" "$d/uv" && chmod +x "$d/uv"\n'
           'done\n'

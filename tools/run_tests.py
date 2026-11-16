@@ -74,7 +74,10 @@ GATE = {
     # 1.5.1 (microphone buffers, Qt Essentials, release manifest and cleanup, first start): the
     # floor now equals the smallest count on CI, measured on pull request #40 (macOS and Linux
     # 1623, Windows 1635): 1623.
-    "floor": 1623,
+    # 1.6.0 (macOS and Linux from the box: the platform runtime #42, the private uv #43, the
+    # one-line installer #44): the smallest count on CI, measured on pull request #44 (macOS and
+    # Linux 1778, Windows 1791): 1778.
+    "floor": 1778,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
