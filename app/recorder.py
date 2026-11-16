@@ -111,15 +111,17 @@ class AudioRecorder:
         # so retry with backoff instead of failing the whole app on first try.
         self._open_persistent_stream()
 
-    def _input_latency(self):
+    def _input_latency(self, device=None):
         """Latency for the device about to open: deep for Windows MME, else "low".
 
-        Metadata queries only; this never opens a stream. Any failure gives "low".
+        ``device`` is the index about to open (a fallback choice); None means the cached
+        index, or the default input. Metadata queries only; this never opens a stream.
+        Any failure gives "low".
         """
         if sys.platform != "win32":
             return "low"
         try:
-            index = self._device_index
+            index = self._device_index if device is None else device
             info = sd.query_devices(kind="input") if index is None else sd.query_devices(index)
             if str(sd.query_hostapis(info["hostapi"])["name"]) == "MME":
                 return self.MME_LATENCY_SECONDS
@@ -179,7 +181,7 @@ class AudioRecorder:
                 if fallback is not None:
                     device = fallback[0]
                     print(f"No default microphone; using '{fallback[1]}' (device {device}).", flush=True)
-            preferred = self._input_latency()
+            preferred = self._input_latency(device)
             # A driver may refuse the deep buffer; the same attempt then tries "low".
             for latency in ((preferred, "low") if preferred != "low" else ("low",)):
                 stream = None

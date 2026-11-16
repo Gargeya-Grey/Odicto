@@ -99,3 +99,58 @@ class X11BackendInWslTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClipboardInWslTests(unittest.TestCase):
+    """WSLg sets WAYLAND_DISPLAY next to its X server: the X11 tool lists the clipboard."""
+
+    def run_targets(self, env, result=None, error=None):
+        from platforms import clipboard
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd[0])
+            if error:
+                raise error
+            return result
+        with mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(clipboard.subprocess, "run", side_effect=fake_run):
+            return clipboard._linux_targets(), calls
+
+    def done(self, code, out=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=code, stdout=out)
+
+    def test_wslg_asks_xclip_not_wl_paste(self):
+        targets, calls = self.run_targets(WSLG, self.done(0, "TARGETS\nimage/png\n"))
+        self.assertEqual(calls, ["xclip"])
+        self.assertEqual(targets, ("TARGETS", "image/png"))
+
+    def test_a_wayland_only_environment_still_uses_wl_paste(self):
+        _, calls = self.run_targets({"WAYLAND_DISPLAY": "wayland-0"}, self.done(0, "text/plain\n"))
+        self.assertEqual(calls, ["wl-paste"])
+
+    def test_a_failed_listing_is_unknown_not_empty(self):
+        self.assertIsNone(self.run_targets(WSLG, self.done(1))[0])
+        self.assertIsNone(self.run_targets(WSLG, error=FileNotFoundError("xclip"))[0])
+
+    def snapshot(self, text, targets):
+        from platforms import clipboard
+        with mock.patch.object(clipboard, "_text_read", return_value=text), \
+                mock.patch.object(clipboard, "_linux_targets", return_value=targets):
+            return clipboard._linux_snapshot()
+
+    def test_unknown_contents_with_text_are_treated_as_non_text(self):
+        snap = self.snapshot("copied", None)
+        self.assertTrue(snap.has_non_text)
+        self.assertFalse(snap.complete)
+
+    def test_an_empty_clipboard_with_no_owner_stays_complete(self):
+        snap = self.snapshot("", None)
+        self.assertFalse(snap.has_non_text)
+        self.assertTrue(snap.complete)
+
+    def test_an_image_next_to_text_is_still_kept(self):
+        snap = self.snapshot("copied", ("text/plain", "image/png"))
+        self.assertTrue(snap.has_non_text)
+        self.assertFalse(snap.complete)

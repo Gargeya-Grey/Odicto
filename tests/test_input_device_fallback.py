@@ -151,3 +151,30 @@ class ReopenTests(Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsMmeFallbackTests(Fixture):
+    """The deep MME buffer follows the device that opens, also when it is a fallback choice."""
+
+    def setUp(self):
+        super().setUp()
+        patch("recorder.sys.platform", "win32").start()
+        patch("recorder.sd.query_hostapis", side_effect=lambda index: {"name": ["MME", "WASAPI"][index]}).start()
+
+    def mme(self, name):
+        return dict(device(name), hostapi=0)
+
+    def test_an_mme_fallback_device_gets_the_deep_buffer(self):
+        self.host([dict(device("Speakers", inputs=0), hostapi=1), self.mme("USB mic")])
+        self.open(self.idle())
+        self.assertEqual(self.chosen(), 1)
+        self.assertEqual(self.opened.call_args.kwargs["latency"], AudioRecorder.MME_LATENCY_SECONDS)
+
+    def test_a_reopen_after_a_lost_device_keeps_the_deep_buffer(self):
+        self.host([self.mme("USB mic")])
+        rec = self.idle()
+        self.open(rec)
+        rec._device_index = None  # reconnect clears a lost device
+        self.opened.reset_mock()
+        self.open(rec)
+        self.assertEqual(self.opened.call_args.kwargs["latency"], AudioRecorder.MME_LATENCY_SECONDS)
