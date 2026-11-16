@@ -540,6 +540,18 @@ def default_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "odicto"
 
 
+def find_uv(home) -> str | None:
+    """The uv that the bootstrap installed in the managed home, else a uv on PATH.
+
+    The private copy comes first, so an update that a LaunchAgent or a desktop autostart starts with a
+    minimal PATH still finds it. A home made by an older bootstrap has none and uses PATH.
+    """
+    private = Path(home) / "tools" / "uv" / ("uv.exe" if os.name == "nt" else "uv")
+    if private.is_file() and not private.is_symlink() and os.access(private, os.X_OK):
+        return str(private)
+    return shutil.which("uv")
+
+
 def _real_folder(path) -> bool:
     """A folder that is not a symlink, a junction or another reparse point."""
     try:
@@ -766,8 +778,16 @@ class Manager:
             if self._read_json(path).get("state") != "complete":
                 raise DistributionError("Migration is unfinished. Resume odicto migrate with the same --source before starting or changing versions")
 
+    def _has_foreign_files(self) -> bool:
+        """True when the home holds anything but the private uv that the bootstrap put there first."""
+        for entry in self.home.iterdir():
+            if entry.name == "tools" and _real_folder(entry) and [p.name for p in entry.iterdir()] == ["uv"] and _real_folder(entry / "uv"):
+                continue
+            return True
+        return False
+
     def initialize(self) -> None:
-        if self.home.exists() and not self.marker.exists() and any(self.home.iterdir()):
+        if self.home.exists() and not self.marker.exists() and self._has_foreign_files():
             raise DistributionError("Destination is not an empty managed installation; existing files were preserved")
         private_directory(self.home, parents=True, exist_ok=True)
         if self.marker.exists():
@@ -829,7 +849,7 @@ class Manager:
         return environment
 
     def _install_dependencies(self, directory: Path, environment: dict) -> None:
-        uv = shutil.which("uv")
+        uv = find_uv(self.home)
         if not uv:
             raise DistributionError("uv was not found; rerun the bootstrap installer")
         lock = directory / "tools" / "distribution" / "requirements.lock"
@@ -1104,7 +1124,7 @@ class Manager:
                 temporary.unlink()
 
     def install_launchers(self) -> None:
-        uv = shutil.which("uv")
+        uv = find_uv(self.home)
         if not uv:
             raise DistributionError("uv was not found; launcher creation was deferred")
         if (self.home / "bin").is_symlink():

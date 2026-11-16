@@ -1,20 +1,51 @@
 #Requires -Version 5.1
 param([string]$HomePath)
 $ErrorActionPreference = 'Stop'
-$uvCommand = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($uvCommand) {
-    $uv = $uvCommand.Source
+# The managed home is -HomePath when given, else the default that manager.py's default_home() gives.
+# Odicto uses its own copy of uv, in <home>\tools\uv, and never a uv that is already on PATH, so the version
+# is the one Odicto installs and the manager finds it without PATH (find_uv in manager.py).
+if ($HomePath) {
+    $managedHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($HomePath)
 } else {
+    $localData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\Local' }
+    $managedHome = Join-Path $localData 'Odicto'
+}
+$uvDirectory = Join-Path $managedHome 'tools\uv'
+$uv = Join-Path $uvDirectory 'uv.exe'
+$uvWorks = $false
+if (Test-Path -LiteralPath $uv) {
+    try { & $uv --version *> $null; $uvWorks = ($LASTEXITCODE -eq 0) } catch { $uvWorks = $false }
+}
+if (-not $uvWorks) {
+    # Options of the Astral installer (https://astral.sh/uv/install.ps1; read 2026-11-16):
+    #   UV_INSTALL_DIR         the folder that gets uv.exe and uvx.exe (flat); it wins over every other folder variable.
+    #   UV_UNMANAGED_INSTALL   the same folder; also turns off the PATH edit in the user environment and the updater
+    #                          receipt, so nothing outside <home> is written.
+    #   UV_NO_MODIFY_PATH      no PATH edit; the second guard, if the first changes.
+    #   UV_DISABLE_UPDATE      no uv updater and no receipt.
+    # CARGO_DIST_FORCE_INSTALL_DIR is cleared because it would rank after UV_INSTALL_DIR but above the default.
+    $uvOptions = [ordered]@{
+        UV_INSTALL_DIR = $uvDirectory; UV_UNMANAGED_INSTALL = $uvDirectory; UV_NO_MODIFY_PATH = '1'
+        INSTALLER_NO_MODIFY_PATH = '1'; UV_DISABLE_UPDATE = '1'; CARGO_DIST_FORCE_INSTALL_DIR = $null
+    }
+    $saved = @{}
+    foreach ($name in $uvOptions.Keys) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, $uvOptions[$name], 'Process')
+    }
     $installer = Join-Path ([IO.Path]::GetTempPath()) ('odicto-uv-' + [guid]::NewGuid().ToString('N') + '.ps1')
     try {
+        New-Item -ItemType Directory -Force -Path $uvDirectory | Out-Null
         Invoke-WebRequest -UseBasicParsing -Uri 'https://astral.sh/uv/install.ps1' -OutFile $installer
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
         if ($LASTEXITCODE -ne 0) { throw 'uv installation failed' }
     } finally {
         Remove-Item -LiteralPath $installer -ErrorAction SilentlyContinue
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     }
-    $uv = Join-Path $env:USERPROFILE '.local\bin\uv.exe'
-    if (-not (Test-Path -LiteralPath $uv)) { $uv = Join-Path $env:USERPROFILE '.cargo\bin\uv.exe' }
+    if (-not (Test-Path -LiteralPath $uv)) {
+        throw "The uv tool was not installed in $uvDirectory. Check the internet connection, then run this installer again."
+    }
 }
 $bootstrap = @'
 import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile

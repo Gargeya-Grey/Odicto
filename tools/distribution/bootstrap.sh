@@ -7,15 +7,53 @@ if [ "${EUID:-$(id -u)}" -eq 0 ]; then
   exit 1
 fi
 
+# The managed home is the --home argument when given, else the default that manager.py's default_home() gives.
+# The private uv goes in it (see below), so find it before anything is installed.
+home=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--home" ]; then home="$argument"; fi
+  case "$argument" in --home=*) home="${argument#--home=}" ;; esac
+  previous="$argument"
+done
+if [ -z "$home" ]; then
+  case "$(uname -s)" in
+    Darwin) home="$HOME/Library/Application Support/Odicto" ;;
+    *) home="${XDG_DATA_HOME:-$HOME/.local/share}/odicto" ;;
+  esac
+fi
+case "$home" in
+  "~") home="$HOME" ;;
+  "~/"*) home="$HOME/${home#\~/}" ;;
+esac
+case "$home" in /*) ;; *) home="$PWD/$home" ;; esac
+uv_dir="$home/tools/uv"
+
+wsl=0
+if [ -e "${ODICTO_WSL_INTEROP_FILE:-/proc/sys/fs/binfmt_misc/WSLInterop}" ] || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  wsl=1
+fi
+
 case "$(uname -s)" in
   Linux)
     # Odicto refuses a Wayland session when it starts. Say it now, before sudo and the download.
     session="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
     if [ "$session" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-      echo "This desktop runs a Wayland session. Odicto needs an X11 (Xorg) session; it does not work in Wayland yet." >&2
-      echo "Log out. On the login screen, choose a session with Xorg in its name, log in, and run this installer again." >&2
-      echo "Nothing was installed." >&2
-      exit 1
+      # WSLg sets WAYLAND_DISPLAY but also runs an X server (DISPLAY), which Odicto uses.
+      if [ "$wsl" = 1 ] && [ -n "${DISPLAY:-}" ]; then
+        :
+      elif [ "$wsl" = 1 ]; then
+        echo "This Linux in WSL has no display. Odicto needs the WSLg display that current WSL provides." >&2
+        echo "In Windows, run: wsl --update, then wsl --shutdown. Open this Linux again and run this installer again." >&2
+        echo "Nothing was installed." >&2
+        exit 1
+      else
+        echo "This desktop runs a Wayland session. Odicto needs an X11 (Xorg) session; it does not work in Wayland yet." >&2
+        echo "If your login screen offers a session with Xorg in its name, choose it, log in, and run this installer again." >&2
+        echo "Ubuntu 25.10 and newer have no Xorg session, and Odicto does not support them yet." >&2
+        echo "Nothing was installed." >&2
+        exit 1
+      fi
     fi
     if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
       echo "The managed Linux bootstrap currently supports Ubuntu and Debian." >&2
@@ -25,6 +63,12 @@ case "$(uname -s)" in
     packages=(curl ca-certificates libportaudio2 xdotool xclip libegl1 libxkbcommon-x11-0 libxcb-cursor0
       libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0
       libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libx11-xcb1)
+    if [ "$wsl" = 1 ]; then
+      echo "Odicto in WSL is for testing. Its shortcuts work only while a Linux window has focus."
+      echo "It types only into Linux (X11) apps, not into Windows apps. For Windows apps, use the Windows installer."
+      # Adds the ALSA "pulse" device, so PortAudio finds the WSLg microphone.
+      packages+=(libasound2-plugins)
+    fi
     missing=()
     for package in "${packages[@]}"; do
       if ! dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -qx installed; then
@@ -37,26 +81,40 @@ case "$(uname -s)" in
         exit 1
       fi
       echo "Installing missing native dependencies with sudo: ${missing[*]}"
-      sudo apt-get update
-      sudo apt-get install -y "${missing[@]}"
+      # </dev/null: when this script comes through a pipe (curl ... | bash), nothing may read the script.
+      # sudo asks for a password on the terminal, not on stdin.
+      sudo apt-get update </dev/null
+      sudo apt-get install -y "${missing[@]}" </dev/null
     fi
     ;;
   Darwin) ;;
   *) echo "Use bootstrap.ps1 on Windows; this installer supports macOS and Linux." >&2; exit 1 ;;
 esac
 
-if command -v uv >/dev/null 2>&1; then
-  UV="$(command -v uv)"
-else
+# Odicto uses its own copy of uv, in <home>/tools/uv, and never a uv that is already on PATH, so the
+# version is the one Odicto installs and the manager finds it without PATH (find_uv in manager.py).
+# Options of the Astral installer (https://astral.sh/uv/install.sh; read 2026-11-16):
+#   UV_INSTALL_DIR         the folder that gets uv and uvx (flat); it wins over every other folder variable.
+#   UV_UNMANAGED_INSTALL   the same folder; also turns off the PATH edit, the env script and the updater
+#                          receipt, so nothing outside <home> is written.
+#   UV_NO_MODIFY_PATH      no edit of ~/.profile, ~/.bashrc and the like; the second guard, if the first changes.
+#   UV_DISABLE_UPDATE      no uv updater and no receipt in ~/.config/uv.
+# CARGO_DIST_FORCE_INSTALL_DIR is cleared because it would rank after UV_INSTALL_DIR but above the default.
+UV="$uv_dir/uv"
+if ! { [ -x "$UV" ] && "$UV" --version >/dev/null 2>&1; }; then
+  mkdir -p "$uv_dir"
   installer="$(mktemp -t odicto-uv.XXXXXX)"
   trap 'rm -f -- "$installer"' EXIT
   curl --proto '=https' --tlsv1.2 -LsSf https://astral.sh/uv/install.sh -o "$installer"
-  sh "$installer"
-  UV="${UV_INSTALL_DIR:-$HOME/.local/bin}/uv"
-  if [ ! -x "$UV" ]; then UV="$HOME/.cargo/bin/uv"; fi
+  env -u CARGO_DIST_FORCE_INSTALL_DIR UV_INSTALL_DIR="$uv_dir" UV_UNMANAGED_INSTALL="$uv_dir" \
+    UV_NO_MODIFY_PATH=1 INSTALLER_NO_MODIFY_PATH=1 UV_DISABLE_UPDATE=1 sh "$installer" </dev/null
+  if [ ! -x "$UV" ]; then
+    echo "The uv tool was not installed in $uv_dir. Check the internet connection, then run this installer again." >&2
+    exit 1
+  fi
 fi
 
-export PATH="$(dirname "$UV"):$PATH"
+export PATH="$uv_dir:$PATH"
 "$UV" run --python 3.12 --no-project --no-config python - "$@" <<'PY'
 import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile
 repo = 'Gargeya-Grey/Odicto'

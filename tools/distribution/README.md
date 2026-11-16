@@ -1,6 +1,6 @@
 # Managed Odicto installation
 
-The bootstrap scripts install `uv` if needed, obtain its managed Python 3.12,
+The bootstrap scripts install their own `uv` in the managed home (see "Private uv"), obtain its managed Python 3.12,
 and verify the stable GitHub release ZIP against its adjacent SHA-256 file before
 executing the installer from that archive. No system Python, Git, Node or npm is
 required. Both scripts run the same embedded bootstrap verifier.
@@ -11,12 +11,33 @@ when to start the application. On Ubuntu/Debian, missing native audio, clipboard
 and display packages are installed through the user's normal sudo prompt. The
 application itself is never started as root. Other Linux distributions receive an
 actionable prerequisite message before a managed install is created. A Linux Wayland session stops the bootstrap before `sudo` and before any
-download, with the advice to log in to an Xorg session. A GitHub rate limit or a lost
+download. It says to choose an Xorg session if the login screen offers one, and that Ubuntu 25.10 and newer have none. A GitHub rate limit or a lost
 connection stops it with a plain message, and nothing is installed. macOS wheels
 are checked for native imports; Homebrew is not installed automatically. OS
 permissions remain prerequisites. An import failure leaves the staged version
 inactive. Linux Wayland sessions are unsupported. Windows Admin mode uses a stable
 managed task, so updating application files does not change the task's target.
+
+## Private uv, and WSL
+
+The bootstrap installs `uv` only in `<home>/tools/uv/` (`<home>` is `--home` when given, else the
+managed default), and it never uses a `uv` that is already on `PATH`. So the version is the one Odicto
+installs, and no shell profile, `PATH` entry or `~/.local/bin` file is written for it. It runs the Astral
+installer with `UV_INSTALL_DIR` and `UV_UNMANAGED_INSTALL` set to that folder, and with `UV_NO_MODIFY_PATH`
+and `UV_DISABLE_UPDATE` on (`UV_UNMANAGED_INSTALL` alone also stops the profile edit, the env script and
+the updater receipt; the others guard against a change in the installer). The manager (`find_uv` in
+`manager.py`) looks in that folder first, then on `PATH` for a home that an older bootstrap made. So an
+update that starts at sign-in, from a macOS LaunchAgent or a desktop autostart with a minimal `PATH`, finds
+`uv`. A home that holds only `tools/uv` still counts as empty for the first install.
+
+On Linux, `sudo apt-get` and the `uv` installer read no input (`</dev/null`), so the bootstrap works when
+the script comes through a pipe.
+
+WSL (the file `/proc/sys/fs/binfmt_misc/WSLInterop` exists, or `WSL_DISTRO_NAME` is set) is for testing.
+WSLg sets `WAYLAND_DISPLAY` but runs an X server, so with `DISPLAY` set the bootstrap goes on, says that
+the shortcuts work only while a Linux window has focus and that Odicto types only into Linux (X11) apps,
+and adds `libasound2-plugins` (the ALSA `pulse` device for the WSLg microphone). Without `DISPLAY` it stops
+and names `wsl --update`. A tester can point `ODICTO_WSL_INTEROP_FILE` at another file to fake or hide WSL.
 
 ## Install
 
@@ -94,10 +115,10 @@ migration; they are not automatically rewritten. After migration, use
 ## Commands
 
 The installed command is placed in the managed home's `bin` directory, with a
-convenience entry in `~/.local/bin` when that name is free. The uv installer also
-uses this user bin location on common configurations. If it is not already on
+convenience entry in `~/.local/bin` when that name is free. If it is not already on
 PATH, use the absolute command printed at installation or add that bin directory
-to PATH. Existing unrelated commands and shell profiles are left untouched.
+to PATH. Existing unrelated commands and shell profiles are left untouched; the
+installer edits no profile, not even through `uv`.
 
 | Command | Behavior |
 | --- | --- |
