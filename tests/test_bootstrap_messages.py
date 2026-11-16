@@ -161,17 +161,25 @@ if os.name != "nt":
                 stubs = root / "stubs"
                 stubs.mkdir()
                 marker = root / "touched"
+                # The curl stub writes an installer that makes a stub uv in UV_INSTALL_DIR, the bootstrap's own folder.
+                installer = ("printf '%s\\n' '#!/bin/sh' 'mkdir -p \"$UV_INSTALL_DIR\"' "
+                             "'printf \"#!/bin/sh\\\\nexit 0\\\\n\" > \"$UV_INSTALL_DIR/uv\"' "
+                             "'chmod +x \"$UV_INSTALL_DIR/uv\"' > \"$destination\"")
                 for name, body in {"uname": "printf 'Linux\\n'",
                                    "sudo": f"touch '{marker}'", "apt-get": f"touch '{marker}'",
-                                   "dpkg-query": f"touch '{marker}'", "curl": f"touch '{marker}'",
+                                   "dpkg-query": f"touch '{marker}'",
+                                   "curl": f"touch '{marker}'; for argument do destination=$argument; done; {installer}",
                                    "uv": f"touch '{marker}'"}.items():
                     (stubs / name).write_text("#!/bin/sh\n" + body + "\n")
                     (stubs / name).chmod(0o700)
                 environment = {key: value for key, value in os.environ.items()
-                               if key not in ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "XDG_DATA_HOME",
-                                              "UV_INSTALL_DIR", "ODICTO_DATA_ROOT", "ODICTO_MANAGED_HOME")}
+                               if key not in ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "XDG_DATA_HOME", "DISPLAY",
+                                              "WSL_DISTRO_NAME", "UV_INSTALL_DIR", "ODICTO_DATA_ROOT",
+                                              "ODICTO_MANAGED_HOME")}
+                # No WSL here, even when a developer runs these tests inside WSL.
                 environment.update(session, PATH=str(stubs) + ":/usr/bin:/bin", HOME=str(root / "home"),
-                                   XDG_DATA_HOME=str(root / "data"), UV_INSTALL_DIR=str(root / "uv"))
+                                   XDG_DATA_HOME=str(root / "data"),
+                                   ODICTO_WSL_INTEROP_FILE=str(root / "no-such-file"))
                 result = subprocess.run(["/bin/bash", str(DISTRIBUTION / "bootstrap.sh")], env=environment,
                                         capture_output=True, text=True, timeout=15)
                 return result, marker.exists()
