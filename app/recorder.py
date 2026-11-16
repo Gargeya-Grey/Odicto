@@ -127,6 +127,36 @@ class AudioRecorder:
             pass
         return "low"
 
+    # Input device names to prefer when PortAudio has no default input, best first. WSLg gives
+    # an ALSA "pulse" device (libasound2-plugins) and no default.
+    FALLBACK_INPUT_NAMES = ("pulse", "pipewire", "default")
+
+    def _fallback_input_device(self):
+        """Index of an input device to use when PortAudio has no default input, else None.
+
+        Only used when no device is chosen (``_device_index`` is None) and the default input
+        query fails: "pulse", then "pipewire", then "default", then the first input device.
+        A system with a default input, or no input device at all, gets None, which keeps the
+        old behaviour. Metadata queries only; this never opens a stream and never raises.
+        """
+        try:
+            sd.query_devices(kind="input")
+            return None
+        except Exception:
+            pass
+        try:
+            inputs = [(index, str(info["name"])) for index, info in enumerate(sd.query_devices())
+                      if int(info["max_input_channels"]) > 0]
+        except Exception:
+            return None
+        if not inputs:
+            return None
+        for wanted in self.FALLBACK_INPUT_NAMES:
+            for index, name in inputs:
+                if name.strip().lower() == wanted:
+                    return index, name
+        return inputs[0]
+
     def _open_persistent_stream(self, delays=(0.0, 0.5, 1.0, 2.0, 4.0)) -> None:
         """Open and start the always-on input stream, retrying a cold audio stack."""
         last_error: Optional[BaseException] = None
@@ -143,13 +173,19 @@ class AudioRecorder:
             def bound_callback(indata, frames, time_info, status, _gen=generation):
                 self._callback(indata, frames, time_info, status, _generation=_gen)
 
+            device = self._device_index
+            if device is None:
+                fallback = self._fallback_input_device()
+                if fallback is not None:
+                    device = fallback[0]
+                    print(f"No default microphone; using '{fallback[1]}' (device {device}).", flush=True)
             preferred = self._input_latency()
             # A driver may refuse the deep buffer; the same attempt then tries "low".
             for latency in ((preferred, "low") if preferred != "low" else ("low",)):
                 stream = None
                 try:
                     stream = sd.InputStream(
-                        device=self._device_index,
+                        device=device,
                         samplerate=self.sample_rate,
                         channels=self.channels,
                         callback=bound_callback,

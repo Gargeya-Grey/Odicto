@@ -191,6 +191,12 @@ Input overflow or a callback gap keeps the captured audio and flags the capture;
 processes it and the HUD shows "Mic gap · check text". Only a dead stream with no audio
 errors. A capture longer than `MAX_RECORDING_SECONDS` stops itself and is processed.
 Reconnect refreshes PortAudio and falls back to the default device. Quiet speech remains valid.
+When PortAudio has no default input device but has input devices (WSLg, whose ALSA layer offers a
+`pulse` device and no default), a start that has no chosen device uses the input named `pulse`, then
+`pipewire`, then `default`, then the first input device, and logs which (`AudioRecorder._fallback_input_device`,
+queried in `_open_persistent_stream`; metadata only). A system with a default input, a cached or chosen
+device index, or no input device at all keeps the old behaviour. The device that opens is cached as
+before, and a lost device falls back again through the same rule.
 Native driver calls cannot be forcibly interrupted within Python; a driver that
 hangs during close/open can still require an explicit process restart.
 The production keyboard hook only snapshots the chord and enqueues an action;
@@ -321,6 +327,29 @@ platforms` gives one consistent surface on every OS.
 | `app/platforms/windows.py` | 353 | Named mutex + `msvcrt` lockfile, `taskkill` orphan sweep, Win32 exstyles |
 | `app/platforms/macos.py` | 352 | `pynput` hooks, `NSWorkspace` terminal detection |
 | `app/platforms/linux.py` | 94 | X11 terminal detection via `xdotool`/`xprop`; re-exports the POSIX helpers |
+| `app/platforms/preflight.py` | 271 | Start-up probes (`environment_problems`), the WSL rule, `guide_to_consent` (macOS) |
+
+**Preflight, consent and WSL.** `environment_problems()` only reports; it never prompts and never
+opens a window, because setup and status call it often. The one place that acts on a blocker is the
+exit path of `app/main.py` (`stop_for_startup_blockers`): it prints each error first, then calls
+`preflight.guide_to_consent`, then exits 2. No hook is bound before or after. On macOS, for a missing
+Accessibility or Input Monitoring permission, `guide_to_consent` asks macOS to show its consent prompt
+(`macos.request_accessibility_prompt`: `AXIsProcessTrustedWithOptions` with the prompt option;
+`macos.request_input_monitoring_prompt`: `IOHIDRequestAccess`), opens the matching System Settings pane
+(`macos.open_privacy_pane`, an `x-apple.systempreferences:` URL) and prints which switch to turn on, then
+"start Odicto again". These calls go through ctypes and the Objective-C runtime, are best effort and never
+raise, so the exit message and code do not depend on them. The microphone probe (`macos_microphone`,
+severity `warning`) reads AVFoundation's authorization status: denied or restricted says where to turn it
+on; not determined says nothing, because the first capture shows the system prompt. The real consent
+dialogs and panes need a Mac to prove; the tests use fakes.
+
+**WSL.** WSL (`WSL_DISTRO_NAME` or `WSL_INTEROP` is set) runs Odicto on WSLg's X server. WSLg sets
+`WAYLAND_DISPLAY` and `DISPLAY` together and no `XDG_SESSION_TYPE`, so with `DISPLAY` set the Wayland
+checks in `preflight._linux_wayland` and `_x11.require_session` (both use `preflight.wayland_blocks_x11`)
+let the X11 backend run, and preflight adds one warning (`wsl_testing_only`): in WSL Odicto is for testing,
+its shortcuts work only while a Linux window has focus, and it types only into Linux X11 apps. A real
+Wayland desktop, and WSL without `DISPLAY`, are still refused, and the advice no longer promises an Xorg
+login session (Ubuntu 25.10 and newer have none).
 
 ### 3.2 Module dependency graph (generated)
 
@@ -666,7 +695,7 @@ supplied it**.
 |---|---|---|---|---|---|
 | Windows | `keyboard` lib + Win32 `SendInput` | `pyperclip`, `WM_COPY` | window class + process image name | named mutex + `msvcrt` lockfile | `taskkill`, then `tasklist` until gone |
 | macOS | `pynput` with `darwin_intercept` | `pyperclip` | `NSWorkspace` bundle id | `fcntl.flock` | `psutil`, then `os.kill` |
-| Linux | rootless Python Xlib grabs with event replay | `pyperclip` / `xclip` | `xdotool` / `xprop` (X11 only; Wayland rejected at preflight) | `fcntl.flock` | `psutil`, then `os.killpg` |
+| Linux | rootless Python Xlib grabs with event replay | `pyperclip` / `xclip` | `xdotool` / `xprop` (X11 only; Wayland rejected at preflight, except WSLg's X server) | `fcntl.flock` | `psutil`, then `os.killpg` |
 
 Subprocesses spawned: `tasklist` / `taskkill` (Windows), `xdotool` / `xprop` (Linux), `ollama
 serve` (only when `LLM_PROVIDER=ollama`), plus `powershell` from the start scripts.
