@@ -544,16 +544,46 @@ def default_home() -> Path:
 PRIVATE_UV_NAMES = ("uv.exe", "uvx.exe") if os.name == "nt" else ("uv", "uvx")
 
 
+def _posix_host() -> bool:
+    """macOS and Linux run bin/odicto; Windows runs bin/odicto.cmd. Tests patch this to reach both."""
+    return os.name != "nt"
+
+
+def _runnable(candidate) -> Path | None:
+    """An absolute path to a file that can run, else None."""
+    path = Path(candidate) if candidate else None
+    if path is not None and path.is_absolute() and path.is_file() and os.access(path, os.X_OK):
+        return path
+    return None
+
+
+def _private_uv(home) -> Path | None:
+    """<home>/tools/uv/uv, when it is a plain file that can run and both folders above it are real folders.
+
+    A link or a junction anywhere below the home is refused, so a stale link never runs another program.
+    The home itself is the user's private folder (private_directory): a program that can change a folder
+    in it between this check and the run can also change launcher.py, so this is no guard against that."""
+    tools = Path(home) / "tools"
+    private = tools / "uv" / PRIVATE_UV_NAMES[0]
+    if not (_real_folder(tools) and _real_folder(tools / "uv")):
+        return None
+    try:
+        info = os.lstat(private)
+    except OSError:
+        return None
+    if stat.S_ISREG(info.st_mode) and os.access(private, os.X_OK):
+        return private
+    return None
+
+
 def find_uv(home) -> str | None:
     """The uv that the manager keeps in the managed home, else a uv on PATH.
 
     The private copy comes first, so an update that a LaunchAgent or a desktop autostart starts with a
     minimal PATH still finds it. A home that has none (an older install) uses PATH.
     """
-    private = Path(home) / "tools" / "uv" / PRIVATE_UV_NAMES[0]
-    if private.is_file() and not private.is_symlink() and os.access(private, os.X_OK):
-        return str(private)
-    return shutil.which("uv")
+    private = _private_uv(home)
+    return str(private) if private else shutil.which("uv")
 
 
 def bootstrap_uv() -> Path | None:
@@ -568,9 +598,8 @@ def bootstrap_uv() -> Path | None:
     running = os.environ.get("UV") or ""
     found = shutil.which("uv") or ""
     for candidate, from_path in ((given, False), (running, False), (found, True)):
-        path = Path(candidate) if candidate else None
-        if (path is not None and path.is_absolute() and path.is_file() and os.access(path, os.X_OK)
-                and not (from_path and os.name == "nt" and path.name.lower() != "uv.exe")):
+        path = _runnable(candidate)
+        if path is not None and not (from_path and os.name == "nt" and path.name.lower() != "uv.exe"):
             return path
     return None
 
@@ -863,8 +892,9 @@ class Manager:
         environment["ODICTO_MANAGED_HOME"] = str(self.home)
         return environment
 
-    def ensure_private_uv(self) -> Path | None:
-        """Keep a copy of the uv this install started with in <home>/tools/uv, unless one is there.
+    def ensure_private_uv(self, source: Path | None = None) -> Path | None:
+        """Keep a copy of a uv in <home>/tools/uv, unless one is there: source, else the uv this install
+        started with (bootstrap_uv).
 
         Call it with the home initialized: the home, its marker and its private-directory policy come
         first, and this makes only the two folders below it, with the same policy. The copy is made under
@@ -873,9 +903,10 @@ class Manager:
         falls back to PATH). A folder that is a link is refused and left as it is."""
         folder = self.home / "tools" / "uv"
         private = folder / PRIVATE_UV_NAMES[0]
-        if private.is_file() and not private.is_symlink() and os.access(private, os.X_OK):
-            return private
-        source = bootstrap_uv()
+        existing = _private_uv(self.home)
+        if existing is not None:
+            return existing
+        source = source or bootstrap_uv()
         if source is None:
             return None
         for directory in (self.home / "tools", folder):
@@ -1217,11 +1248,7 @@ runpy.run_path(str(script), run_name='__main__')
                       "$launcher = Join-Path (Split-Path -Parent $PSScriptRoot) 'launcher.py'\n"
                       f"& {powershell_uv} run --python 3.12 --no-project --no-config $launcher @args\n"
                       "exit $LASTEXITCODE\n")
-        # Both paths are absolute: expose_command links ~/.local/bin/odicto to this file, and a path taken
-        # from $0 would then point into ~/.local.
-        shell = ("#!/bin/sh\nset -eu\n"
-                 f'exec {shlex.quote(uv)} run --python 3.12 --no-project --no-config '
-                 f'{shlex.quote(str(self.home / "launcher.py"))} "$@"\n')
+        shell = self._posix_launcher(uv)
         command = ('@"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
                    '-NoProfile -ExecutionPolicy Bypass -File "%~dp0odicto.ps1" %*\r\n')
         files = {"launcher.py": loader.encode(), "bin/odicto": shell.encode(),
@@ -1251,6 +1278,37 @@ runpy.run_path(str(script), run_name='__main__')
             os.replace(temporary, path)
         marker["launchers"] = {relative: hashlib.sha256(contents).hexdigest() for relative, contents in files.items()}
         atomic_json(self.marker, marker)
+
+    def _posix_launcher(self, uv: str) -> str:
+        """The text of bin/odicto. Both paths are absolute: expose_command links ~/.local/bin/odicto to this
+        file, and a path taken from $0 would then point into ~/.local."""
+        return ("#!/bin/sh\nset -eu\n"
+                f'exec {shlex.quote(uv)} run --python 3.12 --no-project --no-config '
+                f'{shlex.quote(str(self.home / "launcher.py"))} "$@"\n')
+
+    def _owned_launcher(self) -> bytes | None:
+        """The bytes of bin/odicto when Odicto wrote it (its hash is in the marker), else None."""
+        path = self.home / "bin" / "odicto"
+        if path.is_symlink():
+            return None
+        contents = path.read_bytes()
+        accepted = self._read_json(self.marker).get("launchers", {}).get("bin/odicto", [])
+        if isinstance(accepted, str):
+            accepted = [accepted]
+        return contents if hashlib.sha256(contents).hexdigest() in accepted else None
+
+    @staticmethod
+    def _launcher_uv(contents: bytes) -> Path | None:
+        """The uv that a launcher runs: the word after exec, in the line `exec <uv> run ...`."""
+        try:
+            for line in contents.decode("utf-8").splitlines():
+                if line.startswith("exec "):
+                    words = shlex.split(line)
+                    if len(words) > 2 and words[2] == "run":
+                        return _runnable(words[1])
+        except ValueError:  # not UTF-8, or not shell words
+            pass
+        return None
 
     def expose_command(self) -> Path:
         """Create a user-level convenience entry, preserving unrelated commands."""
@@ -1393,20 +1451,29 @@ runpy.run_path(str(script), run_name='__main__')
     def _refresh_launchers(self) -> None:
         """After a successful start on macOS or Linux: a home that an older manager set up gets its private
         uv copy and launchers that work through the ~/.local/bin/odicto link (the old text took its folder
-        from $0). Only under a uv launcher (UV is set), so the copy has a source. Best effort: the start has
-        already succeeded, and a later start tries again."""
-        if os.name == "nt" or not os.environ.get("UV"):
-            return
-        private = self.home / "tools" / "uv" / PRIVATE_UV_NAMES[0]
-        try:
-            current = shlex.quote(str(self.home / "launcher.py")) in (self.home / "bin" / "odicto").read_text(
-                encoding="utf-8")
-        except OSError:
-            return
-        if current and private.is_file():
+        from $0).
+
+        The source is the uv that ran this start: UV, which uv sets for the processes it starts, else the
+        uv named in the launcher, which Odicto wrote (its hash is in the marker). ODICTO_BOOTSTRAP_UV is
+        not read here: it belongs to the bootstrap's process, and a copy of it in a shell would be stale.
+        A launcher that Odicto did not write is kept. The launcher is rewritten only after the private copy
+        exists, so a failed copy leaves a launcher that works. Best effort: the start has already
+        succeeded, nothing here may change its result, and a later start tries again."""
+        if not _posix_host():
             return
         try:
+            owned = self._owned_launcher()
+            if owned is None:
+                return
+            private = _private_uv(self.home)
+            if private is not None and owned == self._posix_launcher(str(private)).encode():
+                return
+            source = _runnable(os.environ.get("UV") or "") or self._launcher_uv(owned)
+            if source is None and private is None:
+                return
             with file_lock(self.home / "manager.lock"):
+                if self.ensure_private_uv(source) is None:
+                    return
                 self.install_launchers()
             self._log("Launchers refreshed after the start")
         except Exception as error:

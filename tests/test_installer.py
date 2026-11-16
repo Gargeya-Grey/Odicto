@@ -136,7 +136,13 @@ class Fake {
                 folder.mkdir(parents=True)
                 _build_fake_uv(folder / "uv.exe", root)
                 log = root / "log"
+                home = root / "managed home"
+                # PATH holds only Windows itself, so a regression that runs `uv` by name finds none, and no
+                # real uv can start the downloader. The working folder and every user folder are temporary.
+                system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+                path = os.pathsep.join([str(system), str(system / "WindowsPowerShell" / "v1.0")])
                 script = r'''
+Set-Location -LiteralPath $env:T_ROOT
 function Get-Command {
     param($Name, $CommandType, $ErrorAction)
     @([pscustomobject]@{Source='Invoke-FirstUv'}, [pscustomobject]@{Source='Invoke-SecondUv'})
@@ -144,16 +150,22 @@ function Get-Command {
 function Invoke-FirstUv { throw 'A uv on PATH was run' }
 function Invoke-SecondUv { throw 'A uv on PATH was run' }
 function Invoke-WebRequest { throw 'The network was used' }
-& $env:ODICTO_MANAGED_INSTALL -HomePath 'synthetic-managed-home'
+& $env:ODICTO_MANAGED_INSTALL -HomePath $env:T_HOME
 '''
                 code, text = _ps(script, ODICTO_MANAGED_INSTALL=str(ROOT / "install-managed.ps1"),
                                  LOCALAPPDATA=str(root / "local"), APPDATA=str(root / "roaming"),
-                                 ODICTO_TEST_LOG=str(log))
+                                 USERPROFILE=str(root / "profile"), TEMP=str(root), TMP=str(root),
+                                 PATH=path, T_ROOT=str(root), T_HOME=str(home), ODICTO_TEST_LOG=str(log))
                 self.assertEqual(code, 0, text)
                 self.assertEqual(log.read_text(encoding="utf-8").splitlines(), [
                     "--version",
-                    "run --python 3.12 --no-project --no-config python - --home synthetic-managed-home"])
-                self.assertFalse((ROOT / "synthetic-managed-home").exists())
+                    f"run --python 3.12 --no-project --no-config python - --home {home}"])
+                self.assertFalse(home.exists())
+                # PowerShell itself may make folders in the temporary profile; nothing else may appear.
+                made = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+                self.assertEqual([p for p in made if not p.startswith("profile/")],
+                                 ["fake_uv.cs", "local/Odicto-bootstrap/uv/uv.exe", "log"])
+                self.assertEqual([p for p in made if "odicto" in p.lower() and p.startswith("profile/")], [])
 
         @classmethod
         def setUpClass(cls):

@@ -123,16 +123,32 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _user_install_places() -> list[Path]:
-    """Places outside the checkout that a real Odicto install writes. A test must use a temporary root
-    for them; one that does not installs for real on the developer's machine (it happened once: a stale
-    installer test downloaded uv and wrote Start Menu items)."""
+    """Places outside the checkout that a real Odicto install writes. Tests must use temporary roots for
+    them. This is detection, not prevention: a run that changed one fails, naming it (it happened once,
+    when a stale installer test downloaded uv and wrote Start Menu items). The places hold launchers,
+    caches and start entries, which a running Odicto does not change; its data folder is left out."""
     home = Path.home()
+
+    def xdg(name, default):
+        value = os.environ.get(name, "")
+        return Path(value) if value and os.path.isabs(value) else home / default
+
+    share, cache, config = xdg("XDG_DATA_HOME", ".local/share"), xdg("XDG_CACHE_HOME", ".cache"), \
+        xdg("XDG_CONFIG_HOME", ".config")
+    support = home / "Library" / "Application Support" / "Odicto"
     places = [home / ".local" / "bin" / "odicto", home / ".local" / "bin" / "odicto.cmd",
-              home / ".local" / "share" / "odicto" / "bin", home / ".cache" / "odicto-bootstrap",
-              home / "Library" / "Caches" / "Odicto-bootstrap"]
+              share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py",
+              cache / "odicto-bootstrap", support / "bin", support / "tools", support / "launcher.py",
+              home / "Library" / "Caches" / "Odicto-bootstrap",
+              home / "Library" / "LaunchAgents" / "com.odicto.managed.plist",
+              home / "Library" / "LaunchAgents" / "com.odicto.plist",
+              config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
+    places += [share / "applications" / name for name in
+               ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
     if os.environ.get("LOCALAPPDATA"):
         local = Path(os.environ["LOCALAPPDATA"])
-        places += [local / "Odicto-bootstrap", local / "Odicto" / "bin"]
+        places += [local / "Odicto-bootstrap", local / "Odicto" / "bin", local / "Odicto" / "tools",
+                   local / "Odicto" / "launcher.py"]
     if os.environ.get("APPDATA"):
         programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
         places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd"]
@@ -140,16 +156,28 @@ def _user_install_places() -> list[Path]:
 
 
 def _fingerprint(places: list[Path]) -> dict:
-    """Each place: whether it exists, its modification time, and the names and times one level down."""
+    """Each place: absent, unreadable (with the error), or every file and folder below it with its size and
+    modification time, so an edit deep down shows too."""
     seen = {}
     for place in places:
         try:
-            state = [os.lstat(place).st_mtime_ns]
-            if place.is_dir() and not place.is_symlink():
-                state += sorted((entry.name, entry.stat(follow_symlinks=False).st_mtime_ns)
-                                for entry in os.scandir(place))
-        except OSError:
-            state = None
+            info = os.lstat(place)
+        except FileNotFoundError:
+            seen[str(place)] = "absent"
+            continue
+        except OSError as error:
+            seen[str(place)] = "unreadable: %s" % type(error).__name__
+            continue
+        state = [("", info.st_size, info.st_mtime_ns)]
+        if place.is_dir() and not place.is_symlink():
+            for folder, folders, files in os.walk(place, onerror=lambda error: state.append(("!", str(error)))):
+                for name in sorted(folders + files):
+                    item = os.path.join(folder, name)
+                    try:
+                        detail = os.lstat(item)
+                        state.append((os.path.relpath(item, place), detail.st_size, detail.st_mtime_ns))
+                    except OSError as error:
+                        state.append((os.path.relpath(item, place), type(error).__name__))
         seen[str(place)] = state
     return seen
 

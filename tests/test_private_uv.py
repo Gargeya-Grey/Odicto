@@ -475,6 +475,15 @@ class ManagerCase(unittest.TestCase):
         return patch.dict(os.environ, base)
 
 
+def link_folder(target: Path, link: Path) -> None:
+    """A folder link: a junction on Windows (no privilege needed), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
 class TestFindUv(ManagerCase):
     def test_the_private_uv_is_found_with_an_empty_path(self):
         private = self.private_uv()
@@ -497,6 +506,29 @@ class TestFindUv(ManagerCase):
         (self.home / "tools" / "uv" / UV_NAME).mkdir(parents=True)
         with patch.object(dist.shutil, "which", return_value="/synthetic/uv"):
             self.assertEqual(dist.find_uv(self.home), "/synthetic/uv")
+
+    def test_a_uv_behind_a_linked_folder_is_never_used_nor_kept_as_the_copy(self):
+        foreign = self.root / "foreign"
+        (foreign / "uv").mkdir(parents=True)
+        (foreign / "uv" / UV_NAME).write_bytes(b"#!/bin/sh\nexit 0\n")
+        (foreign / "uv" / UV_NAME).chmod(0o755)
+        for linked in ("tools", "tools/uv"):
+            with self.subTest(linked=linked):
+                shutil.rmtree(self.home, ignore_errors=True)
+                self.home.mkdir(parents=True)
+                if linked == "tools":
+                    link_folder(foreign, self.home / "tools")
+                else:
+                    (self.home / "tools").mkdir()
+                    link_folder(foreign / "uv", self.home / "tools" / "uv")
+                with self.environment():
+                    self.assertIsNone(dist.find_uv(self.home))
+                manager = dist.Manager(self.home)
+                with self.environment(ODICTO_BOOTSTRAP_UV=str(self.make_source())), \
+                        self.assertRaises(dist.DistributionError):
+                    manager.ensure_private_uv()
+                self.assertEqual((foreign / "uv" / UV_NAME).read_bytes(), b"#!/bin/sh\nexit 0\n")
+                os.unlink(self.home / linked) if os.name != "nt" else os.rmdir(self.home / linked)
 
 
 class TestEnsurePrivateUv(ManagerCase):
@@ -696,6 +728,9 @@ class TestRefreshAfterStart(ManagerCase):
 
     def setUp(self):
         super().setUp()
+        posix = patch.object(dist, "_posix_host", return_value=True)  # the POSIX branch, on every host
+        posix.start()
+        self.addCleanup(posix.stop)
         self.source = self.make_source()
         self.manager = dist.Manager(self.home)
         self.manager.initialize()
@@ -713,19 +748,61 @@ class TestRefreshAfterStart(ManagerCase):
             self.manager._refresh_launchers()
         return (self.home / "bin" / "odicto").read_bytes()
 
+    def private(self) -> Path:
+        return self.home / "tools" / "uv" / UV_NAME
+
+    def expected(self) -> bytes:
+        return self.manager._posix_launcher(str(self.private())).encode()
+
     def test_an_old_launcher_is_rewritten_and_the_uv_copied_under_a_uv_launcher(self):
         text = self.refresh(UV=str(self.source))
-        posix_host = os.name != "nt"
-        self.assertEqual(text != self.old, posix_host)
-        self.assertEqual((self.home / "tools" / "uv" / UV_NAME).is_file(), posix_host)
-        if posix_host:
-            self.assertIn(shlex.quote(str(self.home / "launcher.py")), text.decode())
-            self.assertIn(shlex.quote(str(self.home / "tools" / "uv" / UV_NAME)), text.decode())
+        self.assertEqual(text, self.expected())
+        self.assertEqual(self.private().read_bytes(), self.source.read_bytes())
 
-    def test_nothing_happens_outside_a_uv_launcher(self):
+    def test_without_uv_the_uv_named_in_the_owned_old_launcher_is_the_source(self):
+        # An older uv sets no UV for its children; the 1.5.x launcher names the uv it runs.
+        self.assertEqual(self.refresh(), self.expected())
+        self.assertEqual(self.private().read_bytes(), self.source.read_bytes())
+
+    def test_without_uv_and_with_the_old_uv_gone_nothing_changes(self):
+        self.source.unlink()
         with patch.object(dist.Manager, "install_launchers") as install:
             self.assertEqual(self.refresh(), self.old)
         install.assert_not_called()
+        self.assertFalse((self.home / "tools").exists())
+
+    def test_the_running_uv_wins_over_a_stale_bootstrap_variable(self):
+        stale = self.root / "stale" / UV_NAME
+        stale.parent.mkdir()
+        stale.write_bytes(b"#!/bin/sh\necho stale\n")
+        stale.chmod(0o755)
+        self.assertEqual(self.refresh(UV=str(self.source), ODICTO_BOOTSTRAP_UV=str(stale)), self.expected())
+        self.assertEqual(self.private().read_bytes(), self.source.read_bytes())
+
+    def test_a_launcher_that_still_runs_another_uv_is_rewritten_once_the_copy_exists(self):
+        # A failed copy left a new-style launcher on the cache uv; a later run made the copy.
+        on_cache = self.manager._posix_launcher(str(self.source)).encode()
+        (self.home / "bin" / "odicto").write_bytes(on_cache)
+        marker = json.loads(self.manager.marker.read_text(encoding="utf-8"))
+        marker["launchers"] = {"bin/odicto": hashlib.sha256(on_cache).hexdigest()}
+        dist.atomic_json(self.manager.marker, marker)
+        with self.environment(ODICTO_BOOTSTRAP_UV=str(self.source)):
+            self.assertIsNotNone(self.manager.ensure_private_uv())
+        self.assertEqual(self.refresh(), self.expected())
+
+    def test_a_failed_copy_keeps_the_working_launcher(self):
+        with patch.object(dist.Manager, "ensure_private_uv", return_value=None), \
+                patch.object(dist.Manager, "install_launchers") as install:
+            self.assertEqual(self.refresh(UV=str(self.source)), self.old)
+        install.assert_not_called()
+
+    def test_a_launcher_that_is_not_utf8_never_raises(self):
+        odd = b"#!/bin/sh\n# caf\xe9\nexec /bin/true\n"
+        (self.home / "bin" / "odicto").write_bytes(odd)
+        marker = json.loads(self.manager.marker.read_text(encoding="utf-8"))
+        marker["launchers"] = {"bin/odicto": hashlib.sha256(odd).hexdigest()}
+        dist.atomic_json(self.manager.marker, marker)
+        self.assertEqual(self.refresh(), odd)
 
     def test_current_launchers_with_a_private_uv_are_left_alone(self):
         with self.environment(UV=str(self.source)):
@@ -737,6 +814,12 @@ class TestRefreshAfterStart(ManagerCase):
     def test_a_foreign_launcher_is_kept_and_the_start_is_not_disturbed(self):
         (self.home / "bin" / "odicto").write_bytes(b"#!/bin/sh\necho mine\n")
         self.assertEqual(self.refresh(UV=str(self.source)), b"#!/bin/sh\necho mine\n")
+        self.assertFalse((self.home / "tools").exists())
+
+    def test_windows_hosts_do_nothing(self):
+        with patch.object(dist, "_posix_host", return_value=False):
+            self.assertEqual(self.refresh(UV=str(self.source)), self.old)
+        self.assertFalse((self.home / "tools").exists())
 
     def test_a_busy_manager_lock_skips_the_refresh(self):
         with dist.file_lock(self.manager.home / "manager.lock"):
@@ -804,7 +887,7 @@ if os.name == "nt":
             ''')
 
         def test_path_and_the_variable_are_restored_after_success_and_after_failure(self):
-            with tempfile.TemporaryDirectory(prefix="odicto-ps-bootstrap-") as directory:
+            with tempfile.TemporaryDirectory(prefix="odicto-ps-bootstrap-\u00e9 o'k ") as directory:
                 root = Path(directory).resolve()
                 source = root / "fake.cs"
                 source.write_text(self.SOURCE, encoding="ascii")
@@ -817,23 +900,28 @@ if os.name == "nt":
                 log = root / "log"
                 log.write_text("")
                 runner = root / "run.ps1"
-                runner.write_text(textwrap.dedent(f"""
+                # Paths go in environment variables, never into the script text: a user or checkout folder can
+                # hold a non-ASCII letter or an apostrophe.
+                runner.write_text(textwrap.dedent("""
                     $ErrorActionPreference = 'Stop'
-                    $env:LOCALAPPDATA = '{root / "local"}'
-                    $env:ODICTO_TEST_LOG = '{log}'
+                    $env:LOCALAPPDATA = $env:T_LOCAL
+                    $env:ODICTO_TEST_LOG = $env:T_LOG
                     $env:ODICTO_BOOTSTRAP_UV = 'before-value'
                     $path = $env:PATH
-                    & '{DISTRIBUTION / "bootstrap.ps1"}'
+                    & $env:T_BOOTSTRAP
                     Write-Output ('success-path-restored=' + ($env:PATH -ceq $path))
                     Write-Output ('success-variable=' + $env:ODICTO_BOOTSTRAP_UV)
                     $env:ODICTO_TEST_UV_EXIT = '3'
-                    try {{ & '{DISTRIBUTION / "bootstrap.ps1"}'; Write-Output 'failure-did-not-throw' }}
-                    catch {{ Write-Output ('failure-message=' + $_.Exception.Message) }}
+                    try { & $env:T_BOOTSTRAP; Write-Output 'failure-did-not-throw' }
+                    catch { Write-Output ('failure-message=' + $_.Exception.Message) }
                     Write-Output ('failure-path-restored=' + ($env:PATH -ceq $path))
                     Write-Output ('failure-variable=' + $env:ODICTO_BOOTSTRAP_UV)
                     """), encoding="ascii")
+                environment = dict(os.environ, T_LOCAL=str(root / "local"), T_LOG=str(log),
+                                   T_BOOTSTRAP=str(DISTRIBUTION / "bootstrap.ps1"))
                 done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                                       "-File", str(runner)], capture_output=True, text=True, timeout=120)
+                                       "-File", str(runner)], capture_output=True, text=True, timeout=120,
+                                      env=environment)
                 output = done.stdout + done.stderr
                 self.assertEqual(done.returncode, 0, output)
                 for expected in ("success-path-restored=True", "success-variable=before-value",

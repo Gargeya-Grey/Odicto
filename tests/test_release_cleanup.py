@@ -419,6 +419,13 @@ class TestWhenItRuns(Cleanup):
                 self.assertEqual(self.start(command, result), result)
                 self.assertEqual(refresh.call_count, calls)
 
+    def test_a_refresh_that_breaks_never_changes_the_result_of_a_start(self):
+        self.fixture.initial()
+        with patch.object(dist, "_posix_host", return_value=True), \
+                patch.object(dist.Manager, "_owned_launcher", side_effect=RuntimeError("synthetic")), \
+                patch.object(dist.sys, "stderr", new_callable=io.StringIO):
+            self.assertEqual(self.start(["start"], 0), 0)
+
     def test_a_start_that_failed_or_was_refused_does_not_prune(self):
         self.fixture.initial()
         orphan = self.folder()
