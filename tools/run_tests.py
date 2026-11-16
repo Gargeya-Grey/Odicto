@@ -70,7 +70,10 @@ GATE = {
     # Plus 4 for the installer messages on every platform: rate limit, other HTTP error, no
     # connection, the quoted Setup command (the 2 Wayland tests are macOS/Linux only): 1297.
     # Plus 5 for the CI pull-request path filter (tests/test_ci_paths.py, every platform): 1302.
-    "floor": 1302,
+    # 1.5.1 (microphone buffers, Qt Essentials, release manifest and cleanup, first start): the
+    # floor now equals the smallest count on CI, measured on pull request #40 (macOS and Linux
+    # 1623, Windows 1635): 1623.
+    "floor": 1623,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

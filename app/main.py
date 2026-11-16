@@ -2053,6 +2053,23 @@ class DictationApp:
             self.paste_delivered = False
             print("System Idle. Ready.")
 
+def stop_for_startup_blockers(blockers) -> None:
+    """Print each blocker, lead a macOS user to the missing switch, then exit 2.
+
+    The message comes first and the exit is unconditional: the macOS consent prompt and
+    System Settings pane are best effort, so a failure there never changes the outcome.
+    No hook is bound before this point or after it.
+    """
+    for problem in blockers:
+        print(f"Cannot start Odicto [{problem.code}]: {problem.message}", file=sys.stderr, flush=True)
+    try:
+        from platforms.preflight import guide_to_consent
+        guide_to_consent(blockers)
+    except Exception:
+        pass
+    sys.exit(2)
+
+
 if __name__ == "__main__":
     if sys.stdout is not None:
         try:
@@ -2066,9 +2083,7 @@ if __name__ == "__main__":
     from platforms.preflight import environment_problems
     startup_blockers = [problem for problem in environment_problems() if problem.severity == "error"]
     if startup_blockers:
-        for problem in startup_blockers:
-            print(f"Cannot start Odicto [{problem.code}]: {problem.message}", file=sys.stderr, flush=True)
-        sys.exit(2)
+        stop_for_startup_blockers(startup_blockers)
 
     _pid_path = os.path.join(_install_root(), "dictation.pid")
     if not claim_install(_pid_path):
