@@ -560,11 +560,14 @@ def bootstrap_uv() -> Path | None:
     """The uv that this install was started with, to copy into the managed home.
 
     The bootstrap passes its absolute path in ODICTO_BOOTSTRAP_UV and puts its folder first on PATH. An
-    older bootstrap passes nothing, and then the uv on PATH is the one. Only an absolute path to a file
-    that can run is used; a uv found on PATH must also be a real uv.exe on Windows, not a .cmd shim."""
+    older bootstrap passes nothing, and then the uv on PATH is the one. Under a launcher, uv itself sets UV
+    to its own path for the processes it starts (uv releases since February 2025), so a start at sign-in without uv on PATH
+    still finds it. Only an absolute path to a file that can run is used; a uv found on PATH must also be a
+    real uv.exe on Windows, not a .cmd shim."""
     given = os.environ.get("ODICTO_BOOTSTRAP_UV") or ""
+    running = os.environ.get("UV") or ""
     found = shutil.which("uv") or ""
-    for candidate, from_path in ((given, False), (found, True)):
+    for candidate, from_path in ((given, False), (running, False), (found, True)):
         path = Path(candidate) if candidate else None
         if (path is not None and path.is_absolute() and path.is_file() and os.access(path, os.X_OK)
                 and not (from_path and os.name == "nt" and path.name.lower() != "uv.exe")):
@@ -1384,7 +1387,30 @@ runpy.run_path(str(script), run_name='__main__')
                 print("The new runtime still owns its lock; rollback was deferred.", file=sys.stderr)
         elif result == 0 and requested == "start":
             self._tidy_releases()
+            self._refresh_launchers()
         return result
+
+    def _refresh_launchers(self) -> None:
+        """After a successful start on macOS or Linux: a home that an older manager set up gets its private
+        uv copy and launchers that work through the ~/.local/bin/odicto link (the old text took its folder
+        from $0). Only under a uv launcher (UV is set), so the copy has a source. Best effort: the start has
+        already succeeded, and a later start tries again."""
+        if os.name == "nt" or not os.environ.get("UV"):
+            return
+        private = self.home / "tools" / "uv" / PRIVATE_UV_NAMES[0]
+        try:
+            current = shlex.quote(str(self.home / "launcher.py")) in (self.home / "bin" / "odicto").read_text(
+                encoding="utf-8")
+        except OSError:
+            return
+        if current and private.is_file():
+            return
+        try:
+            with file_lock(self.home / "manager.lock"):
+                self.install_launchers()
+            self._log("Launchers refreshed after the start")
+        except Exception as error:
+            self._log(f"Launchers were not refreshed: {error}")
 
     def configure_admin(self, enabled: bool) -> None:
         if sys.platform != "win32":

@@ -7,7 +7,10 @@ fixture of the 1.5.x manager (old design) with the environment the bootstrap bui
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import shlex
@@ -680,6 +683,62 @@ class TestLauncherThroughALink(ManagerCase):
         self.assertIn("Split-Path -Parent $PSScriptRoot", script)
         source = (DISTRIBUTION / "manager.py").read_text(encoding="utf-8")
         self.assertIn("""target = str(self.home / "bin" / "odicto.cmd")""", source)
+
+
+class TestRefreshAfterStart(ManagerCase):
+    """A home set up by an older manager gets the private uv and link-safe launchers at its next start."""
+
+    def setUp(self):
+        super().setUp()
+        self.source = self.make_source()
+        self.manager = dist.Manager(self.home)
+        self.manager.initialize()
+        old = TestLauncherThroughALink.OLD_LAUNCHER.format(uv=shlex.quote(str(self.source))).encode()
+        launcher = self.home / "bin" / "odicto"
+        launcher.parent.mkdir()
+        launcher.write_bytes(old)
+        marker = json.loads(self.manager.marker.read_text(encoding="utf-8"))
+        marker["launchers"] = {"bin/odicto": hashlib.sha256(old).hexdigest()}
+        dist.atomic_json(self.manager.marker, marker)
+        self.old = old
+
+    def refresh(self, **values):
+        with self.environment(**values):
+            self.manager._refresh_launchers()
+        return (self.home / "bin" / "odicto").read_bytes()
+
+    def test_an_old_launcher_is_rewritten_and_the_uv_copied_under_a_uv_launcher(self):
+        text = self.refresh(UV=str(self.source))
+        posix_host = os.name != "nt"
+        self.assertEqual(text != self.old, posix_host)
+        self.assertEqual((self.home / "tools" / "uv" / UV_NAME).is_file(), posix_host)
+        if posix_host:
+            self.assertIn(shlex.quote(str(self.home / "launcher.py")), text.decode())
+            self.assertIn(shlex.quote(str(self.home / "tools" / "uv" / UV_NAME)), text.decode())
+
+    def test_nothing_happens_outside_a_uv_launcher(self):
+        with patch.object(dist.Manager, "install_launchers") as install:
+            self.assertEqual(self.refresh(), self.old)
+        install.assert_not_called()
+
+    def test_current_launchers_with_a_private_uv_are_left_alone(self):
+        with self.environment(UV=str(self.source)):
+            self.manager.install_launchers()
+        with patch.object(dist.Manager, "install_launchers") as install:
+            self.refresh(UV=str(self.source))
+        install.assert_not_called()
+
+    def test_a_foreign_launcher_is_kept_and_the_start_is_not_disturbed(self):
+        (self.home / "bin" / "odicto").write_bytes(b"#!/bin/sh\necho mine\n")
+        self.assertEqual(self.refresh(UV=str(self.source)), b"#!/bin/sh\necho mine\n")
+
+    def test_a_busy_manager_lock_skips_the_refresh(self):
+        with dist.file_lock(self.manager.home / "manager.lock"):
+            self.assertEqual(self.refresh(UV=str(self.source)), self.old)
+
+    def test_the_uv_variable_is_a_source_for_the_copy(self):
+        with self.environment(UV=str(self.source)):
+            self.assertEqual(dist.bootstrap_uv(), self.source)
 
 
 class TestVerifiersStayIdentical(unittest.TestCase):
