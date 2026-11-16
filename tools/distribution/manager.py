@@ -1103,6 +1103,28 @@ class Manager:
             names.add(name)
         return names
 
+    def _log_size(self) -> int:
+        try:
+            return (self.data / "dictation.log").stat().st_size
+        except OSError:
+            return 0
+
+    def _startup_refusals(self, start: int) -> list[str]:
+        """The "Cannot start Odicto [...]" lines that the owner wrote to dictation.log after offset start.
+
+        A managed owner writes its stderr to the log, so its reason (a missing permission, a Wayland
+        session) would reach the terminal only as a path. A log that shrank (a trim) is read from its
+        last 64 KiB. Best effort: an unreadable log gives no lines."""
+        try:
+            with open(self.data / "dictation.log", "rb") as log:
+                size = log.seek(0, 2)
+                log.seek(start if start <= size else max(0, size - 65536))
+                text = log.read(65536).decode("utf-8", "replace")
+        except OSError:
+            return []
+        marker = "Cannot start Odicto ["
+        return [line[line.index(marker):] for line in text.splitlines() if marker in line]
+
     def _log(self, text: str) -> None:
         try:
             self.update_log.parent.mkdir(parents=True, exist_ok=True)
@@ -1775,6 +1797,7 @@ runpy.run_path(str(script), run_name='__main__')
         environment["ODICTO_LAUNCH_RECEIPT"] = str(receipt)
         process = None
         confirmed = False
+        log_start = self._log_size()
         try:
             options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
             process = subprocess.Popen([str(python), str(directory / "odicto.py"),
@@ -1799,6 +1822,8 @@ runpy.run_path(str(script), run_name='__main__')
                 if status is not None:
                     confirmed = True
                     if command == "start" and status != EXIT_ANOTHER_OWNER:
+                        for line in self._startup_refusals(log_start):
+                            print(line, file=sys.stderr)
                         print(f"Odicto exited during startup (code {status}); see {self.data / 'dictation.log'}.",
                               file=sys.stderr)
                     return status if status else (0 if command == "setup" else 1)

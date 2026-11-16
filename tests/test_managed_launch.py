@@ -68,6 +68,29 @@ class TestManagedLaunch(unittest.TestCase):
         self.assertIn("exited during startup (code 3)", errors.getvalue())
         self.assertIn(str(self.manager.data / "dictation.log"), errors.getvalue())
 
+    def test_startup_exit_shows_the_reason_that_the_owner_logged(self):
+        # A managed owner writes its stderr to dictation.log; the terminal must still show why it stopped.
+        log = self.manager.data / "dictation.log"
+        log.write_text("----- session 1 pid=1 -----\n2026-01-01 00:00:00 Cannot start Odicto [old]: earlier run\n",
+                       encoding="utf-8")
+
+        def spawn(*args, **kwargs):
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write("----- session 2 pid=2 -----\n"
+                             "2026-01-01 00:00:01 Cannot start Odicto [macos_accessibility]: turn on Accessibility\n")
+            return Child(code=2)
+
+        errors = io.StringIO()
+        with patch.object(self.manager, "_ready", return_value=False), patch.object(
+            dist.subprocess, "Popen", side_effect=spawn
+        ), patch.object(sys, "stderr", errors):
+            self.assertEqual(self.manager.run(["start"]), 2)
+        lines = errors.getvalue().splitlines()
+        self.assertIn("Cannot start Odicto [macos_accessibility]: turn on Accessibility", lines)
+        self.assertNotIn("Cannot start Odicto [old]: earlier run", errors.getvalue())
+        self.assertLess(lines.index("Cannot start Odicto [macos_accessibility]: turn on Accessibility"),
+                        [i for i, line in enumerate(lines) if "exited during startup" in line][0])
+
     def test_failure_to_execute_child_rolls_back(self):
         self.update()
         with patch.object(self.manager, "_ready", return_value=False), patch.object(dist.subprocess, "Popen", side_effect=OSError("fixture execute failure")):
