@@ -73,10 +73,12 @@ esac
 exit 0
 """
 
-# The fake `uv` is the verified bootstrap's stand-in: it reads the Python program from stdin
-# (as `uv run ... python -` does), then installs the fake command, unless it is told to fail.
+# The fake `uv` is the verified bootstrap's stand-in. The bootstrap keeps its own uv in its cache folder
+# and checks it with `--version` (the runner puts the fake there). On `run` it reads the Python program
+# from stdin (as `uv run ... python -` does), then installs the fake command, unless it is told to fail.
 FAKE_UV = """#!/bin/sh
 printf 'uv|%s\\n' "$*" >> "$T_LOG"
+[ "$1" = --version ] && { echo 'uv 0.0 (fake)'; exit 0; }
 cat > /dev/null
 [ "${T_UV_EXIT:-0}" = 0 ] || exit "$T_UV_EXIT"
 if [ "${T_NO_INSTALL:-}" != 1 ]; then
@@ -89,9 +91,11 @@ exit 0
 
 FAKES = {
     "uname": "#!/bin/sh\nprintf '%s\\n' \"$T_SYSTEM\"\n",
-    # A download here means the bootstrap did not find the fake `uv`.
+    # A download here means the bootstrap did not find the fake `uv` in its cache folder.
     "curl": "#!/bin/sh\nprintf 'curl|%s\\n' \"$*\" >> \"$T_LOG\"\nexit 1\n",
-    "uv": FAKE_UV,
+    # A uv on PATH is never used: the bootstrap installs and runs its own.
+    "uv": "#!/bin/sh\nprintf 'path-uv|%s\\n' \"$*\" >> \"$T_LOG\"\nexit 9\n",
+    "private-uv": FAKE_UV,
     # sudo and apt-get read all of stdin, as a greedy child would on a pipe.
     "sudo": "#!/bin/sh\nprintf 'sudo|%s\\n' \"$*\" >> \"$T_LOG\"\ncat > /dev/null\nexit 0\n",
     "apt-get": "#!/bin/sh\nprintf 'apt-get|%s\\n' \"$*\" >> \"$T_LOG\"\ncat > /dev/null\nexit 0\n",
@@ -102,7 +106,10 @@ FAKES = {
 
 # The pasted line is `curl ... | bash`: the shell reads the script from a pipe.
 RUNNER = ('export HOME="$T_ROOT/home" PATH="$T_FAKES:/usr/bin:/bin:$PATH" XDG_SESSION_TYPE="${T_SESSION:-x11}"\n'
-          'unset XDG_DATA_HOME WAYLAND_DISPLAY DISPLAY\n'
+          'unset XDG_DATA_HOME XDG_CACHE_HOME WAYLAND_DISPLAY DISPLAY\n'
+          'for d in "$HOME/.cache/odicto-bootstrap/uv" "$HOME/Library/Caches/Odicto-bootstrap/uv"; do\n'
+          '  mkdir -p "$d" && cp "$T_FAKES/private-uv" "$d/uv" && chmod +x "$d/uv"\n'
+          'done\n'
           'cat "$T_SCRIPT" | bash -s -- "$@"\n')
 
 
@@ -221,6 +228,7 @@ class TestPosixInstallerRuns(unittest.TestCase):
         # The bootstrap (the fake uv) runs first, and no download starts: uv is found.
         self.assertEqual([row[0] for row in self.records()][0], "uv")
         self.assertNotIn("curl", [row[0] for row in self.records()])
+        self.assertNotIn("path-uv", [row[0] for row in self.records()])
         out = self.output(done)
         for text in ("Step 1 of 3", "Step 2 of 3: Starting Odicto", "Step 3 of 3", "Odicto is ready.", "Try it now:",
                      "It starts by itself when you sign in.", "Your browser shows Odicto Setup."):
@@ -250,7 +258,8 @@ class TestPosixInstallerRuns(unittest.TestCase):
         other = self.root / "other home"
         done = self.run_installer("--home", posix(other), home=posix(other))
         self.assertEqual(done.returncode, 0, self.output(done))
-        self.assertIn("--home " + posix(other), [row[1] for row in self.records() if row[0] == "uv"][0])
+        self.assertIn("--home " + posix(other),
+                      [row[1] for row in self.records() if row[0] == "uv" and row[1].startswith("run ")][0])
         self.assertEqual({row[1] for row in self.records() if row[0] == "odicto"}, {posix(other) + "/bin/odicto"})
         self.assertFalse(self.managed().exists())
 
