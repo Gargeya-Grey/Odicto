@@ -4,7 +4,8 @@ Discovers every tests/test_*.py (new files are picked up automatically), runs th
 verbosely, then enforces:
   (a) no failures and no errors;
   (b) total tests run >= GATE["floor"];
-  (c) every skipped test matches an allow-list pattern for the current platform.
+  (c) every skipped test matches an allow-list pattern for the current platform;
+  (d) no test wrote to the places where a real install lives (_user_install_places).
 
 Stdlib only. Usage (from anywhere):  python tools/run_tests.py
 """
@@ -121,6 +122,66 @@ GATE = {
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _user_install_places() -> list[Path]:
+    """Places outside the checkout that a real Odicto install writes. Tests must use temporary roots for
+    them. This is detection, not prevention: a run that changed one fails, naming it (it happened once,
+    when a stale installer test downloaded uv and wrote Start Menu items). The places hold launchers,
+    caches and start entries, which a running Odicto does not change; its data folder is left out."""
+    home = Path.home()
+
+    def xdg(name, default):
+        value = os.environ.get(name, "")
+        return Path(value) if value and os.path.isabs(value) else home / default
+
+    share, cache, config = xdg("XDG_DATA_HOME", ".local/share"), xdg("XDG_CACHE_HOME", ".cache"), \
+        xdg("XDG_CONFIG_HOME", ".config")
+    support = home / "Library" / "Application Support" / "Odicto"
+    places = [home / ".local" / "bin" / "odicto", home / ".local" / "bin" / "odicto.cmd",
+              share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py",
+              cache / "odicto-bootstrap", support / "bin", support / "tools", support / "launcher.py",
+              home / "Library" / "Caches" / "Odicto-bootstrap",
+              home / "Library" / "LaunchAgents" / "com.odicto.managed.plist",
+              home / "Library" / "LaunchAgents" / "com.odicto.plist",
+              config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
+    places += [share / "applications" / name for name in
+               ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
+    if os.environ.get("LOCALAPPDATA"):
+        local = Path(os.environ["LOCALAPPDATA"])
+        places += [local / "Odicto-bootstrap", local / "Odicto" / "bin", local / "Odicto" / "tools",
+                   local / "Odicto" / "launcher.py"]
+    if os.environ.get("APPDATA"):
+        programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd"]
+    return places
+
+
+def _fingerprint(places: list[Path]) -> dict:
+    """Each place: absent, unreadable (with the error), or every file and folder below it with its size and
+    modification time, so an edit deep down shows too."""
+    seen = {}
+    for place in places:
+        try:
+            info = os.lstat(place)
+        except FileNotFoundError:
+            seen[str(place)] = "absent"
+            continue
+        except OSError as error:
+            seen[str(place)] = "unreadable: %s" % type(error).__name__
+            continue
+        state = [("", info.st_size, info.st_mtime_ns)]
+        if place.is_dir() and not place.is_symlink():
+            for folder, folders, files in os.walk(place, onerror=lambda error: state.append(("!", str(error)))):
+                for name in sorted(folders + files):
+                    item = os.path.join(folder, name)
+                    try:
+                        detail = os.lstat(item)
+                        state.append((os.path.relpath(item, place), detail.st_size, detail.st_mtime_ns))
+                    except OSError as error:
+                        state.append((os.path.relpath(item, place), type(error).__name__))
+        seen[str(place)] = state
+    return seen
+
+
 @contextlib.contextmanager
 def _elevation_probe_boundary():
     """Keep the gate off the real UAC prompt once an install has opted in to always-admin.
@@ -183,8 +244,12 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         str(ROOT / "tests"), pattern="test_*.py", top_level_dir=str(ROOT))
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
-    # Capture thread stacks from a long-running suite before the parent deadline.
-    faulthandler.dump_traceback_later(160, repeat=True)
+    places = _user_install_places()
+    before = _fingerprint(places)
+    # Capture thread stacks once, shortly before the parent deadline (tools/ci_platform_smoke.py
+    # gives the gate 600 s). A dump reads every thread's frames while they run, and on Windows it
+    # crashed the run once (access violation) when an earlier, repeating dump met a normal run.
+    faulthandler.dump_traceback_later(540, repeat=False)
     try:
         with _elevation_probe_boundary(), _source_migration_boundary():
             result = runner.run(suite)
@@ -198,6 +263,12 @@ def main() -> int:
                 pass
 
     problems = []
+    after = _fingerprint(places)
+    touched = [place for place in before if before[place] != after[place]]
+    if touched:
+        problems.append("%d place(s) of a real install changed during the run (a test escaped its temporary root):"
+                        % len(touched))
+        problems += ["  - " + place for place in touched]
     if result.failures or result.errors:
         problems.append("%d failure(s), %d error(s):" % (len(result.failures), len(result.errors)))
         problems += ["  - " + test.id() for test, _ in result.failures + result.errors]
