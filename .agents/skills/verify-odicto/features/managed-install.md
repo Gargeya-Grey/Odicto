@@ -120,3 +120,51 @@ microphone. No Odicto, Git or Python is installed there.
    checkout's `dictation.log`, and no letter twice while you type. A failure without that line,
    or with no managed owner running, does not prove the lock.
 9. Clean up: open Stop Odicto, then delete the test account. Its files go with it.
+
+## One-line installer (macOS and Linux)
+
+`tests/test_posix_easy_install.py` runs a built `install-odicto.sh` from a pipe (`cat | bash`) with
+fake `uname`, `curl`, `uv`, `sudo`, `apt-get`, `dpkg-query` and `ps`, and a fake managed `odicto`
+(order autostart, start, the readiness check, setup; exit codes; a source copy that blocks the start).
+CI builds the file and pipes it into `bash` on every macOS and Linux job. A real install needs a
+clean machine and the owner's hands: grant the Mac permissions, dictate, and sign out and in.
+Never run it on a machine that runs Odicto for real.
+
+### Owner checklist: a Mac (for example a new Mac Studio)
+
+Use a new macOS user (System Settings, Users & Groups) with a microphone. No Odicto, Homebrew,
+Git or Python is needed.
+
+1. Open Terminal (Command + Space, `Terminal`, Return). Paste the line from the README and press
+   Return. Expect "Step 1 of 3" and no question.
+2. Expect macOS to ask for Accessibility and for Input Monitoring, and System Settings to open on
+   the pane. Turn on the entry it names (Terminal, or `python3.12`), for both permissions.
+3. Paste the line again. Expect "Odicto is ready." (or "not ready to dictate yet" while a microphone
+   prompt is open: click Allow), and Setup in the browser.
+4. Dictate in TextEdit: tap Control+\`, speak, tap Control+\` again. Expect the words at the cursor
+   and the HUD at the bottom of the screen.
+5. Sign out and in. Expect Odicto to run again without Terminal (the LaunchAgent
+   `com.odicto.managed`), and dictation to work. This is the first proof that the permissions hold
+   for a start at sign-in.
+6. `~/Library/Application Support/Odicto/bin/odicto update`. Expect "is up to date" or a working
+   update, also when Terminal's PATH has no `~/.local/bin`.
+7. Clean up: `odicto stop`, then delete the test user.
+
+### Owner checklist: Linux (an Ubuntu 24.04 or Linux Mint machine or VM, Xorg session)
+
+1. Log in with an Xorg session. Open a terminal, paste the README line. Expect one password
+   question (for system packages), then "Step 1 of 3" to "Step 3 of 3" and Setup in the browser.
+2. Dictate in the text editor: tap Ctrl+\`, speak, tap again. Expect the words at the cursor.
+3. Log out and in. Expect Odicto to run again (`~/.config/autostart/odicto-managed.desktop`).
+4. `~/.local/share/odicto/bin/odicto update` from the autostarted session: expect no
+   "uv was not found".
+5. Ubuntu 25.10 or newer (no Xorg session): expect the installer to stop before the password
+   question with "Nothing was installed" and the reason.
+
+### WSL (testing only)
+
+WSLg runs an X server beside its Wayland one, so Odicto runs in WSL with `DISPLAY` set. It types
+only into Linux X11 apps, and its keys work only while a Linux window has focus. The installer
+adds `libasound2-plugins`, without which PortAudio has no microphone. Measured on Ubuntu 24.04 in
+WSL (16 Nov 2026): install, start, `wait-ready` ("microphone receiving audio"), stop, and an update
+from 1.5.0 to 1.5.1.

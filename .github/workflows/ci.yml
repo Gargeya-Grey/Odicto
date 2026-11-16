@@ -75,6 +75,53 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/odicto-installed"
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv/bin/python tools/x11_integration_check.py --output "$RUNNER_TEMP/odicto-evidence/x11.json"
+      # The pasted line is `curl ... | bash`. This runs the built file the same way, on the real
+      # bash and uname of each runner, with fakes for the download, the packages and the app.
+      # The fakes record each call; a real install or start never runs here.
+      - name: One-line installer, run from a pipe with fakes
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/posix-installer"
+          rm -rf "$work"
+          mkdir -p "$work/fakes" "$work/home"
+          uv run --no-project --python 3.12 tools/distribution/build_posix_installer.py "$work/install-odicto.sh"
+          if [ "$(uname -s)" = Darwin ]; then
+            managed="$work/home/Library/Application Support/Odicto"
+            private_uv="$work/home/Library/Caches/Odicto-bootstrap/uv"
+          else
+            managed="$work/home/.local/share/odicto"
+            private_uv="$work/home/.cache/odicto-bootstrap/uv"
+          fi
+          mkdir -p "$private_uv"
+          cat > "$work/fake-odicto" <<'FAKE'
+          #!/bin/sh
+          echo "$*" >> "$T_LOG"
+          exit 0
+          FAKE
+          # The bootstrap uses only its own uv in its cache folder; a uv on PATH is a trap.
+          cat > "$private_uv/uv" <<'FAKE'
+          #!/bin/sh
+          [ "$1" = --version ] && { echo 'uv 0.0 (fake)'; exit 0; }
+          cat > /dev/null
+          mkdir -p "$T_HOME/bin"
+          cp "$T_FAKE" "$T_HOME/bin/odicto"
+          chmod +x "$T_HOME/bin/odicto"
+          FAKE
+          printf '#!/bin/sh\nprintf installed\n' > "$work/fakes/dpkg-query"
+          printf '#!/bin/sh\nexit 0\n' > "$work/fakes/ps"
+          for name in curl uv sudo apt-get; do
+            printf '#!/bin/sh\necho "unexpected %s" >&2\nexit 1\n' "$name" > "$work/fakes/$name"
+          done
+          chmod +x "$work/fake-odicto" "$private_uv/uv" "$work"/fakes/*
+          : > "$work/log"
+          cat "$work/install-odicto.sh" | env -i HOME="$work/home" PATH="$work/fakes:/usr/bin:/bin" \
+            XDG_SESSION_TYPE=x11 T_HOME="$managed" T_LOG="$work/log" T_FAKE="$work/fake-odicto" bash \
+            > "$work/output.txt" 2>&1 || { cat "$work/output.txt"; echo "the installer exited non-zero"; exit 1; }
+          cat "$work/output.txt"
+          printf 'autostart\nstart\nwait-ready --timeout 5 --report-waiting\nsetup\n' | diff - "$work/log"
+          grep -q 'Odicto is ready.' "$work/output.txt"
       - name: Retain exact OS, install, test and smoke evidence
         if: always()
         uses: actions/upload-artifact@v4

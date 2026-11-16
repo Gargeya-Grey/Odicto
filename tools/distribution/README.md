@@ -84,6 +84,27 @@ It is not signed. On Windows, install also writes the Start Menu folder `Odicto`
 Odicto, Odicto Setup and Stop Odicto, which run the stable `bin\odicto.cmd`. A shortcut of
 the same name that runs another program is kept.
 
+On macOS and Linux, a stable release also has `install-odicto.sh` (built by
+`build_posix_installer.py` in the Release workflow; a pre-release does not get it). A user pastes
+`curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash`
+in a terminal. The file holds `bootstrap.sh` unchanged inside a shell function, then the same steps as
+the Windows installer. Every line is inside a function and the call is the last line, so bash has read
+the whole file before it runs anything: a download that stops halfway runs nothing. The bootstrap's own
+exit codes stay; a failed install ends with "Odicto was not installed. The lines above say why." and the
+same code. The managed command is called by its full path in the managed home (the same folder as
+`default_home()`, or the `--home` argument). A new install runs `odicto autostart`; an existing install
+keeps its sign-in choice, and a pending `autostart.json` is tried again. Then it runs `odicto start`,
+asks once `odicto wait-ready --timeout 5 --report-waiting` with its output discarded (0 is ready; 20 and
+21 are waiting; any other answer leaves readiness unconfirmed; the three summaries have the Windows
+texts), and runs `odicto setup`. A failed start ends with "Odicto did not start. The lines above say
+why." and exit 1, with no check and no Setup. The installer starts nothing, prints why and exits 0 when
+a source copy's start entry exists (`~/Library/LaunchAgents/com.odicto.plist`,
+`~/.config/autostart/odicto.desktop`) and `migration.json` is not complete, or when `ps` shows a Python
+that runs a `main.py` with an `odicto.py` beside it outside the managed home. The process check is best
+effort: a machine with no `ps` shows no process. `tests/test_posix_easy_install.py` runs the built file
+from a pipe with `bash` and fakes for `uname`, `curl`, `uv`, `sudo`, `apt-get`, `dpkg-query`, `ps` and the
+managed command. The `test` job of CI repeats one run from a pipe on each macOS and Linux runner.
+
 From 1.5.0 every Odicto takes a session keyboard-hook lock before it hooks the keyboard
 (`docs/architecture.md` section 7), so two installs of 1.5.0 or later never run together in one
 user session. A copy older than 1.5.0 does not take the lock: stop it and retire its startup
