@@ -4,6 +4,21 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.5.1] - 2026-11-16
+
+### Fixed
+
+- Fewer lost words with a USB microphone on Windows. When a busy computer could not read the microphone in time, Windows dropped up to two seconds of audio, and the indicator said "Mic gap · check text". Odicto now gives microphones that use the Windows MME audio driver one second of buffer. In a test with a busy computer this lost no audio, and the end of a dictation is not cut.
+- The first start no longer fails because Odicto waits for something. Before, Odicto stopped itself after 60 seconds when no microphone answered or the speech model was still downloading, and said that another copy may be running. Now it keeps running and says what it waits for, for example "Odicto is running, but it cannot hear a microphone. Connect one or choose one in Odicto Setup. Odicto tries again by itself." The start right after an update still checks that everything works, and goes back to the previous version when it does not.
+- The installer downloads the speech model (about 75 MB), so the first dictation does not wait for it. If that download fails, the install continues and Odicto downloads the model at its first start.
+- The Windows installer and Odicto Setup say "ready" only when Odicto confirmed it.
+- Install and update no longer depend on the GitHub API, which refuses too many requests from one network. They read a small file that each release publishes, and use the API only when that file is missing.
+
+### Changed
+
+- Updates delete old versions. Odicto keeps the current version, the one before it (for a rollback), and a version that failed to install. It deletes the others after a start, in at most 15 seconds, so each update no longer leaves about 1 GB behind. The first cleanup happens at the second start after the update to 1.5.1.
+- The install is smaller: Odicto now uses only the parts of Qt that it needs (about 440 MB less).
+
 ## [1.5.0] - 2026-11-07
 
 ### Added

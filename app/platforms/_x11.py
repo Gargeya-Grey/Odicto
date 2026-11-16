@@ -2,7 +2,8 @@
 
 Imports and connections are lazy. Importing this module never installs a hook.
 Wayland is deliberately rejected: an Xwayland connection cannot supply global
-shortcuts or inject into native Wayland applications reliably.
+shortcuts or inject into native Wayland applications reliably. The one exception
+is WSLg, which runs a real X server (``DISPLAY``) beside its Wayland compositor.
 """
 from __future__ import annotations
 
@@ -47,8 +48,10 @@ def _key_names(key):
 
 
 def require_session():
-    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or os.environ.get("WAYLAND_DISPLAY"):
-        raise RuntimeError("Wayland is not supported by Odicto's X11 backend; log into an X11 session.")
+    # WSLg sets WAYLAND_DISPLAY but also runs an X server; the same rule as the preflight check.
+    from platforms.preflight import WAYLAND_ADVICE, wayland_blocks_x11
+    if wayland_blocks_x11():
+        raise RuntimeError("Wayland is not supported by Odicto's X11 backend. " + WAYLAND_ADVICE)
     if not os.environ.get("DISPLAY"):
         raise RuntimeError("No X11 DISPLAY is available; start Odicto from your desktop session.")
 

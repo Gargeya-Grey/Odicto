@@ -60,6 +60,11 @@ Update this table when a gap changes status. The register in section 6 keeps the
 | L2 | Closed, #36 | Wayland stops `bootstrap.sh` before `sudo` and any download. A test runs the script with stubbed `sudo`, `apt-get`, `curl` and `uv` and checks that none is called. |
 | X3 | Closed, #36 | Plain messages for a rate limit, another HTTP error and a lost connection. The test fakes the answers; the real quota is not used. |
 | X6 | Closed, #36 | The printed Setup command is quoted. |
+| X3 | Closed, #39 | The bootstrap verifiers and the updater read `releases/latest/download/odicto-release.json` first; the API only on an HTTP error or invalid content. 16 Nov 2026: a clean Ubuntu 24.04 (WSL) installed v1.5.0 through the API fallback, because no release had the file yet. |
+| M12 | Partly closed, #40 | `manager install` downloads the speech model ("Getting the speech model"); a start that waits for the download says so. To verify by hand: what the indicator shows. |
+| M3 | Rejected on Ubuntu 24.04 | 16 Nov 2026, clean Ubuntu 24.04 in WSL: `curl -fsSL .../main/tools/distribution/bootstrap.sh \| bash` ran `sudo apt-get`, the `uv` installer and the full install to "Odicto v1.5.0 is active". macOS: to verify. |
+| L1 | Confirmed (sources) | Ubuntu 25.10 removed the GNOME Xorg session, and Ubuntu 26.04 LTS ships Wayland-only for GNOME (Ubuntu Discourse, "Ubuntu 25.10 drops support for GNOME on Xorg"). So a default current Ubuntu desktop cannot run Odicto until it has a Wayland backend (D2). |
+| WSL | Found 16 Nov 2026 | WSLg sets `WAYLAND_DISPLAY`, so the bootstrap stops and tells the person to choose an Xorg login, which WSL does not have. PortAudio in WSL sees no input device (no ALSA bridge to the WSLg PulseAudio server). 1.5.0 then stops itself after 60 s; #40 fixes that part. |
 | CI | Closed, #35 | 11 Nov 2026: the Ubuntu jobs failed before their tests (mirror names did not resolve, some `amd64v3` packages answered 404). #35 retries the package installs and skips CI for a pull request that changes only Markdown the tests do not read. |
 
 ## 3. Rules for the agent that does this work
