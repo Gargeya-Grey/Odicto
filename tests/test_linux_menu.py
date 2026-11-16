@@ -292,6 +292,14 @@ class TestRefreshAfterAnUpdate(MenuFixture):
         self.assertEqual((self.folder / "odicto-setup.desktop").read_bytes(), foreign)
         self.assertEqual(len(self.names()), 4)
 
+    def test_a_home_with_deferred_launchers_gets_no_entries_and_no_error(self):
+        self.with_release_icon()
+        self.launcher.unlink()
+        self.assertEqual(self.manager.refresh_menu(self.folder), [])
+        self.assertEqual(self.names(), [])
+        with self.assertRaises(dist.DistributionError):  # a direct install still says why
+            self.manager.install_menu(self.folder)
+
     def test_other_systems_get_none(self):
         self.manager.install_menu(self.folder)
         self.manager.platform = "darwin"
@@ -508,7 +516,8 @@ class TestTheUpdateCommandRefreshesTheMenu(MenuFixture):
 
     def test_a_menu_that_cannot_be_written_is_one_line_and_the_update_goes_on(self):
         self.with_release_icon()
-        self.launcher.unlink()
+        self.folder.parent.mkdir(parents=True)
+        self.folder.write_bytes(b"a file where the menu folder belongs")
         code, output, errors = self.run_update()
         self.assertEqual(code, 0)
         self.assertIn("Menu entries unchanged: ", errors)

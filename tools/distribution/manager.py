@@ -1473,8 +1473,12 @@ runpy.run_path(str(script), run_name='__main__')
         """After an update or an upgrade: make the menu entries current. Linux only.
 
         A home from before the menu existed gets its entries now. A name that holds a file Odicto
-        did not write is kept."""
+        did not write is kept. A home whose launchers were deferred (no uv when they were due) gets
+        none yet: the entries would run a missing command, and the refresh after the launchers
+        are made adds them."""
         if not self.platform.startswith("linux") or not self.marker.is_file():
+            return []
+        if not (self.home / "bin" / "odicto").is_file():
             return []
         return self.install_menu(folder)
 
