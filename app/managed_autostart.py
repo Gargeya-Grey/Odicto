@@ -38,13 +38,38 @@ def inspect(home: Path):
     return target, receipt, target.exists()
 
 
+MACOS_LABEL = "com.odicto.managed"
+
+
+def _unload(target: Path) -> None:
+    """macOS: take this LaunchAgent out of launchd before its file goes. Best effort, never raises.
+
+    A job is booted out only when launchd says that it was loaded from this very file, so a
+    foreign job that has the same label is never touched."""
+    if sys.platform != "darwin":
+        return
+    try:
+        service = f"gui/{os.getuid()}/{MACOS_LABEL}"
+        shown = subprocess.run(["launchctl", "print", service], capture_output=True, text=True, timeout=10)
+        if shown.returncode != 0:
+            return
+        paths = [line.split("=", 1)[1].strip() for line in shown.stdout.splitlines()
+                 if "=" in line and line.split("=", 1)[0].strip() == "path"]
+        if str(target) in paths:
+            subprocess.run(["launchctl", "bootout", service], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        pass
+
+
 def remove(home: Path) -> bool:
     """Delete this home's startup entry. True when one was deleted, False when there was none.
 
-    An entry that Odicto did not write is kept and raises RuntimeError (see inspect). The receipt
-    stays: it lives in the managed home, which the uninstall deletes next."""
+    An entry that Odicto did not write is kept and raises RuntimeError (see inspect). A failed
+    delete raises OSError and keeps the receipt: it lives in the managed home, which the
+    uninstall deletes only after every outside item is gone."""
     target, _, present = inspect(home)
     if present:
+        _unload(target)
         target.unlink()
     return present
 
@@ -54,6 +79,7 @@ def configure(home: Path, enabled: bool):
     target, receipt, _ = inspect(home)
     if not enabled:
         if target.exists():
+            _unload(target)
             target.unlink()
         return
     launcher = home / "bin" / ("odicto.cmd" if os.name == "nt" else "odicto")

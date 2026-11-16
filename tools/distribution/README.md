@@ -121,6 +121,7 @@ to PATH. Existing unrelated commands and shell profiles are left untouched.
 | `odicto migrate --source "PATH" --check` | Inspect a source migration without applying it |
 | `odicto migrate --source "PATH"` | Apply or resume a stopped source installation's migration |
 | `odicto uninstall` / `odicto uninstall --all` | Stop Odicto and remove it; keep `data/` (settings) / delete it too. See Application menu and removal |
+| `odicto uninstall --ask` | The same, after one question (keep or delete the settings, or cancel). The Remove Odicto shortcut runs it |
 
 Automatic checks run before `start` and `setup`, at most once every eight hours.
 Offline checks and staging failures retain the active release. Explicit `update`
@@ -135,30 +136,50 @@ works.
 
 ## Application menu and removal
 
-On Linux, `install` (and `update`, for entries that exist) writes `odicto.desktop`,
-`odicto-setup.desktop` and `odicto-stop.desktop` into `$XDG_DATA_HOME/applications`
-(default `~/.local/share/applications`). Each runs the quoted stable `bin/odicto` with
-`start`, `setup` or `stop`, with the release icon copied to `<home>/odicto.png`. The marker
-`.odicto-managed.json` keeps the SHA-256 of every text written (`menu_entries`) and of the
-icon (`menu_icon`). A file of that name with another hash, a link or a folder is kept and the
-install prints `Kept ...`, as for a Windows shortcut that runs another program. macOS has no
-menu entries.
+On Linux, `install` and every activation of a release (`update`, an automatic update at `start` or
+`setup`, `rollback`) write `odicto.desktop`, `odicto-setup.desktop`, `odicto-stop.desktop` and
+`odicto-remove.desktop` into `$XDG_DATA_HOME/applications` (default `~/.local/share/applications`). The
+first three run the quoted stable `bin/odicto` with `start`, `setup` or `stop`. The last runs
+`uninstall --ask` and has `Terminal=true`. The release icon is copied to `<home>/odicto.png`. A home
+that an older Odicto installed gets its entries at its first activation. The marker
+`.odicto-managed.json` keeps the SHA-256 of every text written (`menu_entries`) and of the icon
+(`menu_icon`). A file of that name with another hash, a link or a folder is kept and the command prints
+`Kept ...`, as for a Windows shortcut that runs another program. Odicto deletes or replaces a menu file
+only after it read it through one open handle (`O_NOFOLLOW`) and checked that the name still holds the
+same file (device and inode); a new entry is made with a link that fails if anything exists, so a file
+that appeared meanwhile is never overwritten. On Windows the same four names are Start Menu shortcuts
+(`Remove Odicto` opens a normal window; the others run minimized). macOS has no menu entries.
 
-`odicto uninstall` works in this order and prints one line for each step:
+`odicto uninstall` (`--all` to delete the settings too, `--ask` to be asked) works in this order and
+prints one line for each step:
 
-1. Refuse, before anything changes, a home that is a link or has no Odicto marker naming it,
-   a home that holds the user's own home folder, an unfinished migration, and (Windows) admin
-   mode that is on (the user turns it off in Setup first; the command never runs `schtasks`
-   or `admin_mode.ps1`).
-2. Stop Odicto through the managed `stop`. A stop that fails ends the command with nothing deleted.
-3. Remove the start-at-sign-in entry (`managed_autostart.remove`), the Start Menu shortcuts
-   or menu entries, and `~/.local/bin/odicto` (or `odicto.cmd`). Each is deleted only when
-   it is still Odicto's own: a matching hash, shortcut target or command target. A foreign item stays.
-4. Delete the home's entries, every link as a link and never through it. Without `--all`,
-   `data/` and the marker stay (the marker is rewritten to the bare ownership record), so a later
-   install finds the settings; with `--all` the marker and the home folder go last. An entry that
-   cannot be removed (Windows: a file that a running program holds) is named, the marker stays,
-   and the exit code is 1.
+1. Refuse, before anything changes, a home that is a link (the launcher passes the home as it was
+   reached in `ODICTO_LAUNCHER_HOME`, because the manager itself only sees the resolved path), a home with
+   no Odicto marker that names it, a home that holds the user's own home folder, an unfinished
+   migration, and (Windows) admin mode that is on (the user turns it off in Setup first; the command
+   never runs `schtasks` or `admin_mode.ps1`). The checked folder stays open to the end: POSIX keeps a
+   folder descriptor (`O_NOFOLLOW`) and every later call is relative to it, Windows keeps a handle that
+   forbids a rename of the folder and of every folder above it. The marker is read through it too.
+2. Take `manager.lock` and `launch.lock` and hold them to the end, so a start, an update and a
+   rollback find them busy. Stop Odicto with the active release's own `stop` (not the managed `run`,
+   which would take the same locks). A release record that cannot be read ends the command with nothing
+   deleted. Then take `data/setup.lock` and `data/dictation.lock`: an open Setup page or a running app
+   refuses the uninstall.
+3. Write `uninstalling.json` into the home. Start, update, rollback and every other manager command except `install` refuse
+   while it exists. A failed uninstall leaves it, so nothing starts between two tries; `odicto
+   uninstall` finishes the job, and `odicto install` clears it.
+4. Remove the start-at-sign-in entry (`managed_autostart.remove`; on macOS the LaunchAgent is first
+   booted out of launchd, and only when launchd says it was loaded from this very file), the Start Menu
+   shortcuts or menu entries, and `~/.local/bin/odicto` (or `odicto.cmd`). Each is deleted only when it is
+   still Odicto's own. A foreign item stays and is not a failure. An owned item that cannot be deleted
+   is a failure: the command says so, deletes nothing more, keeps the receipts and exits 1.
+5. Delete the home's entries, every link as a link and never through it, in this order: everything
+   except the files that run this command again, the old releases, (`--all`) `data/`, then the active
+   release and `bin`, `launcher.py`, `active.json`. Without `--all`, `data/` and the marker stay (the
+   marker is rewritten to the bare ownership record); with `--all` the marker and the home folder go
+   last. The lock files, any folder that a racing command made again, and the notice go after the locks
+   are released. An entry that cannot be removed (Windows: a file that a running program holds) is
+   named, the command says to run it again, and the exit code is 1.
 
 ## On-disk contract
 

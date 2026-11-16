@@ -373,24 +373,27 @@ class TestWindowsStartMenuShortcuts(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_creates_three_shortcuts_that_run_the_stable_command(self):
+    def test_creates_the_shortcuts_that_run_the_stable_command(self):
         lines = self.manager.install_shortcuts(self.programs)
-        self.assertEqual(lines, ["Start Menu: Odicto", "Start Menu: Odicto Setup", "Start Menu: Stop Odicto"])
+        self.assertEqual(lines, ["Start Menu: Odicto", "Start Menu: Odicto Setup", "Start Menu: Stop Odicto",
+                                 "Start Menu: Remove Odicto"])
         links = self.read()
         for name, command, _ in dist.SHORTCUTS:
             with self.subTest(name=name):
                 link = links[name]
                 del link["icon"]
+                # The remove shortcut asks a question, so its window is normal (1); the others run minimized (7).
                 self.assertEqual(link, {"target": str(self.launcher), "arguments": command,
-                                        "directory": str(self.manager.home), "style": 7})
+                                        "directory": str(self.manager.home),
+                                        "style": 1 if name == "Remove Odicto" else 7})
 
     def test_second_run_refreshes_the_same_shortcuts(self):
         self.manager.install_shortcuts(self.programs)
         lines = self.manager.install_shortcuts(self.programs)
-        self.assertEqual(len(lines), 3)
+        self.assertEqual(len(lines), 4)
         self.assertTrue(all(line.startswith("Start Menu: ") for line in lines))
         self.assertEqual(sorted(p.name for p in self.folder.iterdir()),
-                         ["Odicto Setup.lnk", "Odicto.lnk", "Stop Odicto.lnk"])
+                         ["Odicto Setup.lnk", "Odicto.lnk", "Remove Odicto.lnk", "Stop Odicto.lnk"])
 
     def test_a_shortcut_that_runs_another_program_is_kept(self):
         other = self.programs.parent / "source checkout" / "start_dictation.bat"

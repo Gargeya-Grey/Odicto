@@ -123,19 +123,21 @@ class TestExecQuoting(unittest.TestCase):
 
 
 class TestInstallMenu(MenuFixture):
-    def test_writes_the_three_entries_that_run_the_stable_command(self):
+    def test_writes_the_entries_that_run_the_stable_command(self):
         self.with_release_icon()
         lines = self.manager.install_menu(self.folder)
-        self.assertEqual(lines, ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto"])
-        self.assertEqual(self.names(), ["odicto-setup.desktop", "odicto-stop.desktop", "odicto.desktop"])
+        self.assertEqual(lines, ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto", "Menu: Remove Odicto"])
+        self.assertEqual(self.names(), ["odicto-remove.desktop", "odicto-setup.desktop", "odicto-stop.desktop",
+                                        "odicto.desktop"])
         for name, command, text in dist.SHORTCUTS:
             with self.subTest(name=name):
                 entry = read_entry(self.folder / dist.MENU_FILES[name])
                 self.assertEqual(entry["Type"], "Application")
                 self.assertEqual(entry["Name"], name)
                 self.assertEqual(entry["Comment"], text)
-                self.assertEqual(entry["Terminal"], "false")
-                self.assertEqual(split_exec(entry["Exec"]), [str(self.launcher), command])
+                # Only the remove entry asks a question, so only it opens a terminal window.
+                self.assertEqual(entry["Terminal"], "true" if name == "Remove Odicto" else "false")
+                self.assertEqual(split_exec(entry["Exec"]), [str(self.launcher), *command.split()])
                 self.assertEqual(entry["Icon"], str(self.home / "odicto.png"))
         self.assertEqual((self.home / "odicto.png").read_bytes(), b"release icon")
 
@@ -154,7 +156,7 @@ class TestInstallMenu(MenuFixture):
         self.manager.install_menu(self.folder)
         before = {path.name: path.read_bytes() for path in self.folder.iterdir()}
         lines = self.manager.install_menu(self.folder)
-        self.assertTrue(all(line.startswith("Menu: ") for line in lines) and len(lines) == 3)
+        self.assertTrue(all(line.startswith("Menu: ") for line in lines) and len(lines) == 4)
         self.assertEqual({path.name: path.read_bytes() for path in self.folder.iterdir()}, before)
         self.assertEqual(len(self.marker()["menu_entries"]["odicto.desktop"]), 1)
 
@@ -182,7 +184,8 @@ class TestInstallMenu(MenuFixture):
         lines = self.manager.install_menu(self.folder)
         self.assertEqual(lines[0], "Kept Odicto (it is not an Odicto file)")
         self.assertEqual((self.folder / "odicto.desktop").read_bytes(), foreign)
-        self.assertEqual(self.names(), ["odicto-setup.desktop", "odicto-stop.desktop", "odicto.desktop"])
+        self.assertEqual(self.names(), ["odicto-remove.desktop", "odicto-setup.desktop", "odicto-stop.desktop",
+                                        "odicto.desktop"])
         self.assertNotIn("odicto.desktop", self.marker()["menu_entries"])
 
     def test_a_link_or_a_folder_with_an_entry_name_is_kept(self):
@@ -246,7 +249,7 @@ class TestMenuFolderAndDispatch(MenuFixture):
 
     def test_install_shortcuts_writes_the_menu_on_linux_and_nothing_on_macos(self):
         self.assertEqual(self.manager.install_shortcuts(self.folder),
-                         ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto"])
+                         ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto", "Menu: Remove Odicto"])
         self.manager.platform = "darwin"
         shutil_before = self.names()
         self.assertEqual(self.manager.install_shortcuts(self.folder), [])
@@ -267,14 +270,27 @@ class TestRefreshAfterAnUpdate(MenuFixture):
         self.with_release_icon(b"second")
         with patch.object(dist.Manager, "_menu_folder", return_value=self.folder):
             lines = self.manager.refresh_menu()
-        self.assertEqual(len(lines), 3)
+        self.assertEqual(len(lines), 4)
         self.assertEqual((self.home / "odicto.png").read_bytes(), b"second")
 
-    def test_a_home_that_never_had_entries_gets_none(self):
+    def test_a_home_from_before_the_menu_gets_its_entries_when_the_names_are_free(self):
         self.with_release_icon()
+        self.assertNotIn("menu_entries", self.marker())
         with patch.object(dist.Manager, "_menu_folder", return_value=self.folder):
-            self.assertEqual(self.manager.refresh_menu(), [])
-        self.assertFalse(self.folder.exists())
+            lines = self.manager.refresh_menu()
+        self.assertEqual(lines, ["Menu: Odicto", "Menu: Odicto Setup", "Menu: Stop Odicto", "Menu: Remove Odicto"])
+        self.assertEqual(len(self.names()), 4)
+
+    def test_a_foreign_entry_stays_when_an_old_home_is_upgraded(self):
+        self.with_release_icon()
+        self.folder.mkdir(parents=True)
+        foreign = b"[Desktop Entry]\nType=Application\nName=Mine\nExec=/usr/bin/true\n"
+        (self.folder / "odicto-setup.desktop").write_bytes(foreign)
+        with patch.object(dist.Manager, "_menu_folder", return_value=self.folder):
+            lines = self.manager.refresh_menu()
+        self.assertIn("Kept Odicto Setup (it is not an Odicto file)", lines)
+        self.assertEqual((self.folder / "odicto-setup.desktop").read_bytes(), foreign)
+        self.assertEqual(len(self.names()), 4)
 
     def test_other_systems_get_none(self):
         self.manager.install_menu(self.folder)
@@ -293,7 +309,7 @@ class TestRemoveMenu(MenuFixture):
         self.manager.install_menu(self.folder)
         lines = self.manager.remove_menu(self.folder)
         self.assertEqual(lines, ["Removed menu entry: Odicto", "Removed menu entry: Odicto Setup",
-                                 "Kept Stop Odicto (it is not an Odicto file)"])
+                                 "Kept Stop Odicto (it is not an Odicto file)", "Removed menu entry: Remove Odicto"])
         self.assertEqual(self.names(), ["odicto-stop.desktop", "other.desktop"])
         self.assertEqual((self.folder / "odicto-stop.desktop").read_bytes(), foreign)
 
@@ -306,6 +322,197 @@ class TestRemoveMenu(MenuFixture):
 
     def test_a_missing_folder_is_not_an_error(self):
         self.assertEqual(self.manager.remove_menu(self.folder), [])
+
+
+class TestAFileThatChangesUnderneathIsNeverTouched(MenuFixture):
+    """A foreign file takes an entry's place between the ownership check and the delete or the write."""
+
+    FOREIGN = b"[Desktop Entry]\nName=Mine\nExec=/usr/bin/true\n"
+
+    def swap(self, path):
+        replacement = path.with_name(path.name + ".other")
+        replacement.write_bytes(self.FOREIGN)
+        os.replace(replacement, path)
+
+    def test_a_file_replaced_before_the_delete_is_kept(self):
+        self.manager.install_menu(self.folder)
+        target = self.folder / "odicto-setup.desktop"
+        real = dist.Manager._unlink_if_same
+
+        def racing(path, identity):
+            if path == target:
+                self.swap(path)
+            return real(path, identity)
+
+        with patch.object(dist.Manager, "_unlink_if_same", staticmethod(racing)):
+            lines = self.manager.remove_menu(self.folder)
+        self.assertIn("Kept Odicto Setup (it is not an Odicto file)", lines)
+        self.assertEqual(target.read_bytes(), self.FOREIGN)
+        self.assertNotIn("Removed menu entry: Odicto Setup", lines)
+        self.assertFalse((self.folder / "odicto.desktop").exists(), "the entries nobody touched are removed")
+
+    def test_a_file_replaced_before_the_rewrite_is_not_overwritten(self):
+        self.manager.install_menu(self.folder)
+        target = self.folder / "odicto.desktop"
+        real = dist.Manager._put
+
+        def racing(contents, path, identity):
+            if path == target:
+                self.swap(path)
+            return real(contents, path, identity)
+
+        with patch.object(dist.Manager, "_put", staticmethod(racing)):
+            lines = self.manager.install_menu(self.folder)
+        self.assertIn("Kept Odicto (it is not an Odicto file)", lines)
+        self.assertEqual(target.read_bytes(), self.FOREIGN)
+
+    def test_a_file_that_appears_before_a_new_entry_is_written_is_not_overwritten(self):
+        target = self.folder / "odicto-stop.desktop"
+        real = dist.Manager._put
+
+        def racing(contents, path, identity):
+            if path == target:
+                path.write_bytes(self.FOREIGN)  # nothing was there when the entry was checked
+            return real(contents, path, identity)
+
+        with patch.object(dist.Manager, "_put", staticmethod(racing)):
+            lines = self.manager.install_menu(self.folder)
+        self.assertIn("Kept Stop Odicto (it is not an Odicto file)", lines)
+        self.assertEqual(target.read_bytes(), self.FOREIGN)
+        self.assertEqual(sorted(path.name for path in self.folder.iterdir() if ".new-" in path.name), [],
+                         "no temporary file is left behind")
+
+    def test_a_replaced_file_is_not_read_as_the_one_that_was_checked(self):
+        self.manager.install_menu(self.folder)
+        target = self.folder / "odicto.desktop"
+        found = dist.Manager._owned_file(target)
+        self.swap(target)
+        self.assertFalse(dist.Manager._unlink_if_same(target, found[1]))
+        self.assertEqual(target.read_bytes(), self.FOREIGN)
+
+    def test_a_link_is_never_read_through(self):
+        self.folder.mkdir(parents=True)
+        real = self.root / "real.desktop"
+        real.write_bytes(self.FOREIGN)
+        link = self.folder / "odicto.desktop"
+        try:
+            os.symlink(real, link)
+        except OSError:  # no link right on this account: a folder is the same kind of obstacle
+            link.mkdir()
+        self.assertIsNone(dist.Manager._owned_file(link))
+
+
+class TestTheRemoveEntry(MenuFixture):
+    def test_it_runs_the_uninstall_in_a_terminal_and_asks_there(self):
+        self.manager.install_menu(self.folder)
+        entry = read_entry(self.folder / "odicto-remove.desktop")
+        self.assertEqual(entry["Name"], "Remove Odicto")
+        self.assertEqual(entry["Terminal"], "true")
+        self.assertEqual(split_exec(entry["Exec"]), [str(self.launcher), "uninstall", "--ask"])
+
+    def test_it_follows_the_ownership_rule_of_the_others(self):
+        self.folder.mkdir(parents=True)
+        foreign = b"[Desktop Entry]\nName=Mine\n"
+        (self.folder / "odicto-remove.desktop").write_bytes(foreign)
+        lines = self.manager.install_menu(self.folder)
+        self.assertIn("Kept Remove Odicto (it is not an Odicto file)", lines)
+        self.assertEqual((self.folder / "odicto-remove.desktop").read_bytes(), foreign)
+        removed = self.manager.remove_menu(self.folder)
+        self.assertIn("Kept Remove Odicto (it is not an Odicto file)", removed)
+        self.assertEqual((self.folder / "odicto-remove.desktop").read_bytes(), foreign)
+
+
+class TestARunThatSwitchesTheRelease(MenuFixture):
+    """`odicto start` may apply an automatic update. The menu follows it, outside the update's own lock."""
+
+    def switch(self, directories):
+        self.with_release_icon()
+        calls = {"n": 0}
+        self.manager.bind_dependencies = lambda: None
+
+        def active():
+            return {"directory": directories[min(calls["n"], len(directories) - 1)]}
+
+        def run(command, automatic_updates=True):
+            calls["n"] += 1
+            return 0
+
+        patcher = patch.object(self.manager, "active", side_effect=active)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(self.manager, "run", side_effect=run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_main(self):
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(dist, "Manager", return_value=self.manager), \
+                patch.object(type(self.manager), "_menu_folder", return_value=self.folder), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = dist.main(["--home", str(self.home), "run", "start"])
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_entries_are_written_after_an_automatic_update_activated_a_release(self):
+        self.switch(["old", "new"])
+        code, output, errors = self.run_main()
+        self.assertEqual((code, errors), (0, ""))
+        self.assertIn("Menu: Odicto", output)
+        self.assertEqual(len(self.names()), 4)
+
+    def test_nothing_is_written_when_the_release_did_not_change(self):
+        self.switch(["same"])
+        code, output, _ = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertNotIn("Menu:", output)
+        self.assertEqual(self.names(), [])
+
+    def test_a_busy_manager_lock_leaves_the_refresh_to_a_later_run(self):
+        self.switch(["old", "new"])
+        with dist.file_lock(self.home / "manager.lock"):
+            code, output, errors = self.run_main()
+        self.assertEqual((code, errors), (0, ""))
+        self.assertEqual(self.names(), [])
+
+
+class TestTheUpdateCommandRefreshesTheMenu(MenuFixture):
+    def run_update(self, **patched):
+        output, errors = io.StringIO(), io.StringIO()
+        record = {"version": "v1.1.0", "directory": "fixture"}
+        with patch.object(dist, "Manager", return_value=self.manager), \
+                patch.object(type(self.manager), "_menu_folder", return_value=self.folder), \
+                patch.object(self.manager, "update", return_value=record), \
+                patch.object(self.manager, "initialize"), \
+                patch.object(self.manager, "retire_old_releases", return_value=[]), \
+                patch.object(self.manager, "delete_trash", return_value=0), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = dist.main(["--home", str(self.home), "update"])
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_an_install_from_before_the_menu_gets_its_entries(self):
+        self.with_release_icon()
+        self.assertNotIn("menu_entries", self.marker())
+        code, output, errors = self.run_update()
+        self.assertEqual((code, errors), (0, ""))
+        self.assertIn("Menu: Remove Odicto", output)
+        self.assertEqual(len(self.names()), 4)
+
+    def test_a_foreign_entry_stays_and_the_update_still_succeeds(self):
+        self.with_release_icon()
+        self.folder.mkdir(parents=True)
+        foreign = b"[Desktop Entry]\nName=Mine\n"
+        (self.folder / "odicto.desktop").write_bytes(foreign)
+        code, output, _ = self.run_update()
+        self.assertEqual(code, 0)
+        self.assertIn("Kept Odicto (it is not an Odicto file)", output)
+        self.assertEqual((self.folder / "odicto.desktop").read_bytes(), foreign)
+
+    def test_a_menu_that_cannot_be_written_is_one_line_and_the_update_goes_on(self):
+        self.with_release_icon()
+        self.launcher.unlink()
+        code, output, errors = self.run_update()
+        self.assertEqual(code, 0)
+        self.assertIn("Menu entries unchanged: ", errors)
+        self.assertIn("is ready.", output)
 
 
 class TestInstallCommandPrintsTheMenu(unittest.TestCase):

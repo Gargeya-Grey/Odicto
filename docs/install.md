@@ -189,7 +189,13 @@ by itself. Your settings stay. See [Updates and settings](../README.md#updates-a
 
 ## Remove Odicto
 
-One command stops Odicto and removes it. It also removes what Odicto added to your account: the
+You do not need a terminal on Windows and Linux. On Windows, open the Start Menu, open the
+**Odicto** folder and choose **Remove Odicto**. On Linux, open the application menu and choose
+**Remove Odicto**. A window asks one question. Press **Enter** to remove Odicto and keep your
+settings. Type `DELETE` to remove your settings too. Type `N` to cancel and remove nothing. macOS has
+no menu entry yet: use the command below.
+
+One command does the same. It stops Odicto and removes it. It also removes what Odicto added to your account: the
 start at sign-in, the Start Menu items (Windows) or the application menu entries (Linux), and the
 `odicto` command. A file of the same name that Odicto did not write stays, and the command says so.
 
@@ -207,5 +213,6 @@ If the command says "Admin mode is on", open Odicto Setup, turn off admin mode, 
 again. Nothing was removed. If it says that a folder is a link or is not an Odicto folder, Odicto
 refuses to delete it; nothing was removed.
 
-If the command says that it could not remove a file, close the program that uses it and delete the
-Odicto folder that the command names.
+If the command says that it could not remove a file, close the program that uses it and run the same
+command again. Do not delete the whole Odicto folder: it holds the `data` folder with your settings.
+Odicto does not start while a removal is unfinished; run the command again to finish it.

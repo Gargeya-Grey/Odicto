@@ -68,6 +68,14 @@ class BusyError(DistributionError):
     pass
 
 
+class MenuRemovalError(DistributionError):
+    """A menu entry that Odicto wrote could not be deleted. `lines` holds what happened to the others."""
+
+    def __init__(self, message: str, lines: list[str]):
+        super().__init__(message)
+        self.lines = lines
+
+
 def version_tuple(value: str) -> tuple[int, int, int]:
     match = _VERSION.fullmatch(value) if isinstance(value, str) else None
     if not match:
@@ -485,7 +493,8 @@ def private_directory(path: Path, *, exist_ok: bool = False, parents: bool = Fal
 # Start Menu items of a managed Windows install: (file name, command, description).
 SHORTCUTS = (("Odicto", "start", "Start Odicto dictation"),
              ("Odicto Setup", "setup", "Open the Odicto setup page"),
-             ("Stop Odicto", "stop", "Stop Odicto"))
+             ("Stop Odicto", "stop", "Stop Odicto"),
+             ("Remove Odicto", "uninstall --ask", "Remove Odicto from this computer"))
 
 # Values arrive in environment variables, so no path is ever quoted into the script.
 SHORTCUT_SCRIPT = r"""
@@ -512,7 +521,8 @@ foreach ($entry in ($env:ODICTO_SHORTCUTS | ConvertFrom-Json)) {
     $link.TargetPath = $launcher
     $link.Arguments = $command
     $link.WorkingDirectory = $env:ODICTO_HOME
-    $link.WindowStyle = 7
+    # The remove item asks a question, so its window must show; the others run minimized.
+    if ($command -like 'uninstall*') { $link.WindowStyle = 1 } else { $link.WindowStyle = 7 }
     $link.Description = $text
     if ($env:ODICTO_ICON) { $link.IconLocation = $env:ODICTO_ICON + ',0' }
     $link.Save()
@@ -550,7 +560,16 @@ if (-not (Get-ChildItem -LiteralPath $folder -Force | Select-Object -First 1)) {
 
 # Linux application menu: the file name of each shortcut above, in a folder every desktop reads.
 MENU_FILES = {"Odicto": "odicto.desktop", "Odicto Setup": "odicto-setup.desktop",
-              "Stop Odicto": "odicto-stop.desktop"}
+              "Stop Odicto": "odicto-stop.desktop", "Remove Odicto": "odicto-remove.desktop"}
+
+# A marker that the uninstall writes while it deletes. Start, update and rollback refuse while it
+# exists; only `odicto uninstall` (to finish) and `odicto install` (to start over) go on.
+REMOVAL_NOTICE = "uninstalling.json"
+# The files that run `odicto uninstall` again: they go last, so a failed removal can be retried.
+_RETRY_FILES = ("bin", "launcher.py", "active.json")
+_LOCK_FILES = ("manager.lock", "launch.lock")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_BINARY = getattr(os, "O_BINARY", 0)
 
 
 def _desktop_text(text: str) -> str:
@@ -595,6 +614,17 @@ def _real_folder(path) -> bool:
         return False
     return (stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
             and not getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+class _HeldHome:
+    """The home folder that was checked, kept open. fd: the open folder on POSIX, None on Windows (a
+    handle that forbids a rename holds it). identity: its (device, inode). marker: the marker as it was
+    read from this very folder."""
+
+    def __init__(self, fd, identity):
+        self.fd = fd
+        self.identity = identity
+        self.marker: dict = {}
 
 
 class _BudgetEnded(Exception):
@@ -814,7 +844,9 @@ class Manager:
             if self._read_json(path).get("state") != "complete":
                 raise DistributionError("Migration is unfinished. Resume odicto migrate with the same --source before starting or changing versions")
 
-    def initialize(self) -> None:
+    def initialize(self, *, reinstall: bool = False) -> None:
+        if not reinstall:
+            self._refuse_while_removed()  # before it makes any folder in a home that is being removed
         if self.home.exists() and not self.marker.exists() and any(self.home.iterdir()):
             raise DistributionError("Destination is not an empty managed installation; existing files were preserved")
         private_directory(self.home, parents=True, exist_ok=True)
@@ -965,6 +997,7 @@ class Manager:
         self.release_path(record)
         with self._activation_locks():
             self._migration_guard()
+            self._refuse_while_removed()
             old = self.active()
             admin_markers = [self.data / ".odicto-admin-enabled"]
             if old:
@@ -1178,6 +1211,7 @@ args = sys.argv[1:]
 if not args or args[0] in ('start', 'setup', 'stop', 'restart', 'config', 'version', 'wait-ready', 'autostart', 'remove-autostart'):
     args = ['run', *(args or ['start'])]
 script = release / 'tools' / 'distribution' / 'manager.py'
+os.environ['ODICTO_LAUNCHER_HOME'] = str(Path(os.path.abspath(__file__)).parent)  # the home before a link is resolved
 sys.argv = [str(script), '--home', str(home), *args]
 runpy.run_path(str(script), run_name='__main__')
 '''
@@ -1279,21 +1313,101 @@ runpy.run_path(str(script), run_name='__main__')
         return root / "applications"
 
     @staticmethod
-    def _regular_digest(path: Path) -> str | None:
-        """The SHA-256 of a plain file, or None for a missing file, a link or any other kind."""
+    def _owned_file(path: Path) -> tuple[str, tuple[int, int]] | None:
+        """(SHA-256, identity) of the plain file at path, read through one open handle.
+
+        None for a missing file, a link, a folder, any other kind, or a file over 1 MiB. The identity
+        (device, inode) is what a later delete or replace checks again, so that it acts on the file
+        that was read and never on one that took its place."""
         try:
-            if not stat.S_ISREG(os.lstat(path).st_mode):
-                return None
-            return hashlib.sha256(path.read_bytes()).hexdigest()
+            descriptor = os.open(path, os.O_RDONLY | _BINARY | _NOFOLLOW)
         except OSError:
             return None
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_size > 1024 * 1024:
+                return None
+            chunks = []
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            named = os.lstat(path)  # a link, or another file under the same name, is not what was opened
+            if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+                return None
+            return hashlib.sha256(b"".join(chunks)).hexdigest(), (opened.st_dev, opened.st_ino)
+        except OSError:
+            return None
+        finally:
+            os.close(descriptor)
+
+    @classmethod
+    def _regular_digest(cls, path: Path) -> str | None:
+        """The SHA-256 of a plain file, or None for a missing file, a link or any other kind."""
+        found = cls._owned_file(path)
+        return found[0] if found else None
+
+    @staticmethod
+    def _unlink_if_same(path: Path, identity: tuple[int, int]) -> bool:
+        """Delete path only when it is still the file with this identity. True: it is gone.
+        False: another file has taken its place, and nothing was deleted. A failed delete raises."""
+        try:
+            named = os.lstat(path)
+        except FileNotFoundError:
+            return True
+        if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != identity:
+            return False
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return True
+
+    @staticmethod
+    def _put(contents: bytes, path: Path, identity: tuple[int, int] | None) -> bool:
+        """Write contents to path through a temporary file, renamed into place.
+
+        identity None: nothing may exist at path, and a file that appeared meanwhile is never
+        overwritten. Otherwise path must still be the file with that identity. False: the check
+        failed and nothing was written."""
+        temporary = path.with_name(path.name + ".new-" + uuid.uuid4().hex)
+        temporary.write_bytes(contents)
+        try:
+            if identity is None:
+                try:
+                    os.link(temporary, path)  # fails when anything exists at path, a dangling link too
+                except FileExistsError:
+                    return False
+                except OSError:  # a file system without hard links
+                    try:
+                        with open(path, "xb") as handle:
+                            handle.write(contents)
+                    except FileExistsError:
+                        return False
+                return True
+            try:
+                named = os.lstat(path)
+            except FileNotFoundError:
+                return False
+            if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != identity:
+                return False
+            os.replace(temporary, path)
+            return True
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     def _menu_text(self, name: str, command: str, text: str, launcher: Path, icon: Path | None) -> bytes:
+        # The remove entry asks a question, so a terminal window must open for it.
+        terminal = "true" if command.startswith("uninstall") else "false"
         lines = ["[Desktop Entry]", "Type=Application", f"Name={_desktop_text(name)}",
                  f"Comment={_desktop_text(text)}", f"Exec={_desktop_command(str(launcher))} {command}"]
         if icon:
             lines.append(f"Icon={_desktop_text(str(icon))}")
-        lines += ["Terminal=false", "StartupNotify=false", "Categories=Utility;",
+        lines += [f"Terminal={terminal}", "StartupNotify=false", "Categories=Utility;",
                   "Keywords=dictation;voice;speech;typing;"]
         return ("\n".join(lines) + "\n").encode("utf-8")
 
@@ -1302,7 +1416,8 @@ runpy.run_path(str(script), run_name='__main__')
 
         An entry that exists and is not one Odicto wrote (the marker keeps the hash of every
         version Odicto wrote) is kept, as a Windows shortcut that runs another program is.
-        Each call writes the current text, so the entries follow the stable launcher.
+        Each call writes the current text, so the entries follow the stable launcher. A file is
+        replaced only when it is still the very file that was checked (`_put`).
         """
         launcher = self.home / "bin" / "odicto"
         if not launcher.is_file():
@@ -1314,15 +1429,15 @@ runpy.run_path(str(script), run_name='__main__')
         current = self.active()
         source = self.release_path(current) / "assets" / "odicto-icon-256.png" if current else None
         present = icon.exists() or icon.is_symlink()
-        digest = self._regular_digest(icon)
-        owned = present and digest is not None and digest == marker.get("menu_icon")
+        seen = self._owned_file(icon)
+        owned = seen is not None and seen[0] == marker.get("menu_icon")
         if (owned or not present) and source and source.is_file():
             contents = source.read_bytes()
-            temporary = icon.with_name(icon.name + ".new-" + uuid.uuid4().hex)
-            temporary.write_bytes(contents)
-            os.replace(temporary, icon)
-            owned = True
-            marker["menu_icon"] = hashlib.sha256(contents).hexdigest()
+            if self._put(contents, icon, seen[1] if owned else None):
+                owned = True
+                marker["menu_icon"] = hashlib.sha256(contents).hexdigest()
+            else:
+                owned = False  # another file took the name meanwhile: it is not used
         known = marker.get("menu_entries", {})
         if not isinstance(known, dict):
             known = {}
@@ -1332,50 +1447,65 @@ runpy.run_path(str(script), run_name='__main__')
             contents = self._menu_text(name, command, text, launcher, icon if owned else None)
             digest = hashlib.sha256(contents).hexdigest()
             path = folder / filename
+            identity = None
             if path.exists() or path.is_symlink():
                 accepted = [*(known.get(filename) or []), digest]
-                if self._regular_digest(path) not in accepted:
+                found = self._owned_file(path)
+                if found is None or found[0] not in accepted:
                     lines.append(f"Kept {name} (it is not an Odicto file)")
                     continue
-            writes.append((name, path, contents))
+                identity = found[1]
+            writes.append((name, path, contents, identity))
             known[filename] = list(dict.fromkeys([*(known.get(filename) or []), digest]))
         # The hash is recorded before the file exists, so an interrupted run never leaves an
         # entry that Odicto wrote and cannot recognise.
         marker["menu_entries"] = known
         atomic_json(self.marker, marker)
         folder.mkdir(parents=True, exist_ok=True)
-        for name, path, contents in writes:
-            temporary = path.with_name(path.name + ".new-" + uuid.uuid4().hex)
-            temporary.write_bytes(contents)
-            os.replace(temporary, path)
-            lines.append(f"Menu: {name}")
+        for name, path, contents, identity in writes:
+            if self._put(contents, path, identity):
+                lines.append(f"Menu: {name}")
+            else:
+                lines.append(f"Kept {name} (it is not an Odicto file)")
         return lines
 
     def refresh_menu(self, folder: Path | None = None) -> list[str]:
-        """After an update: rewrite the menu entries that an earlier install wrote. Never new ones."""
+        """After an update or an upgrade: make the menu entries current. Linux only.
+
+        A home from before the menu existed gets its entries now. A name that holds a file Odicto
+        did not write is kept."""
         if not self.platform.startswith("linux") or not self.marker.is_file():
-            return []
-        if not self._read_json(self.marker).get("menu_entries"):
             return []
         return self.install_menu(folder)
 
     def remove_menu(self, folder: Path | None = None) -> list[str]:
-        """Linux: delete the menu entries that Odicto wrote. Any other file of that name stays."""
+        """Linux: delete the menu entries that Odicto wrote. Any other file of that name stays.
+
+        A file is deleted only when it is still the file that was hashed. When a delete fails, the
+        others still run, and MenuRemovalError carries the lines so far."""
         known = self._read_json(self.marker).get("menu_entries", {})
         if not isinstance(known, dict):
             known = {}
         folder = Path(folder) if folder else self._menu_folder()
-        lines = []
+        lines, failures = [], []
         for name, _, _ in SHORTCUTS:
             filename = MENU_FILES[name]
             path = folder / filename
             if not (path.exists() or path.is_symlink()):
                 continue
-            if self._regular_digest(path) in (known.get(filename) or []):
-                path.unlink()
-                lines.append(f"Removed menu entry: {name}")
-            else:
+            found = self._owned_file(path)
+            if found is None or found[0] not in (known.get(filename) or []):
                 lines.append(f"Kept {name} (it is not an Odicto file)")
+                continue
+            try:
+                if self._unlink_if_same(path, found[1]):
+                    lines.append(f"Removed menu entry: {name}")
+                else:
+                    lines.append(f"Kept {name} (it is not an Odicto file)")
+            except OSError as error:
+                failures.append(f"{name} ({error.strerror or error})")
+        if failures:
+            raise MenuRemovalError("Could not remove the menu entry " + ", ".join(failures), lines)
         return lines
 
     def _install_start_menu(self, programs: Path | None = None) -> list[str]:
@@ -1426,52 +1556,116 @@ runpy.run_path(str(script), run_name='__main__')
         spec.loader.exec_module(module)
         return module
 
-    def _check_removable(self, requested: Path | None) -> bool:
-        """False when there is nothing at the home. Raises unless the home is a real folder that
-        Odicto made: not a link, with a marker that names this very folder, never the user's own
-        home folder or a folder above it."""
+    def _read_marker_held(self, held: "_HeldHome") -> dict:
+        """The marker, read through the held folder: the file that sits in the folder that was checked."""
+        if held.fd is None:
+            return self._read_json(self.marker)
+        try:
+            descriptor = os.open(self.marker.name, os.O_RDONLY | _NOFOLLOW, dir_fd=held.fd)
+        except OSError as error:
+            raise DistributionError(f"Invalid managed-install metadata: {self.marker.name}") from error
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
+                raise DistributionError(f"Invalid managed-install metadata: {self.marker.name}")
+            data = os.read(descriptor, 64 * 1024 + 1)
+        finally:
+            os.close(descriptor)
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except (ValueError, UnicodeError) as error:
+            raise DistributionError(f"Invalid managed-install metadata: {self.marker.name}") from error
+        if not isinstance(value, dict):
+            raise DistributionError(f"Invalid managed-install metadata: {self.marker.name}")
+        return value
+
+    @contextmanager
+    def _hold_home(self, requested: Path | None):
+        """Check the home and keep the very folder that was checked open until the block ends.
+
+        Yields None when nothing is installed there. Raises unless the home is a real folder that
+        Odicto made: not a link (`requested` is the path as the user gave it; the manager has
+        already resolved `self.home`), with a marker that names this very folder, never the user's
+        own home folder or a folder above it.
+
+        Everything after the check goes through the held folder, so a program that swaps the home
+        or a folder above it afterwards cannot make the delete follow a link. POSIX: an open
+        folder (O_NOFOLLOW) and calls relative to it. Windows: a handle that forbids a rename of
+        this folder and of every folder above it (`_held_folder`)."""
         given = Path(requested).expanduser() if requested is not None else self.home
         if not os.path.lexists(given) and not os.path.lexists(self.home):
-            return False
+            yield None
+            return
         refused = f"{given} is not an Odicto folder, so nothing was removed"
         if not _real_folder(given) or not _real_folder(self.home):
             raise DistributionError(f"{refused}: it is a link or not a folder.")
-        try:
-            value = self._read_json(self.marker)
-        except DistributionError as error:
-            raise DistributionError(f"{refused}: its Odicto marker is missing or unreadable ({error}).") from error
-        if value.get("schema") != 1 or value.get("home") != str(self.home):
-            raise DistributionError(f"{refused}: its Odicto marker names another folder.")
-        try:
-            user = Path.home().resolve()
-        except (OSError, RuntimeError):
-            user = None
-        if self.home.parent == self.home or (user is not None and (user == self.home or self.home in user.parents)):
-            raise DistributionError(f"{refused}: it holds your own home folder.")
-        return True
+        with ExitStack() as stack:
+            if os.name == "nt":
+                if not stack.enter_context(_held_folder(str(self.home))):
+                    raise DistributionError(f"{refused}: it is a link or not a folder.")
+                info = os.lstat(self.home)
+                held = _HeldHome(None, (info.st_dev, info.st_ino))
+            else:
+                try:
+                    descriptor = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                except OSError as error:
+                    raise DistributionError(f"{refused}: it cannot be opened as a folder ({error.strerror}).") from error
+                stack.callback(os.close, descriptor)
+                info = os.fstat(descriptor)
+                for path in (given, self.home):
+                    try:
+                        named = os.lstat(path)
+                    except OSError as error:
+                        raise DistributionError(f"{refused}: it changed while it was checked.") from error
+                    if (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino):
+                        raise DistributionError(f"{refused}: it changed while it was checked.")
+                held = _HeldHome(descriptor, (info.st_dev, info.st_ino))
+            try:
+                value = self._read_marker_held(held)
+            except DistributionError as error:
+                raise DistributionError(f"{refused}: its Odicto marker is missing or unreadable ({error}).") from error
+            if value.get("schema") != 1 or value.get("home") != str(self.home):
+                raise DistributionError(f"{refused}: its Odicto marker names another folder.")
+            try:
+                user = Path.home().resolve()
+            except (OSError, RuntimeError):
+                user = None
+            if self.home.parent == self.home or (user is not None and (user == self.home or self.home in user.parents)):
+                raise DistributionError(f"{refused}: it holds your own home folder.")
+            held.marker = value
+            yield held
 
     def _stop_for_uninstall(self) -> None:
-        """Stop Odicto through the managed stop. A failed stop ends the uninstall before it deletes."""
+        """Stop Odicto through the managed stop, with manager.lock and launch.lock already held by
+        the caller (the managed `run` would take them again and find itself busy).
+
+        Fail closed: a release record that cannot be read, or a stop that fails, ends the uninstall
+        before it deletes anything."""
         try:
             current = self.active()
-        except DistributionError:
-            print("Odicto could not check whether it runs. Make sure it is stopped.", file=sys.stderr)
+            directory = self.release_path(current) if current else None
+        except DistributionError as error:
+            raise DistributionError(f"Odicto cannot tell whether it is running, because its release record is "
+                                    f"not readable ({error}). Nothing was removed. Run the Odicto installer "
+                                    "again to repair it, then run odicto uninstall.") from error
+        if directory is None:
             return
-        if current is None:
-            return
-        code = self.run(["stop"], automatic_updates=False)
+        self._recover_launch_intent()
+        code = subprocess.run([str(self._python(directory)), str(directory / "odicto.py"), "stop"],
+                              cwd=directory, env=self.environment()).returncode
         if code:
             raise DistributionError(f"Odicto did not stop (exit {code}). Nothing was removed. "
                                     "Quit it, then run odicto uninstall again.")
 
     def _remove_command(self, directory: Path | None) -> str:
         """Delete the `odicto` command that expose_command wrote, if it is still Odicto's.
-        Returns a line to show, or an empty string when there was none."""
+        Returns a line to show, or an empty string when there was none. A failed delete raises OSError."""
         directory = Path(directory) if directory else Path.home() / ".local" / "bin"
         if os.name == "nt":
             command = directory / "odicto.cmd"
             target = str(self.home / "bin" / "odicto.cmd").replace("%", "%%")
-            ours = self._regular_digest(command) == hashlib.sha256(f'@"{target}" %*\r\n'.encode()).hexdigest()
+            found = self._owned_file(command)
+            ours = found is not None and found[0] == hashlib.sha256(f'@"{target}" %*\r\n'.encode()).hexdigest()
         else:
             command = directory / "odicto"
             ours = command.is_symlink() and command.resolve() == (self.home / "bin" / "odicto").resolve()
@@ -1482,9 +1676,11 @@ runpy.run_path(str(script), run_name='__main__')
         command.unlink()
         return f"Removed the command {command}"
 
-    def _empty_home(self, keep: set[str]) -> list[tuple[str, OSError]]:
-        """Delete every entry of the home except the names in keep. A link is removed, never followed.
-        The home is held open while it is listed. An entry that cannot go is returned, not raised."""
+    def _delete_children(self, held: "_HeldHome", relative: str, *, skip: frozenset = frozenset(),
+                         only: frozenset | None = None) -> list[tuple[str, OSError]]:
+        """Delete the entries of the held home (or of its folder `relative`) except the names in
+        skip, or only the names in only. A link is removed itself, never followed. An entry that
+        cannot go is returned, not raised."""
         failures: list[tuple[str, OSError]] = []
 
         def attempt(name, action):
@@ -1493,91 +1689,251 @@ runpy.run_path(str(script), run_name='__main__')
             except OSError as error:
                 failures.append((name, error))
 
+        def wanted(name):
+            return name not in skip and (only is None or name in only)
+
         never = float("inf")
         if os.name == "nt":
-            with _held_folder(str(self.home)) as real:
-                if not real:
-                    raise DistributionError(f"{self.home} is a link, so nothing more was removed.")
-                with os.scandir(self.home) as entries:
+            folder = self.home / relative if relative else self.home
+            if relative and not _real_folder(folder):
+                return failures  # missing, or a link: the home's own listing removes a link itself
+            with (_held_folder(str(folder)) if relative else ExitStack()) as real:
+                if relative and not real:
+                    return failures
+                with os.scandir(folder) as entries:
                     children = [(entry.name, entry.path, entry.is_dir(follow_symlinks=False)) for entry in entries]
-                for name, child, folder in children:
-                    if name in keep:
-                        continue
-                    attempt(name, (lambda child=child: _delete_held(child, never, time.monotonic)) if folder
-                            else (lambda child=child: _unlink(child)))
+                for name, child, is_folder in children:
+                    if wanted(name):
+                        attempt(name, (lambda child=child: _delete_held(child, never, time.monotonic)) if is_folder
+                                else (lambda child=child: _unlink(child)))
             return failures
+        if relative:
+            try:
+                descriptor = os.open(relative, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=held.fd)
+            except OSError:
+                return failures  # missing, or a link: the home's own listing removes a link itself
+        else:
+            descriptor = held.fd
         try:
-            parent = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        except OSError as error:
-            raise DistributionError(f"{self.home} cannot be opened as a folder: {error.strerror}") from error
-        try:
-            with os.scandir(parent) as entries:
+            with os.scandir(descriptor) as entries:
                 children = [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
-            for name, folder in children:
-                if name in keep:
-                    continue
-                attempt(name, (lambda name=name: _delete_in(parent, name, never, time.monotonic)) if folder
-                        else (lambda name=name: _in_folder(os.unlink, name, parent)))
+            for name, is_folder in children:
+                if wanted(name):
+                    attempt(name, (lambda name=name: _delete_in(descriptor, name, never, time.monotonic)) if is_folder
+                            else (lambda name=name: _in_folder(os.unlink, name, descriptor)))
         finally:
-            os.close(parent)
+            if relative:
+                os.close(descriptor)
         return failures
 
-    def uninstall(self, *, everything: bool = False, requested: Path | None = None,
-                  stop: Callable[[], None] | None = None, say: Callable[[str], None] = print,
-                  programs: Path | None = None, command_directory: Path | None = None) -> bool:
+    def _write_json_held(self, held: "_HeldHome", name: str, value: dict) -> None:
+        """atomic_json for a file of the held home. POSIX: relative to the open folder."""
+        if held.fd is None:
+            atomic_json(self.home / name, value)
+            return
+        temporary = name + ".tmp-" + uuid.uuid4().hex
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=held.fd)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, sort_keys=True, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, name, src_dir_fd=held.fd, dst_dir_fd=held.fd)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=held.fd)
+            except OSError:
+                pass
+            raise
+
+    def _remove_empty_home(self, held: "_HeldHome") -> None:
+        """Remove the home folder itself, after the held folder is closed. Only the very folder that
+        was checked is removed, and only when it is empty."""
+        if os.name == "nt":
+            if _real_folder(self.home):
+                os.rmdir(self.home)
+            return
+        parent = os.open(self.home.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            try:
+                named = os.stat(self.home.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            if (named.st_dev, named.st_ino) == held.identity:
+                os.rmdir(self.home.name, dir_fd=parent)
+        finally:
+            os.close(parent)
+
+    def _refuse_while_removed(self) -> None:
+        """Start, update and rollback do not run while an uninstall has begun and not finished."""
+        if os.path.lexists(self.home / REMOVAL_NOTICE):
+            raise DistributionError("Odicto is being removed from this computer. Run odicto uninstall again "
+                                    "to finish, or run the Odicto installer to put it back.")
+
+    def clear_removal_notice(self) -> None:
+        """Delete the notice of a failed uninstall. The caller holds manager.lock: no uninstall runs now."""
+        try:
+            (self.home / REMOVAL_NOTICE).unlink()
+        except FileNotFoundError:
+            pass
+
+    def _take_locks(self, locks: ExitStack) -> None:
+        """Hold manager.lock and launch.lock until the stack closes; a start, an update and a rollback
+        need them and find them busy."""
+        for name in _LOCK_FILES:
+            try:
+                locks.enter_context(file_lock(self.home / name))
+            except BusyError as error:
+                raise BusyError("Odicto is busy with another command (a start or an update). Wait for it to "
+                                "finish, then run odicto uninstall again. Nothing was removed.") from error
+
+    def _take_runtime_locks(self, locks: ExitStack) -> None:
+        """After the stop: Setup's writer lock and the app's instance lock must be free, and stay held."""
+        if not _real_folder(self.data):
+            return
+        for name, message in (("setup.lock", "Odicto Setup is open. Close its page, then run odicto uninstall "
+                                             "again. Nothing was removed."),
+                              ("dictation.lock", "Odicto is still running. Quit it, then run odicto uninstall "
+                                                 "again. Nothing was removed.")):
+            try:
+                locks.enter_context(file_lock(self.data / name))
+            except BusyError as error:
+                raise BusyError(message) from error
+
+    def uninstall(self, *, everything: bool = False, ask: Callable[[], str | None] | None = None,
+                  requested: Path | None = None, stop: Callable[[], None] | None = None,
+                  say: Callable[[str], None] = print, programs: Path | None = None,
+                  command_directory: Path | None = None) -> bool:
         """Remove this install: stop it, take out what it put in the user's account, then the home.
 
         Outside the home, only an item that Odicto wrote is deleted: its start-at-sign-in entry,
         its Start Menu or application menu entries, its `odicto` command. The settings (the
-        `data` folder) stay unless `everything`. `requested` is the home as the user gave it, so
-        that a link is refused before it is resolved. Returns False when something stayed.
+        `data` folder) stay unless `everything`. `ask` replaces `everything`: it returns "keep",
+        "all", or None to cancel. `requested` is the home as the user gave it, so that a link is
+        refused before it is resolved. Returns False when something stayed.
+
+        The validated home is held open from the check to the end, and manager.lock and
+        launch.lock are held for the whole run, so a start or an update cannot interleave. The
+        home gets a removal notice before anything is deleted, and keeps it until the end: a
+        failed removal can be run again, and nothing else starts in between.
         """
-        if not self._check_removable(requested):
-            say(f"Odicto is not installed in {self.home}. Nothing was removed.")
+        locks = ExitStack()
+        try:
+            with self._hold_home(requested) as held:
+                if held is None:
+                    say(f"Odicto is not installed in {self.home}. Nothing was removed.")
+                    return True
+                # Windows admin mode owns a logon task that only the Setup switch removes. Nothing is
+                # touched first, and nothing here runs schtasks or the admin helper.
+                if self.admin_enabled():
+                    raise DistributionError("Admin mode is on. Open Odicto Setup, turn off admin mode, then run "
+                                            "odicto uninstall again. Nothing was removed.")
+                self._migration_guard()
+                if ask is not None:
+                    answer = ask()
+                    if answer is None:
+                        say("Nothing was removed.")
+                        return True
+                    everything = answer == "all"
+                again = "odicto uninstall --all" if everything else "odicto uninstall"
+                self._take_locks(locks)
+                (stop or self._stop_for_uninstall)()
+                say("Odicto is stopped.")
+                runtime = locks.enter_context(ExitStack())
+                self._take_runtime_locks(runtime)
+                self._write_json_held(held, REMOVAL_NOTICE, {"schema": 1, "home": str(self.home), "pid": os.getpid()})
+                failed = False
+                try:
+                    removed = self._autostart_module().remove(self.home)
+                    say("Removed start at sign-in." if removed else "Start at sign-in was off.")
+                except (RuntimeError, ValueError) as error:  # not Odicto's, or a receipt that cannot be read
+                    say(f"Kept the start-at-sign-in entry: {error}")
+                except (OSError, subprocess.SubprocessError) as error:
+                    failed = True
+                    say(f"Could not remove the start-at-sign-in entry: {getattr(error, 'strerror', None) or error}")
+                try:
+                    for line in self.remove_shortcuts(programs):
+                        say(line)
+                except MenuRemovalError as error:
+                    failed = True
+                    for line in error.lines:
+                        say(line)
+                    say(f"{error}.")
+                except (DistributionError, OSError, ValueError, subprocess.SubprocessError) as error:
+                    failed = True
+                    say(f"Could not remove the menu entries: {error}")
+                try:
+                    line = self._remove_command(command_directory)
+                    if line:
+                        say(line)
+                except (OSError, RuntimeError) as error:
+                    failed = True
+                    say(f"Could not remove the odicto command: {getattr(error, 'strerror', None) or error}")
+                if failed:
+                    # The receipts stay in the home, so the next run still knows what is Odicto's.
+                    say(f"Nothing else was removed. Close the program that uses the item above, then run {again} again.")
+                    return False
+
+                def stayed(failures) -> bool:
+                    for name, error in failures:
+                        say(f"Could not remove {name}: {error.strerror or error}")
+                    if failures:
+                        say(f"Close the program that uses it, then run {again} again.")
+                        if not everything:
+                            say(f"Keep the folder {self.data}: it holds your settings. Do not delete the folder "
+                                f"{self.home}.")
+                    return bool(failures)
+
+                marker = self.marker.name
+                keep = frozenset({marker, REMOVAL_NOTICE, "data", *_LOCK_FILES})
+                # The files that run this command again go last, so that a failed removal can be run again.
+                if stayed(self._delete_children(held, "", skip=keep | {*_RETRY_FILES, "releases"})):
+                    return False
+                active = (self._read_json_quietly(self.pointer) or {}).get("directory")
+                active = active if isinstance(active, str) and _RELEASE_DIR.fullmatch(active) else None
+                if stayed(self._delete_children(held, "releases", skip=frozenset({active} if active else ()))):
+                    return False
+                if everything:
+                    runtime.close()  # the lock files of `data` go with it
+                    if stayed(self._delete_children(held, "", only=frozenset({"data"}))):
+                        return False
+                if stayed(self._delete_children(held, "", only=frozenset({"releases", *_RETRY_FILES}))):
+                    return False
+                locks.close()
+                # Last: whatever a command that began before the notice made again, the lock files, the
+                # marker, then the removal notice, so that nothing starts in between.
+                sweep = frozenset({marker, REMOVAL_NOTICE} | (set() if everything else {"data"}))
+                if stayed(self._delete_children(held, "", skip=sweep)):
+                    return False
+                if everything:
+                    if stayed(self._delete_children(held, "", only=frozenset({marker}))):
+                        return False
+                else:
+                    self._write_json_held(held, marker, {"schema": 1, "home": str(self.home),
+                                                         "automatic_updates": held.marker.get("automatic_updates", True)})
+                if stayed(self._delete_children(held, "", only=frozenset({REMOVAL_NOTICE}))):
+                    return False
+            if everything:
+                try:
+                    self._remove_empty_home(held)
+                except OSError as error:
+                    say(f"Could not remove the folder {self.home}: {error.strerror or error}")
+                    return False
+                say("Removed Odicto and its settings.")
+            else:
+                say("Removed Odicto.")
+                say(f"Your settings are kept in {self.data}. They hold your keys and your prompt.")
+                say("Install Odicto again to use them, or delete that folder to remove them too.")
             return True
-        # Windows admin mode owns a logon task that only the Setup switch removes. Nothing is
-        # touched first, and nothing here runs schtasks or the admin helper.
-        if self.admin_enabled():
-            raise DistributionError("Admin mode is on. Open Odicto Setup, turn off admin mode, then run "
-                                    "odicto uninstall again. Nothing was removed.")
-        self._migration_guard()
-        (stop or self._stop_for_uninstall)()
-        say("Odicto is stopped.")
+        finally:
+            locks.close()
+
+    def _read_json_quietly(self, path: Path) -> dict | None:
         try:
-            removed = self._autostart_module().remove(self.home)
-            say("Removed start at sign-in." if removed else "Start at sign-in was off.")
-        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
-            say(f"Kept the start-at-sign-in entry: {error}")
-        try:
-            for line in self.remove_shortcuts(programs):
-                say(line)
-        except (DistributionError, OSError, ValueError, subprocess.SubprocessError) as error:
-            say(f"Menu entries unchanged: {error}")
-        try:
-            line = self._remove_command(command_directory)
-            if line:
-                say(line)
-        except (OSError, RuntimeError) as error:
-            say(f"The odicto command was not removed: {error}")
-        marker = self.marker.name
-        failures = self._empty_home({marker} if everything else {marker, "data"})
-        if failures:
-            for name, error in failures:
-                say(f"Could not remove {name}: {error.strerror or error}")
-            say(f"Close the program that uses it, then delete the folder {self.home} yourself.")
-            return False
-        if everything:
-            self.marker.unlink()
-            os.rmdir(self.home)
-            say("Removed Odicto and its settings.")
-        else:
-            kept = self._read_json(self.marker)
-            atomic_json(self.marker, {"schema": 1, "home": str(self.home),
-                                      "automatic_updates": kept.get("automatic_updates", True)})
-            say("Removed Odicto.")
-            say(f"Your settings are kept in {self.data}. They hold your keys and your prompt.")
-            say("Install Odicto again to use them, or delete that folder to remove them too.")
-        return True
+            return self._read_json(path)
+        except DistributionError:
+            return None
 
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
@@ -1591,6 +1947,7 @@ runpy.run_path(str(script), run_name='__main__')
             with file_lock(self.home / "manager.lock"):
                 if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
                     self._migration_guard()
+                    self._refuse_while_removed()
                 before = self.active()
                 if automatic_updates and command[0] in {"start", "setup"}:
                     try:
@@ -2210,6 +2567,70 @@ def _app_args_refused(argv: list[str]) -> int | None:
     return None
 
 
+def _ask_about_settings(read: Callable[[str], str] = input, show: Callable[[str], None] = print) -> str | None:
+    """The one question of `odicto uninstall --ask`: "keep", "all", or None (cancel).
+
+    A terminal is required, so that an answer is never taken from nothing."""
+    show("Remove Odicto from this computer.")
+    show("Your settings stay by default: your keys and your prompt. A new install uses them again.")
+    for _ in range(3):
+        try:
+            answer = read("Press Enter to remove Odicto and keep your settings. Type DELETE to remove your "
+                          "settings too. Type N to cancel: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if answer in ("", "keep"):
+            return "keep"
+        if answer in ("delete", "all"):
+            return "all"
+        if answer in ("n", "no", "cancel"):
+            return None
+        show("Please press Enter, type DELETE, or type N.")
+    return None
+
+
+def _pause(read: Callable[[str], str] = input) -> None:
+    """Keep a window that was opened for the command on screen until the person has read it."""
+    try:
+        read("Press Enter to close this window.")
+    except (EOFError, KeyboardInterrupt, OSError):
+        pass
+
+
+def _uninstall(manager: "Manager", args, requested: Path) -> int:
+    """`odicto uninstall` for main(): exit 0 when it finished, 1 when it refused or something stayed."""
+    ask = _ask_about_settings if args.ask else None
+    try:
+        if ask and not getattr(sys.stdin, "isatty", lambda: False)():
+            raise DistributionError("odicto uninstall --ask needs a terminal window. "
+                                    "Run odicto uninstall in a terminal instead.")
+        code = 0 if manager.uninstall(everything=args.all, ask=ask, requested=requested) else 1
+    except (RuntimeError, OSError, ValueError, ImportError, subprocess.SubprocessError) as error:
+        print(f"Odicto: {error}", file=sys.stderr)
+        code = 1
+    if args.ask:
+        _pause()
+    return code
+
+
+def _refresh_menu_after(manager: "Manager", before: dict | None) -> None:
+    """After a command that may have switched the active release (an automatic update at start or
+    setup): bring the application menu entries along. Takes manager.lock; busy means a later run does it."""
+    try:
+        after = manager.active()
+        if after is None or (before or {}).get("directory") == after.get("directory"):
+            return
+        if not manager.platform.startswith("linux"):
+            return
+        with file_lock(manager.home / "manager.lock"):
+            for line in manager.refresh_menu():
+                print(line)
+    except BusyError:
+        pass
+    except (DistributionError, OSError, ValueError) as error:
+        print(f"Menu entries unchanged: {error}", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # The guide names this install's command path, so it needs --home before the real parse.
@@ -2255,7 +2676,11 @@ def main(argv=None) -> int:
                                          "and the odicto command that Odicto made, then its folder. Your "
                                          "settings stay in a folder whose path this command prints. "
                                          "Windows admin mode must be off first (Odicto Setup).")
-    removal.add_argument("--all", action="store_true", help="delete your settings too")
+    choice = removal.add_mutually_exclusive_group()
+    choice.add_argument("--all", action="store_true", help="delete your settings too")
+    choice.add_argument("--ask", action="store_true",
+                        help="ask whether to delete your settings too, and wait before the window closes "
+                             "(the Remove Odicto shortcut uses this)")
     migration = sub.add_parser("migrate", help="Move a source checkout to this install",
                                description="Move a source checkout to this install. Run with "
                                            "--check first. Quit Odicto and close its setup "
@@ -2284,11 +2709,14 @@ def main(argv=None) -> int:
         checked = args.app_args[1:] if args.app_args[:1] == ["--"] else args.app_args
         if checked and (code := _app_args_refused(checked)) is not None:
             return code
+    # The stable launcher sets this to the home as the user reached it, before any link is resolved.
+    # An environment variable, not an option: a rolled-back release must still accept the launcher.
+    launcher_home = os.environ.pop("ODICTO_LAUNCHER_HOME", "")
     manager = Manager(args.home)
     try:
         if args.command == "uninstall":
             # Before initialize(): that would make the folder if it is missing.
-            return 0 if manager.uninstall(everything=args.all, requested=args.home) else 1
+            return _uninstall(manager, args, Path(launcher_home) if launcher_home else args.home)
         if args.command in {"run", "migrate", "admin", "admin-task"}:
             current = manager.active()
             if current is None:
@@ -2299,7 +2727,9 @@ def main(argv=None) -> int:
             return 0
         if args.command == "run":
             app_args = args.app_args[1:] if args.app_args[:1] == ["--"] else args.app_args
-            return manager.run(app_args or ["start"], automatic_updates=not args.no_auto_updates)
+            code = manager.run(app_args or ["start"], automatic_updates=not args.no_auto_updates)
+            _refresh_menu_after(manager, current)
+            return code
         if args.command == "admin-task":
             return manager.admin_task()
         if args.command == "admin":
@@ -2312,9 +2742,14 @@ def main(argv=None) -> int:
             result = migrate(manager, args.source, check=args.check, adapter=support.MigrationAdapter(), lock_factory=file_lock)
             print(json.dumps(result.as_dict() if hasattr(result, "as_dict") else result, indent=2))
             return 0
-        manager.initialize()
+        manager.initialize(reinstall=args.command == "install")
         cleanup_deadline = None
         with file_lock(manager.home / "manager.lock"):
+            if args.command == "install":
+                # Holding manager.lock means no uninstall runs now: a notice left by a failed one is stale.
+                manager.clear_removal_notice()
+            else:
+                manager._refuse_while_removed()
             if args.command == "status":
                 print(json.dumps(manager.active(), indent=2))
             elif args.command == "auto-updates":
@@ -2324,6 +2759,11 @@ def main(argv=None) -> int:
                 print(f"Automatic updates are {args.setting}.")
             elif args.command == "rollback":
                 print(json.dumps(manager.rollback(), indent=2))
+                try:
+                    for line in manager.refresh_menu():
+                        print(line)
+                except (DistributionError, OSError, ValueError) as error:
+                    print(f"Menu entries unchanged: {error}", file=sys.stderr)
             elif args.command == "stage":
                 print(json.dumps(manager.stage(latest_release(manager.fetch)), indent=2))
             else:
