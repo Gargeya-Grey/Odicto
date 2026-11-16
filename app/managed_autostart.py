@@ -38,6 +38,17 @@ def inspect(home: Path):
     return target, receipt, target.exists()
 
 
+def remove(home: Path) -> bool:
+    """Delete this home's startup entry. True when one was deleted, False when there was none.
+
+    An entry that Odicto did not write is kept and raises RuntimeError (see inspect). The receipt
+    stays: it lives in the managed home, which the uninstall deletes next."""
+    target, _, present = inspect(home)
+    if present:
+        target.unlink()
+    return present
+
+
 def configure(home: Path, enabled: bool):
     home = home.resolve()
     target, receipt, _ = inspect(home)

@@ -186,3 +186,26 @@ system and its version, and the text of the error. Do not paste API keys.
 
 Odicto checks for a new version when it starts, at most one time in eight hours, and installs it
 by itself. Your settings stay. See [Updates and settings](../README.md#updates-and-settings).
+
+## Remove Odicto
+
+One command stops Odicto and removes it. It also removes what Odicto added to your account: the
+start at sign-in, the Start Menu items (Windows) or the application menu entries (Linux), and the
+`odicto` command. A file of the same name that Odicto did not write stays, and the command says so.
+
+Your settings stay by default: your keys, your prompt and your history. The last lines of the command
+print the folder that holds them. Install Odicto again and it uses them. To remove them as well, add
+`--all` to the command.
+
+| System | Command (put `--all` after `uninstall` to delete your settings too) |
+| --- | --- |
+| Windows | Press **Windows key + R**, type `cmd /k ""%LOCALAPPDATA%\Odicto\bin\odicto.cmd" uninstall"` and press **Enter** |
+| macOS | `"$HOME/Library/Application Support/Odicto/bin/odicto" uninstall` |
+| Linux | `~/.local/share/odicto/bin/odicto uninstall` |
+
+If the command says "Admin mode is on", open Odicto Setup, turn off admin mode, and run the command
+again. Nothing was removed. If it says that a folder is a link or is not an Odicto folder, Odicto
+refuses to delete it; nothing was removed.
+
+If the command says that it could not remove a file, close the program that uses it and delete the
+Odicto folder that the command names.

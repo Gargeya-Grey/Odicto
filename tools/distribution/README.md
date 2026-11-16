@@ -120,6 +120,7 @@ to PATH. Existing unrelated commands and shell profiles are left untouched.
 | `odicto admin on` / `odicto admin off` | Change Windows Admin mode with owner-approved UAC when required; when the mode changes, dictation is left stopped |
 | `odicto migrate --source "PATH" --check` | Inspect a source migration without applying it |
 | `odicto migrate --source "PATH"` | Apply or resume a stopped source installation's migration |
+| `odicto uninstall` / `odicto uninstall --all` | Stop Odicto and remove it; keep `data/` (settings) / delete it too. See Application menu and removal |
 
 Automatic checks run before `start` and `setup`, at most once every eight hours.
 Offline checks and staging failures retain the active release. Explicit `update`
@@ -131,6 +132,33 @@ pending version for the next launch.
 check) and one result line. The output of `uv` and of the health check goes to
 `<data>/update.log`, so a failed step names that file and says the active version still
 works.
+
+## Application menu and removal
+
+On Linux, `install` (and `update`, for entries that exist) writes `odicto.desktop`,
+`odicto-setup.desktop` and `odicto-stop.desktop` into `$XDG_DATA_HOME/applications`
+(default `~/.local/share/applications`). Each runs the quoted stable `bin/odicto` with
+`start`, `setup` or `stop`, with the release icon copied to `<home>/odicto.png`. The marker
+`.odicto-managed.json` keeps the SHA-256 of every text written (`menu_entries`) and of the
+icon (`menu_icon`). A file of that name with another hash, a link or a folder is kept and the
+install prints `Kept ...`, as for a Windows shortcut that runs another program. macOS has no
+menu entries.
+
+`odicto uninstall` works in this order and prints one line for each step:
+
+1. Refuse, before anything changes, a home that is a link or has no Odicto marker naming it,
+   a home that holds the user's own home folder, an unfinished migration, and (Windows) admin
+   mode that is on (the user turns it off in Setup first; the command never runs `schtasks`
+   or `admin_mode.ps1`).
+2. Stop Odicto through the managed `stop`. A stop that fails ends the command with nothing deleted.
+3. Remove the start-at-sign-in entry (`managed_autostart.remove`), the Start Menu shortcuts
+   or menu entries, and `~/.local/bin/odicto` (or `odicto.cmd`). Each is deleted only when
+   it is still Odicto's own: a matching hash, shortcut target or command target. A foreign item stays.
+4. Delete the home's entries, every link as a link and never through it. Without `--all`,
+   `data/` and the marker stay (the marker is rewritten to the bare ownership record), so a later
+   install finds the settings; with `--all` the marker and the home folder go last. An entry that
+   cannot be removed (Windows: a file that a running program holds) is named, the marker stays,
+   and the exit code is 1.
 
 ## On-disk contract
 
