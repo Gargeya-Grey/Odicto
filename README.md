@@ -60,6 +60,27 @@ copy too (the same box, `%LOCALAPPDATA%\Odicto\bin\odicto.cmd stop`) and close e
 then follow [Moving from a source checkout](#moving-from-a-source-checkout). A source copy older
 than 1.5.0 does not do this check, so never run it beside the new copy.
 
+### macOS and Linux, one line
+
+Open a terminal. On a Mac, press **Command + Space**, type `Terminal` and press **Return**. On Ubuntu
+or Debian, press **Ctrl + Alt + T**. Paste this line and press **Enter**:
+
+```bash
+curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+```
+
+It takes a few minutes. It installs Odicto, turns on start at login, starts Odicto and opens Setup in
+your browser. On Ubuntu or Debian it can ask for your password once, to install system packages. On a
+Mac, if it says that Odicto did not start, turn on **Accessibility** and **Input Monitoring** for
+Terminal (System Settings, Privacy & Security), then run the line that it prints.
+
+Linux needs an X11 (Xorg) session. Ubuntu 25.10 and newer have no Xorg session, so Odicto does not run
+on them yet. If a copy of Odicto that you installed from a source folder is on the computer, the
+installer installs the new copy but does not start it, because two copies must never run together.
+Follow [Moving from a source checkout](#moving-from-a-source-checkout). The installer finds that copy by
+its start-at-login entry and by a running process. If you run the line again on a computer that has the
+new copy, it repairs that copy and keeps your start-at-login choice.
+
 ### Any platform, from a terminal
 
 Download `Odicto-v<version>.zip` from the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest),

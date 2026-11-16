@@ -40,6 +40,28 @@ its start at login before you continue, then follow
 [Moving from a source checkout](../README.md#moving-from-a-source-checkout) after step 5.
 Two copies must never run together: each letter that you type would show twice.
 
+### One line
+
+1. Open Terminal: press **Command + Space**, type `Terminal`, press **Return**.
+2. Copy this line, paste it in Terminal and press **Return**:
+
+   ```bash
+   curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+   ```
+
+   Wait a few minutes. Odicto installs, it starts when you log in, it starts now, and Odicto Setup
+   opens in your browser.
+3. If the last lines say `Odicto did not start`, a permission is off. Do step 6 of the list below,
+   then run the line that the installer printed.
+4. If the installer says that another copy of Odicto is on this computer, it did not start the new
+   copy. Follow [Moving from a source checkout](../README.md#moving-from-a-source-checkout).
+
+Go to [Your first dictation](#your-first-dictation).
+
+### From the zip file
+
+Prefer to download the files yourself? Follow these steps.
+
 1. Open the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest). Under **Assets**,
    click `Odicto-v<version>.zip`.
 2. Open your **Downloads** folder. If you see the zip file and no `Odicto` folder, double-click the zip file.
@@ -90,12 +112,37 @@ Go to [Your first dictation](#your-first-dictation).
 
 ## Ubuntu or Debian
 
-Odicto needs an **X11** session. It does not work in a Wayland session.
+Odicto needs an **X11** session. It does not work in a Wayland session. Ubuntu 25.10 and newer have no
+Xorg session, so Odicto does not run on them yet.
 
 Did you use Odicto before from a source folder (a copy made with Git)? Stop that copy and turn off
 its start at login before you continue, then follow
 [Moving from a source checkout](../README.md#moving-from-a-source-checkout) after step 6.
 Two copies must never run together: each letter that you type would show twice.
+
+### One line
+
+1. Open a terminal: press **Ctrl + Alt + T**.
+2. Paste this line and press **Enter**:
+
+   ```bash
+   curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+   ```
+
+   The installer can ask for your password. It uses the password only to install system
+   packages for sound, the clipboard and the display. Wait a few minutes. Odicto installs, it
+   starts when you log in, it starts now, and Odicto Setup opens in your browser.
+3. If the installer says that the desktop runs a Wayland session, nothing was installed. If the login
+   screen offers an Xorg session, choose it, log in and paste the line again. Ubuntu 25.10 and newer
+   have none, and Odicto does not run on them yet.
+4. If the installer says that another copy of Odicto is on this computer, it did not start the new
+   copy. Follow [Moving from a source checkout](../README.md#moving-from-a-source-checkout).
+
+Go to [Your first dictation](#your-first-dictation).
+
+### From the zip file
+
+Prefer to download the files yourself? Follow these steps.
 
 1. Open a terminal: press **Ctrl + Alt + T**.
 2. Check your session. Paste this line and press **Enter**:
@@ -107,7 +154,8 @@ Two copies must never run together: each letter that you type would show twice.
    - `x11`: continue with step 3.
    - `wayland`: log out. On the login screen, click your name, then click the gear icon at the
      bottom right and choose the entry with **Xorg** in its name. Log in and do this step again.
-     If the login screen has no Xorg entry, Odicto cannot run on this system yet. Stop here.
+     If the login screen has no Xorg entry (Ubuntu 25.10 and newer have none), Odicto cannot run on
+     this system yet. Stop here.
 3. Open the [latest release](https://github.com/Gargeya-Grey/Odicto/releases/latest). Under **Assets**,
    click `Odicto-v<version>.zip`.
 4. Open the **Downloads** folder in Files. Right-click the zip file and choose **Extract Here**.
@@ -175,7 +223,7 @@ First, ask Odicto. It lists the problems that it can see:
 | macOS: `Cannot start Odicto [macos_accessibility]` or `[macos_input_monitoring]` | Do step 6 of the macOS list again, then give the start command again. |
 | macOS: the indicator shows, but no words appear | Check **System Settings > Privacy & Security > Microphone**. |
 | Linux: the installer says it supports Ubuntu and Debian | Your distribution is not supported by this installer yet. |
-| Linux: the installer or Odicto says the desktop runs a Wayland session | Log in to an Xorg session (step 2 of the Linux list). |
+| Linux: the installer or Odicto says the desktop runs a Wayland session | Log in to an Xorg session, if the login screen offers one (step 2 of the Linux zip list). Ubuntu 25.10 and newer have none, and Odicto does not run on them yet. |
 | `odicto: command not found` | Use the full command from this guide. On macOS keep its quotation marks. |
 | The installer stops with a download error | Check the internet connection and run the same installer again. A second run is safe. |
 

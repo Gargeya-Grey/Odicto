@@ -116,6 +116,13 @@ jobs:
           .venv\Scripts\python.exe tools/distribution/build_easy_installer.py out/Install-Odicto.cmd
           if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
 
+      # One file a macOS or Linux user pastes into a terminal as `curl -fsSL <url> | bash`: the same
+      # verified bootstrap, then start at login, start and Setup. Built here, tested in the gate.
+      - name: Build the one-line macOS and Linux installer
+        run: |
+          .venv\Scripts\python.exe tools/distribution/build_posix_installer.py out/install-odicto.sh
+          if ($LASTEXITCODE -ne 0) { throw 'POSIX installer build failed' }
+
       # The installer and the updater read this file before the rate-limited GitHub API.
       - name: Build the release manifest
         run: |
@@ -130,9 +137,9 @@ jobs:
           $name = '${{ steps.package.outputs.name }}'
           $flags = @()
           $assets = @("out/$name", "out/$name.sha256", "out/platform-gate.json")
-          # The installer and the manifest always describe the latest stable release, so a pre-release gets neither.
+          # The installers and the manifest always describe the latest stable release, so a pre-release gets none.
           if ('${{ inputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
-          else { $assets += 'out/Install-Odicto.cmd', 'out/odicto-release.json' }
+          else { $assets += 'out/Install-Odicto.cmd', 'out/install-odicto.sh', 'out/odicto-release.json' }
           gh release create $tag @assets `
             --target $env:GITHUB_SHA --title "Odicto $tag" `
             --notes-file out/notes.md --generate-notes @flags
