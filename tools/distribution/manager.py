@@ -35,6 +35,24 @@ CHECK_INTERVAL = 8 * 60 * 60
 STARTUP_TIMEOUT = 60.0
 CANCEL_TIMEOUT = 10.0
 CLEANUP_BUDGET = 15.0
+# A launch that is not strict accepts an owner that still downloads its speech model after
+# this long. The admin launcher gives up at 70 s and Setup Save at 90 s.
+DOWNLOAD_ACCEPT_SECONDS = 45.0
+# A child that never got the hand-off byte ends itself when its launcher's pipe closes; it polls
+# that pipe every 0.05 s. One that still runs this long after the launcher is gone was handed off.
+HANDOFF_SETTLE = 1.0
+# What a running owner may still wait for (see `odicto.py wait-ready --report-waiting`), with the
+# exit code that goes with each state. A state counts only when the code and the marker agree.
+_WAITING_CODES = {"mic": 20, "speech": 20, "speech-download": 21}
+_WAITING_MARKER = "ODICTO-WAITING"
+_LAUNCH_NOTICES = {
+    "mic": "Odicto is running, but it cannot hear a microphone. Connect one or choose one in "
+           "Odicto Setup. Odicto tries again by itself.",
+    "speech": "Odicto is running, but its speech model did not load. Check the internet "
+              "connection. Odicto tries again by itself.",
+    "speech-download": "Odicto is running and still downloads its speech model. Dictation works "
+                       "when the download ends.",
+}
 _VERSION = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 _RELEASE_DIR = re.compile(r"v\d+\.\d+\.\d+-[a-f0-9]{12}-[a-f0-9]{8}\Z")
 _TRASH = ".trash-"
@@ -121,7 +139,8 @@ class Release:
 
 
 _UPDATE_STEPS = {"check": "Checking for updates", "download": "Downloading and verifying",
-                 "install": "Installing", "verify": "Checking that it works"}
+                 "install": "Installing", "verify": "Checking that it works",
+                 "speech": "Getting the speech model"}
 
 
 class _UpdateSteps:
@@ -692,7 +711,8 @@ def _delete_trash_folder(releases: str, name: str, deadline: float, clock: Calla
 
 
 class Manager:
-    def __init__(self, home: Path, *, fetch: Callable = download, installer: Callable | None = None):
+    def __init__(self, home: Path, *, fetch: Callable = download, installer: Callable | None = None,
+                 speech_preparer: Callable | None = None):
         self.home = Path(home).expanduser().resolve()
         self.data = self.home / "data"
         self.releases = self.home / "releases"
@@ -700,6 +720,11 @@ class Manager:
         self.marker = self.home / ".odicto-managed.json"
         self.fetch = fetch
         self.installer = installer or self._install_dependencies
+        self.speech_preparer = speech_preparer or self._download_speech_model
+        # The state a start accepted while the owner still waited ("" when it was ready); run()
+        # prints the matching line. Reset at the start of every run and every launch.
+        self.launch_notice = ""
+        self._waiting = "none"
         # Called with a step name ("check", "download", "install", "verify"); the CLI prints it.
         self.progress: Callable[[str], None] = lambda step: None
         self.update_log = self.data / "update.log"
@@ -844,6 +869,16 @@ class Manager:
                                 capture_output=True, text=True)
         if (directory / "VERSION").read_text(encoding="utf-8").strip() not in result.stdout:
             raise DistributionError("Staged release did not report its expected version")
+
+    def _download_speech_model(self, directory: Path, environment: dict) -> None:
+        """Download the configured speech model with the release's own Python. Output goes to the log."""
+        self.update_log.parent.mkdir(parents=True, exist_ok=True)
+        with self.update_log.open("a", encoding="utf-8", errors="replace") as log:
+            log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} speech model {directory.name}\n")
+            log.flush()
+            subprocess.run([str(self._python(directory)), str(directory / "odicto.py"), "_prepare-speech"],
+                           check=True, cwd=directory, env=environment, timeout=900,
+                           stdout=log, stderr=subprocess.STDOUT)
 
     def stage(self, release: Release) -> dict:
         self.progress("download")
@@ -1201,6 +1236,7 @@ runpy.run_path(str(script), run_name='__main__')
     def run(self, command: list[str], *, automatic_updates: bool = True) -> int:
         if not command or command[0] not in {"start", "setup", "stop", "restart", "status", "config", "version", "wait-ready", "autostart", "remove-autostart", "--help", "-h"}:
             raise DistributionError("Unsupported managed Odicto command")
+        self.launch_notice = ""
         requested = command[0]  # an admin restart is rewritten to start below
         self.initialize()
         if command[0] not in {"status", "version", "stop", "wait-ready", "--help", "-h"}:
@@ -1224,6 +1260,10 @@ runpy.run_path(str(script), run_name='__main__')
                 if current is None:
                     raise DistributionError("No active release; run install first")
                 directory = self.release_path(current)
+                # A start that follows an activation must reach full readiness, or the rollback
+                # below applies. Any other start also accepts an owner that waits for a
+                # microphone or its speech model.
+                strict = before is not None and current["directory"] != before["directory"]
                 if command[0] in {"start", "setup", "restart", "stop"}:
                     launch.enter_context(file_lock(self.home / "launch.lock"))
                     if command[0] == "stop" and not self.admin_enabled():
@@ -1246,12 +1286,14 @@ runpy.run_path(str(script), run_name='__main__')
                     return result
                 command = ["start", *command[1:]]
             if admin and command[0] == "start" and not self.support().elevated(directory):
-                result = self._launch_admin(directory, python)
+                result = self._launch_admin(directory, python, strict)
             elif command[0] in {"start", "setup", "restart"}:
-                result = self._launch(directory, python, command[0])
+                result = self._launch(directory, python, command[0], strict=strict)
             else:
                 result = subprocess.run([str(python), str(directory / "odicto.py"), *command],
                                         cwd=directory, env=self.environment()).returncode
+        if result == 0 and self.launch_notice in _LAUNCH_NOTICES:
+            print(_LAUNCH_NOTICES[self.launch_notice], file=sys.stderr)
         if result == EXIT_ANOTHER_OWNER and command[0] in {"start", "restart"}:
             print("Another copy of Odicto is running. Quit it, then start Odicto again.", file=sys.stderr)
         elif result and command[0] == "start" and before and current["directory"] != before["directory"]:
@@ -1286,9 +1328,23 @@ runpy.run_path(str(script), run_name='__main__')
                 if support.enabled(self.home) != enabled:
                     raise DistributionError("Administrator mode did not read back correctly")
 
-    def _launch_admin(self, directory: Path, python: Path) -> int:
+    def _sweep_admin_results(self) -> None:
+        """Delete result files that earlier admin launches left behind. The caller holds launch.lock,
+        so no launch of this home is in flight; a result file only matters to the launch that made it."""
+        try:
+            for path in self.home.glob("admin-result-*.json"):
+                if (re.fullmatch(r"admin-result-[a-f0-9]{32}\.json", path.name)
+                        and path.is_file() and not path.is_symlink()):
+                    path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _launch_admin(self, directory: Path, python: Path, strict: bool = True) -> int:
+        self._sweep_admin_results()
         self._recover_launch_intent()
-        if self._ready(directory, python):
+        state = self._started_state(directory, python, strict=strict)
+        if state != "none":
+            self.launch_notice = state if state in _WAITING_CODES else ""
             return 0
         token = uuid.uuid4().hex
         intent = self.home / "launch-intent.json"
@@ -1306,15 +1362,23 @@ runpy.run_path(str(script), run_name='__main__')
         with file_lock(self.home / "launch-intent.lock"):
             atomic_json(intent, reservation)
             atomic_json(request, {"schema": 1, "home": str(self.home), "token": token, "directory": directory.name,
-                                  "launcher_pid": os.getpid(), "state": "pending"})
+                                  "launcher_pid": os.getpid(), "state": "pending", "strict": bool(strict)})
         try:
             self.support().start_task(self.home, directory)
             deadline = time.monotonic() + STARTUP_TIMEOUT + CANCEL_TIMEOUT
             while time.monotonic() < deadline:
                 if result_path.exists():
-                    result = self._read_json(result_path)
+                    try:
+                        result = self._read_json(result_path)
+                    finally:
+                        try:
+                            result_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
                     if result.get("token") != token or type(result.get("code")) is not int:
                         raise DistributionError("Administrator startup result is invalid")
+                    notice = result.get("notice")
+                    self.launch_notice = notice if isinstance(notice, str) and notice in _WAITING_CODES else ""
                     if result["code"]:
                         print(f"Odicto did not start through admin mode (code {result['code']}); "
                               f"see {self.data / 'dictation.log'}.", file=sys.stderr)
@@ -1355,7 +1419,11 @@ runpy.run_path(str(script), run_name='__main__')
                 atomic_json(request, value)
                 reservation["supervisor_pid"] = os.getpid()
                 atomic_json(self.home / "launch-intent.json", reservation)
-            if self._ready(directory, self._python(directory)):
+            # A request without the field comes from a launcher that predates it: it stays strict.
+            strict = value.get("strict") is not False
+            self.launch_notice = ""
+            state = self._started_state(directory, self._python(directory), strict=strict)
+            if state != "none":
                 with file_lock(self.home / "launch-intent.lock"):
                     current = self._read_json(request)
                     if (current.get("token") != token or current.get("state") != "claimed"
@@ -1365,9 +1433,14 @@ runpy.run_path(str(script), run_name='__main__')
                     atomic_json(request, current)
                     (self.home / "launch-intent.json").unlink()
                 result = 0
+                self.launch_notice = state if state in _WAITING_CODES else ""
             else:
-                result = self._launch(directory, self._python(directory), "start", reservation=reservation)
-            atomic_json(self.home / ("admin-result-" + token + ".json"), {"token": token, "code": result})
+                result = self._launch(directory, self._python(directory), "start", reservation=reservation,
+                                      strict=strict)
+            payload = {"token": token, "code": result}
+            if result == 0 and self.launch_notice in _WAITING_CODES:
+                payload["notice"] = self.launch_notice
+            atomic_json(self.home / ("admin-result-" + token + ".json"), payload)
             return result
 
     @staticmethod
@@ -1438,7 +1511,15 @@ runpy.run_path(str(script), run_name='__main__')
                                     and state.get("supervisor_pid") == record.get("supervisor_pid")
                                     and state.get("state") == "released"
                                 )
-                        safe = admin_release if admin_release is not None else self._ready(directory, self._python(directory), token)
+                        if admin_release is not None:
+                            safe = admin_release
+                        else:
+                            # A launcher killed after it handed off may have left an owner that
+                            # still waits for a microphone or its speech model. It must not block
+                            # `odicto stop` and updates for ever, but a waiting owner counts only
+                            # with proof of the hand-off; a ready owner is the rule from before.
+                            state = self._started_state(directory, self._python(directory), token, strict=False)
+                            safe = state == "ready" or (state != "none" and self._outlived_its_launcher(record, child))
             else:
                 safe = not self._pid_alive(record.get("supervisor_pid")) and (
                     record.get("child_pid") is None or not self._pid_alive(record.get("child_pid")))
@@ -1447,18 +1528,57 @@ runpy.run_path(str(script), run_name='__main__')
             intent.unlink()
             receipt.unlink(missing_ok=True)
 
-    def _ready(self, directory: Path, python: Path, token: str = "") -> bool:
+    def _outlived_its_launcher(self, record: dict, child: dict) -> bool:
+        """True when the child still runs a moment after its supervising launcher is gone.
+
+        Without the hand-off byte the child exits when the launcher's pipe closes
+        (`odicto.py`, `_managed_startup_guard`), so a survivor was handed off."""
+        if self._pid_alive(record.get("supervisor_pid")):
+            return False
+        time.sleep(HANDOFF_SETTLE)
+        return self._pid_alive(child.get("pid"))
+
+    def _startup_state(self, directory: Path, python: Path, token: str = "") -> str:
+        """`ready`, `mic`, `speech`, `speech-download` or `none`, from one `wait-ready` probe.
+
+        A waiting state counts only when the exit code and the `ODICTO-WAITING` line agree. A probe
+        that cannot run, times out, or ends with any other code is `none`."""
         command = [str(python), str(directory / "odicto.py"), "wait-ready", "--timeout", "0",
-                   "--expected-root", str(directory)]
+                   "--report-waiting", "--expected-root", str(directory)]
         if token:
             command += ["--launch-token", token]
         try:
-            return subprocess.run(command, cwd=directory, env=self.environment(),
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+            done = subprocess.run(command, cwd=directory, env=self.environment(), stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, timeout=15, encoding="utf-8", errors="replace")
         except (OSError, subprocess.SubprocessError):
-            return False
+            return "none"
+        if done.returncode == 0:
+            return "ready"
+        text = getattr(done, "stdout", None)
+        if done.returncode not in _WAITING_CODES.values() or not isinstance(text, str):
+            return "none"
+        marks = [words for words in (line.split() for line in text.splitlines())
+                 if words[:1] == [_WAITING_MARKER]]
+        if len(marks) == 1 and len(marks[0]) == 2 and _WAITING_CODES.get(marks[0][1]) == done.returncode:
+            return marks[0][1]
+        return "none"
 
-    def _launch(self, directory: Path, python: Path, command: str, *, reservation: dict | None = None) -> int:
+    def _ready(self, directory: Path, python: Path, token: str = "") -> bool:
+        """The strict question: is the owner fully ready. A waiting owner is kept in `_waiting`
+        for `_started_state`, so one probe answers both questions."""
+        state = self._startup_state(directory, python, token)
+        self._waiting = state if state in _WAITING_CODES else "none"
+        return state == "ready"
+
+    def _started_state(self, directory: Path, python: Path, token: str = "", *, strict: bool = True) -> str:
+        """What counts as started: `ready`, or (not strict only) a waiting state; else `none`."""
+        self._waiting = "none"
+        if self._ready(directory, python, token):
+            return "ready"
+        return "none" if strict else self._waiting
+
+    def _launch(self, directory: Path, python: Path, command: str, *, reservation: dict | None = None,
+                strict: bool = True) -> int:
         intent = self.home / "launch-intent.json"
         if reservation is None:
             self._recover_launch_intent()
@@ -1468,13 +1588,17 @@ runpy.run_path(str(script), run_name='__main__')
             if result:
                 return result
             command = "start"
-        if reservation is None and command == "start" and self._ready(directory, python):
-            return 0
+        if reservation is None and command == "start":
+            state = self._started_state(directory, python, strict=strict)
+            if state != "none":
+                self.launch_notice = state if state in _WAITING_CODES else ""
+                return 0
         token = reservation["token"] if reservation else uuid.uuid4().hex
         receipt = self.home / ("launch-receipt-" + token + ".json")
         if reservation is None:
             atomic_json(intent, {"token": token, "directory": directory.name,
                                  "supervisor_pid": os.getpid(), "child_pid": None, "receipt": receipt.name})
+        self.launch_notice = ""
         environment = self.environment()
         environment["ODICTO_LAUNCH_TOKEN"] = token
         environment["ODICTO_LAUNCH_RECEIPT"] = str(receipt)
@@ -1493,7 +1617,8 @@ runpy.run_path(str(script), run_name='__main__')
                     raise OSError("Administrator startup was cancelled")
                 process.stdin.write(b"S")
                 process.stdin.flush()
-            deadline = time.monotonic() + STARTUP_TIMEOUT
+            began = time.monotonic()
+            deadline = began + STARTUP_TIMEOUT
             while time.monotonic() < deadline:
                 if reservation is not None:
                     state = self._read_json(self.home / "admin-request.json")
@@ -1507,10 +1632,15 @@ runpy.run_path(str(script), run_name='__main__')
                               file=sys.stderr)
                     return status if status else (0 if command == "setup" else 1)
                 owned_setup = False
+                accepted = "none"
                 if command == "setup" and receipt.exists():
                     state = self._read_json(receipt)
                     owned_setup = state.get("token") == token and state.get("state") == "setup-owned"
-                if owned_setup or command == "start" and self._ready(directory, python, token):
+                if command == "start":
+                    accepted = self._started_state(directory, python, token, strict=strict)
+                    if accepted == "speech-download" and time.monotonic() - began < DOWNLOAD_ACCEPT_SECONDS:
+                        accepted = "none"
+                if owned_setup or accepted != "none":
                     with file_lock(self.home / "launch-intent.lock"):
                         if reservation is not None:
                             state = self._read_json(self.home / "admin-request.json")
@@ -1523,6 +1653,7 @@ runpy.run_path(str(script), run_name='__main__')
                             atomic_json(self.home / "admin-request.json", state)
                     process.stdin.close()
                     confirmed = True
+                    self.launch_notice = accepted if accepted in _WAITING_CODES else ""
                     return 0
                 time.sleep(0.1)
             print("Odicto did not complete startup; cancelling the unconfirmed child.", file=sys.stderr)
@@ -1668,9 +1799,11 @@ def _app_parser() -> argparse.ArgumentParser:
         "when one is due.")
     add("start", "Start dictation in the background",
         "Odicto runs in the background and shows a small indicator at the bottom of the\n"
-        "screen. This command returns when Odicto is ready. If Odicto already runs and is\n"
-        "ready, nothing changes. Odicto checks for an update first when one is due. Run\n"
-        "only one Odicto install at a time: two installs would each hook the keyboard.")
+        "screen. This command returns when Odicto is ready. It also returns when Odicto\n"
+        "runs but still waits for a microphone or its speech model, and says which. If\n"
+        "Odicto already runs, nothing changes. Odicto checks for an update first when one\n"
+        "is due. Run only one Odicto install at a time: two installs would each hook the\n"
+        "keyboard.")
     add("restart", "Stop Odicto, then start it again",
         "Like 'odicto stop' followed by 'odicto start', except that it does not check for\n"
         "an update. A ready update is applied by 'odicto start' or 'odicto update'.")
@@ -1685,6 +1818,7 @@ def _app_parser() -> argparse.ArgumentParser:
                        help="seconds to wait (default 30)")
     ready.add_argument("--launch-token", help=argparse.SUPPRESS)
     ready.add_argument("--expected-root", help=argparse.SUPPRESS)
+    ready.add_argument("--report-waiting", action="store_true", help=argparse.SUPPRESS)
     add("config", "Show the main settings and where each value came from",
         "Shows the main settings, their values, and whether each value is a default or\n"
         "comes from your settings file. It is not a full list: some values are only\n"
@@ -1865,6 +1999,14 @@ def main(argv=None) -> int:
                     print(_update_result(before, record))
                 if args.command == "install":
                     manager.initialize_settings(record)
+                    manager.progress("speech")
+                    try:
+                        manager.speech_preparer(manager.release_path(record), manager.environment())
+                        steps.end(" done")
+                    except Exception:
+                        # The first start downloads the model instead; the install itself worked.
+                        steps.end(" skipped")
+                        print("The speech model was not downloaded now. Odicto downloads it at its first start.")
                     manager.install_launchers()
                     try:
                         command_path = manager.expose_command()

@@ -80,6 +80,12 @@ def helper(manager, action: str, *, source: Path | None = None, transaction: Pat
         command += ["-TransactionPath", str(transaction)]
     result = subprocess.run(command, timeout=180, creationflags=0x08000000, capture_output=True)
     value = json.loads(result.stdout.decode("utf-8-sig")) if action == "Inspect" else (manager._read_json(receipt) if receipt.exists() else {})
+    # The receipt only carries this call's answer, so it goes once it was read. After a timeout or
+    # an unreadable receipt it stays: it is then the only record of what the elevated helper did.
+    try:
+        receipt.unlink(missing_ok=True)
+    except OSError:
+        pass
     if result.returncode or value.get("ok") is not True or value.get("home") != str(manager.home):
         raise RuntimeError(value.get("error") or "Administrator change was cancelled or could not be verified")
     return value.get("result", {})

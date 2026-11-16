@@ -69,10 +69,23 @@ establish Wayland support, or replace an owner-confirmed real dictation journey.
 ## Double-click installer and Start Menu (Windows)
 
 `tests/test_easy_install.py` runs a built `Install-Odicto.cmd` with a fake bootstrap and a fake
-`odicto.cmd` (order autostart, start, setup; exit codes) and writes real shortcuts in a temp
-Programs folder. A real install from the published asset needs a fresh Windows user or machine,
+`odicto.cmd` (order autostart, start, setup; exit codes; `wait-ready` answers 0, 20, 21 or 1) and
+writes real shortcuts in a temp Programs folder. A real install from the published asset needs a fresh Windows user or machine,
 with the owner's hands: download it, pass SmartScreen, and confirm the Start Menu items, the
 HUD after start, and Setup in the browser. Never run it on a machine that runs Odicto for real.
+
+### When Odicto waits
+
+The install downloads the speech model in the step "Getting the speech model" (the first start
+then has nothing to download). `odicto start` succeeds when Odicto runs, even if it still waits.
+It then prints one line that says what for: no microphone, a speech model that did not load, or a
+model that still downloads. The installer asks once more, and in that case ends with a yellow
+"Odicto is running. It is not ready to dictate yet." instead of "Odicto is ready.". Setup still
+opens and the exit code stays 0. `odicto run status` prints a `Start-up:` line that names the
+stage and the last failed step. An update that activates a new release is stricter: its first
+start must reach full readiness, or the old release comes back. To prove the waiting path on a
+fresh user, start with no microphone (disable it in Device Manager) and expect the yellow
+summary and the notice; enable the microphone and expect dictation to work without a restart.
 
 ### Owner checklist: a fresh Windows user
 

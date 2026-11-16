@@ -80,6 +80,154 @@ class TestManagedAdmin(unittest.TestCase):
             self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
         self.support.start_task.assert_not_called()
 
+    # A launcher (medium) and its task (elevated) see the owner through one probe each.
+    def probe(self, medium="none", elevated="none"):
+        return lambda directory, python, token="": elevated if self.support.elevated.return_value else medium
+
+    def write_result(self, home, directory, **extra):
+        """What a task that accepted a running owner leaves: request released, intent gone, a result."""
+        token = self.manager._read_json(home / "launch-intent.json")["token"]
+        request = self.manager._read_json(home / "admin-request.json")
+        request["state"] = "released"
+        dist.atomic_json(home / "admin-request.json", request)
+        (home / "launch-intent.json").unlink()
+        dist.atomic_json(home / ("admin-result-" + token + ".json"), {"token": token, "code": 0, **extra})
+
+    def start_through_task(self, probe, errors=None, **run_arguments):
+        """`run(["start"])` as the medium launcher, with Task Scheduler running admin_task."""
+        requests, results = [], []
+
+        def task(home, directory):
+            requests.append(self.manager._read_json(home / "admin-request.json"))
+            self.support.elevated.return_value = True
+            try:
+                results.append(self.manager.admin_task())
+            finally:
+                self.support.elevated.return_value = False
+        self.support.start_task.side_effect = task
+        errors = errors if errors is not None else io.StringIO()
+        with patch.object(self.manager, "_startup_state", side_effect=probe), patch.object(sys, "stderr", errors):
+            code = self.manager.run(["start"], **{"automatic_updates": False, **run_arguments})
+        return code, requests, results, errors.getvalue()
+
+    def test_the_request_says_whether_the_start_is_strict(self):
+        seen = []
+
+        def task(home, directory):
+            seen.append(self.manager._read_json(home / "admin-request.json")["strict"])
+            self.write_result(home, directory)
+        self.support.start_task.side_effect = task
+        with patch.object(self.manager, "_startup_state", return_value="none"):
+            self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
+            self.fixture.add_release("v1.3.0")
+            self.assertEqual(self.manager.run(["start"]), 0)  # the update makes it a strict start
+        self.assertEqual(seen, [False, True])
+
+    def test_a_task_accepts_a_waiting_owner_and_the_launcher_prints_the_notice(self):
+        for state in ("mic", "speech", "speech-download"):
+            with self.subTest(state=state):
+                code, requests, results, errors = self.start_through_task(self.probe(elevated=state))
+                self.assertEqual((code, results, requests[0]["strict"]), (0, [0], False))
+                self.assertEqual(errors.strip(), dist._LAUNCH_NOTICES[state])
+                self.assertFalse((self.manager.home / "launch-intent.json").exists())
+                self.assertEqual(self.manager._read_json(self.manager.home / "admin-request.json")["state"],
+                                 "released")
+                # This launch's result file is read once and then deleted.
+                self.assertFalse(list(self.manager.home.glob("admin-result-*")))
+
+    def test_the_result_file_carries_the_notice_only_for_a_waiting_owner(self):
+        token = self.reservation()
+        self.support.elevated.return_value = True
+        with patch.object(self.manager, "_startup_state", return_value="mic"):
+            request = self.manager._read_json(self.manager.home / "admin-request.json")
+            request["strict"] = False
+            dist.atomic_json(self.manager.home / "admin-request.json", request)
+            self.assertEqual(self.manager.admin_task(), 0)
+        result = self.manager._read_json(self.manager.home / ("admin-result-" + token + ".json"))
+        self.assertEqual(result, {"token": token, "code": 0, "notice": "mic"})
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+        self.assertEqual(self.manager._read_json(self.manager.home / "admin-request.json")["state"], "released")
+
+    def test_a_task_after_an_update_stays_strict_and_the_update_rolls_back(self):
+        self.fixture.add_release("v1.3.0")
+        child = Child()
+        child.stdin = MagicMock(spec=io.BytesIO)
+        child.stdin.closed = False
+        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(dist, "STARTUP_TIMEOUT", 0.3):
+            code, requests, results, errors = self.start_through_task(self.probe(elevated="mic"),
+                                                                      automatic_updates=True)
+        self.assertEqual((code, results, requests[0]["strict"]), (1, [1], True))
+        self.assertEqual([call.args[0] for call in child.stdin.write.call_args_list], [b"S"])
+        self.assertEqual(self.manager.active()["directory"], self.old["directory"])
+        self.assertIn("previous version is active again", errors)
+        self.assertNotIn("is running", errors)
+
+    def test_a_request_without_the_field_stays_strict(self):
+        self.reservation()
+        self.support.elevated.return_value = True
+        child = Child()
+        child.stdin = MagicMock(spec=io.BytesIO)
+        child.stdin.closed = False
+        with patch.object(dist.subprocess, "Popen", return_value=child), patch.object(dist, "STARTUP_TIMEOUT", 0.3), \
+                patch.object(self.manager, "_startup_state", return_value="mic"):
+            self.assertEqual(self.manager.admin_task(), 1)
+        self.assertEqual([call.args[0] for call in child.stdin.write.call_args_list], [b"S"])
+        token = "a" * 32
+        self.assertEqual(self.manager._read_json(self.manager.home / ("admin-result-" + token + ".json")),
+                         {"token": token, "code": 1})
+
+    def test_an_explicit_strict_request_does_not_accept_a_waiting_owner(self):
+        self.reservation()
+        request = self.manager._read_json(self.manager.home / "admin-request.json")
+        request["strict"] = True
+        dist.atomic_json(self.manager.home / "admin-request.json", request)
+        self.support.elevated.return_value = True
+        child = Child(code=3)
+        with patch.object(dist.subprocess, "Popen", return_value=child), \
+                patch.object(self.manager, "_startup_state", return_value="speech"):
+            self.assertEqual(self.manager.admin_task(), 3)
+
+    def test_an_unknown_notice_in_a_result_is_ignored(self):
+        for notice in ("bogus", ["mic"], 7, ""):
+            with self.subTest(notice=notice):
+                def task(home, directory, notice=notice):
+                    self.write_result(home, directory, notice=notice)
+                self.support.start_task.side_effect = task
+                errors = io.StringIO()
+                with patch.object(self.manager, "_startup_state", return_value="none"), patch.object(sys, "stderr", errors):
+                    self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
+                self.assertEqual((errors.getvalue(), self.manager.launch_notice), ("", ""))
+
+    def test_the_launcher_precheck_accepts_a_waiting_owner_unless_strict(self):
+        python = self.manager._python(self.directory)
+        errors = io.StringIO()
+        with patch.object(self.manager, "_startup_state", return_value="speech"), patch.object(sys, "stderr", errors):
+            self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
+        self.support.start_task.assert_not_called()
+        self.assertEqual(errors.getvalue().strip(), dist._LAUNCH_NOTICES["speech"])
+        self.assertFalse((self.manager.home / "admin-request.json").exists())
+        self.support.start_task.side_effect = lambda home, directory: self.write_result(home, directory)
+        with patch.object(self.manager, "_startup_state", return_value="speech"):
+            self.assertEqual(self.manager._launch_admin(self.directory, python, True), 0)
+        self.support.start_task.assert_called_once()  # strict: a waiting owner does not count as running
+
+    def test_a_launch_sweeps_old_result_files_but_nothing_else(self):
+        home = self.manager.home
+        stale = [home / ("admin-result-" + character * 32 + ".json") for character in "0f"]
+        for path in stale:
+            path.write_text("{}")
+        keep = [home / "admin-result-short.json", home / ("admin-result-" + "a" * 32 + ".json.bak"),
+                home / ("launch-receipt-" + "b" * 32 + ".json"), home / "admin-request.json.keep"]
+        for path in keep:
+            path.write_text("{}")
+        folder = home / ("admin-result-" + "c" * 32 + ".json")
+        folder.mkdir()
+        with patch.object(self.manager, "_startup_state", return_value="ready"):
+            self.assertEqual(self.manager.run(["start"], automatic_updates=False), 0)
+        self.assertFalse(any(path.exists() for path in stale))
+        self.assertTrue(all(path.exists() for path in keep))
+        self.assertTrue(folder.is_dir())
+
     def test_elevated_task_recognizes_owner_hidden_from_medium_readiness_probe(self):
         import odicto
         import psutil
@@ -606,6 +754,56 @@ foreach($present in @($false,$true)) {
                 self.assertEqual(admin.helper(manager, "Inspect", source=Path("source")), {"admin": True})
             self.assertNotIn("-ReceiptPath", run.call_args.args[0])
             self.assertFalse(list(manager.home.glob("admin-receipt-*")))
+
+    def test_the_helper_deletes_its_receipt_after_it_is_read(self):
+        for ok in (True, False):
+            with self.subTest(ok=ok), tempfile.TemporaryDirectory() as tmp:
+                manager = dist.Manager(Path(tmp) / "managed")
+                manager.initialize()
+
+                def run(command, **kwargs):
+                    receipt = Path(command[command.index("-ReceiptPath") + 1])
+                    receipt.write_text(json.dumps({"ok": ok, "home": str(manager.home), "result": {"done": 1},
+                                                   "error": "synthetic refusal"}), encoding="utf-8")
+                    return SimpleNamespace(returncode=0, stdout=b"")
+                with patch.object(manager, "active", return_value={}), \
+                        patch.object(manager, "release_path", return_value=Path("release")), \
+                        patch.object(admin, "_windows_admin", return_value=SimpleNamespace(_powershell_exe=lambda: "fake-powershell")), \
+                        patch.object(admin.subprocess, "run", side_effect=run):
+                    if ok:
+                        self.assertEqual(admin.helper(manager, "Enable"), {"done": 1})
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "synthetic refusal"):
+                            admin.helper(manager, "Enable")
+                self.assertFalse(list(manager.home.glob("admin-receipt-*")))
+
+    def test_the_helper_keeps_a_receipt_it_could_not_read(self):
+        # After a timeout the receipt is the only record of what the elevated helper did.
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = dist.Manager(Path(tmp) / "managed")
+            manager.initialize()
+
+            def run(command, **kwargs):
+                Path(command[command.index("-ReceiptPath") + 1]).write_text("{", encoding="utf-8")
+                raise subprocess.TimeoutExpired("helper", 180)
+            with patch.object(manager, "active", return_value={}), \
+                    patch.object(manager, "release_path", return_value=Path("release")), \
+                    patch.object(admin, "_windows_admin", return_value=SimpleNamespace(_powershell_exe=lambda: "fake-powershell")), \
+                    patch.object(admin.subprocess, "run", side_effect=run):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    admin.helper(manager, "Enable")
+            self.assertEqual(len(list(manager.home.glob("admin-receipt-*"))), 1)
+
+            def unreadable(command, **kwargs):
+                Path(command[command.index("-ReceiptPath") + 1]).write_text("{", encoding="utf-8")
+                return SimpleNamespace(returncode=0, stdout=b"")
+            with patch.object(manager, "active", return_value={}), \
+                    patch.object(manager, "release_path", return_value=Path("release")), \
+                    patch.object(admin, "_windows_admin", return_value=SimpleNamespace(_powershell_exe=lambda: "fake-powershell")), \
+                    patch.object(admin.subprocess, "run", side_effect=unreadable):
+                with self.assertRaises(RuntimeError):
+                    admin.helper(manager, "Enable")
+            self.assertEqual(len(list(manager.home.glob("admin-receipt-*"))), 2)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell parser")
     def test_powershell_helpers_parse_without_execution(self):

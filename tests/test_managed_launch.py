@@ -12,7 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 import odicto
 from tests import test_managed_distribution as fixtures
@@ -187,8 +187,13 @@ class TestManagedLaunch(unittest.TestCase):
                 patch.object(platforms, "kill_other_odicto_processes") as kill, \
                 patch.object(platforms, "spawn_detached") as detached:
             message = setup_web.restart_odicto()
-        restart.assert_called_once_with(
-            [sys.executable, str(launcher), "run", "--no-auto-updates", "restart"], timeout=90)
+        # The restart first; then one look at whether Odicto still waits for a microphone or model.
+        self.assertEqual(restart.call_args_list[0], call(
+            [sys.executable, str(launcher), "run", "--no-auto-updates", "restart"], timeout=90))
+        self.assertEqual(restart.call_args_list[1].args[0], [
+            sys.executable, str(launcher), "run", "--no-auto-updates", "wait-ready", "--timeout", "5",
+            "--report-waiting"])
+        self.assertEqual(len(restart.call_args_list), 2)
         self.assertIn("ready", message)
         kill.assert_not_called()
         detached.assert_not_called()
@@ -237,6 +242,8 @@ class TestManagedLaunch(unittest.TestCase):
 
         def run(command, **kwargs):
             if command[1] == str(launcher):
+                if "wait-ready" in command:  # Setup Save asks once more whether Odicto still waits
+                    return SimpleNamespace(returncode=0)
                 self.assertEqual(command[2:], ["run", "--no-auto-updates", "restart"])
                 return SimpleNamespace(returncode=self.manager.run(["restart"], automatic_updates=False))
             self.assertEqual(command[-1], "stop")
@@ -288,6 +295,60 @@ class TestManagedLaunch(unittest.TestCase):
         with patch.object(self.manager, "_pid_alive", return_value=True), patch.object(self.manager, "_ready", return_value=True):
             self.manager._recover_launch_intent()
         self.assertFalse((self.manager.home / "launch-intent.json").exists())
+
+    SUPERVISOR, CHILD = 12345, 12347  # the pids that reservation() writes
+
+    def test_crashed_supervisor_after_a_waiting_handoff_does_not_block_running_owner(self):
+        # The launcher accepted an owner that waits for a microphone or its model, then died.
+        for state in ("mic", "speech", "speech-download"):
+            with self.subTest(state=state):
+                self.reservation("owner-starting")
+                with patch.object(self.manager, "_pid_alive", side_effect=lambda pid: pid == self.CHILD), \
+                        patch.object(dist.time, "sleep") as settle, \
+                        patch.object(self.manager, "_startup_state", return_value=state) as probe:
+                    self.manager._recover_launch_intent()
+                self.assertEqual(probe.call_args.args[2], "a" * 32)  # asks about this launch's token
+                settle.assert_called_once_with(dist.HANDOFF_SETTLE)
+                self.assertFalse((self.manager.home / "launch-intent.json").exists())
+
+    def test_a_waiting_owner_without_proof_of_the_handoff_keeps_the_reservation(self):
+        # A child that never got the hand-off byte ends itself when the launcher's pipe closes.
+        # Until that is seen, a second start must not retire the intent and report success.
+        self.reservation("owner-starting")
+        seen = []
+
+        def child_ends_during_the_settle(pid):
+            seen.append(pid)
+            return pid == self.CHILD and seen.count(self.CHILD) == 1  # alive first, gone after the settle
+        for name, alive in (("the supervisor still runs", lambda pid: True),
+                            ("the child ends in the settle", child_ends_during_the_settle)):
+            with self.subTest(name), patch.object(self.manager, "_pid_alive", side_effect=alive), \
+                    patch.object(dist.time, "sleep"), \
+                    patch.object(self.manager, "_startup_state", return_value="mic"):
+                with self.assertRaises(dist.BusyError):
+                    self.manager._recover_launch_intent()
+                self.assertTrue((self.manager.home / "launch-intent.json").exists())
+        # Once the child is gone the old rule retires the reservation.
+        with patch.object(self.manager, "_pid_alive", return_value=False):
+            self.manager._recover_launch_intent()
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+
+    def test_a_ready_owner_needs_no_settle(self):
+        self.reservation("owner-starting")
+        with patch.object(self.manager, "_pid_alive", return_value=True), \
+                patch.object(dist.time, "sleep") as settle, \
+                patch.object(self.manager, "_startup_state", return_value="ready"):
+            self.manager._recover_launch_intent()
+        settle.assert_not_called()
+        self.assertFalse((self.manager.home / "launch-intent.json").exists())
+
+    def test_recovery_still_blocks_when_the_owner_is_not_running_or_not_verified(self):
+        self.reservation("owner-starting")
+        with patch.object(self.manager, "_pid_alive", return_value=True), \
+                patch.object(self.manager, "_startup_state", return_value="none"):
+            with self.assertRaises(dist.BusyError):
+                self.manager._recover_launch_intent()
+        self.assertTrue((self.manager.home / "launch-intent.json").exists())
 
     def test_late_child_cannot_prepare_after_reservation_was_retired(self):
         self.reservation()

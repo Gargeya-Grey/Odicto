@@ -467,6 +467,10 @@ class DictationApp:
         self.status_detail: Optional[str] = None
         self._preflight_error: Optional[str] = None
         self._hooks_bound: bool = False
+        # What start-up is doing now (mic|speech|ai|hotkeys) and why the last attempt
+        # failed. Published in the heartbeat so a launcher can tell a wait from a fault.
+        self._init_stage: Optional[str] = None
+        self._init_reason: Optional[str] = None
 
         self.ollama_process = None
         self.recorder: Optional[AudioRecorder] = None
@@ -515,6 +519,8 @@ class DictationApp:
                             "code_root": str(ROOT),
                             "ready": ready, "state": self.state.name,
                             "status": self.last_status,
+                            "initialized": bool(self.ready),
+                            "init": self._init_snapshot(),
                             "microphone": microphone}
                 with open(temporary, "w", encoding="utf-8") as f:
                     json.dump(snapshot, f)
@@ -527,6 +533,21 @@ class DictationApp:
             os.remove(temporary)
         except OSError:
             pass
+
+    def _init_snapshot(self) -> dict:
+        """The start-up stage and the last failed reason, for the heartbeat.
+
+        A model that is not in the local cache shows as ``speech-download``: the speech
+        step is then a long download, not a fault. Never raises.
+        """
+        stage = getattr(self, "_init_stage", None)
+        try:
+            import transcriber
+            if stage == "speech" and transcriber.model_download_pending():
+                stage = "speech-download"
+        except Exception:
+            pass  # diagnostics must not break dictation
+        return {"stage": stage, "reason": getattr(self, "_init_reason", None)}
 
     # ------------------------------------------------------------------ UI push
     def _start_hotkey_worker(self) -> None:
@@ -720,6 +741,7 @@ class DictationApp:
         attempt = 0
         while True:
             reason = self._init_attempt()
+            self._init_reason = reason if reason != "closing" else None
             if reason is None:
                 break
             if reason == "closing" or self._closing.is_set():
@@ -817,9 +839,22 @@ class DictationApp:
 
         Returns a short reason code (indicator.INIT_REASON_LABELS) on failure,
         or "closing" when shutdown began. Every step is idempotent so a retry
-        only repeats the steps that failed.
+        only repeats the steps that failed. The stage is published only while a
+        step runs.
         """
+        try:
+            return self._init_steps()
+        finally:
+            self._init_stage = None
+
+    def _init_step_done(self, step: str) -> None:
+        """A step worked: an older failure of that same step no longer describes start-up."""
+        if getattr(self, "_init_reason", None) == step:
+            self._init_reason = None
+
+    def _init_steps(self) -> Optional[str]:
         if self.recorder is None:
+            self._init_stage = "mic"
             try:
                 recorder = AudioRecorder(
                     sample_rate=Config.SAMPLE_RATE,
@@ -831,7 +866,9 @@ class DictationApp:
             except Exception as e:
                 print(f"!!! Microphone init error: {e}", file=sys.stderr)
                 return "mic"
+            self._init_step_done("mic")
         if self.transcriber is None:
+            self._init_stage = "speech"
             try:
                 provider = Config.effective_stt_provider()
                 if provider == "gemini":
@@ -843,7 +880,9 @@ class DictationApp:
             except Exception as e:
                 print(f"!!! Speech engine init error: {e}", file=sys.stderr)
                 return "speech"
+            self._init_step_done("speech")
         if self.refiner is None:
+            self._init_stage = "ai"
             try:
                 refiner = TextRefiner()
                 refiner.preload()
@@ -851,8 +890,10 @@ class DictationApp:
             except Exception as e:
                 print(f"!!! AI init error: {e}", file=sys.stderr)
                 return "ai"
+            self._init_step_done("ai")
 
         # Bind global press/release hooks for hold-to-talk (ctrl+grave / ctrl+shift+grave).
+        self._init_stage = "hotkeys"
         try:
             with self._lifecycle_lock:
                 if self._closing.is_set():
@@ -862,6 +903,7 @@ class DictationApp:
                     self._bind_hotkeys()
                     self._hooks_bound = True
                 self.ready = True
+                self._init_step_done("hotkeys")
         except Exception as e:
             print(f"!!! Failed to bind hotkey '{Config.HOTKEY}': {e}", file=sys.stderr)
             # A partial bind must not survive into the retry (stacked hooks).
