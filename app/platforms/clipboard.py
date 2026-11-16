@@ -757,20 +757,24 @@ _LINUX_NON_TEXT_EXACT = frozenset(
 )
 
 
-def _linux_targets() -> tuple:
-    """Clipboard MIME targets, or () when no tool can list them (0.5 s timeout)."""
-    if os.environ.get("WAYLAND_DISPLAY"):
-        cmd = ["wl-paste", "--list-types"]
-    elif os.environ.get("DISPLAY"):
+def _linux_targets():
+    """Clipboard MIME targets, or None when they cannot be listed (0.5 s timeout).
+
+    The X server is asked first: Odicto runs only on X11, and WSLg sets WAYLAND_DISPLAY
+    next to its X server, where the X11 tools are the ones the installer provides.
+    """
+    if os.environ.get("DISPLAY"):
         cmd = ["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"]
+    elif os.environ.get("WAYLAND_DISPLAY"):
+        cmd = ["wl-paste", "--list-types"]
     else:
-        return ()
+        return None
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=0.5)
     except Exception:
-        return ()
+        return None
     if result.returncode != 0:
-        return ()
+        return None
     return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
@@ -779,9 +783,14 @@ def _linux_snapshot() -> ClipboardSnapshot:
     if text is None:
         return _UNREADABLE
     targets = _linux_targets()
-    has_non_text = any(
-        t.lower().startswith("image/") or t.lower() in _LINUX_NON_TEXT_EXACT for t in targets
-    )
+    if targets is None:
+        # Unknown contents count as non-text (typing, no clipboard overwrite), as a Windows
+        # timeout does. An empty clipboard has no owner to list targets, so it stays complete.
+        has_non_text = text != ""
+    else:
+        has_non_text = any(
+            t.lower().startswith("image/") or t.lower() in _LINUX_NON_TEXT_EXACT for t in targets
+        )
     return ClipboardSnapshot(
         text=text,
         formats=(),

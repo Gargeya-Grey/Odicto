@@ -11,6 +11,8 @@ bind the unmodified keyboard layout so Option-generated symbols keep their prima
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -498,3 +500,138 @@ def foreground_window_id():
         return app.processIdentifier() if app else None
     except Exception:
         return None
+
+
+# ---- Consent (TCC) helpers -------------------------------------------------------
+#
+# Used by platforms.preflight: the microphone probe reads the status, and a refused start
+# asks macOS to show its prompts and opens the matching System Settings pane. Every function
+# is best effort and never raises: a failure means "nothing happened", and the caller still
+# prints its own message. Calls go through ctypes (the Objective-C runtime and the system
+# frameworks), so no extra package is needed. Nothing here binds a hook.
+
+# AVAuthorizationStatus
+AUTH_NOT_DETERMINED, AUTH_RESTRICTED, AUTH_DENIED, AUTH_AUTHORIZED = 0, 1, 2, 3
+
+_PRIVACY_PANES = {
+    "accessibility": "Privacy_Accessibility",
+    "input_monitoring": "Privacy_ListenEvent",
+    "microphone": "Privacy_Microphone",
+}
+
+
+def privacy_pane_url(pane: str) -> str:
+    return "x-apple.systempreferences:com.apple.preference.security?" + _PRIVACY_PANES[pane]
+
+
+def _load(name: str, path: str):
+    import ctypes
+    import ctypes.util
+
+    return ctypes.cdll.LoadLibrary(ctypes.util.find_library(name) or path)
+
+
+def _objc():
+    """The Objective-C runtime, with Foundation loaded so NSString and NSDictionary exist."""
+    import ctypes
+
+    objc = _load("objc", "/usr/lib/libobjc.A.dylib")
+    _load("Foundation", "/System/Library/Frameworks/Foundation.framework/Foundation")
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    return objc
+
+
+def _send(objc, restype, argtypes, receiver, selector: bytes, *args):
+    """objc_msgSend with an explicit signature; ``selector`` is the method name."""
+    import ctypes
+
+    objc.objc_msgSend.restype = restype
+    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, *argtypes]
+    return objc.objc_msgSend(receiver, objc.sel_registerName(selector), *args)
+
+
+def _nsstring(objc, text: str):
+    import ctypes
+
+    return _send(objc, ctypes.c_void_p, [ctypes.c_char_p], objc.objc_getClass(b"NSString"),
+                 b"stringWithUTF8String:", text.encode("utf-8"))
+
+
+def audio_authorization_status():
+    """AVFoundation's microphone status (``AUTH_*``), or None when it cannot be read.
+
+    Reading the status never shows a prompt; the first capture does that.
+    """
+    try:
+        import ctypes
+
+        objc = _objc()
+        _load("AVFoundation", "/System/Library/Frameworks/AVFoundation.framework/AVFoundation")
+        device = objc.objc_getClass(b"AVCaptureDevice")
+        media_type = _nsstring(objc, "soun")  # AVMediaTypeAudio
+        if not device or not media_type:
+            return None
+        return int(_send(objc, ctypes.c_long, [ctypes.c_void_p], device,
+                         b"authorizationStatusForMediaType:", media_type))
+    except Exception:
+        return None
+
+
+def request_accessibility_prompt() -> bool:
+    """AXIsProcessTrustedWithOptions with the prompt option: macOS shows its consent dialog."""
+    try:
+        import ctypes
+
+        services = _load("ApplicationServices",
+                         "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        objc = _objc()
+        key = _nsstring(objc, "AXTrustedCheckOptionPrompt")  # kAXTrustedCheckOptionPrompt
+        yes = _send(objc, ctypes.c_void_p, [ctypes.c_int], objc.objc_getClass(b"NSNumber"),
+                    b"numberWithBool:", 1)
+        options = _send(objc, ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_void_p],
+                        objc.objc_getClass(b"NSDictionary"), b"dictionaryWithObject:forKey:", yes, key)
+        if not options:
+            return False
+        services.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+        services.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        return bool(services.AXIsProcessTrustedWithOptions(options))
+    except Exception:
+        return False
+
+
+def request_input_monitoring_prompt() -> bool:
+    """IOHIDRequestAccess(listen events): macOS shows its Input Monitoring dialog."""
+    try:
+        import ctypes
+
+        iokit = _load("IOKit", "/System/Library/Frameworks/IOKit.framework/IOKit")
+        request = iokit.IOHIDRequestAccess
+        request.restype = ctypes.c_bool
+        request.argtypes = [ctypes.c_uint32]
+        return bool(request(1))  # kIOHIDRequestTypeListenEvent
+    except Exception:
+        return False
+
+
+def open_privacy_pane(pane: str) -> bool:
+    """Open System Settings at one Privacy & Security pane. True when ``open`` succeeded."""
+    try:
+        result = subprocess.run(["open", privacy_pane_url(pane)], check=False, timeout=5,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def responsible_program_name() -> str:
+    """How to name the program whose switch the person must turn on."""
+    try:
+        name = os.path.basename(os.path.realpath(sys.executable))
+    except Exception:
+        name = ""
+    if name:
+        return f'"{name}" (or the terminal app that started Odicto)'
+    return "your terminal app or Python"
