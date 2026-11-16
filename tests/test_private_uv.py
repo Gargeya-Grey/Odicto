@@ -439,6 +439,12 @@ class ManagerCase(unittest.TestCase):
         elevation = patch("tools.distribution.managed_admin.elevated", return_value=False)
         elevation.start()
         self.addCleanup(elevation.stop)
+        # uv sets UV for its children, and CI runs this suite under `uv run`: the manager would read
+        # that uv as a source. Each test starts without it and sets it where it means to.
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("UV", None)
         self.temporary = tempfile.TemporaryDirectory(prefix="odicto-find-uv-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
