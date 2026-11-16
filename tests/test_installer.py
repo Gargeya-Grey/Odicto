@@ -104,23 +104,56 @@ if sys.platform == "win32":
             raise AssertionError("PowerShell failed: " + text)
         return json.loads(text.splitlines()[-1])
 
+    FAKE_UV = """using System; using System.IO;
+class Fake {
+    static int Main(string[] args) {
+        File.AppendAllText(Environment.GetEnvironmentVariable("ODICTO_TEST_LOG"), string.Join(" ", args) + "\\n");
+        if (args.Length == 0 || args[0] != "--version") { Console.In.ReadToEnd(); }
+        return 0;
+    }
+}
+"""
+
+    def _build_fake_uv(target, scratch):
+        """A uv.exe that logs its arguments, built with the C# compiler that ships with Windows."""
+        source = scratch / "fake_uv.cs"
+        source.write_text(FAKE_UV, encoding="ascii")
+        compiler = (Path(os.environ.get("SystemRoot", r"C:\Windows")) / "Microsoft.NET" / "Framework64"
+                    / "v4.0.30319" / "csc.exe")
+        built = subprocess.run([str(compiler), "/nologo", f"/out:{target}", str(source)],
+                               capture_output=True, text=True, timeout=120)
+        if built.returncode:
+            raise AssertionError("The fake uv was not built: " + built.stdout + built.stderr)
+
     class TestWindowsInstaller(_InstallFolderCase):
-        def test_managed_installer_selects_first_uv_when_path_contains_multiple_executables(self):
-            script = r'''
+        def test_managed_installer_runs_its_own_uv_and_never_a_uv_on_path(self):
+            """The bootstrap keeps its own uv in Odicto-bootstrap/uv under LOCALAPPDATA. A uv on PATH (two, faked) is
+            never run. A compiled fake uv.exe in a throwaway LOCALAPPDATA logs its arguments: no network, no real
+            uv, no real install, no Start Menu items."""
+            with tempfile.TemporaryDirectory(prefix="odicto-managed-installer-") as directory:
+                root = Path(directory).resolve()
+                folder = root / "local" / "Odicto-bootstrap" / "uv"
+                folder.mkdir(parents=True)
+                _build_fake_uv(folder / "uv.exe", root)
+                log = root / "log"
+                script = r'''
 function Get-Command {
     param($Name, $CommandType, $ErrorAction)
     @([pscustomobject]@{Source='Invoke-FirstUv'}, [pscustomobject]@{Source='Invoke-SecondUv'})
 }
-function Invoke-FirstUv {
-    @{chosen='first';arguments=@($args | ForEach-Object { [string]$_ })} | ConvertTo-Json -Compress
-    $global:LASTEXITCODE=0
-}
-function Invoke-SecondUv { throw 'Wrong PATH executable selected' }
+function Invoke-FirstUv { throw 'A uv on PATH was run' }
+function Invoke-SecondUv { throw 'A uv on PATH was run' }
+function Invoke-WebRequest { throw 'The network was used' }
 & $env:ODICTO_MANAGED_INSTALL -HomePath 'synthetic-managed-home'
 '''
-            result = _ps_json(script, ODICTO_MANAGED_INSTALL=str(ROOT / "install-managed.ps1"))
-            self.assertEqual(result, {"chosen": "first", "arguments": ["run", "--python", "3.12",
-                "--no-project", "--no-config", "python", "-", "--home", "synthetic-managed-home"]})
+                code, text = _ps(script, ODICTO_MANAGED_INSTALL=str(ROOT / "install-managed.ps1"),
+                                 LOCALAPPDATA=str(root / "local"), APPDATA=str(root / "roaming"),
+                                 ODICTO_TEST_LOG=str(log))
+                self.assertEqual(code, 0, text)
+                self.assertEqual(log.read_text(encoding="utf-8").splitlines(), [
+                    "--version",
+                    "run --python 3.12 --no-project --no-config python - --home synthetic-managed-home"])
+                self.assertFalse((ROOT / "synthetic-managed-home").exists())
 
         @classmethod
         def setUpClass(cls):

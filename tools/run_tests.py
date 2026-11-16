@@ -4,7 +4,8 @@ Discovers every tests/test_*.py (new files are picked up automatically), runs th
 verbosely, then enforces:
   (a) no failures and no errors;
   (b) total tests run >= GATE["floor"];
-  (c) every skipped test matches an allow-list pattern for the current platform.
+  (c) every skipped test matches an allow-list pattern for the current platform;
+  (d) no test wrote to the places where a real install lives (_user_install_places).
 
 Stdlib only. Usage (from anywhere):  python tools/run_tests.py
 """
@@ -121,6 +122,38 @@ GATE = {
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _user_install_places() -> list[Path]:
+    """Places outside the checkout that a real Odicto install writes. A test must use a temporary root
+    for them; one that does not installs for real on the developer's machine (it happened once: a stale
+    installer test downloaded uv and wrote Start Menu items)."""
+    home = Path.home()
+    places = [home / ".local" / "bin" / "odicto", home / ".local" / "bin" / "odicto.cmd",
+              home / ".local" / "share" / "odicto" / "bin", home / ".cache" / "odicto-bootstrap",
+              home / "Library" / "Caches" / "Odicto-bootstrap"]
+    if os.environ.get("LOCALAPPDATA"):
+        local = Path(os.environ["LOCALAPPDATA"])
+        places += [local / "Odicto-bootstrap", local / "Odicto" / "bin"]
+    if os.environ.get("APPDATA"):
+        programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd"]
+    return places
+
+
+def _fingerprint(places: list[Path]) -> dict:
+    """Each place: whether it exists, its modification time, and the names and times one level down."""
+    seen = {}
+    for place in places:
+        try:
+            state = [os.lstat(place).st_mtime_ns]
+            if place.is_dir() and not place.is_symlink():
+                state += sorted((entry.name, entry.stat(follow_symlinks=False).st_mtime_ns)
+                                for entry in os.scandir(place))
+        except OSError:
+            state = None
+        seen[str(place)] = state
+    return seen
+
+
 @contextlib.contextmanager
 def _elevation_probe_boundary():
     """Keep the gate off the real UAC prompt once an install has opted in to always-admin.
@@ -183,6 +216,8 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         str(ROOT / "tests"), pattern="test_*.py", top_level_dir=str(ROOT))
     runner = unittest.TextTestRunner(verbosity=2, stream=sys.stdout)
+    places = _user_install_places()
+    before = _fingerprint(places)
     # Capture thread stacks from a long-running suite before the parent deadline.
     faulthandler.dump_traceback_later(160, repeat=True)
     try:
@@ -198,6 +233,12 @@ def main() -> int:
                 pass
 
     problems = []
+    after = _fingerprint(places)
+    touched = [place for place in before if before[place] != after[place]]
+    if touched:
+        problems.append("%d place(s) of a real install changed during the run (a test escaped its temporary root):"
+                        % len(touched))
+        problems += ["  - " + place for place in touched]
     if result.failures or result.errors:
         problems.append("%d failure(s), %d error(s):" % (len(result.failures), len(result.errors)))
         problems += ["  - " + test.id() for test, _ in result.failures + result.errors]
