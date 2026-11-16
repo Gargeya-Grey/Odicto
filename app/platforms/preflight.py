@@ -199,6 +199,18 @@ def _macos_microphone() -> list[Problem]:
     return []
 
 
+def macos_microphone_problem() -> "Problem | None":
+    """The refusal of the microphone by macOS, or None (another system, not asked yet, allowed, or a
+    status that cannot be read). A refused microphone records silence, so start-up waits on it."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        found = _macos_microphone()
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
 _LINUX_PROBES = (_linux_x11, _linux_xlib, _linux_root_env, _linux_wayland, _linux_wsl,
                  _linux_clipboard, _linux_xdotool, _linux_portaudio)
 _MACOS_PROBES = (_macos_accessibility, _macos_input_monitoring, _macos_microphone)

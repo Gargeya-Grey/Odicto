@@ -57,21 +57,22 @@ does not derive them from `$0`, because `~/.local/bin/odicto` is a link to it. T
 On Linux, `sudo apt-get` and the `uv` installer read no input (`</dev/null`), so the bootstrap works when
 the script comes through a pipe.
 
-WSL (the file `/proc/sys/fs/binfmt_misc/WSLInterop` exists, or `WSL_DISTRO_NAME` is set) is for testing.
+WSL (`WSL_DISTRO_NAME` or `WSL_INTEROP` is set, the same rule as Odicto's own check) is for testing.
 It is checked on its own, before `sudo` and any download: without `DISPLAY` the bootstrap stops, whatever
 the Wayland variables say, and names `wsl --update`. WSLg sets `WAYLAND_DISPLAY` but runs an X server, so
 with `DISPLAY` set the bootstrap goes on, says that the shortcuts work only while a Linux window has focus
 and that Odicto types only into Linux (X11) apps, and adds `libasound2-plugins` (the ALSA `pulse` device
-for the WSLg microphone). A tester can point `ODICTO_WSL_INTEROP_FILE` at another file to fake or hide WSL.
+for the WSLg microphone). A test hides WSL by clearing both variables (the test gate clears them).
 
 ## Install
 
 On Windows, the release also has `Install-Odicto.cmd`. It holds `bootstrap.ps1` unchanged
 (built by `build_easy_installer.py` in the Release workflow). Double-clicked, it runs that
 bootstrap, then `odicto autostart` (new installs only), `odicto start` and `odicto setup`,
-and waits for a key. It starts nothing when the Start Menu item `Odicto` runs another program
-or a Startup `Odicto.lnk` exists (a source checkout), unless `migration.json` says the
-migration is complete; the user migrates first. The check reads only those two shortcuts, under
+and waits for a key. It starts nothing when a Startup `Odicto.lnk` exists (a source checkout;
+the migration retires the migrated checkout's one), or when the Start Menu item `Odicto` runs
+another program, except a file of the checkout that a complete `migration.json` names as its
+`source` (that checkout forwards to this install); the user migrates first. The check reads only those two shortcuts, under
 `%APPDATA%`: a source copy without them, or a running source owner, is not detected. It reports
 each failed step and exits 1. After a start that worked it asks `odicto wait-ready --timeout 5
 --report-waiting`; when Odicto still waits for a microphone or its speech model (exit 20 or 21),
@@ -86,8 +87,10 @@ the same name that runs another program is kept.
 
 On macOS and Linux, a stable release also has `install-odicto.sh` (built by
 `build_posix_installer.py` in the Release workflow; a pre-release does not get it). A user pastes
-`curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash`
-in a terminal. The file holds `bootstrap.sh` unchanged inside a shell function, then the same steps as
+`curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` on a Mac, or
+`wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` on Linux
+(`MAC_LINE` and `LINUX_LINE` in that file; Ubuntu's desktop has `wget` but no `curl`, and the bootstrap
+installs `curl` with the other packages) in a terminal. The file holds `bootstrap.sh` unchanged inside a shell function, then the same steps as
 the Windows installer. Every line is inside a function and the call is the last line, so bash has read
 the whole file before it runs anything: a download that stops halfway runs nothing. The bootstrap's own
 exit codes stay; a failed install ends with "Odicto was not installed. The lines above say why." and the

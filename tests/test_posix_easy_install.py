@@ -106,7 +106,8 @@ FAKES = {
 
 # The pasted line is `curl ... | bash`: the shell reads the script from a pipe.
 RUNNER = ('export HOME="$T_ROOT/home" PATH="$T_FAKES:/usr/bin:/bin:$PATH" XDG_SESSION_TYPE="${T_SESSION:-x11}"\n'
-          'unset XDG_DATA_HOME XDG_CACHE_HOME WAYLAND_DISPLAY DISPLAY\n'
+          # No WSL: a developer may run these tests inside WSL, and the bootstrap checks for it.
+          'unset XDG_DATA_HOME XDG_CACHE_HOME WAYLAND_DISPLAY DISPLAY WSL_DISTRO_NAME WSL_INTEROP\n'
           'for d in "$HOME/.cache/odicto-bootstrap/uv" "$HOME/Library/Caches/Odicto-bootstrap/uv"; do\n'
           '  mkdir -p "$d" && cp "$T_FAKES/private-uv" "$d/uv" && chmod +x "$d/uv"\n'
           'done\n'
@@ -319,20 +320,24 @@ class TestPosixInstallerRuns(unittest.TestCase):
         self.assertEqual(done.returncode, 0, self.output(done))
         self.assertEqual(self.calls()[:2], ["autostart", "start"])
 
-    def test_source_entries_after_a_finished_migration_do_not_block(self):
+    def test_a_source_entry_blocks_even_after_a_finished_migration(self):
+        # The migration retires the source entry, so this one belongs to another copy (review of 1.6.0).
         self.install_existing()
-        entry = self.source_entry()
-        entry.parent.mkdir(parents=True)
-        entry.write_text("source copy", encoding="ascii")
         receipt = self.managed() / "migration.json"
         receipt.write_text('{"state": "complete"}', encoding="ascii")
         done = self.run_installer()
-        self.assertEqual(done.returncode, 0, self.output(done))
-        self.assertEqual(self.calls(), ["start", "wait-ready --timeout 5 --report-waiting", "setup"])
-        receipt.write_text('{"state": "copying"}', encoding="ascii")
-        done = self.run_installer()
-        self.assertEqual(self.calls(), [])
-        self.assertIn("another copy of Odicto is on this computer", self.output(done))
+        self.assertEqual(self.calls(), ["start", "wait-ready --timeout 5 --report-waiting", "setup"], self.output(done))
+        entry = self.source_entry()
+        entry.parent.mkdir(parents=True)
+        entry.write_text("another source copy", encoding="ascii")
+        for state in ("complete", "copying"):
+            with self.subTest(state=state):
+                receipt.write_text('{"state": "%s"}' % state, encoding="ascii")
+                done = self.run_installer()
+                self.assertEqual(done.returncode, 0, self.output(done))
+                self.assertEqual(self.calls(), [])
+                self.assertIn("another copy of Odicto is on this computer", self.output(done))
+                self.assertIn(entry.name, self.output(done))
 
     def source_checkout(self) -> Path:
         checkout = self.root / "src checkout" / "Odicto"
@@ -578,6 +583,20 @@ class TestWorkflowsUseTheInstaller(unittest.TestCase):
         self.assertIn("if: runner.os != 'Windows'", step)
         self.assertIn("build_posix_installer.py", step)
         self.assertIn('cat "$work/install-odicto.sh" | env -i', step)
+
+
+class TestTheDocsGiveTheLines(unittest.TestCase):
+    def test_every_guide_gives_the_mac_line_and_the_linux_line(self):
+        # Review of 1.6.0: one curl line for both failed on Ubuntu, whose desktop has wget but no curl.
+        self.assertTrue(builder.MAC_LINE.startswith("curl -fsSL https://"))
+        self.assertTrue(builder.LINUX_LINE.startswith("wget -nv -O- https://"))
+        for name in ("README.md", "docs/install.md", "tools/release/release-notes.md",
+                     "tools/distribution/README.md", "CHANGELOG.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(guide=name):
+                self.assertIn(builder.MAC_LINE, text)
+                self.assertIn(builder.LINUX_LINE, text)
+        self.assertIn("#   " + builder.LINUX_LINE, builder.HEADER)
 
 
 if __name__ == "__main__":

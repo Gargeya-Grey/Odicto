@@ -123,10 +123,11 @@ Two copies must never run together: each letter that you type would show twice.
 ### One line
 
 1. Open a terminal: press **Ctrl + Alt + T**.
-2. Paste this line and press **Enter**:
+2. Paste this line and press **Enter**. It uses `wget`, because Ubuntu has no `curl` until the
+   installer adds it:
 
    ```bash
-   curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+   wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
    ```
 
    The installer can ask for your password. It uses the password only to install system
@@ -222,7 +223,7 @@ First, ask Odicto. It lists the problems that it can see:
 | Windows: "Another copy of Odicto is running" | Right-click the Odicto icon near the clock and choose **Quit Odicto**. Then open **Odicto** from the Start Menu. |
 | Every letter that you type shows twice | Two copies of Odicto run. Stop each copy: this copy with **Stop Odicto** or the `stop` command, a source copy with its own stop script. Turn off the source copy's start at login. Check that none is left: on Windows, Task Manager (Details) shows no `pythonw.exe`; on macOS and Linux, `pgrep -fl main.py` prints nothing. Then start one copy, one time. |
 | macOS: `Cannot start Odicto [macos_accessibility]` or `[macos_input_monitoring]` | Do step 6 of the macOS list again, then give the start command again. |
-| "Odicto is running, but it cannot hear a microphone" | Connect a microphone, or choose one in Odicto Setup. Odicto tries again by itself. |
+| "Odicto is running, but it cannot hear a microphone" | Connect a microphone, or choose one in Odicto Setup. Odicto tries again by itself. On a Mac, also turn on the switch for your terminal or Python in **System Settings > Privacy & Security > Microphone**. |
 | "Odicto is running and still downloads its speech model" | Wait. Dictation works when the download ends. |
 | macOS: the indicator shows, but no words appear | Check **System Settings > Privacy & Security > Microphone**. |
 | Linux: the installer says it supports Ubuntu and Debian | Your distribution is not supported by this installer yet. |

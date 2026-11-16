@@ -4,6 +4,25 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.6.0] - 2026-11-16
+
+### Added
+
+- Install on macOS and Linux with one line. Open a terminal and paste one line: on a Mac `curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash`, on Ubuntu, Debian or Linux Mint `wget -nv -O- https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash` (Ubuntu has `wget`, not `curl`). You need nothing installed first. It installs Odicto and what it needs, turns on start at sign-in, starts Odicto and opens Setup. It says "Odicto is ready." only when Odicto confirmed it. If a copy installed from a source checkout is on the computer, it starts nothing and links to the migration steps.
+
+### Fixed
+
+- macOS: when Odicto does not have Accessibility or Input Monitoring, it now asks macOS to show the permission prompt, opens the matching System Settings pane and says what to turn on. Before, a start at sign-in stopped without a word. When the microphone is turned off for Odicto, Odicto waits for it and says where to turn it on, and the installer does not say "ready".
+- Updates on macOS and Linux no longer need `uv` on `PATH`. Odicto keeps its own copy of uv. Before, an update from a start at sign-in failed with "uv was not found".
+- The `~/.local/bin/odicto` command works. Before, the link to the launcher failed.
+- Linux: when the sound system names no default microphone, Odicto uses the `pulse` input, then `pipewire`, then `default`, then the first microphone.
+- Linux in WSL: Odicto starts with WSLg (it uses the WSLg X server). WSL is for testing: the shortcuts work only while a Linux window has focus, and Odicto types only into Linux apps.
+- When Odicto stops during startup, the installer and `odicto start` now show the reason that Odicto wrote to its log.
+
+### Upgrade from 1.5.x on macOS or Linux
+
+- A 1.5.x copy runs its own old update code, which needs `uv` on `PATH`, and its `odicto` command in `~/.local/bin` does not work. The easiest way to 1.6.0: paste the install line again. Or run the full command in a terminal: `~/.local/share/odicto/bin/odicto update` on Linux, `"$HOME/Library/Application Support/Odicto/bin/odicto" update` on a Mac. The next start after that (at sign-in, or the same command with `start`) repairs the launchers, and later updates need nothing.
+
 ## [1.5.1] - 2026-11-16
 
 ### Fixed

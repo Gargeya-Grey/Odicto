@@ -5,7 +5,7 @@ install: start at sign-in (new installs only), start Odicto, check that it is re
 Setup. It mirrors build_easy_installer.py, the Windows one-file installer. Usage:
     python tools/distribution/build_posix_installer.py out/install-odicto.sh
 
-A user pastes `curl -fsSL <url> | bash`. Bash runs a script from a pipe while it reads it. So
+A user pastes MAC_LINE or LINUX_LINE. Bash runs a script from a pipe while it reads it. So
 every line of the file is a function, and the one call to the main function is the last line:
 a download that breaks off halfway has no call and runs nothing.
 """
@@ -13,11 +13,18 @@ from pathlib import Path
 import sys
 
 BOOTSTRAP = Path(__file__).resolve().with_name("bootstrap.sh")
+URL = "https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh"
+# The lines that the docs give. Ubuntu's desktop has wget but no curl (the 24.04.3 and 26.04 desktop
+# manifests, read 16 Nov 2026); the bootstrap installs curl with the other packages. macOS has curl.
+MAC_LINE = f"curl -fsSL {URL} | bash"
+LINUX_LINE = f"wget -nv -O- {URL} | bash"
 
-HEADER = """#!/usr/bin/env bash
+HEADER = f"""#!/usr/bin/env bash
 # Odicto installer for macOS and Linux. Built by tools/distribution/build_posix_installer.py.
-# Paste this line in a terminal:
-#   curl -fsSL https://github.com/Gargeya-Grey/Odicto/releases/latest/download/install-odicto.sh | bash
+# Paste one line in a terminal. On a Mac:
+#   {MAC_LINE}
+# On Linux:
+#   {LINUX_LINE}
 # Every line below is inside a function and the call is the last line. Bash runs a script from a
 # pipe while it reads it, so a download that stops halfway has no call and runs nothing.
 """
@@ -165,9 +172,9 @@ odicto_install_main() {
   fi
 
   # A source copy's start-at-sign-in entry, or a source copy that runs now: two copies must never
-  # run together. After a finished migration the source launchers forward to this install.
-  entry=""
-  if [ "$migrated" = 0 ]; then entry="$(odicto_source_entry)" || entry=""; fi
+  # run together. A migration refuses to run while a source entry exists, so an entry found after a
+  # finished migration belongs to another copy, which may be older than 1.5.0 and hook beside this one.
+  entry="$(odicto_source_entry)" || entry=""
   owner="$(odicto_source_owner "$home")" || owner=""
   if [ -n "$entry" ] || [ -n "$owner" ]; then
     odicto_say '' 'Odicto is installed, but another copy of Odicto is on this computer.'

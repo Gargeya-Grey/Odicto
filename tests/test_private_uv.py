@@ -70,9 +70,10 @@ cp "$ODICTO_TEST_INSTALLER" "$destination"
     # A uv that is already on PATH. The bootstrap must not use it.
     "uv": 'echo "PATH-UV-USED $*" >> "$ODICTO_TEST_LOG"\nexit 0\n',
 }
-FORGET = ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "WSL_DISTRO_NAME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
-          "CARGO_HOME", "UV_INSTALL_DIR", "UV_UNMANAGED_INSTALL", "UV_NO_MODIFY_PATH", "CARGO_DIST_FORCE_INSTALL_DIR",
-          "ODICTO_DATA_ROOT", "ODICTO_MANAGED_HOME", "ODICTO_WSL_INTEROP_FILE", "ODICTO_BOOTSTRAP_UV")
+# WSL_DISTRO_NAME and WSL_INTEROP go too: a developer may run these tests inside WSL.
+FORGET = ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "WSL_DISTRO_NAME", "WSL_INTEROP", "XDG_DATA_HOME",
+          "XDG_CACHE_HOME", "CARGO_HOME", "UV_INSTALL_DIR", "UV_UNMANAGED_INSTALL", "UV_NO_MODIFY_PATH",
+          "CARGO_DIST_FORCE_INSTALL_DIR", "ODICTO_DATA_ROOT", "ODICTO_MANAGED_HOME", "ODICTO_BOOTSTRAP_UV")
 
 # The managers that the fake uv runs after the bootstrap. Both read --home from their arguments.
 DRIVER_NEW = '''
@@ -179,9 +180,7 @@ class Bootstrap(unittest.TestCase):
             tools += ["/usr/bin", "/bin"]
         env.update(PATH=os.pathsep.join(tools), HOME=posix(self.home), TMPDIR=posix(self.root),
                    ODICTO_TEST_LOG=posix(self.log), ODICTO_TEST_FAKE_UV=posix(self.root / "fake-uv"),
-                   ODICTO_TEST_INSTALLER=posix(self.root / "fake-installer"),
-                   # No WSL, unless the test says so: a developer may run these tests inside WSL.
-                   ODICTO_WSL_INTEROP_FILE=posix(self.root / "no-such-file"))
+                   ODICTO_TEST_INSTALLER=posix(self.root / "fake-installer"))
         env.update(environment)
         return subprocess.run([self.bash, posix(self.root / "bootstrap.sh"), *arguments], env=env,
                               input=b"THE REST OF A PIPED SCRIPT\n", capture_output=True, timeout=60)
@@ -372,9 +371,22 @@ class TestWslAndWayland(Bootstrap):
         return " ".join(line for line in self.lines() if line.startswith("sudo apt-get install"))
 
     def wsl_variants(self):
-        marker = self.root / "WSLInterop"
-        marker.write_text("")
-        return ({"WSL_DISTRO_NAME": "Ubuntu"}, {"ODICTO_WSL_INTEROP_FILE": posix(marker)})
+        return ({"WSL_DISTRO_NAME": "Ubuntu"}, {"WSL_INTEROP": "/run/WSL/1_interop"})
+
+    def test_the_bootstrap_and_odicto_decide_wsl_and_wayland_alike(self):
+        # Review of 1.6.0: the bootstrap also read the interop file, Odicto only the variables, so a
+        # WSLg session without them was installed and then refused. Now one rule: the variables.
+        from platforms import preflight
+        sessions =[dict(wsl, WAYLAND_DISPLAY="wayland-0", DISPLAY=":0") for wsl in self.wsl_variants()]
+        sessions += [{"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"}, {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"}]
+        for session in sessions:
+            with self.subTest(session=session):
+                self.log.write_text("")
+                result = self.run_bootstrap(**session)
+                odicto_refuses = preflight.wayland_blocks_x11(session)
+                self.assertEqual(result.returncode != 0, odicto_refuses, self.output(result))
+                self.assertEqual("Odicto in WSL is for testing" in result.stdout.decode(),
+                                 preflight.running_in_wsl(session))
 
     def test_wsl_with_a_wayland_variable_and_an_x_display_goes_on_and_adds_the_alsa_plugins(self):
         for wsl in self.wsl_variants():

@@ -45,9 +45,14 @@ HANDOFF_SETTLE = 1.0
 # exit code that goes with each state. A state counts only when the code and the marker agree.
 _WAITING_CODES = {"mic": 20, "speech": 20, "speech-download": 21}
 _WAITING_MARKER = "ODICTO-WAITING"
+# A Mac that refused the microphone also gives "mic". The owner's own words reach only the start that
+# launched it, so a later start (the install line pasted again) needs the place of the switch here.
+_MAC_MICROPHONE_HINT = (" On a Mac, also open System Settings > Privacy & Security > Microphone and turn "
+                        "on the switch for your terminal or Python.")
 _LAUNCH_NOTICES = {
     "mic": "Odicto is running, but it cannot hear a microphone. Connect one or choose one in "
-           "Odicto Setup. Odicto tries again by itself.",
+           "Odicto Setup. Odicto tries again by itself."
+           + (_MAC_MICROPHONE_HINT if sys.platform == "darwin" else ""),
     "speech": "Odicto is running, but its speech model did not load. Check the internet "
               "connection. Odicto tries again by itself.",
     "speech-download": "Odicto is running and still downloads its speech model. Dictation works "
@@ -1109,10 +1114,10 @@ class Manager:
         except OSError:
             return 0
 
-    def _startup_refusals(self, start: int) -> list[str]:
-        """The "Cannot start Odicto [...]" lines that the owner wrote to dictation.log after offset start.
+    def _startup_lines(self, start: int, marker: str) -> list[str]:
+        """The lines with marker that the owner wrote to dictation.log after offset start, from the marker on.
 
-        A managed owner writes its stderr to the log, so its reason (a missing permission, a Wayland
+        A managed owner writes its output to the log, so its reason (a missing permission, a Wayland
         session) would reach the terminal only as a path. A log that shrank (a trim) is read from its
         last 64 KiB. Best effort: an unreadable log gives no lines."""
         try:
@@ -1122,8 +1127,15 @@ class Manager:
                 text = log.read(65536).decode("utf-8", "replace")
         except OSError:
             return []
-        marker = "Cannot start Odicto ["
         return [line[line.index(marker):] for line in text.splitlines() if marker in line]
+
+    def _startup_refusals(self, start: int) -> list[str]:
+        return self._startup_lines(start, "Cannot start Odicto [")
+
+    def _startup_warnings(self, start: int) -> list[str]:
+        """The preflight warnings of this start (a Mac microphone that macOS refuses), for the terminal."""
+        marker = "Preflight warning: "
+        return ["Warning: " + line[len(marker):] for line in self._startup_lines(start, marker)]
 
     def _log(self, text: str) -> None:
         try:
@@ -1850,6 +1862,9 @@ runpy.run_path(str(script), run_name='__main__')
                     process.stdin.close()
                     confirmed = True
                     self.launch_notice = accepted if accepted in _WAITING_CODES else ""
+                    if command == "start":
+                        for line in self._startup_warnings(log_start):
+                            print(line, file=sys.stderr)
                     return 0
                 time.sleep(0.1)
             print("Odicto did not complete startup; cancelling the unconfirmed child.", file=sys.stderr)

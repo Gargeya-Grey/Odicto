@@ -74,7 +74,10 @@ GATE = {
     # 1.5.1 (microphone buffers, Qt Essentials, release manifest and cleanup, first start): the
     # floor now equals the smallest count on CI, measured on pull request #40 (macOS and Linux
     # 1623, Windows 1635): 1623.
-    "floor": 1623,
+    # 1.6.0 (macOS and Linux from the box: the platform runtime #42, the private uv #43, the
+    # one-line installer #44): the smallest count on CI, measured on pull request #44 (macOS and
+    # Linux 1778, Windows 1791): 1778.
+    "floor": 1778,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
@@ -130,28 +133,33 @@ def _user_install_places() -> list[Path]:
     home = Path.home()
 
     def xdg(name, default):
+        """The XDG folder and the default one: a writer that ignores the variable (managed_autostart
+        writes ~/.config/autostart) still lands in a watched place."""
         value = os.environ.get(name, "")
-        return Path(value) if value and os.path.isabs(value) else home / default
+        return sorted({Path(value) if value and os.path.isabs(value) else home / default, home / default})
 
-    share, cache, config = xdg("XDG_DATA_HOME", ".local/share"), xdg("XDG_CACHE_HOME", ".cache"), \
-        xdg("XDG_CONFIG_HOME", ".config")
     support = home / "Library" / "Application Support" / "Odicto"
     places = [home / ".local" / "bin" / "odicto", home / ".local" / "bin" / "odicto.cmd",
-              share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py",
-              cache / "odicto-bootstrap", support / "bin", support / "tools", support / "launcher.py",
+              support / "bin", support / "tools", support / "launcher.py",
               home / "Library" / "Caches" / "Odicto-bootstrap",
               home / "Library" / "LaunchAgents" / "com.odicto.managed.plist",
-              home / "Library" / "LaunchAgents" / "com.odicto.plist",
-              config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
-    places += [share / "applications" / name for name in
-               ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
+              home / "Library" / "LaunchAgents" / "com.odicto.plist"]
+    for share in xdg("XDG_DATA_HOME", ".local/share"):
+        places += [share / "odicto" / "bin", share / "odicto" / "tools", share / "odicto" / "launcher.py"]
+        places += [share / "applications" / name for name in
+                   ("odicto.desktop", "odicto-setup.desktop", "odicto-stop.desktop", "odicto-remove.desktop")]
+    for cache in xdg("XDG_CACHE_HOME", ".cache"):
+        places.append(cache / "odicto-bootstrap")
+    for config in xdg("XDG_CONFIG_HOME", ".config"):
+        places += [config / "autostart" / "odicto-managed.desktop", config / "autostart" / "odicto.desktop"]
     if os.environ.get("LOCALAPPDATA"):
         local = Path(os.environ["LOCALAPPDATA"])
         places += [local / "Odicto-bootstrap", local / "Odicto" / "bin", local / "Odicto" / "tools",
                    local / "Odicto" / "launcher.py"]
     if os.environ.get("APPDATA"):
         programs = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd"]
+        places += [programs / "Odicto", programs / "Startup" / "Odicto managed.cmd",
+                   programs / "Startup" / "Odicto.lnk"]
     return places
 
 
@@ -205,6 +213,21 @@ def _elevation_probe_boundary():
 
 
 @contextlib.contextmanager
+def _microphone_consent_boundary():
+    """Keep start-up off the host's macOS microphone consent.
+
+    Start-up waits while macOS refuses the microphone (main.macos_microphone_problem). The older
+    start-up tests (tests/test_units.py, hash-frozen) do not replace that query, so on a Mac that
+    refused the test runner's microphone they would wait instead of starting. The whole run
+    therefore sees "not refused"; the waiting tests (tests/test_startup_waiting.py) patch the query
+    themselves, which overrides this default. preflight's own tests call preflight and are unchanged.
+    """
+    import main  # tests/__init__ put app/ on sys.path; the start-up tests already imported it
+    with unittest.mock.patch.object(main, "macos_microphone_problem", return_value=None):
+        yield
+
+
+@contextlib.contextmanager
 def _source_migration_boundary():
     """A migrated checkout must never forward a test into the real installed owner."""
     import migration_guard
@@ -228,6 +251,11 @@ def main() -> int:
     # The keyboard-hook lock is per user session. A gate run must never meet the owner's real
     # one (it would refuse) or hold it (the owner could not start); child processes inherit this.
     os.environ["ODICTO_HOOK_LOCK_SCOPE"] = "gate-%d" % os.getpid()
+    # A gate run inside WSL or a Wayland desktop must not make every test see that session, as
+    # CI never does: the bootstrap and Odicto read only these variables to find WSL and Wayland,
+    # and a test that models WSL or Wayland sets them itself.
+    for name in ("WSL_DISTRO_NAME", "WSL_INTEROP", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"):
+        os.environ.pop(name, None)
     for stream in (sys.stdout, sys.stderr):
         try:  # a cp1252 console must not crash on non-ASCII text in a traceback
             stream.reconfigure(errors="replace")
@@ -251,7 +279,7 @@ def main() -> int:
     # crashed the run once (access violation) when an earlier, repeating dump met a normal run.
     faulthandler.dump_traceback_later(540, repeat=False)
     try:
-        with _elevation_probe_boundary(), _source_migration_boundary():
+        with _elevation_probe_boundary(), _microphone_consent_boundary(), _source_migration_boundary():
             result = runner.run(suite)
     finally:
         faulthandler.cancel_dump_traceback_later()

@@ -203,7 +203,7 @@ from typer import (
 )
 
 import platforms
-from platforms.preflight import environment_problems
+from platforms.preflight import environment_problems, macos_microphone_problem
 
 
 # Stage workers use the Thread class captured at import. A deadline is only a
@@ -855,6 +855,11 @@ class DictationApp:
     def _init_steps(self) -> Optional[str]:
         if self.recorder is None:
             self._init_stage = "mic"
+            refused = macos_microphone_problem()
+            if refused is not None:
+                # macOS gives silence then: wait on the microphone, as when none answers.
+                print(f"!!! Microphone init error: {refused.message}", file=sys.stderr)
+                return "mic"
             try:
                 recorder = AudioRecorder(
                     sample_rate=Config.SAMPLE_RATE,
@@ -862,10 +867,19 @@ class DictationApp:
                     max_seconds=Config.MAX_RECORDING_SECONDS,
                 )
                 recorder.set_limit_callback(self._on_recording_limit)
-                self.recorder = recorder
             except Exception as e:
                 print(f"!!! Microphone init error: {e}", file=sys.stderr)
                 return "mic"
+            # The first open shows the macOS prompt, and the answer can come during the open.
+            refused = macos_microphone_problem()
+            if refused is not None:
+                try:
+                    recorder.close()
+                except Exception as e:
+                    print(f"!!! Microphone close error: {e}", file=sys.stderr)
+                print(f"!!! Microphone init error: {refused.message}", file=sys.stderr)
+                return "mic"
+            self.recorder = recorder
             self._init_step_done("mic")
         if self.transcriber is None:
             self._init_stage = "speech"

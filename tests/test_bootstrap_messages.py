@@ -174,12 +174,11 @@ if os.name != "nt":
                     (stubs / name).chmod(0o700)
                 environment = {key: value for key, value in os.environ.items()
                                if key not in ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "XDG_DATA_HOME", "DISPLAY",
-                                              "WSL_DISTRO_NAME", "UV_INSTALL_DIR", "ODICTO_DATA_ROOT",
-                                              "ODICTO_MANAGED_HOME")}
-                # No WSL here, even when a developer runs these tests inside WSL.
+                                              "WSL_DISTRO_NAME", "WSL_INTEROP", "UV_INSTALL_DIR",
+                                              "ODICTO_DATA_ROOT", "ODICTO_MANAGED_HOME")}
+                # No WSL here (the two WSL variables are gone), even when a developer runs these tests inside WSL.
                 environment.update(session, PATH=str(stubs) + ":/usr/bin:/bin", HOME=str(root / "home"),
-                                   XDG_DATA_HOME=str(root / "data"),
-                                   ODICTO_WSL_INTEROP_FILE=str(root / "no-such-file"))
+                                   XDG_DATA_HOME=str(root / "data"))
                 result = subprocess.run(["/bin/bash", str(DISTRIBUTION / "bootstrap.sh")], env=environment,
                                         capture_output=True, text=True, timeout=15)
                 return result, marker.exists()
