@@ -410,6 +410,22 @@ class TestWhenItRuns(Cleanup):
             self.assertEqual(self.manager.run(["restart"], automatic_updates=False), 0)
         self.assertIn(orphan, self.names())
 
+    def test_only_a_successful_start_refreshes_the_launchers(self):
+        self.fixture.initial()
+        for command, result, calls in ((["start"], 0, 1), (["start"], 1, 0), (["restart"], 0, 0), (["setup"], 0, 0)):
+            with self.subTest(command=command, result=result), \
+                    patch.object(self.manager, "_refresh_launchers") as refresh, \
+                    patch.object(dist.sys, "stderr", new_callable=io.StringIO):
+                self.assertEqual(self.start(command, result), result)
+                self.assertEqual(refresh.call_count, calls)
+
+    def test_a_refresh_that_breaks_never_changes_the_result_of_a_start(self):
+        self.fixture.initial()
+        with patch.object(dist, "_posix_host", return_value=True), \
+                patch.object(dist.Manager, "_owned_launcher", side_effect=RuntimeError("synthetic")), \
+                patch.object(dist.sys, "stderr", new_callable=io.StringIO):
+            self.assertEqual(self.start(["start"], 0), 0)
+
     def test_a_start_that_failed_or_was_refused_does_not_prune(self):
         self.fixture.initial()
         orphan = self.folder()

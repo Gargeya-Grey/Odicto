@@ -1,20 +1,48 @@
 #Requires -Version 5.1
 param([string]$HomePath)
 $ErrorActionPreference = 'Stop'
-$uvCommand = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($uvCommand) {
-    $uv = $uvCommand.Source
-} else {
+# The bootstrap never touches the managed home. It keeps its own uv in a folder of the user's local data, and
+# the manager copies that uv into <home>\tools\uv after it has made the home (ensure_private_uv in manager.py).
+# A uv that is already on PATH is not used, so the version is the one Odicto installs.
+# The folder is the user's own cache, not the managed home, so a uv that already sits there may be reused.
+$localData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\Local' }
+$uvDirectory = Join-Path $localData 'Odicto-bootstrap\uv'
+$uv = Join-Path $uvDirectory 'uv.exe'
+$uvWorks = $false
+if (Test-Path -LiteralPath $uv) {
+    try { & $uv --version *> $null; $uvWorks = ($LASTEXITCODE -eq 0) } catch { $uvWorks = $false }
+}
+if (-not $uvWorks) {
+    # Options of the Astral installer (https://astral.sh/uv/install.ps1; read 2026-11-16):
+    #   UV_INSTALL_DIR         the folder that gets uv.exe and uvx.exe (flat); it wins over every other folder variable.
+    #   UV_UNMANAGED_INSTALL   the same folder; also turns off the PATH edit in the user environment and the updater
+    #                          receipt, so nothing outside that folder is written.
+    #   UV_NO_MODIFY_PATH      no PATH edit; the second guard, if the first changes.
+    #   INSTALLER_NO_MODIFY_PATH  the same, under the name of the older installers.
+    #   UV_DISABLE_UPDATE      no uv updater and no receipt.
+    # CARGO_DIST_FORCE_INSTALL_DIR is cleared because it would rank after UV_INSTALL_DIR but above the default.
+    $uvOptions = [ordered]@{
+        UV_INSTALL_DIR = $uvDirectory; UV_UNMANAGED_INSTALL = $uvDirectory; UV_NO_MODIFY_PATH = '1'
+        INSTALLER_NO_MODIFY_PATH = '1'; UV_DISABLE_UPDATE = '1'; CARGO_DIST_FORCE_INSTALL_DIR = $null
+    }
+    $saved = @{}
+    foreach ($name in $uvOptions.Keys) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, $uvOptions[$name], 'Process')
+    }
     $installer = Join-Path ([IO.Path]::GetTempPath()) ('odicto-uv-' + [guid]::NewGuid().ToString('N') + '.ps1')
     try {
+        New-Item -ItemType Directory -Force -Path $uvDirectory | Out-Null
         Invoke-WebRequest -UseBasicParsing -Uri 'https://astral.sh/uv/install.ps1' -OutFile $installer
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
         if ($LASTEXITCODE -ne 0) { throw 'uv installation failed' }
     } finally {
         Remove-Item -LiteralPath $installer -ErrorAction SilentlyContinue
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     }
-    $uv = Join-Path $env:USERPROFILE '.local\bin\uv.exe'
-    if (-not (Test-Path -LiteralPath $uv)) { $uv = Join-Path $env:USERPROFILE '.cargo\bin\uv.exe' }
+    if (-not (Test-Path -LiteralPath $uv)) {
+        throw "The uv tool was not installed in $uvDirectory. Check the internet connection, then run this installer again."
+    }
 }
 $bootstrap = @'
 import hashlib, io, json, stat, sys, urllib.error, urllib.parse, urllib.request, zipfile
@@ -86,6 +114,17 @@ raise SystemExit(namespace['main']([*sys.argv[1:], 'install']))
 '@
 $managerArgs = @()
 if ($HomePath) { $managerArgs = @('--home', $HomePath) }
-$env:PATH = (Split-Path -Parent $uv) + [IO.Path]::PathSeparator + $env:PATH
-$bootstrap | & $uv run --python 3.12 --no-project --no-config python - @managerArgs
-if ($LASTEXITCODE -ne 0) { throw 'Odicto managed installation failed' }
+# An older manager looks for uv on PATH and bakes that path into its launchers; a newer one copies
+# ODICTO_BOOTSTRAP_UV into the managed home. Both are served from here, for this process only: the
+# finally block puts PATH and the variable back, whether the install worked or not.
+$savedPath = $env:PATH
+$savedBootstrapUv = [Environment]::GetEnvironmentVariable('ODICTO_BOOTSTRAP_UV', 'Process')
+try {
+    $env:PATH = $uvDirectory + [IO.Path]::PathSeparator + $env:PATH
+    [Environment]::SetEnvironmentVariable('ODICTO_BOOTSTRAP_UV', $uv, 'Process')
+    $bootstrap | & $uv run --python 3.12 --no-project --no-config python - @managerArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Odicto managed installation failed' }
+} finally {
+    $env:PATH = $savedPath
+    [Environment]::SetEnvironmentVariable('ODICTO_BOOTSTRAP_UV', $savedBootstrapUv, 'Process')
+}
