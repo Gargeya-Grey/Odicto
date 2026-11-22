@@ -40,6 +40,97 @@ except Exception as _exc:  # pragma: no cover - macOS only
 else:
     _PYNPUT_IMPORT_ERROR = None
 
+
+def _install_pynput_main_thread_cache() -> None:
+    """Cache Carbon keyboard layout lookups on the main thread.
+
+    On macOS 27+, HIToolbox enforces ``dispatch_assert_queue(main_queue)``
+    inside ``TSMGetInputSourceProperty`` once AppKit/Qt shows a window.
+    Because ``pynput.keyboard.Listener`` and ``Controller`` call
+    ``keycode_context`` from background threads, pre-warming and reusing the
+    immutable ``(keyboard_type, layout_data)`` layout prevents ``SIGTRAP``.
+    """
+    if sys.platform != "darwin" or _pynput is None:
+        return
+    try:
+        import contextlib
+        import pynput._util.darwin as darwin_util
+        import pynput.keyboard._darwin as darwin_kb
+    except Exception:
+        return
+
+    if getattr(darwin_util, "_odicto_main_thread_safe", False):
+        return
+
+    orig_keycode_context = getattr(darwin_util, "keycode_context", None)
+    orig_unicode_map = getattr(darwin_util, "get_unicode_to_keycode_map", None)
+    if not callable(orig_keycode_context) or not callable(orig_unicode_map):
+        return
+
+    cache_lock = threading.Lock()
+    cached: dict[str, object] = {"context": None, "map": None}
+
+    if threading.current_thread() is threading.main_thread():
+        try:
+            with orig_keycode_context() as ctx:
+                if ctx is not None:
+                    cached["context"] = ctx
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                cached["map"] = dict(mapping)
+        except Exception:
+            pass
+
+    @contextlib.contextmanager
+    def safe_keycode_context():
+        if threading.current_thread() is threading.main_thread():
+            with orig_keycode_context() as ctx:
+                if ctx is not None:
+                    with cache_lock:
+                        cached["context"] = ctx
+                yield ctx
+            return
+        with cache_lock:
+            ctx = cached["context"]
+        if ctx is not None:
+            yield ctx
+            return
+        if "PySide6.QtCore" not in sys.modules:
+            with orig_keycode_context() as ctx:
+                yield ctx
+            return
+        yield (None, None)
+
+    def safe_get_unicode_to_keycode_map():
+        if threading.current_thread() is threading.main_thread():
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                with cache_lock:
+                    cached["map"] = dict(mapping)
+                return dict(mapping)
+            return mapping
+        with cache_lock:
+            mapping = cached["map"]
+            ctx = cached["context"]
+        if isinstance(mapping, dict):
+            return dict(mapping)
+        if isinstance(ctx, tuple) and len(ctx) == 2 and ctx[1] is not None:
+            keycode_to_string = getattr(darwin_util, "keycode_to_string", None)
+            if callable(keycode_to_string):
+                return {keycode_to_string(ctx, kc): kc for kc in range(128)}
+        if "PySide6.QtCore" not in sys.modules:
+            return orig_unicode_map()
+        return {}
+
+    darwin_util.keycode_context = safe_keycode_context
+    darwin_kb.keycode_context = safe_keycode_context
+    darwin_util.get_unicode_to_keycode_map = safe_get_unicode_to_keycode_map
+    darwin_kb.get_unicode_to_keycode_map = safe_get_unicode_to_keycode_map
+    darwin_util._odicto_main_thread_safe = True
+
+
+_install_pynput_main_thread_cache()
+
 KEY_DOWN = "down"
 KEY_UP = "up"
 
