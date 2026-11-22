@@ -177,11 +177,18 @@ class TestPathHint(unittest.TestCase):
             fake_home = Path(directory)
             bash_login = fake_home / ".bash_login"
             bash_login.write_text('export EXISTING="keep"', encoding="utf-8")
-            command = PurePosixPath(fake_home.as_posix()) / ".local" / "bin" / "odicto"
+            posix_home = PurePosixPath("/Users/alice")
+            command = posix_home / ".local" / "bin" / "odicto"
+
+            def check_fixture(path: str) -> bool:
+                rel = PurePosixPath(path).relative_to(posix_home)
+                return (fake_home / Path(*rel.parts)).exists()
+
             hint = self.manager.path_hint(
                 command,
-                env={"PATH": "/usr/bin:/bin", "HOME": fake_home.as_posix(), "SHELL": "/bin/bash"},
+                env={"PATH": "/usr/bin:/bin", "HOME": str(posix_home), "SHELL": "/bin/bash"},
                 platform="darwin",
+                profile_exists=check_fixture,
             )
             self.assertIsNotNone(hint)
             self.assertIn(">> ~/.bash_login", hint)
