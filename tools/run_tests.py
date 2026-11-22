@@ -79,7 +79,8 @@ GATE = {
     # Linux 1778, Windows 1791): 1778.
     # Plus 15 portable checks for recording, encoding, startup, setup and focused-field Polish.
     # Plus 11 portable checks for the macOS main-thread pynput Carbon layout cache, live refresh & fail-fast timeout: 1804.
-    "floor": 1804,
+    # Plus 12 portable checks for the POSIX installer PATH copy-paste hint (plus POSIX live-shell checks): 1816.
+    "floor": 1816,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.
