@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import shutil
 import shlex
@@ -16,7 +17,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Callable
+from typing import Callable, Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -535,6 +536,90 @@ def setup_command(home: Path) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline([str(home / "bin" / "odicto.cmd"), "setup"])
     return shlex.join([str(home / "bin" / "odicto"), "setup"])
+
+
+def _posix_norm_dir(path: str, home: str | None = None) -> str:
+    """Normalize a POSIX directory path, expanding a leading ~ against home when provided."""
+    if home and (path == "~" or path.startswith("~/")):
+        path = home.rstrip("/") + path[1:]
+    return posixpath.normpath(path)
+
+
+def _macos_bash_profile(home: str | None, profile_exists: Callable[[str], bool]) -> str:
+    """Return the login profile Bash already reads on macOS so we never shadow ~/.bash_login or ~/.profile."""
+    if home:
+        for name in (".bash_profile", ".bash_login", ".profile"):
+            if profile_exists(posixpath.join(home, name)):
+                return f"~/{name}"
+    return "~/.bash_profile"
+
+
+def path_hint(
+    command_path: Path | PurePosixPath,
+    env: Mapping[str, str] | None = None,
+    platform: str | None = None,
+    profile_exists: Callable[[str], bool] | None = None,
+) -> str | None:
+    """Return a copy-paste PATH instruction for POSIX shells when command_path's folder is not on PATH.
+
+    Never edits any shell profile. Preserves existing Bash login profile precedence on macOS,
+    honors ZDOTDIR for zsh, and starts appended lines on a new line even when a profile lacks
+    a trailing newline. Returns None on Windows, for relative paths, or when already on PATH.
+    """
+    target_platform = sys.platform if platform is None else platform
+    if target_platform == "win32":
+        return None
+    target_dir = _posix_norm_dir(command_path.parent.as_posix())
+    if not target_dir.startswith("/"):
+        return None
+    environ = os.environ if env is None else env
+    home = environ.get("HOME", "").strip() or None
+    if home is not None:
+        home = posixpath.normpath(home)
+    entries = {
+        _posix_norm_dir(entry, home)
+        for entry in environ.get("PATH", "").split(":")
+        if entry
+    }
+    if target_dir in entries:
+        return None
+    shell_name = posixpath.basename(environ.get("SHELL", "").strip())
+    default_local_bin = posixpath.normpath(f"{home}/.local/bin") if home else None
+    is_default_local_bin = default_local_bin is not None and target_dir == default_local_bin
+    display_dir = "~/.local/bin" if is_default_local_bin else target_dir
+    if shell_name == "fish":
+        add_cmd = (
+            'fish_add_path "$HOME/.local/bin"'
+            if is_default_local_bin
+            else f"fish_add_path {shlex.quote(target_dir)}"
+        )
+        return f"To run 'odicto' from any terminal, add {display_dir} to PATH:\n  {add_cmd}"
+    exists = os.path.exists if profile_exists is None else profile_exists
+    if shell_name == "zsh":
+        rc_name = ".zprofile" if target_platform == "darwin" else ".zshrc"
+        zdotdir = environ.get("ZDOTDIR", "").strip()
+        if zdotdir:
+            zdotdir_norm = _posix_norm_dir(zdotdir, home)
+            if home is not None and zdotdir_norm == home:
+                profile = f"~/{rc_name}"
+            else:
+                profile = shlex.quote(posixpath.join(zdotdir_norm, rc_name))
+        else:
+            profile = f"~/{rc_name}"
+    elif shell_name == "bash":
+        profile = (
+            _macos_bash_profile(home, exists)
+            if target_platform == "darwin"
+            else "~/.bashrc"
+        )
+    else:
+        profile = "~/.profile"
+    if is_default_local_bin:
+        export_line = 'export PATH="$HOME/.local/bin:$PATH"'
+    else:
+        export_line = f'export PATH={shlex.quote(target_dir)}:"$PATH"'
+    add_cmd = f"printf '\\n%s\\n' {shlex.quote(export_line)} >> {profile}"
+    return f"To run 'odicto' from any terminal, add {display_dir} to PATH:\n  {add_cmd}"
 
 
 def default_home() -> Path:
@@ -2231,6 +2316,9 @@ def main(argv=None) -> int:
                     try:
                         command_path = manager.expose_command()
                         print(f"Command installed at {command_path}")
+                        hint = path_hint(command_path)
+                        if hint:
+                            print(hint)
                     except DistributionError as error:
                         print(f"Command alias unchanged: {error}", file=sys.stderr)
                     if sys.platform == "win32":
