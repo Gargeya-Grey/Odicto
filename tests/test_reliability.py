@@ -94,10 +94,13 @@ class TestReliability(unittest.TestCase):
                 app.recorder = recorder
                 app.state = AppState.RECORDING
                 app._record_started_at = time.monotonic() - 5
-                with patch.object(Config, "PLAY_AUDIO_CUES", False):
+                app._beep = MagicMock(side_effect=lambda *_: self.assertFalse(recorder.recording))
+                with patch.object(Config, "PLAY_AUDIO_CUES", True):
                     app.on_release()
+                app._beep.assert_called_once_with(440.0, "beep-stop")
                 self.assertEqual(app.state, AppState.IDLE)
                 self.assertEqual(app.last_status, "empty")
+                self.assertIsNone(recorder.last_audio_array)
                 worker.assert_not_called()
             finally:
                 recorder.close()

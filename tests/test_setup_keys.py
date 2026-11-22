@@ -70,6 +70,30 @@ class SetupKeySaveTests(unittest.TestCase):
     def _stored(self) -> dict:
         return setup_web.read_env_raw()
 
+    def test_save_clears_effort_and_answer_cap_and_retains_literal_guidance(self):
+        guidance = "Keep ${HOME}, don't change #42.\nUse <plain> English."
+        self._save({"OPENROUTER_REASONING_EFFORT": "high", "LLM_MAX_TOKENS": "512"})
+        self._save({"OPENROUTER_REASONING_EFFORT": "", "LLM_MAX_TOKENS": "",
+                    "POLISH_PROMPT": guidance})
+        saved = self._stored()
+        self.assertEqual(saved["OPENROUTER_REASONING_EFFORT"], "")
+        self.assertEqual(saved["LLM_MAX_TOKENS"], "0")
+        self.assertEqual(urllib.parse.unquote(saved["POLISH_PROMPT_ENCODED"]), guidance)
+        self.assertIn("&lt;plain&gt; English.", setup_web._page())
+        self._save({"POLISH_PROMPT": ""})
+        self.assertFalse(self._stored()["POLISH_PROMPT_ENCODED"])
+
+    def test_partial_save_preserves_ai_prompt_and_refuses_invalid_cap(self):
+        self._save({"SYSTEM_PROMPT": "Original instructions", "LLM_MAX_TOKENS": "256"})
+        with mock.patch.object(setup_web, "restart_odicto") as restart:
+            self._save({"LLM_MAX_TOKENS": "-5"})
+            restart.assert_not_called()
+        self.assertEqual(self._stored()["LLM_MAX_TOKENS"], "256")
+        self._save({"POLISH_PROMPT": "Fix punctuation."})
+        self.assertEqual(self._stored()["SYSTEM_PROMPT_FILE"], "prompt.txt")
+        with open(self.prompt_path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "Original instructions")
+
     def test_keys_are_saved_when_the_ai_provider_is_none(self) -> None:
         fields = {"LLM_PROVIDER": "none", "STT_PROVIDER": "gemini", **KEYS}
         self.assertEqual(self._save(fields), 200)

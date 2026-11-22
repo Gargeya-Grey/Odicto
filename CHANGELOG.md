@@ -4,6 +4,13 @@ Odicto's version is the one line in `VERSION` (MAJOR.MINOR.PATCH). Each version 
 section here; the Release workflow (`.github/workflows/release.yml`) publishes that
 section as the release notes and refuses a version that has no section.
 
+## [1.7.0] - 2026-11-22
+
+- AI answers remembers the fastest reasoning choice. Blank or zero output tokens uses the provider limit. OpenRouter retries respect an explicit cap.
+- Add editing instructions in Setup for F8 Polish. Use a selection or, in supported editors, the whole focused field. Odicto checks the target and text again before replacement.
+- Batch dictation filters calibrated room noise and the start cue, and trims long quiet tails. Audio encoding uses less temporary memory on long recordings.
+- Managed startup avoids launching a readiness checker before the new owner publishes its first heartbeat.
+
 ## [1.6.0] - 2026-11-16
 
 ### Added

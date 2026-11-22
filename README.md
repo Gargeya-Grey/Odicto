@@ -147,16 +147,18 @@ There is no separate activation command. You can change the shortcuts in Setup.
 | Dictate | Tap **Ctrl+\`**, speak, tap again |
 | Ask AI for a fresh reply | Tap **Ctrl+Shift+\`**, speak, tap again |
 | Live dictation | Tap **F7** to start and again to finish |
-| Polish selected text | Select text, then press **F8** |
+| Polish text | Press **F8** on a selection or in a supported text field |
 | Continue AI memory | Hold **F6** while using the AI or dictation chord |
 | Clear AI memory | **F5** |
 | Cancel processing | **Esc** |
 
-Raw and live dictation never polish automatically. On the **Polish** page, select
-its model independently and record its shortcut by pressing the keys. Select text
-and press the shortcut: the polished text replaces your selection. Press **Ctrl+Z**
-to get the original back. If the selection changed while polish ran, your text stays
-as it was.
+On the **Polish** page, choose a model, set the shortcut, and optionally describe
+how you want your text edited. Press **F8** to replace the selection. In supported
+editable fields, place the caret without selecting text to polish the whole field.
+Raw and live dictation keep their original wording until you explicitly request Polish.
+
+In **AI answers**, leave the maximum output tokens blank or enter **0** to use
+the provider's limit. Reasoning effort controls how much the model thinks.
 
 Add names, brands and technical terms to your personal vocabulary on **Speech**
 to supply spelling hints to transcription and Polish.

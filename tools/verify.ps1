@@ -57,7 +57,9 @@ Set-Location $RepoRoot
 #      spawn, argument and status assertions are unchanged; a subprocess tripwire covers it.
 # (15) Selection fixtures mock modifier-state reads rather than consulting the owner's
 #      keyboard. Selection, copy, restoration and hotkey assertions are unchanged.
-$ExpectedTestUnitsHash = 'CE11948D5478D6BCEECC61F1F8ADCCC5A57207C07603832A16FD929D87161EAF'
+# (16) OpenRouter answer retries must retain an explicit 512-token maximum. The previous
+#      minimum-budget assertion is replaced by exact equality. No assertion weakened.
+$ExpectedTestUnitsHash = '417449DE45285F03C5AF44302B5CD2B44B6F4A584DD35DED2AC5523CEE38BE01'
 
 $Script:Failures = @()
 

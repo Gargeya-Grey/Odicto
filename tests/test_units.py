@@ -911,7 +911,7 @@ class TestOdicto(unittest.TestCase):
         first_tokens = mock_client.chat.completions.create.call_args_list[0][1]["max_tokens"]
         retry_tokens = mock_client.chat.completions.create.call_args_list[1][1]["max_tokens"]
         self.assertEqual(first_tokens, 512)
-        self.assertGreaterEqual(retry_tokens, 2048)
+        self.assertEqual(retry_tokens, 512)
 
     @patch("refiner.Config.LLM_PROVIDER", "openrouter")
     @patch("refiner.Config.OPENROUTER_REASONING_EFFORT", "none")

@@ -487,21 +487,22 @@ asynchronous paste consumers. Terminals still receive typed Unicode without a cl
 change. The deleted caret worker, tail backspacing and delayed F7 clipboard restoration
 must not be reintroduced.
 
-Selection polish uses `POLISH_HOTKEY` (default F8), without recording. Raw and live
-transcription never calls polish. `POLISH_DICTATION` is retained as an ignored legacy key.
-`_start_polish_selection` reserves PROCESSING, then a worker copies the selection, calls
-`TextRefiner.polish` with `POLISH_MODEL` (or the selected chat model), then replaces the
-selection in place with `paste_text` (owner decision, 4 Nov 2026: no review step; Ctrl+Z
-undoes the paste). Before the paste it reads the selection again and pastes only when the
-window and the selected text are unchanged. A copy-based probe cannot establish field
-identity: an editor that copies the current line when nothing is selected gets the polished
-line inserted, and Ctrl+Z undoes it. Empty selections, terminals, unknown targets,
-cancellation and failures insert nothing. The lifecycle
-and cycle gates reject late results. The refiner has no AI memory or image context here.
-Foreground identity is HWND on Windows, active window ID on X11 and frontmost application
-PID on macOS. Copy-based checks cannot prove field identity or detect every selection move.
-Editing preserves voice, emotion, emphasis, language and paragraphs. Short calls wait two
-seconds, scaling with length up to the stage deadline; one request may be outstanding.
+F8 (`POLISH_HOTKEY`) reserves PROCESSING without starting the recorder. A selected
+passage takes precedence. With a caret and no selection, F8 reads the complete focused
+editable field when the platform identifies it. Windows uses native Edit/RichEdit
+messages or UI Automation text ranges, macOS uses accessibility text ranges, and Linux
+X11 uses AT-SPI when its Python bindings and the editor expose editable text.
+Password controls and terminals are excluded from whole-field capture. For an unsupported
+editor the clipboard selection probe remains available, except in identified IDE hosts
+where copying at the caret can return an unselected line.
+
+F8 gives the text and the saved Polish guidance to a separate model request. It keeps
+AI history and clipboard images out of the request. Before replacing a field it checks
+the foreground window, control identity, caret and original text again, then selects the
+range through the control and delivers one paste. Cancellation or a changed snapshot
+discards the result. Clipboard-only selection checks compare the window and text and
+cannot distinguish identical selections in different fields of the same window.
+`POLISH_MODEL` defaults to the AI answers model. Raw and live dictation never run Polish.
 AI answer failure similarly shows "AI failed · raw text" instead of "Done". Screenshot
 context requires explicit `AI_CLIPBOARD_IMAGE=true`; the HUD marshals Qt image access to
 the GUI thread. Remote AI providers do not generate a startup warmup reply; Ollama does.

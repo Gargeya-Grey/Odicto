@@ -13,8 +13,13 @@ Only the owner saves Setup and restarts because Save restarts their running inst
 Owner journey: in Notepad select text containing a grammatical error and deliberate
 emphasis. Press F8. Confirm the selection is replaced in place with minimal edits that
 preserve meaning, emotion and paragraphs, the HUD says "Polished", and Ctrl+Z restores
-the original. Confirm the clipboard holds what it held before F8. Repeat with no
-selection, Esc during processing, and a changed selection: no result should be inserted. Confirm raw and F7 dictation never run polish.
+the original. Confirm the clipboard holds what it held before F8. In a supported
+text field, clear the selection and press F8. Check that the whole field is polished
+once. Repeat with Esc during processing, a changed selection, and focus moved to
+another field with identical text. For a whole-field edit, each interruption should
+leave the field alone. Save a short editing instruction on the Polish page, reopen
+Setup, and check that the instruction survived. Try it on a sentence where its
+effect will be visible. Confirm raw and F7 dictation never run polish.
 Check behavior in the actual editor too: copy-based probes cannot prove field identity,
 and some editors copy a line when nothing is selected. Terminal targets are refused.
 Real recognition, editor selection behavior and editorial quality need owner confirmation.

@@ -428,6 +428,10 @@ cryptography==50.0.2 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
     # via google-auth
+comtypes==1.5.0 ; sys_platform == 'win32' \
+    --hash=sha256:831ddb867bc17bc89cac525b4f32132ebd4bef1ffe6432406ec9f5d858c1a122 \
+    --hash=sha256:c648ed3b243b1eb3b7cb893a873d1b35104ca1c8922061f4b1efafeb255bacb5
+    # via -r requirements.txt
 ctranslate2==4.8.5 \
     --hash=sha256:0413ce473dcc9ff6c69ea9320b06e5192a81992e89e4e3b54241f914594f78f5 \
     --hash=sha256:058d0fb7345b333eaa88bc6b223cd59d6ff7a3722cb6266f94cc909f4e367787 \

@@ -50,6 +50,21 @@ class TestManagedLaunch(unittest.TestCase):
     def update(self):
         self.fixture.add_release("v1.3.0")
 
+    def test_starting_owner_only_spawns_validation_after_its_first_heartbeat(self):
+        directory = self.manager.home / "releases" / self.old["directory"]
+        heartbeat = self.manager.data / "dictation-health.json"
+        with patch.object(dist.subprocess, "run") as probe:
+            for health in (None, [], {"ready": False, "launch_token": "previous"},
+                           {"ready": True, "launch_token": "previous"}):
+                if health is not None:
+                    heartbeat.write_text(json.dumps(health), encoding="utf-8")
+                self.assertFalse(self.manager._ready(directory, self.manager._python(directory), "current"))
+            probe.assert_not_called()
+            heartbeat.write_text('{"ready":true,"launch_token":"current"}', encoding="utf-8")
+            probe.return_value.returncode = 1
+            self.assertFalse(self.manager._ready(directory, self.manager._python(directory), "current"))
+            probe.assert_called_once()
+
     def test_startup_exit_after_spawn_rolls_back(self):
         self.update()
         child = Child(code=3)

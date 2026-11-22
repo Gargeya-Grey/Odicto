@@ -223,6 +223,19 @@ class TestSpeechTransport(unittest.TestCase):
         self.assertTrue(data.startswith(b"RIFF"))
         self.assertEqual(transcriber.encode_upload_audio(audio, 16000)[1], "wav")
 
+    def test_multiblock_upload_preserves_stereo_downmix_and_partial_last_block(self):
+        import soundfile as sf
+
+        ramp = np.linspace(-1.5, 1.5, 150003, dtype=np.float32)
+        audio = np.column_stack((ramp, ramp * 0.75))
+        mono = audio.mean(axis=1)
+        for encoder in (transcriber.float32_to_wav_bytes, transcriber.float32_to_flac_bytes):
+            with self.subTest(encoder=encoder.__name__):
+                encoded = encoder(audio, 16000)
+                decoded, rate = sf.read(io.BytesIO(encoded), dtype="float32")
+                self.assertEqual(rate, 16000)
+                np.testing.assert_allclose(decoded, np.clip(mono, -1, 1), atol=2 / 32768)
+
     def test_local_fallback_uses_lazy_whisper(self):
         with patch.object(transcriber, "WhisperTranscriber") as whisper:
             whisper.return_value.transcribe.return_value = "local words"
@@ -526,6 +539,29 @@ class TestOpenAIClients(unittest.TestCase):
 
 
 class TestAIBudget(unittest.TestCase):
+    def test_zero_sends_no_token_cap_on_chat_requests_or_retry(self):
+        with patch.object(Config, "LLM_MAX_TOKENS", 0):
+            for provider in ("groq", "openrouter", "ollama"):
+                with self.subTest(provider=provider):
+                    r = refiner_fixture(provider)
+                    if provider == "openrouter":
+                        r.client.chat.completions.create.side_effect = [_reply(None, "length"), _reply()]
+                    r.refine("question")
+                    calls = r.client.chat.completions.create.call_args_list
+                    self.assertEqual(len(calls), 2 if provider == "openrouter" else 1)
+                    for call in calls:
+                        self.assertNotIn("max_tokens", call.kwargs)
+                        self.assertNotIn("num_predict", call.kwargs.get("extra_body", {}).get("options", {}))
+
+    def test_gemini_explicit_zero_overrides_positive_shared_limit(self):
+        with patch.object(Config, "LLM_PROVIDER", "gemini"), patch.object(
+            Config, "LLM_MAX_TOKENS", 512
+        ), patch.object(Config, "GEMINI_MAX_OUTPUT_TOKENS", 0):
+            cap = Config.effective_max_output_tokens()
+            self.assertEqual(cap, 0)
+            client = refiner._GeminiClient.__new__(refiner._GeminiClient)
+            self.assertNotIn("max_output_tokens", client._generation_config(cap))
+
     def openrouter(self):
         r = refiner_fixture("openrouter")
         r.model = "vendor/model"
