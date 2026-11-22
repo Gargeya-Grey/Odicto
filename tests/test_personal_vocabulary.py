@@ -96,10 +96,12 @@ class TestPersonalVocabulary(unittest.TestCase):
         editor = refiner_fixture()
         editor.conversation_history = [{"role": "user", "content": "unrelated prior request"}]
         text = "Odicto is very very good.\n\nI feels happy!"
-        with patch.object(Config, "GEMINI_TRANSCRIBE_VOCABULARY", "Odicto, TwinAatma"):
+        with patch.object(Config, "GEMINI_TRANSCRIBE_VOCABULARY", "Odicto, TwinAatma"), patch.object(
+                Config, "POLISH_PROMPT", "Keep contractions."):
             self.assertEqual(editor.polish(text), "Hello world.")
         request = editor.client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["messages"][1], {"role": "user", "content": text})
+        self.assertIn("Keep contractions.", request["messages"][0]["content"])
         self.assertIn("Odicto", request["messages"][0]["content"])
         self.assertIn("TwinAatma", request["messages"][0]["content"])
         self.assertNotIn("unrelated prior request", str(request))

@@ -273,6 +273,14 @@ IDE_HOST_NAMES: frozenset = frozenset(
         "rubymine64.exe",
         "datagrip64.exe",
         "studio64.exe",
+        # macOS
+        "com.microsoft.vscode",
+        "com.microsoft.vscodeinsiders",
+        "com.todesktop.230313mzl4w4u92",
+        "com.exafunction.windsurf",
+        "com.jetbrains.intellij",
+        "com.jetbrains.pycharm",
+        "dev.zed.zed",
         # Linux
         "code",
         "code-insiders",

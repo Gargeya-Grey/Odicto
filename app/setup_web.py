@@ -25,7 +25,7 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, unquote
 
 from theme import DEFAULT_THEME, PRESETS as THEME_PRESETS, hud_palette, page_theme, parse_theme, theme_hue_k
 from version import app_version
@@ -99,6 +99,7 @@ EDITABLE_KEYS = {
     "GROQ_MODEL",
     "POLISH_DICTATION",
     "POLISH_MODEL",
+    "POLISH_PROMPT_ENCODED",
     "POLISH_HOTKEY",
     "AI_CLIPBOARD_IMAGE",
     "OPENROUTER_STT_MODEL",
@@ -153,6 +154,11 @@ _SECRET_KEYS = frozenset({
     "GEMINI_API_KEY",
     "GROQ_API_KEY",
 })
+
+# A blank effort is the automatic option shown in the selector. Retain it
+# across partial form saves, even when .env.example ships an explicit value.
+_EMPTY_SETTINGS = {"POLISH_HOTKEY", "META_REASONING_EFFORT", "GEMINI_THINKING_LEVEL",
+                   "OPENROUTER_REASONING_EFFORT", "OPENROUTER_PROVIDER_SORT"}
 
 # faster-whisper size ids. GPU figures are approximate peak memory for this
 # app's float16 GPU load, including the ~1 GB CUDA runtime. On device=auto,
@@ -339,15 +345,15 @@ def merge_env(updates: dict) -> None:
             key = stripped.split("=", 1)[0].strip()
             if key in cleaned:
                 val = cleaned[key]
-                if val or key == "POLISH_HOTKEY":
+                if val or key in _EMPTY_SETTINGS:
                     out.append(_format_env_assignment(key, val))
                 else:
                     # Intentional clear (user blanked the field): restore the pristine slot.
                     out.append(line)
                 seen.add(key)
-            elif key in stored and ((stored[key] or "").strip() or key == "POLISH_HOTKEY"):
+            elif key in stored and ((stored[key] or "").strip() or key in _EMPTY_SETTINGS):
                 # Unsubmitted this round (sentinel or hidden field): preserve.
-                out.append(_format_env_assignment(key, stored[key].strip()))
+                out.append(f"{key}={stored[key].strip()}")
                 seen.add(key)
             else:
                 out.append(line)
@@ -367,7 +373,7 @@ def merge_env(updates: dict) -> None:
 
     # Keys submitted this round whose line never existed in the template (defensive).
     for key in sorted(cleaned):
-        if key not in seen and (cleaned[key] or key == "POLISH_HOTKEY"):
+        if key not in seen and (cleaned[key] or key in _EMPTY_SETTINGS):
             out.append(_format_env_assignment(key, cleaned[key]))
 
     text = "\n".join(out).rstrip() + "\n"
@@ -855,6 +861,7 @@ def _page(message: str = "", message_kind: str = "neutral") -> str:
         "__GROQ_MODEL__": html.escape(env_or("GROQ_MODEL")),
         "__POLISH_HOTKEY__": html.escape(polish_hotkey),
         "__POLISH_MODEL__": html.escape(env_raw("POLISH_MODEL")),
+        "__POLISH_PROMPT__": html.escape(unquote(env_raw("POLISH_PROMPT_ENCODED"))),
         "__POLISH_ON__": " selected" if env_or("POLISH_DICTATION") == "true" else "",
         "__POLISH_CHECKED__": " checked" if env_or("POLISH_DICTATION") == "true" else "",
         "__POLISH_OFF__": " selected" if env_or("POLISH_DICTATION") != "true" else "",
@@ -1222,7 +1229,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, OSError):
             self.send_error(400, "Bad request body")
             return
-        form = parse_qs(raw)
+        form = parse_qs(raw, keep_blank_values=self.path == "/save")
         if not self._token_ok(form):
             self.send_error(403, "Forbidden: missing or invalid token")
             return
@@ -1347,8 +1354,20 @@ class _Handler(BaseHTTPRequestHandler):
 
         updates = {}
         for key in EDITABLE_KEYS:
-            if key in form:
+            if key in form and key != "POLISH_PROMPT_ENCODED":
+                if key in _SECRET_KEYS and not form[key][0].strip():
+                    continue
                 updates[key] = form[key][0]
+
+        if "POLISH_PROMPT" in form:
+            # The text is literal, including newlines and dotenv interpolation syntax.
+            guidance = form["POLISH_PROMPT"][0].replace("\r\n", "\n").strip()
+            updates["POLISH_PROMPT_ENCODED"] = quote(guidance, safe="")
+
+        cap = updates.get("LLM_MAX_TOKENS", "").strip()
+        if cap and not re.fullmatch(r"[0-9]+", cap):
+            self._send(self._inject_token(_page("Enter zero or a positive whole number for maximum output tokens.", "err")))
+            return
 
         hotkey = updates.get("HOTKEY") or Config.HOTKEY
         ai_hotkey = updates.get("AI_HOTKEY") or Config.AI_HOTKEY
@@ -1370,19 +1389,15 @@ class _Handler(BaseHTTPRequestHandler):
 
         # prompt.txt is the only live prompt. Matching the shipped default
         # deletes it; any other textarea content writes the private file.
-        prompt_body = updates.get("SYSTEM_PROMPT", "")
-        err = apply_prompt_save(prompt_body)
-        if err:
-            body = self._inject_token(_page(err, "err"))
-            self._send(body)
-            return
-        if (prompt_body or "").strip() and (
-            prompt_body.strip() != DEFAULT_SYSTEM_PROMPT.strip()
-        ):
-            updates["SYSTEM_PROMPT_FILE"] = PROMPT_LIVE_NAME
-        else:
-            updates["SYSTEM_PROMPT_FILE"] = ""
-        updates["SYSTEM_PROMPT"] = ""
+        if "SYSTEM_PROMPT" in updates:
+            prompt_body = updates["SYSTEM_PROMPT"].strip()
+            err = apply_prompt_save(prompt_body)
+            if err:
+                self._send(self._inject_token(_page(err, "err")))
+                return
+            custom = prompt_body and prompt_body != DEFAULT_SYSTEM_PROMPT.strip()
+            updates["SYSTEM_PROMPT_FILE"] = PROMPT_LIVE_NAME if custom else ""
+            updates["SYSTEM_PROMPT"] = ""
 
         merge_env(updates)
         merged = read_env_raw()

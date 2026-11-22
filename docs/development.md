@@ -310,7 +310,7 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 | `GEMINI_API_KEY` | Required (app refuses to start if missing) |
 | `GEMINI_MODEL` | Gemini model id (default `gemini-3.5-flash-lite` — the fast, non-reasoning pick for dictation; `gemini-3.7-flash` is available for heavier questions) |
 | `GEMINI_THINKING_LEVEL` | Thinking budget: `minimal` / `low` / `medium` / `high` (default `minimal`) |
-| `GEMINI_MAX_OUTPUT_TOKENS` | Output budget floor (default `4096`) |
+| `GEMINI_MAX_OUTPUT_TOKENS` | Optional Gemini output cap. When unset, Gemini uses the generic cap. |
 
 Notes:
 - Multi-turn chat (F6 chord only) uses Gemini **server-side state**
@@ -489,7 +489,7 @@ Run your OS's stop script (see table above), or close the debug console with Ctr
 - Raw dictation never waits on the clipboard or the LLM.
 - AI mode runs Whisper and selection-copy **at the same time**, so clipboard wait does not sit in front of STT.
 - Short hold-to-talk clips skip Silero VAD (set `WHISPER_VAD=true` if you want it always on).
-- AI replies are capped by `LLM_MAX_TOKENS` (default 1024, enough for a mid-length social post). Raise it only if you need long essays.
+- Leave `LLM_MAX_TOKENS` blank or use `0` for the provider's default. Set a positive value to request a shorter answer.
 - Gemini thinking stays at `minimal` unless you change it; higher thinking levels are slower.
 
 ---
@@ -512,7 +512,7 @@ Core knobs:
 |----------|---------|---------|
 | `LLM_PROVIDER` | `none` | `none` · `ollama` · `openrouter` · `meta` (also `meta-api`) · `gemini` (also `google`) |
 | `LLM_MODEL` | provider default | Model id for any provider (`qwen2.5:1.5b-instruct` / `muse-spark-1.3-contributor` / `gemini-3.5-flash-lite` / an OpenRouter slug) |
-| `LLM_MAX_TOKENS` | `1024` | Output cap for every provider (~750 words) |
+| `LLM_MAX_TOKENS` | `0` | AI answer output cap. Zero uses the provider default. Meta uses its effort setting. |
 | `LLM_REASONING_EFFORT` | provider default | Unified thinking knob; maps to Meta `reasoning.effort` / Gemini `thinking_level` / OpenRouter `reasoning.effort` (`minimal\|low\|medium\|high\|none`) |
 
 Per-provider credentials — each starts empty, is saved independently, and is
@@ -709,8 +709,10 @@ The licence does not give you the right to use the name "Odicto" for your own pr
 ### Polish selected text
 
 Select text in an editor and press **F8** to polish it. No recording is needed.
-Setup's **Polish** page lets you change the shortcut and choose or type a separate
-polish model. It uses the provider and saved key from **AI answers**; a blank model
+Setup's **Polish** page lets you change the shortcut, supply editing guidance, and
+choose a separate polish model. With an empty selection in a supported editable
+field, F8 uses the whole field and checks the target again before replacement.
+Polish uses the provider and saved key from **AI answers**; a blank model
 uses that provider's selected model. A blank shortcut disables selection polish.
 Raw and live dictation never run an extra polish call, even if an older configuration
 still has `POLISH_DICTATION=true`.

@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+from urllib.parse import unquote
 from typing import Literal, Tuple
 from dotenv import load_dotenv
 from paths import ROOT, DATA_ROOT
@@ -155,13 +156,14 @@ ENV_DEFAULTS: dict[str, str] = {
     "POLISH_DICTATION": "false",
     "POLISH_HOTKEY": "f8",
     "POLISH_MODEL": "",
+    "POLISH_PROMPT_ENCODED": "",
     "OPENROUTER_STT_MODEL": "openai/whisper-large-v3",
     "LIVE_HOTKEY": "f7",
     # LLM — generic knobs (apply to the active provider)
     "LLM_PROVIDER": "none",
     "LLM_MODEL": "qwen2.5:1.5b-instruct",
     "LLM_API_BASE": "http://localhost:11434/v1",
-    "LLM_MAX_TOKENS": "1024",
+    "LLM_MAX_TOKENS": "0",
     "LLM_NUM_CTX": "2048",
     "LLM_REASONING_EFFORT": "",
     # OpenRouter overrides
@@ -562,6 +564,7 @@ class Config:
     POLISH_DICTATION: bool = _env_bool("POLISH_DICTATION", _def("POLISH_DICTATION"))
     POLISH_HOTKEY: str = _default_env("POLISH_HOTKEY").strip().lower()
     POLISH_MODEL: str = _sanitize_model_id(_default_env("POLISH_MODEL"))
+    POLISH_PROMPT: str = unquote(_default_env("POLISH_PROMPT_ENCODED"))
     GROQ_MODEL: str = _sanitize_model_id(_default_env("GROQ_MODEL"))
     GROQ_API_KEY: str = _clean_secret("GROQ_API_KEY")
     GROQ_API_BASE: str = _default_env("GROQ_API_BASE").strip().rstrip("/")
@@ -779,17 +782,17 @@ class Config:
         """Output token cap for the active provider.
 
         Cascade: provider-specific ceiling override → generic LLM_MAX_TOKENS,
-        floored at 64 either way (matches the historical hard floor).
+        with zero meaning provider default.
         """
         provider = cls.LLM_PROVIDER
         try:
             if provider == "gemini" and cls._explicit(
                 "GEMINI_MAX_OUTPUT_TOKENS", ("GEMINI_MAX_OUTPUT_TOKENS",)
             ):
-                return max(64, int(cls.GEMINI_MAX_OUTPUT_TOKENS))
-            return max(64, int(cls.LLM_MAX_TOKENS))
+                return int(cls.GEMINI_MAX_OUTPUT_TOKENS)
+            return int(cls.LLM_MAX_TOKENS)
         except (TypeError, ValueError):
-            return max(64, int(_def("LLM_MAX_TOKENS")))
+            return int(_def("LLM_MAX_TOKENS"))
 
     @classmethod
     def effective_reasoning_effort(cls) -> str:
@@ -1443,8 +1446,8 @@ class Config:
                 "OPENROUTER_PROVIDER_SORT must be latency|throughput|price, got "
                 f"{cls.OPENROUTER_PROVIDER_SORT!r}"
             )
-        if cls.GEMINI_MAX_OUTPUT_TOKENS < 64:
-            raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 64, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
+        if cls.GEMINI_MAX_OUTPUT_TOKENS < 0:
+            raise ValueError(f"GEMINI_MAX_OUTPUT_TOKENS must be >= 0, got {cls.GEMINI_MAX_OUTPUT_TOKENS}")
         if cls.STT_PROVIDER not in STT_PROVIDER_NAMES:
             raise ValueError(
                 "STT_PROVIDER must be whisper|gemini|groq|openrouter|auto, "
@@ -1476,8 +1479,8 @@ class Config:
             raise ValueError(f"SAMPLE_RATE must be 16000 for the in-memory speech pipeline, got {cls.SAMPLE_RATE}")
         if cls.CHANNELS not in (1, 2):
             raise ValueError(f"CHANNELS must be 1 or 2, got {cls.CHANNELS}")
-        if cls.LLM_MAX_TOKENS < 1:
-            raise ValueError(f"LLM_MAX_TOKENS must be >= 1, got {cls.LLM_MAX_TOKENS}")
+        if cls.LLM_MAX_TOKENS < 0:
+            raise ValueError(f"LLM_MAX_TOKENS must be >= 0, got {cls.LLM_MAX_TOKENS}")
         if cls.LLM_NUM_CTX < 256:
             raise ValueError(f"LLM_NUM_CTX must be >= 256, got {cls.LLM_NUM_CTX}")
 

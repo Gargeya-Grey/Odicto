@@ -414,8 +414,14 @@ def send_copy_ide() -> None:
 
 
 def foreground_is_ide_host(extra=()) -> bool:
-    """Always False on macOS: Cmd+C copies and never interrupts a process."""
-    return False
+    """Identify editors that may copy the whole line when the caret is collapsed."""
+    try:
+        from AppKit import NSWorkspace
+        from platforms.base import is_ide_host_identifier
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return is_ide_host_identifier((app.bundleIdentifier(), app.localizedName()), extra)
+    except Exception:
+        return False
 
 
 def send_paste() -> None:

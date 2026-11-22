@@ -187,7 +187,7 @@ attach_pythonw_log()
 
 from app_state import AppState
 from config import Config, parse_hold_hotkey, normalize_modifier_name
-from recorder import AudioRecorder, play_beep
+from recorder import AudioRecorder, CUE_SECONDS, START_CUE_HZ, play_beep
 from transcriber import (
     CloudTranscriber,
     GeminiLiveSession,
@@ -204,6 +204,7 @@ from typer import (
 
 import platforms
 from platforms.preflight import environment_problems, macos_microphone_problem
+from platforms.polish_field import IneligibleField, focused_polish_field
 
 
 # Stage workers use the Thread class captured at import. A deadline is only a
@@ -865,6 +866,7 @@ class DictationApp:
                     sample_rate=Config.SAMPLE_RATE,
                     channels=Config.CHANNELS,
                     max_seconds=Config.MAX_RECORDING_SECONDS,
+                    start_cue_enabled=Config.PLAY_AUDIO_CUES,
                 )
                 recorder.set_limit_callback(self._on_recording_limit)
             except Exception as e:
@@ -945,7 +947,7 @@ class DictationApp:
     def _beep(self, frequency: float, name: str) -> None:
         """Play a short audio cue off the hot path."""
         threading.Thread(
-            target=play_beep, args=(frequency, 0.08), daemon=True, name=name
+            target=play_beep, args=(frequency, CUE_SECONDS), daemon=True, name=name
         ).start()
 
     def _mods_in_snapshot(self, mods: tuple, snapshot=None) -> bool:
@@ -1390,7 +1392,7 @@ class DictationApp:
             self._early_probe = None
             self._set_state(AppState.RECORDING)
             if Config.PLAY_AUDIO_CUES:
-                self._beep(880.0, "beep-start")
+                self._beep(START_CUE_HZ, "beep-start")
 
             # Toggle mode: the chord is released right after this tap, so read
             # the selection/image now (off the hook thread; the probe waits for
@@ -1445,9 +1447,6 @@ class DictationApp:
 
             self._set_state(AppState.PROCESSING)
 
-            if Config.PLAY_AUDIO_CUES:
-                self._beep(440.0, "beep-stop")
-
             # Hot path: keep audio in memory only (no disk write).
             try:
                 success: bool = self.recorder.stop(filepath=None)
@@ -1459,8 +1458,12 @@ class DictationApp:
                 self._last_cycle_end = time.monotonic()
                 self._set_state(AppState.IDLE)
                 return
+            if Config.PLAY_AUDIO_CUES:
+                self._beep(440.0, "beep-stop")
             if not success:
                 print("!!! Warning: No audio captured. Resetting to idle.")
+                self.recorder.clear()
+                self._last_cycle_end = time.monotonic()
                 self.last_status = "empty"
                 self._set_state(AppState.IDLE)
                 return
@@ -1531,7 +1534,7 @@ class DictationApp:
                     self.live_active = True
                     self._set_state(AppState.RECORDING)
                     if Config.PLAY_AUDIO_CUES:
-                        self._beep(880.0, "beep-start")
+                        self._beep(START_CUE_HZ, "beep-start")
                     self._prewarm_for_capture(False)
                 except Exception as e:
                     print(f"!!! Live start failed: {e}", file=sys.stderr)
@@ -1556,7 +1559,7 @@ class DictationApp:
             if session is not None:
                 self.recorder.remove_chunk_listener(session.push_audio)
             try:
-                captured = self.recorder.stop(filepath=None)
+                captured = self.recorder.stop(filepath=None, filter_room_noise=False)
             except Exception as e:
                 print(f"!!! Failed to stop live recorder: {e}", file=sys.stderr)
                 self.last_status = "error"
@@ -1617,7 +1620,12 @@ class DictationApp:
             if target is None or platforms.foreground_is_terminal(Config.EXTRA_TERMINAL_APPS):
                 self.last_status = "polish_target"
                 return
-            text = get_selected_text(timeout=0.35)
+            field = focused_polish_field(target, Config.POLISH_MAX_CHARS)
+            if field is None and platforms.foreground_is_ide_host():
+                # Some IDEs copy the current line with an empty selection.
+                self.last_status = "polish_target"
+                return
+            text = field.text if field is not None else get_selected_text(timeout=0.35)
             if not text.strip():
                 self.last_status = "polish_no_selection"
                 return
@@ -1639,18 +1647,13 @@ class DictationApp:
             if result == text:
                 self.last_status = "polish_unchanged"
                 return
-            # Replace the selection in place (owner decision 2026-11-04; Ctrl+Z undoes
-            # the paste). Same window and the same selected text as before the model
-            # call, or the document stays untouched. A copy-based probe cannot tell a
-            # real selection from an editor's copy-the-line-when-empty, so F8 with no
-            # selection in such an editor inserts the polished line; Ctrl+Z undoes it.
             with self.state_lock:
                 if cycle.cancel.is_set() or self._cycle is not cycle:
                     raise _Abort("cancelled")
             if self._closing.is_set():
                 return  # no copy chord into the target after shutdown began
             if (platforms.foreground_window_id() != target
-                    or get_selected_text(timeout=0.35) != text
+                    or (field is None and get_selected_text(timeout=0.35) != text)
                     or platforms.foreground_window_id() != target):
                 self.last_status = "polish_target"
                 return
@@ -1665,13 +1668,27 @@ class DictationApp:
                     self.last_status = "polished"
                     self._on_paste_delivered()
 
+                def select_field() -> None:
+                    if (self._closing.is_set() or cycle.cancel.is_set()
+                            or platforms.foreground_window_id() != target):
+                        raise _Abort("polish_target")
+                    current = focused_polish_field(target, Config.POLISH_MAX_CHARS)
+                    if (current != field or self._closing.is_set() or cycle.cancel.is_set()
+                            or not current.select() or platforms.foreground_window_id() != target):
+                        raise _Abort("polish_target")
+
                 with delivery_callback(delivered):
-                    paste_text(result)
+                    if field is None:
+                        paste_text(result)
+                    else:
+                        paste_text(result, before_inject=select_field)
                 restore_lost = self._paste_restore_failed()
             if restore_lost:
                 # The text was replaced, but the previous clipboard is gone: say so.
                 print("Warning: the previous clipboard could not be restored.", flush=True)
             self.last_status = "clipboard_not_restored" if restore_lost else "polished"
+        except IneligibleField:
+            self.last_status = "polish_target"
         except _Abort as stop:
             self.last_status = stop.status
         except Exception as error:

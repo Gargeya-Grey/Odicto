@@ -586,7 +586,8 @@ def _get_selected_text_legacy(
 
 
 def paste_text(text: str, restore_clipboard: bool = True,
-               on_delivered: Optional[Callable[[], None]] = None) -> None:
+               on_delivered: Optional[Callable[[], None]] = None, *,
+               before_inject: Optional[Callable[[], None]] = None) -> None:
     """Inject text at the cursor, typing into terminals and pasting elsewhere.
 
     Terminals reject or reassign the paste chord, so there the text is typed
@@ -611,8 +612,12 @@ def paste_text(text: str, restore_clipboard: bool = True,
     if not text:
         return
 
+    if before_inject and not restore_clipboard:
+        raise ValueError("Guarded edits must preserve the clipboard")
     with _CLIPBOARD_LOCK:
         if _terminal_target():
+            if before_inject:
+                raise RuntimeError("Polish target changed to a terminal")
             _wait_modifiers_up(0.08)
             if send_text_bulk(text):
                 print(">>> Terminal target: typed text (clipboard untouched)", flush=True)
@@ -632,6 +637,8 @@ def paste_text(text: str, restore_clipboard: bool = True,
             return
 
         original = _snapshot()
+        if before_inject and (not original.ok or not original.complete):
+            raise RuntimeError("Cannot preserve the clipboard for this edit")
 
         if original.ok and original.has_non_text and not original.complete:
             if len(text) <= _type_instead_limit():
@@ -662,6 +669,8 @@ def paste_text(text: str, restore_clipboard: bool = True,
         try:
             _wait_modifiers_up(0.08)
             time.sleep(0.02)
+            if before_inject:
+                before_inject()
             send_paste()
         except BaseException:
             _note_restore(_guarded_restore(original, guard, "after failed paste"))

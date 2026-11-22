@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app_state import AppState
 from config import Config
+from platforms.polish_field import PolishField, IneligibleField
 from main import _Cycle
 from tests.test_reliability import app_fixture
 
@@ -12,6 +13,12 @@ class TestSelectionPolish(unittest.TestCase):
     def setUp(self):
         focus = patch("main.platforms.foreground_window_id", return_value=42)
         terminal = patch("main.platforms.foreground_is_terminal", return_value=False)
+        field = patch("main.focused_polish_field", return_value=None)
+        ide = patch("main.platforms.foreground_is_ide_host", return_value=False)
+        self.field = field.start()
+        self.ide = ide.start()
+        self.addCleanup(field.stop)
+        self.addCleanup(ide.stop)
         self.focus = focus.start()
         self.terminal = terminal.start()
         self.addCleanup(focus.stop)
@@ -49,6 +56,50 @@ class TestSelectionPolish(unittest.TestCase):
         app.refiner.polish.assert_not_called()
         paste.assert_not_called()
         self.assertEqual(app.state, AppState.IDLE)
+
+    def test_no_selection_polishes_the_intact_field_without_copying_a_line(self):
+        app = self.fixture()
+        select = MagicMock(return_value=True)
+        self.field.return_value = PolishField(17, 2, "My complete draft.", select)
+        def paste(result, *, before_inject):
+            before_inject()
+            self.assertEqual(result, "These words are corrected.")
+        with patch("main.get_selected_text") as copy, patch("main.paste_text", side_effect=paste):
+            app._polish_selection()
+        app.refiner.polish.assert_called_once_with("My complete draft.")
+        select.assert_called_once_with()
+        copy.assert_not_called()
+        self.assertEqual(app.last_status, "polished")
+
+    def test_changed_control_caret_or_content_keeps_the_field_untouched(self):
+        original = PolishField(10, 1, "original", MagicMock())
+        for control, caret, text in [(20, 1, "original"), (10, 3, "original"), (10, 1, "revised")]:
+            app = self.fixture()
+            select = MagicMock()
+            self.field.side_effect = [original, PolishField(control, caret, text, select)]
+            def paste(result, *, before_inject):
+                before_inject()
+                self.fail("A stale edit reached the paste chord")
+            with patch("main.paste_text", side_effect=paste):
+                app._polish_selection()
+            self.assertEqual(app.last_status, "polish_target")
+            select.assert_not_called()
+
+    def test_unsupported_ide_does_not_submit_copy_current_line(self):
+        app = self.fixture()
+        self.ide.return_value = True
+        with patch("main.get_selected_text") as copy:
+            app._polish_selection()
+        copy.assert_not_called()
+        app.refiner.polish.assert_not_called()
+
+    def test_protected_control_never_calls_copy_or_model(self):
+        app = self.fixture()
+        self.field.side_effect = IneligibleField
+        with patch("main.get_selected_text") as copy:
+            app._polish_selection()
+        copy.assert_not_called()
+        app.refiner.polish.assert_not_called()
 
     def test_selected_text_is_replaced_in_place_with_one_undoable_paste(self):
         # Owner decision 2026-11-04: polish replaces the selection; Ctrl+Z undoes it.

@@ -77,7 +77,8 @@ GATE = {
     # 1.6.0 (macOS and Linux from the box: the platform runtime #42, the private uv #43, the
     # one-line installer #44): the smallest count on CI, measured on pull request #44 (macOS and
     # Linux 1778, Windows 1791): 1778.
-    "floor": 1778,
+    # Plus 15 portable checks for recording, encoding, startup, setup and focused-field Polish.
+    "floor": 1793,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

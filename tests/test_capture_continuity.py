@@ -114,6 +114,66 @@ class TestCaptureContinuity(unittest.TestCase):
             self.recorder.last_audio_array, np.zeros(7 * 1024, dtype=np.float32)
         )
 
+    def feed_samples(self, samples):
+        for start in range(0, samples.size, 1024):
+            chunk = samples[start:start + 1024].reshape(-1, 1)
+            self.now += len(chunk) / self.recorder.sample_rate
+            self.recorder._callback(chunk, len(chunk), None, None)
+
+    def test_stationary_room_noise_is_empty_after_idle_calibration(self):
+        rng = np.random.default_rng(5)
+        self.feed_samples(rng.normal(0, .001, 32000).astype("f"))
+        self.recorder.start()
+        self.feed_samples(rng.normal(0, .001, 16000).astype("f"))
+        self.assertFalse(self.recorder.stop())
+
+    def test_quiet_voice_and_internal_pause_survive_trailing_noise_trim(self):
+        rng = np.random.default_rng(6)
+        self.feed_samples(rng.normal(0, .001, 32000).astype("f"))
+        self.recorder.start()
+        clip = rng.normal(0, .001, 48000).astype("f")
+        tone = .004 * np.sin(2 * np.pi * 150 * np.arange(3200) / 16000)
+        clip[:3200] += tone
+        clip[20000:23200] += tone
+        self.feed_samples(clip)
+        self.assertTrue(self.recorder.stop())
+        sent = self.recorder.last_audio_array[6400:]  # exclude 0.4 s of pre-roll
+        self.assertLess(sent.size, 32000)
+        np.testing.assert_array_equal(sent[:26400], clip[:26400])
+
+    def test_first_press_keeps_faint_audio_without_idle_calibration(self):
+        self.recorder.start()
+        clip = np.random.default_rng(7).normal(0, .00001, 4000).astype("f")
+        self.feed_samples(clip)
+        self.assertTrue(self.recorder.stop())
+        np.testing.assert_array_equal(self.recorder.last_audio_array, clip)
+
+    def test_live_keeps_full_audio_if_batch_filter_would_skip_it(self):
+        rng = np.random.default_rng(8)
+        self.feed_samples(rng.normal(0, .001, 32000).astype("f"))
+        self.recorder.start()
+        clip = rng.normal(0, .001, 16000).astype("f")
+        self.feed_samples(clip)
+        self.assertTrue(self.recorder.stop(filter_room_noise=False))
+        np.testing.assert_array_equal(self.recorder.last_audio_array[-16000:], clip)
+
+    def test_start_cue_leakage_is_empty_unless_other_sound_overlaps_it(self):
+        from recorder import play_beep
+        with patch("recorder.sd.play") as play, patch("recorder.sd.wait"):
+            play_beep(880, .08, volume=.025)
+        cue = play.call_args.args[0]
+        self.recorder.start_cue_enabled = True
+        rng = np.random.default_rng(22)
+        for with_voice in (False, True):
+            self.feed_samples(rng.normal(0, .001, 32000).astype("f"))
+            self.recorder.start()
+            clip = rng.normal(0, .001, 16000).astype("f")
+            clip[527:527 + cue.size] += cue
+            if with_voice:
+                clip[527:527 + cue.size] += .004 * np.sin(2 * np.pi * 180 * np.arange(cue.size) / 16000)
+            self.feed_samples(clip)
+            self.assertEqual(self.recorder.stop(), with_voice)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1748,6 +1748,15 @@ runpy.run_path(str(script), run_name='__main__')
 
         A waiting state counts only when the exit code and the `ODICTO-WAITING` line agree. A probe
         that cannot run, times out, or ends with any other code is `none`."""
+        if token:
+            # Wait for this launch to publish its first heartbeat before
+            # spawning a verifier. A matching heartbeat may report waiting or ready.
+            try:
+                health = self._read_json(self.data / "dictation-health.json")
+            except DistributionError:
+                return "none"
+            if health.get("launch_token") != token:
+                return "none"
         command = [str(python), str(directory / "odicto.py"), "wait-ready", "--timeout", "0",
                    "--report-waiting", "--expected-root", str(directory)]
         if token:

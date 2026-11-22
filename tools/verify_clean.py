@@ -28,7 +28,7 @@ def main():
         for name in ("main.py", "odicto.py", ".env.example", "prompt.txt.example", "install.ps1", "install.sh", "install-managed.ps1", "install-managed.sh",
                      "start_dictation.bat", "setup.bat", "stop_dictation.bat",
                      "start_dictation.sh", "setup.sh", "stop_dictation.sh", ".gitignore",
-                     "VERSION", "CHANGELOG.md"):
+                     "VERSION", "CHANGELOG.md", "README.md", "requirements.txt"):
             shutil.copy2(root / name, clean / name)
         # The same suite gets 600 s in Gate 2 and verify.ps1 waits 600 s for this script;
         # stop just before that, so this run reports its own timeout and cleans up.

@@ -214,6 +214,28 @@ class ClipboardSafetyBase(unittest.TestCase):
 
 
 class TestSynchronousRestore(ClipboardSafetyBase):
+    def test_native_polish_refuses_unrestorable_clipboard_before_selecting_text(self):
+        for readable in (False, True):
+            with self.subTest(readable=readable):
+                self.clip.readable = readable
+                self.clip.complete = False
+                self.clip.non_text = b"private clipboard format"
+                def unexpected_selection():
+                    self.fail("Selected the field before checking the clipboard")
+                with self.assertRaisesRegex(RuntimeError, "preserve"):
+                    self._paste("x" * (typer._type_instead_limit() + 1), before_inject=unexpected_selection)
+                self.assertFalse(self.clip.writes)
+                self.assertEqual(self.clip.non_text, b"private clipboard format")
+
+    def test_changed_polish_target_restores_clipboard_and_sends_no_input(self):
+        def changed():
+            raise RuntimeError("Focus moved")
+        with self.assertRaisesRegex(RuntimeError, "Focus moved"):
+            self._paste("edited draft", before_inject=changed)
+        self.assertEqual(self.clip.text, "user clip")
+        self.mocks["send_paste"].assert_not_called()
+        self.mocks["send_text_bulk"].assert_not_called()
+
     def test_restore_happens_before_paste_returns_after_the_delay(self):
         order = []
         self.mocks["send_paste"].side_effect = lambda: order.append("paste")

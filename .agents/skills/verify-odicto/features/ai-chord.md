@@ -19,8 +19,12 @@ AI reply` line, speak, tap again. The pill shows Working while the LLM answers.
 1. Note the time. Ask the owner to run the steps above in Notepad with a short request.
 2. `log_report.py --since <time>`: one row, `mode=AI`, a `paste_s`. The log also shows
    `Sending query to <provider>` and `<provider> responded in Ns`.
+3. In Setup, choose the fastest reasoning effort the selected model offers.
+   Save, let the service restart, and reopen AI answers. Check the selected effort.
+   Repeat after changing from a slower setting. Set a positive output token limit,
+   save it, then clear it and save again. Verify that Setup shows no Odicto limit.
 
 ## Gotchas
 
 - AI captures take seconds (LLM time); judge responsiveness by `hud_lag`, not `paste_s`.
-- `finish_reason='length'` with reasoning tokens triggers one retry with more tokens; that doubles the time.
+- An empty OpenRouter answer can trigger one retry within the remaining time budget.

@@ -169,6 +169,9 @@ class TestStartupState(unittest.TestCase):
             return self.manager._startup_state(self.directory, Path("python"), token), run
 
     def test_the_command_asks_for_the_waiting_report_with_this_release_and_token(self):
+        self.manager.data.mkdir(parents=True, exist_ok=True)
+        (self.manager.data / "dictation-health.json").write_text(
+            json.dumps({"launch_token": "t" * 32, "ready": False}), encoding="utf-8")
         _, run = self.state(0, token="t" * 32)
         command = run.call_args.args[0]
         self.assertEqual(command[2:], ["wait-ready", "--timeout", "0", "--report-waiting", "--expected-root",

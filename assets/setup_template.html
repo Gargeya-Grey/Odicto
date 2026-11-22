@@ -314,14 +314,14 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .btn.recording { color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 50%, transparent); }
 
 /* Inputs: a well, set into the glass */
-input[type="text"], input[type="password"], textarea {
+input[type="text"], input[type="number"], input[type="password"], textarea {
   width: 100%; min-width: 0; height: 44px; padding: 0 14px;
   border: 0; border-radius: var(--r-control);
   background: var(--well); box-shadow: var(--well-in); color: var(--text); font-size: 14px; line-height: 20px;
   transition: box-shadow var(--t-fast) var(--ease);
 }
 input::placeholder, textarea::placeholder { color: var(--faint); }
-input[type="text"]:focus, input[type="password"]:focus, textarea:focus { outline: none; box-shadow: var(--well-in), var(--halo); }
+input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:focus, textarea:focus { outline: none; box-shadow: var(--well-in), var(--halo); }
 input[readonly] { color: var(--muted); }
 textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(--mono); font-size: 13px; line-height: 20px; }
 .key-input { position: relative; display: flex; align-items: center; }
@@ -1012,8 +1012,8 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                   </div>
                 </li>
                 <li class="row">
-                  <div class="row-text"><h3><label for="LLM_MAX_TOKENS">Longest answer</label></h3><p>Maximum output tokens for every provider.</p></div>
-                  <div class="row-ctl" style="width:140px"><input type="text" name="LLM_MAX_TOKENS" id="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="1024" inputmode="numeric"></div>
+                  <div class="row-text"><h3><label for="LLM_MAX_TOKENS">Maximum output tokens</label></h3><p id="answer_limit_help">Leave blank or enter 0 to use the provider’s limit. Meta uses its own limit. A Gemini limit set in the configuration file takes precedence.</p></div>
+                  <div class="row-ctl" style="width:140px"><input type="number" min="0" step="1" name="LLM_MAX_TOKENS" id="LLM_MAX_TOKENS" value="__LLM_MAX_TOKENS__" placeholder="0" inputmode="numeric" aria-describedby="answer_limit_help"></div>
                 </li>
               </ul>
             </section>
@@ -1027,7 +1027,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
             <div class="sect-label"><h2 id="h_polish">Text polish</h2></div>
             <ul class="group">
               <li class="row block">
-                <div class="row-text"><h3>Polish selected text</h3><p>Select text in an editor, then press the shortcut. Fixes grammar, sentence structure and accidental repetition while preserving ideas, emotions, voice and paragraph breaks. Raw and live dictation never run an extra polish call. Esc cancels. The polished text replaces your selection; press Ctrl+Z to undo it. If the selection changed meanwhile, your text stays as it was. Terminal targets are skipped.</p></div>
+                <div class="row-text"><h3>Polish text</h3><p>Press the shortcut to edit your selection. With no selection, Polish uses the whole field in supported editors. Your AI provider edits the text using your Polish instructions. Esc cancels. If the text changes during editing, Odicto keeps your changes. Use your editor’s Undo command to undo a replacement. Terminal targets are skipped.</p></div>
                 <input type="hidden" name="POLISH_DICTATION" id="POLISH_DICTATION" value="false">
               </li>
               <li class="row">
@@ -1051,6 +1051,11 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                   <p class="note model-summary" id="polish_model_summary" aria-live="polite"></p>
                   <p class="note model-help">Uses the provider and key from AI answers. Your model choice stays separate.</p>
                 </div>
+              </li>
+              <li class="row block">
+                <label class="field-label" for="POLISH_PROMPT">Polish instructions</label>
+                <textarea id="POLISH_PROMPT" name="POLISH_PROMPT" rows="4" aria-describedby="polish_prompt_help">__POLISH_PROMPT__</textarea>
+                <p class="note" id="polish_prompt_help">Tell the model how to edit your text. Leave blank for the standard polish.</p>
               </li>
             </ul>
           </section>
@@ -2168,7 +2173,7 @@ function lightestOpenrouterEffort(spec) {
 }
 function filterOpenrouterEffort() {
   var hidModel = el('OPENROUTER_MODEL');
-  var model = hidModel ? hidModel.value : '';
+  var model = (hidModel && hidModel.value) || MODEL_DEFAULTS.openrouter;
   var spec = openrouterReasoningFor(model);
   var sel = el('openrouter_reasoning_select');
   var hidden = el('OPENROUTER_REASONING_EFFORT');
@@ -2187,7 +2192,7 @@ function filterOpenrouterEffort() {
   }
   sel.innerHTML = '';
   var o0 = document.createElement('option');
-  o0.value = '';
+  o0.value = (spec && spec.mandatory) ? 'none' : '';
   o0.textContent = (spec && spec.mandatory)
     ? ('Fastest allowed (' + lightestOpenrouterEffort(spec) + ')')
     : 'Backend default (none)';
@@ -2200,11 +2205,9 @@ function filterOpenrouterEffort() {
   });
   if (current && allowed.indexOf(current) >= 0) {
     sel.value = current;
-  } else if (current && spec && spec.mandatory) {
-    sel.value = '';
-    if (hidden) hidden.value = '';
   } else {
-    sel.value = '';
+    sel.value = o0.value;
+    if (hidden) hidden.value = o0.value;
   }
   if (note) {
     if (!model) note.textContent = 'Default is no thinking. Allowed levels load from OpenRouter for the selected model.';

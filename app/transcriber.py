@@ -230,15 +230,18 @@ def float32_to_pcm16_bytes(audio: np.ndarray) -> bytes:
     return np.ascontiguousarray(pcm).tobytes()
 
 
+_ENCODE_BLOCK_FRAMES = 65536
+
+
 def float32_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     """Wrap mono float32 PCM as an in-memory 16-bit WAV (no disk)."""
-    pcm = float32_to_pcm16_bytes(audio)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(int(sample_rate) or 16000)
-        wf.writeframes(pcm)
+        for start in range(0, len(audio), _ENCODE_BLOCK_FRAMES):
+            wf.writeframesraw(float32_to_pcm16_bytes(audio[start:start + _ENCODE_BLOCK_FRAMES]))
     return buf.getvalue()
 
 
@@ -257,19 +260,16 @@ def float32_to_flac_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     """Encode mono float32 PCM as in-memory 16-bit FLAC (about half a WAV's size)."""
     import soundfile as sf
 
-    arr = np.asarray(audio, dtype=np.float32)
-    if arr.ndim > 1:
-        arr = np.mean(arr, axis=1) if arr.shape[-1] > 1 else arr.reshape(-1)
-    if arr.size == 0:
+    if audio.size == 0:
         return b""
     buf = io.BytesIO()
-    sf.write(
-        buf,
-        np.clip(arr, -1.0, 1.0),
-        int(sample_rate) or 16000,
-        format="FLAC",
-        subtype="PCM_16",
-    )
+    with sf.SoundFile(buf, mode="w", samplerate=int(sample_rate) or 16000,
+                      channels=1, format="FLAC", subtype="PCM_16") as stream:
+        for start in range(0, len(audio), _ENCODE_BLOCK_FRAMES):
+            block = np.asarray(audio[start:start + _ENCODE_BLOCK_FRAMES], dtype=np.float32)
+            if block.ndim > 1:
+                block = np.mean(block, axis=1) if block.shape[-1] > 1 else block.reshape(-1)
+            stream.write(np.clip(block, -1.0, 1.0))
     return buf.getvalue()
 
 

@@ -21,6 +21,11 @@ pill shows Working, then a check, and the text appears.
 2. Run `log_report.py --since <time>`. Expect one row, `mode=raw`, `hud_lag` ≤ 1 s, an `stt_s`
    and a `paste_s`.
 3. Ask the owner whether the text landed and whether the pill appeared at once.
+4. With vocabulary and audio cues enabled, wait two seconds in steady room noise
+   and repeat once without speaking.
+   Check that the editor receives nothing. Then dictate a quiet sentence ending in
+   a vocabulary term, pause, and stop. Check the last word and whether any extra
+   words appeared. Use the same microphone and speech provider for both trials.
 
 ## Gotchas
 

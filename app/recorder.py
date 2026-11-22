@@ -8,6 +8,9 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+START_CUE_HZ = 880.0
+CUE_SECONDS = 0.08
+
 
 class _MicrophoneOpenFailed(RuntimeError):
     """Every open attempt failed and no stream was left half-open."""
@@ -47,7 +50,8 @@ class AudioRecorder:
     # "Microphone host buffers"). Other host APIs were not measured and keep "low".
     MME_LATENCY_SECONDS: float = 1.0
 
-    def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0) -> None:
+    def __init__(self, sample_rate: int = 16000, channels: int = 1, max_seconds: float = 0,
+                 *, start_cue_enabled: bool = False) -> None:
         """Initializes the audio recorder and opens the persistent input stream.
 
         Args:
@@ -56,6 +60,7 @@ class AudioRecorder:
             max_seconds: Longest session kept, in seconds; 0 means no limit.
         """
         self.sample_rate: int = sample_rate
+        self.start_cue_enabled = start_cue_enabled
         self.channels: int = channels
         self.recording: bool = False
         self.audio_data: List[np.ndarray] = []
@@ -561,6 +566,7 @@ class AudioRecorder:
             if (self._closed.is_set() or self._stream is None
                     or time.monotonic() - self._last_callback > self.GAP_SECONDS):
                 raise RuntimeError("Microphone stopped; restart Odicto")
+            self._quiet_frame_power = self._idle_noise_power()
             # Seed the session with the tail of the always-running ring buffer so
             # the first spoken syllable (which often starts before Windows would
             # have delivered the first callback) is not clipped.
@@ -597,6 +603,7 @@ class AudioRecorder:
                 pre_roll = kept
             self.audio_data = pre_roll
             self._session_frames = sum(len(part) for part in pre_roll)
+            self._preroll_frames = self._session_frames
             self._session_gap = False
             self._session_limited = False
             self.last_capture_gap = False
@@ -613,7 +620,44 @@ class AudioRecorder:
                     except Exception:
                         pass
 
-    def stop(self, filepath: Optional[str] = None) -> bool:
+    def _frame_power(self, audio: np.ndarray) -> np.ndarray:
+        frame = max(1, self.sample_rate // 50)
+        whole = audio.size // frame * frame
+        blocks = audio[:whole].reshape(-1, frame)
+        power = np.einsum("ij,ij->i", blocks, blocks) / frame
+        tail = audio[whole:]
+        if tail.size:
+            power = np.append(power, np.dot(tail, tail) / tail.size)
+        return power
+
+    def _idle_noise_power(self) -> float:
+        """Use half a second of stable, low-level room tone before the pre-roll."""
+        count = self.sample_rate // 2
+        end = self._ring_frames - self._session_samples
+        if end < count or count == 0:
+            return 0.0
+        offset = 0
+        parts = []
+        for chunk in self._ring:
+            first = max(0, end - count - offset)
+            last = min(len(chunk), end - offset)
+            if first < last:
+                parts.append(chunk[first:last])
+            offset += len(chunk)
+            if offset >= end:
+                break
+        reference = np.concatenate(parts, axis=0)
+        if reference.ndim == 2:
+            reference = reference.mean(axis=1)
+        power = self._frame_power(reference)
+        low, median, high = np.percentile(power, (10, 50, 90))
+        # A loud or changing reference can contain speech. Disable adaptive
+        # filtering for that capture instead of learning the speaker as noise.
+        if high > 0.003 ** 2 or high > 1.6 * low:
+            return 0.0
+        return float(median * 1.6)
+
+    def stop(self, filepath: Optional[str] = None, *, filter_room_noise: bool = True) -> bool:
         """Stops recording and keeps the captured buffer in memory.
 
         Optionally saves to a WAV file when a filepath is provided (debug / fallback).
@@ -621,13 +665,15 @@ class AudioRecorder:
 
         Args:
             filepath: Optional path to save the audio file.
+            filter_room_noise: Ignore calibrated room noise for batch dictation.
+                Live captions already have a recognizer listening to the full stream.
 
         Captured audio is never discarded because of an overflow or a callback
         gap: it is kept and flagged in ``last_capture_gap``. ``last_capture_limited``
         is True when the session reached ``max_seconds``.
 
         Returns:
-            bool: True if nonzero audio was captured, False otherwise.
+            bool: True if audio above the calibrated room noise was captured.
 
         Raises:
             RuntimeError: The stream died and the session holds no audio at all.
@@ -672,9 +718,49 @@ class AudioRecorder:
                 sf.write(filepath, data, self.sample_rate)
             except Exception as e:
                 print(f"Warning: Failed to write debug WAV to {filepath}: {e}")
-        # Exact digital silence must not produce recognizer hallucinations.
-        # Preserve quiet speech and the unmodified buffer for diagnostics.
-        return bool(np.any(arr))
+        if self.last_capture_gap or not filter_room_noise:
+            return bool(np.any(arr))
+        # With no usable calibration, only digital silence is eligible.
+        active = np.flatnonzero(self._frame_power(arr) > self._quiet_frame_power)
+        if not active.size:
+            return False
+        # Preserve the complete utterance, including internal pauses. Leave
+        # 300 ms after the last active frame for soft word endings.
+        frame = max(1, self.sample_rate // 50)
+        if self.start_cue_enabled and self._only_start_cue(arr, active, frame):
+            return False
+        end = (active[-1] + 1) * frame + int(self.sample_rate * 0.3)
+        if arr.size - end >= self.sample_rate // 2:
+            self.last_audio_array = self.last_audio_array[:end]
+        return True
+
+    def _only_start_cue(self, audio: np.ndarray, active: np.ndarray, frame: int) -> bool:
+        """Test whether the known start tone explains all above-floor sound."""
+        first = int(active[0]) * frame
+        last = (int(active[-1]) + 1) * frame
+        length = int(CUE_SECONDS * self.sample_rate)
+        if (first < self._preroll_frames - frame
+                or first > self._preroll_frames + self.sample_rate // 2
+                or last - first > length + 2 * frame):
+            return False
+        # Allow for output latency and the microphone's phase and gain. Only
+        # the decision uses this copy; overlapping speech keeps its original PCM.
+        window = audio[max(0, first - frame):last + frame].copy()
+        if window.size < length:
+            return False
+        sine = _cue_wave(START_CUE_HZ, CUE_SECONDS, self.sample_rate)
+        cosine = _cue_wave(START_CUE_HZ, CUE_SECONDS, self.sample_rate, phase=np.pi / 2)
+        score = np.correlate(window, sine) ** 2 + np.correlate(window, cosine) ** 2
+        onset = int(score.argmax())
+        segment = window[onset:onset + length]
+        basis = np.column_stack((sine, cosine))
+        gains = np.linalg.lstsq(basis, segment, rcond=None)[0]
+        fitted = basis @ gains
+        if np.dot(fitted, fitted) < 0.5 * np.dot(segment, segment):
+            return False
+        segment -= fitted
+        # The lowest measurable residual after a 16-bit loopback is one PCM step.
+        return bool(np.max(self._frame_power(window)) <= max(self._quiet_frame_power, (1 / 32768) ** 2))
 
     def close(self) -> None:
         """Closes the persistent stream (app shutdown only)."""
@@ -704,20 +790,11 @@ class AudioRecorder:
         self.last_audio_array = None
 
 
-def play_beep(frequency: float, duration: float, volume: float = 0.12) -> None:
-    """Generates and plays a clean sine wave tone using sounddevice.
-
-    Includes 10ms linear fades to prevent audible click artifacts.
-
-    Args:
-        frequency: Audio frequency in Hz.
-        duration: Duration of the beep in seconds.
-        volume: Volume level between 0.0 and 1.0.
-    """
-    sample_rate = 16000
+def _cue_wave(frequency: float, duration: float, sample_rate: int, phase: float = 0.0) -> np.ndarray:
+    """Sine with 10 ms fades, shared by cue playback and echo recognition."""
     n_samples = max(1, int(sample_rate * duration))
     t: np.ndarray = np.linspace(0, duration, n_samples, endpoint=False, dtype=np.float32)
-    wave: np.ndarray = (volume * np.sin(2.0 * np.pi * frequency * t)).astype(np.float32)
+    wave = np.sin(2.0 * np.pi * frequency * t + phase)
 
     # Fade in/out by 10ms to smooth out the start/stop click
     fade_len = min(int(sample_rate * 0.01), len(wave) // 2)
@@ -727,5 +804,11 @@ def play_beep(frequency: float, duration: float, volume: float = 0.12) -> None:
         wave[:fade_len] *= fade_in
         wave[-fade_len:] *= fade_out
 
-    sd.play(wave, sample_rate)
+    return wave
+
+
+def play_beep(frequency: float, duration: float, volume: float = 0.12) -> None:
+    """Play a short, click-free audio cue."""
+    sample_rate = 16000
+    sd.play(volume * _cue_wave(frequency, duration, sample_rate), sample_rate)
     sd.wait()
