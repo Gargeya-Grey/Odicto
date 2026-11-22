@@ -11,6 +11,7 @@ bind the unmodified keyboard layout so Option-generated symbols keep their prima
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -42,6 +43,27 @@ else:
 
 
 _MAIN_THREAD_RUNNER_CLS = None
+_layout_lookup_tls = threading.local()
+
+
+@contextlib.contextmanager
+def _require_fresh_layout():
+    prev = getattr(_layout_lookup_tls, "require_fresh", False)
+    _layout_lookup_tls.require_fresh = True
+    try:
+        yield
+    finally:
+        _layout_lookup_tls.require_fresh = prev
+
+
+@contextlib.contextmanager
+def _preloaded_layout_map(mapping):
+    prev = getattr(_layout_lookup_tls, "preloaded_map", None)
+    _layout_lookup_tls.preloaded_map = mapping
+    try:
+        yield
+    finally:
+        _layout_lookup_tls.preloaded_map = prev
 
 
 def _get_main_thread_runner_class():
@@ -192,6 +214,9 @@ def _install_pynput_main_thread_cache() -> None:
         yield ctx if ctx is not None else (None, None)
 
     def safe_get_unicode_to_keycode_map():
+        preloaded = getattr(_layout_lookup_tls, "preloaded_map", None)
+        if isinstance(preloaded, dict):
+            return dict(preloaded)
         if threading.current_thread() is threading.main_thread():
             mapping = orig_unicode_map()
             if isinstance(mapping, dict):
@@ -211,6 +236,11 @@ def _install_pynput_main_thread_cache() -> None:
                     cached["map"] = dict(mapping)
                 return dict(mapping)
             return mapping
+        if getattr(_layout_lookup_tls, "require_fresh", False):
+            raise RuntimeError(
+                "Could not refresh macOS keyboard layout on main thread; "
+                "shortcut not sent."
+            )
         with cache_lock:
             mapping = cached["map"]
             ctx = cached["context"]
@@ -546,28 +576,45 @@ def wm_copy_foreground() -> bool:
     return False
 
 
-def copy_chord() -> None:
+def _fresh_controller(required_char: str | None = None):
+    """Instantiate a pynput Controller with a fresh active keyboard layout map."""
     pynput = _require_pynput()
-    controller = pynput.Controller()
+    mapping = None
+    try:
+        from pynput._util.darwin import get_unicode_to_keycode_map
+    except ImportError:
+        get_unicode_to_keycode_map = None
+    if callable(get_unicode_to_keycode_map):
+        with _require_fresh_layout():
+            mapping = get_unicode_to_keycode_map()
+        if not isinstance(mapping, dict) or not mapping:
+            raise RuntimeError("Could not obtain a fresh macOS keyboard layout map.")
+        if required_char is not None and required_char not in mapping:
+            raise RuntimeError(
+                f"Fresh macOS keyboard layout map is missing key {required_char!r}."
+            )
+    with _preloaded_layout_map(mapping):
+        return pynput.Controller()
+
+
+def _send_cmd_chord(char: str) -> None:
+    pynput = _require_pynput()
+    controller = _fresh_controller(char)
     cmd = pynput.Key.cmd
     controller.press(cmd)
     time.sleep(0.01)
-    controller.press("c")
-    controller.release("c")
+    controller.press(char)
+    controller.release(char)
     time.sleep(0.01)
     controller.release(cmd)
+
+
+def copy_chord() -> None:
+    _send_cmd_chord("c")
 
 
 def paste_chord() -> None:
-    pynput = _require_pynput()
-    controller = pynput.Controller()
-    cmd = pynput.Key.cmd
-    controller.press(cmd)
-    time.sleep(0.01)
-    controller.press("v")
-    controller.release("v")
-    time.sleep(0.01)
-    controller.release(cmd)
+    _send_cmd_chord("v")
 
 
 def send(chord: str) -> None:
@@ -578,20 +625,17 @@ def send(chord: str) -> None:
     if "v" in parts:
         return paste_chord()
     if parts:
-        pynput = _require_pynput()
-        controller = pynput.Controller()
+        key_char = parts[-1]
+        controller = _fresh_controller(key_char if len(key_char) == 1 else None)
         try:
-            controller.press(parts[-1])
-            controller.release(parts[-1])
+            controller.press(key_char)
+            controller.release(key_char)
         except Exception:
             pass
 
 
 def send_copy() -> None:
-    try:
-        copy_chord()
-    except Exception:
-        send("cmd+c")
+    copy_chord()
 
 
 def send_copy_terminal() -> None:
@@ -616,10 +660,7 @@ def foreground_is_ide_host(extra=()) -> bool:
 
 
 def send_paste() -> None:
-    try:
-        paste_chord()
-    except Exception:
-        send("cmd+v")
+    paste_chord()
 
 
 def send_backspaces(n: int) -> None:
@@ -641,8 +682,7 @@ def send_text(text: str) -> bool:
     if len(text) > 256:
         return False
     try:
-        pynput = _require_pynput()
-        pynput.Controller().type(text)
+        _fresh_controller().type(text)
         return True
     except Exception:
         return False
@@ -657,8 +697,7 @@ def send_text_bulk(text: str) -> bool:
     if not text:
         return True
     try:
-        pynput = _require_pynput()
-        pynput.Controller().type(text)
+        _fresh_controller().type(text)
         return True
     except Exception:
         return False

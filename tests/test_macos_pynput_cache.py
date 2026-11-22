@@ -1,7 +1,7 @@
 """Tests for the macOS main-thread Carbon layout cache & live refresh around pynput.
 
-Uses fake ``pynput`` and ``PySide6.QtCore`` modules so every check runs on
-Windows, Linux, and macOS without opening a window or touching HIToolbox.
+Uses fake ``pynput``, ``PySide6.QtCore``, and clipboard modules so every check
+runs on Windows, Linux, and macOS without opening a window or touching HIToolbox.
 """
 
 from __future__ import annotations
@@ -13,11 +13,13 @@ import types
 import unittest
 from unittest import mock
 
-from platforms import macos
+import typer
+from platforms import clipboard as clip_mod, macos
+from tests.test_clipboard_safety import FakeClipboard
 
 
 def _build_fake_pynput(state: dict):
-    """Create isolated fake ``pynput`` modules that record Carbon call threads."""
+    """Create isolated fake ``pynput`` modules that record Carbon & Controller calls."""
     pynput_mod = types.ModuleType("pynput")
     util_mod = types.ModuleType("pynput._util")
     darwin_util = types.ModuleType("pynput._util.darwin")
@@ -41,6 +43,29 @@ def _build_fake_pynput(state: dict):
                 for kc in sorted(state["chars_by_vk"])
             }
 
+    class FakeKey:
+        cmd = "<cmd>"
+        ctrl = "<ctrl>"
+        shift = "<shift>"
+        alt = "<alt>"
+        backspace = "<backspace>"
+
+    class FakeController:
+        def __init__(self):
+            self._mapping = darwin_kb.get_unicode_to_keycode_map()
+            state["controllers"].append(dict(self._mapping))
+
+        def press(self, key):
+            vk = self._mapping.get(key) if isinstance(key, str) else key
+            state["key_events"].append(("press", key, vk))
+
+        def release(self, key):
+            vk = self._mapping.get(key) if isinstance(key, str) else key
+            state["key_events"].append(("release", key, vk))
+
+        def type(self, text):
+            state["typed"].append((text, dict(self._mapping)))
+
     darwin_util.keycode_context = orig_keycode_context
     darwin_util.keycode_to_string = orig_keycode_to_string
     darwin_util.get_unicode_to_keycode_map = orig_get_unicode_to_keycode_map
@@ -49,7 +74,11 @@ def _build_fake_pynput(state: dict):
     # inside ``pynput/keyboard/_darwin.py``.
     darwin_kb.keycode_context = orig_keycode_context
     darwin_kb.get_unicode_to_keycode_map = orig_get_unicode_to_keycode_map
+    darwin_kb.Controller = FakeController
+    darwin_kb.Key = FakeKey
 
+    kb_mod.Controller = FakeController
+    kb_mod.Key = FakeKey
     util_mod.darwin = darwin_util
     kb_mod._darwin = darwin_kb
     pynput_mod._util = util_mod
@@ -85,6 +114,9 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
             "context_calls": [],
             "map_calls": [],
             "to_string_calls": [],
+            "controllers": [],
+            "key_events": [],
+            "typed": [],
         }
         (
             self.modules,
@@ -149,18 +181,8 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
         modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
 
         def fake_main_thread_dispatch(fn, timeout_s=0.5):
-            # Simulate executing on the main thread (``main_tid``) rather than
-            # the calling background thread.
-            result = {}
-
-            def run_as_main():
-                result["value"] = fn()
-
-            # Here the test itself runs on main_tid; verify the wrapper sees a
-            # background caller before dispatching, then run fn synchronously.
             self.assertNotEqual(threading.get_ident(), main_tid)
-            run_as_main()
-            return True, result["value"]
+            return True, fn()
 
         with mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(sys, "platform", "darwin"), \
@@ -168,7 +190,6 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
                 mock.patch.object(macos, "_run_on_main_thread", side_effect=fake_main_thread_dispatch):
             macos._install_pynput_main_thread_cache()
 
-            # Switch layout from U.S. to plain Dvorak while Odicto is running.
             self.state["context"] = (77, b"dvorak-layout")
             self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
 
@@ -180,6 +201,131 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
 
         self.assertEqual(bg_ctx, (77, b"dvorak-layout"))
         self.assertEqual(bg_map, {"c": 34, "v": 47, "`": 50})
+
+    def test_copy_and_paste_use_fresh_dvorak_keycodes_after_layout_switch(self) -> None:
+        main_tid = threading.get_ident()
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+
+        def fake_main_thread_dispatch(fn, timeout_s=0.5):
+            self.assertNotEqual(threading.get_ident(), main_tid)
+            return True, fn()
+
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", side_effect=fake_main_thread_dispatch), \
+                mock.patch("platforms.macos.time.sleep"):
+            macos._install_pynput_main_thread_cache()
+            warm_map_count = len(self.state["map_calls"])
+
+            # Switch layout from U.S. (c=8, v=9) to plain Dvorak (c=34, v=47).
+            self.state["context"] = (77, b"dvorak-layout")
+            self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
+
+            self._run_in_thread(macos.send_copy)
+            self._run_in_thread(macos.send_paste)
+
+        self.assertEqual(len(self.state["map_calls"]), warm_map_count + 2)
+        self.assertIn(("press", "c", 34), self.state["key_events"])
+        self.assertIn(("press", "v", 47), self.state["key_events"])
+
+    def test_copy_and_paste_fail_without_sending_shortcut_on_layout_timeout(self) -> None:
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)):
+            macos._install_pynput_main_thread_cache()
+
+            # Simulate layout change while main-thread lookup subsequently times out.
+            self.state["context"] = (77, b"dvorak-layout")
+            self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
+
+            with self.assertRaises(RuntimeError):
+                self._run_in_thread(macos.send_copy)
+            with self.assertRaises(RuntimeError):
+                self._run_in_thread(macos.send_paste)
+
+        self.assertEqual(self.state["controllers"], [])
+        self.assertEqual(self.state["key_events"], [])
+
+    def _fake_typer_env(self, clip: FakeClipboard):
+        stack = contextlib.ExitStack()
+        for target, kwargs in (
+            ("typer.clipboard_read", {"side_effect": clip.read}),
+            ("typer.clipboard_write", {"side_effect": clip.write}),
+            ("typer.clipboard_snapshot", {"side_effect": clip.snapshot}),
+            ("typer.clipboard_restore", {"side_effect": clip.restore}),
+            ("typer.clipboard_restore_result", {"side_effect": clip.restore_result}),
+            ("typer.clipboard_change_token", {"side_effect": lambda: clip.token}),
+            ("typer.clipboard_write_text_token", {"side_effect": clip.write_token}),
+            ("typer.clipboard_read_text_token", {"side_effect": clip.read_token}),
+            ("typer.foreground_is_terminal", {"return_value": False}),
+            ("typer.foreground_is_ide_host", {"return_value": False}),
+            ("typer.force_release_modifiers", {}),
+            ("typer.wm_copy_foreground", {"return_value": False}),
+            ("typer._wait_modifiers_up", {}),
+            ("typer.time.sleep", {}),
+        ):
+            stack.enter_context(mock.patch(target, **kwargs))
+        stack.enter_context(mock.patch.object(clip_mod, "_win_api", side_effect=AssertionError("real clipboard")))
+        stack.enter_context(mock.patch.object(clip_mod, "_text_restore", side_effect=AssertionError("real clipboard")))
+        stack.enter_context(mock.patch.object(clip_mod, "_text_read", side_effect=AssertionError("real clipboard")))
+        return stack
+
+    def test_paste_text_restores_clipboard_and_reports_failure_on_layout_timeout(self) -> None:
+        clip = FakeClipboard("user clip")
+        delivered = []
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+        typer._reset_restore_now_for_tests()
+        self.addCleanup(typer._reset_restore_now_for_tests)
+
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)), \
+                mock.patch("typer.send_paste", side_effect=macos.send_paste), \
+                self._fake_typer_env(clip):
+            macos._install_pynput_main_thread_cache()
+            self.state["context"] = (77, b"dvorak-layout")
+            self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
+
+            with self.assertRaises(RuntimeError):
+                self._run_in_thread(
+                    lambda: typer.paste_text(
+                        "dictated text",
+                        on_delivered=lambda: delivered.append("delivered"),
+                    )
+                )
+
+        self.assertEqual(self.state["controllers"], [])
+        self.assertEqual(self.state["key_events"], [])
+        self.assertEqual(delivered, [])
+        self.assertEqual(clip.text, "user clip")
+        self.assertEqual(len(clip.restores), 1)
+        self.assertFalse(typer.last_paste_restore_failed())
+
+    def test_get_selected_text_restores_clipboard_without_shortcut_on_layout_timeout(self) -> None:
+        clip = FakeClipboard("user clip")
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)), \
+                mock.patch("typer.send_copy", side_effect=macos.send_copy), \
+                self._fake_typer_env(clip):
+            macos._install_pynput_main_thread_cache()
+            self.state["context"] = (77, b"dvorak-layout")
+            self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
+
+            selected = self._run_in_thread(lambda: typer.get_selected_text(timeout=0.05))
+
+        self.assertEqual(selected, "")
+        self.assertEqual(self.state["controllers"], [])
+        self.assertEqual(self.state["key_events"], [])
+        self.assertEqual(clip.text, "user clip")
+        self.assertEqual(len(clip.restores), 1)
 
     def test_main_thread_calls_refresh_cached_layout(self) -> None:
         modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
