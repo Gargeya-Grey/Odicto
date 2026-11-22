@@ -1,6 +1,6 @@
-"""Tests for the macOS main-thread Carbon layout cache around pynput.
+"""Tests for the macOS main-thread Carbon layout cache & live refresh around pynput.
 
-Uses fake ``pynput`` submodules in ``sys.modules`` so every check runs on
+Uses fake ``pynput`` and ``PySide6.QtCore`` modules so every check runs on
 Windows, Linux, and macOS without opening a window or touching HIToolbox.
 """
 
@@ -65,11 +65,23 @@ def _build_fake_pynput(state: dict):
     return modules, darwin_util, darwin_kb, kb_mod, orig_keycode_context, orig_get_unicode_to_keycode_map
 
 
+def _fake_qt_core(has_instance: bool = True):
+    qt_core = types.ModuleType("PySide6.QtCore")
+
+    class _FakeQCoreApplication:
+        @staticmethod
+        def instance():
+            return object() if has_instance else None
+
+    qt_core.QCoreApplication = _FakeQCoreApplication
+    return qt_core
+
+
 class TestMacosPynputMainThreadCache(unittest.TestCase):
     def setUp(self) -> None:
         self.state = {
-            "context": (42, b"layout-v1"),
-            "chars_by_vk": {50: "`", 0: "a"},
+            "context": (42, b"us-layout"),
+            "chars_by_vk": {8: "c", 9: "v", 50: "`"},
             "context_calls": [],
             "map_calls": [],
             "to_string_calls": [],
@@ -101,11 +113,13 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
             raise error["exc"]
         return result.get("value")
 
-    def test_warms_cache_on_main_thread_and_serves_background_threads(self) -> None:
+    def test_warms_cache_on_main_thread_and_serves_cached_when_qt_loop_not_pumping(self) -> None:
         main_tid = threading.get_ident()
-        with mock.patch.dict(sys.modules, self.modules), \
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+        with mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(sys, "platform", "darwin"), \
-                mock.patch.object(macos, "_pynput", self.fake_kb_pkg):
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)):
             macos._install_pynput_main_thread_cache()
 
             self.assertTrue(all(tid == main_tid for tid in self.state["context_calls"]))
@@ -123,16 +137,56 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
 
             kb_ctx, util_ctx, util_map = self._run_in_thread(bg_read)
 
-        self.assertEqual(kb_ctx, (42, b"layout-v1"))
-        self.assertEqual(util_ctx, (42, b"layout-v1"))
-        self.assertEqual(util_map, {"`": 50, "a": 0})
+        self.assertEqual(kb_ctx, (42, b"us-layout"))
+        self.assertEqual(util_ctx, (42, b"us-layout"))
+        self.assertEqual(util_map, {"c": 8, "v": 9, "`": 50})
         self.assertEqual(len(self.state["context_calls"]), warm_ctx_count)
         self.assertEqual(len(self.state["map_calls"]), warm_map_count)
 
-    def test_main_thread_calls_refresh_cached_layout(self) -> None:
-        with mock.patch.dict(sys.modules, self.modules), \
+    def test_background_refreshes_live_layout_on_main_thread_after_layout_switch(self) -> None:
+        """Simulates switching U.S. -> Dvorak while Qt HUD loop is running."""
+        main_tid = threading.get_ident()
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+
+        def fake_main_thread_dispatch(fn, timeout_s=0.5):
+            # Simulate executing on the main thread (``main_tid``) rather than
+            # the calling background thread.
+            result = {}
+
+            def run_as_main():
+                result["value"] = fn()
+
+            # Here the test itself runs on main_tid; verify the wrapper sees a
+            # background caller before dispatching, then run fn synchronously.
+            self.assertNotEqual(threading.get_ident(), main_tid)
+            run_as_main()
+            return True, result["value"]
+
+        with mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(sys, "platform", "darwin"), \
-                mock.patch.object(macos, "_pynput", self.fake_kb_pkg):
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", side_effect=fake_main_thread_dispatch):
+            macos._install_pynput_main_thread_cache()
+
+            # Switch layout from U.S. to plain Dvorak while Odicto is running.
+            self.state["context"] = (77, b"dvorak-layout")
+            self.state["chars_by_vk"] = {34: "c", 47: "v", 50: "`"}
+
+            def bg_copy_paste():
+                with self.darwin_kb.keycode_context() as ctx:
+                    return ctx, self.darwin_kb.get_unicode_to_keycode_map()
+
+            bg_ctx, bg_map = self._run_in_thread(bg_copy_paste)
+
+        self.assertEqual(bg_ctx, (77, b"dvorak-layout"))
+        self.assertEqual(bg_map, {"c": 34, "v": 47, "`": 50})
+
+    def test_main_thread_calls_refresh_cached_layout(self) -> None:
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)):
             macos._install_pynput_main_thread_cache()
 
             self.state["context"] = (77, b"layout-v2")
@@ -158,11 +212,11 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
         self.assertEqual(len(self.state["map_calls"]), map_count_before_bg)
 
     def test_background_install_with_qt_loaded_skips_carbon_when_cache_empty(self) -> None:
-        fake_qt_core = types.ModuleType("PySide6.QtCore")
-        modules = {**self.modules, "PySide6.QtCore": fake_qt_core}
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(True)}
         with mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(sys, "platform", "darwin"), \
-                mock.patch.object(macos, "_pynput", self.fake_kb_pkg):
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg), \
+                mock.patch.object(macos, "_run_on_main_thread", return_value=(False, None)):
             self._run_in_thread(macos._install_pynput_main_thread_cache)
 
             def bg_read():
@@ -175,6 +229,24 @@ class TestMacosPynputMainThreadCache(unittest.TestCase):
         self.assertEqual(bg_map, {})
         self.assertEqual(self.state["context_calls"], [])
         self.assertEqual(self.state["map_calls"], [])
+
+    def test_background_without_qt_app_reads_live_layout_directly(self) -> None:
+        modules = {**self.modules, "PySide6.QtCore": _fake_qt_core(False)}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(macos, "_pynput", self.fake_kb_pkg):
+            macos._install_pynput_main_thread_cache()
+            self.state["context"] = (88, b"dvorak-no-hud")
+            self.state["chars_by_vk"] = {34: "c", 47: "v"}
+
+            def bg_read():
+                with self.darwin_kb.keycode_context() as ctx:
+                    return ctx, self.darwin_kb.get_unicode_to_keycode_map()
+
+            bg_ctx, bg_map = self._run_in_thread(bg_read)
+
+        self.assertEqual(bg_ctx, (88, b"dvorak-no-hud"))
+        self.assertEqual(bg_map, {"c": 34, "v": 47})
 
     def test_idempotent_installation_does_not_double_wrap(self) -> None:
         with mock.patch.dict(sys.modules, self.modules), \

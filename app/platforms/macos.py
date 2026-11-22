@@ -41,14 +41,94 @@ else:
     _PYNPUT_IMPORT_ERROR = None
 
 
+_MAIN_THREAD_RUNNER_CLS = None
+
+
+def _get_main_thread_runner_class():
+    """Return a cached Objective-C NSObject subclass for main-thread dispatch."""
+    global _MAIN_THREAD_RUNNER_CLS
+    if _MAIN_THREAD_RUNNER_CLS is not None:
+        return _MAIN_THREAD_RUNNER_CLS
+    import objc
+    from Foundation import NSObject
+
+    try:
+        _MAIN_THREAD_RUNNER_CLS = objc.lookUpClass("_OdictoMainThreadRunner")
+        return _MAIN_THREAD_RUNNER_CLS
+    except objc.nosuchclass_error:
+        pass
+
+    class _OdictoMainThreadRunner(NSObject):
+        def initWithCallback_(self, fn):
+            self = objc.super(_OdictoMainThreadRunner, self).init()
+            if self is None:
+                return None
+            self._fn = fn
+            return self
+
+        def run_(self, _arg):
+            self._fn()
+
+    _MAIN_THREAD_RUNNER_CLS = _OdictoMainThreadRunner
+    return _MAIN_THREAD_RUNNER_CLS
+
+
+def _qt_app_instance():
+    qt_core = sys.modules.get("PySide6.QtCore")
+    if qt_core is None:
+        return None
+    qcore_app = getattr(qt_core, "QCoreApplication", None)
+    return qcore_app.instance() if qcore_app is not None else None
+
+
+def _run_on_main_thread(fn, timeout_s: float = 0.5):
+    """Run ``fn`` on the Cocoa main runloop when Qt's event loop is active.
+
+    Returns ``(True, result)`` on completion or ``(False, None)`` when no
+    runloop is active or the bounded wait expires.
+    """
+    if _qt_app_instance() is None:
+        return False, None
+    try:
+        from AppKit import NSApplication
+        from Foundation import NSRunLoopCommonModes
+        if not NSApplication.sharedApplication().isRunning():
+            return False, None
+        runner_cls = _get_main_thread_runner_class()
+    except Exception:
+        return False, None
+
+    done = threading.Event()
+    box: dict[str, object] = {}
+
+    def _invoke():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:
+            box["error"] = exc
+        finally:
+            done.set()
+
+    runner = runner_cls.alloc().initWithCallback_(_invoke)
+    if runner is None:
+        return False, None
+    runner.performSelectorOnMainThread_withObject_waitUntilDone_modes_(
+        "run:", None, False, [NSRunLoopCommonModes]
+    )
+    if not done.wait(timeout_s) or "error" in box:
+        return False, None
+    return True, box.get("value")
+
+
 def _install_pynput_main_thread_cache() -> None:
-    """Cache Carbon keyboard layout lookups on the main thread.
+    """Keep pynput Carbon keyboard layout lookups on the main dispatch queue.
 
     On macOS 27+, HIToolbox enforces ``dispatch_assert_queue(main_queue)``
     inside ``TSMGetInputSourceProperty`` once AppKit/Qt shows a window.
-    Because ``pynput.keyboard.Listener`` and ``Controller`` call
-    ``keycode_context`` from background threads, pre-warming and reusing the
-    immutable ``(keyboard_type, layout_data)`` layout prevents ``SIGTRAP``.
+    ``pynput.keyboard.Listener`` and ``Controller`` invoke ``keycode_context``
+    from background threads, so we dispatch live lookups onto the main runloop
+    (preserving layout switches such as U.S. -> Dvorak while running) and fall
+    back to a main-thread-warmed cache when the runloop is not pumping.
     """
     if sys.platform != "darwin" or _pynput is None:
         return
@@ -70,11 +150,15 @@ def _install_pynput_main_thread_cache() -> None:
     cache_lock = threading.Lock()
     cached: dict[str, object] = {"context": None, "map": None}
 
+    def _read_context():
+        with orig_keycode_context() as ctx:
+            return ctx
+
     if threading.current_thread() is threading.main_thread():
         try:
-            with orig_keycode_context() as ctx:
-                if ctx is not None:
-                    cached["context"] = ctx
+            ctx = _read_context()
+            if ctx is not None:
+                cached["context"] = ctx
             mapping = orig_unicode_map()
             if isinstance(mapping, dict):
                 cached["map"] = dict(mapping)
@@ -90,19 +174,37 @@ def _install_pynput_main_thread_cache() -> None:
                         cached["context"] = ctx
                 yield ctx
             return
-        with cache_lock:
-            ctx = cached["context"]
-        if ctx is not None:
+        ok, ctx = _run_on_main_thread(_read_context)
+        if ok and ctx is not None:
+            with cache_lock:
+                cached["context"] = ctx
             yield ctx
             return
-        if "PySide6.QtCore" not in sys.modules:
+        if _qt_app_instance() is None:
             with orig_keycode_context() as ctx:
+                if ctx is not None:
+                    with cache_lock:
+                        cached["context"] = ctx
                 yield ctx
             return
-        yield (None, None)
+        with cache_lock:
+            ctx = cached["context"]
+        yield ctx if ctx is not None else (None, None)
 
     def safe_get_unicode_to_keycode_map():
         if threading.current_thread() is threading.main_thread():
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                with cache_lock:
+                    cached["map"] = dict(mapping)
+                return dict(mapping)
+            return mapping
+        ok, mapping = _run_on_main_thread(orig_unicode_map)
+        if ok and isinstance(mapping, dict):
+            with cache_lock:
+                cached["map"] = dict(mapping)
+            return dict(mapping)
+        if _qt_app_instance() is None:
             mapping = orig_unicode_map()
             if isinstance(mapping, dict):
                 with cache_lock:
@@ -118,8 +220,6 @@ def _install_pynput_main_thread_cache() -> None:
             keycode_to_string = getattr(darwin_util, "keycode_to_string", None)
             if callable(keycode_to_string):
                 return {keycode_to_string(ctx, kc): kc for kc in range(128)}
-        if "PySide6.QtCore" not in sys.modules:
-            return orig_unicode_map()
         return {}
 
     darwin_util.keycode_context = safe_keycode_context
