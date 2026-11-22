@@ -78,7 +78,8 @@ GATE = {
     # one-line installer #44): the smallest count on CI, measured on pull request #44 (macOS and
     # Linux 1778, Windows 1791): 1778.
     # Plus 15 portable checks for recording, encoding, startup, setup and focused-field Polish.
-    "floor": 1793,
+    # Plus 11 portable checks for the macOS main-thread pynput Carbon layout cache, live refresh & fail-fast timeout: 1804.
+    "floor": 1804,
     "allowed_skips": {
         # The real-clipboard round trip skips itself when the developer's clipboard
         # is busy or holds data it cannot save; CI's clean clipboard always runs it.

@@ -11,6 +11,7 @@ bind the unmodified keyboard layout so Option-generated symbols keep their prima
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -39,6 +40,226 @@ except Exception as _exc:  # pragma: no cover - macOS only
     _PYNPUT_IMPORT_ERROR = _exc
 else:
     _PYNPUT_IMPORT_ERROR = None
+
+
+_MAIN_THREAD_RUNNER_CLS = None
+_layout_lookup_tls = threading.local()
+
+
+@contextlib.contextmanager
+def _require_fresh_layout():
+    prev = getattr(_layout_lookup_tls, "require_fresh", False)
+    _layout_lookup_tls.require_fresh = True
+    try:
+        yield
+    finally:
+        _layout_lookup_tls.require_fresh = prev
+
+
+@contextlib.contextmanager
+def _preloaded_layout_map(mapping):
+    prev = getattr(_layout_lookup_tls, "preloaded_map", None)
+    _layout_lookup_tls.preloaded_map = mapping
+    try:
+        yield
+    finally:
+        _layout_lookup_tls.preloaded_map = prev
+
+
+def _get_main_thread_runner_class():
+    """Return a cached Objective-C NSObject subclass for main-thread dispatch."""
+    global _MAIN_THREAD_RUNNER_CLS
+    if _MAIN_THREAD_RUNNER_CLS is not None:
+        return _MAIN_THREAD_RUNNER_CLS
+    import objc
+    from Foundation import NSObject
+
+    try:
+        _MAIN_THREAD_RUNNER_CLS = objc.lookUpClass("_OdictoMainThreadRunner")
+        return _MAIN_THREAD_RUNNER_CLS
+    except objc.nosuchclass_error:
+        pass
+
+    class _OdictoMainThreadRunner(NSObject):
+        def initWithCallback_(self, fn):
+            self = objc.super(_OdictoMainThreadRunner, self).init()
+            if self is None:
+                return None
+            self._fn = fn
+            return self
+
+        def run_(self, _arg):
+            self._fn()
+
+    _MAIN_THREAD_RUNNER_CLS = _OdictoMainThreadRunner
+    return _MAIN_THREAD_RUNNER_CLS
+
+
+def _qt_app_instance():
+    qt_core = sys.modules.get("PySide6.QtCore")
+    if qt_core is None:
+        return None
+    qcore_app = getattr(qt_core, "QCoreApplication", None)
+    return qcore_app.instance() if qcore_app is not None else None
+
+
+def _run_on_main_thread(fn, timeout_s: float = 0.5):
+    """Run ``fn`` on the Cocoa main runloop when Qt's event loop is active.
+
+    Returns ``(True, result)`` on completion or ``(False, None)`` when no
+    runloop is active or the bounded wait expires.
+    """
+    if _qt_app_instance() is None:
+        return False, None
+    try:
+        from AppKit import NSApplication
+        from Foundation import NSRunLoopCommonModes
+        if not NSApplication.sharedApplication().isRunning():
+            return False, None
+        runner_cls = _get_main_thread_runner_class()
+    except Exception:
+        return False, None
+
+    done = threading.Event()
+    box: dict[str, object] = {}
+
+    def _invoke():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:
+            box["error"] = exc
+        finally:
+            done.set()
+
+    runner = runner_cls.alloc().initWithCallback_(_invoke)
+    if runner is None:
+        return False, None
+    runner.performSelectorOnMainThread_withObject_waitUntilDone_modes_(
+        "run:", None, False, [NSRunLoopCommonModes]
+    )
+    if not done.wait(timeout_s) or "error" in box:
+        return False, None
+    return True, box.get("value")
+
+
+def _install_pynput_main_thread_cache() -> None:
+    """Keep pynput Carbon keyboard layout lookups on the main dispatch queue.
+
+    On macOS 27+, HIToolbox enforces ``dispatch_assert_queue(main_queue)``
+    inside ``TSMGetInputSourceProperty`` once AppKit/Qt shows a window.
+    ``pynput.keyboard.Listener`` and ``Controller`` invoke ``keycode_context``
+    from background threads, so we dispatch live lookups onto the main runloop
+    (preserving layout switches such as U.S. -> Dvorak while running) and fall
+    back to a main-thread-warmed cache when the runloop is not pumping.
+    """
+    if sys.platform != "darwin" or _pynput is None:
+        return
+    try:
+        import contextlib
+        import pynput._util.darwin as darwin_util
+        import pynput.keyboard._darwin as darwin_kb
+    except Exception:
+        return
+
+    if getattr(darwin_util, "_odicto_main_thread_safe", False):
+        return
+
+    orig_keycode_context = getattr(darwin_util, "keycode_context", None)
+    orig_unicode_map = getattr(darwin_util, "get_unicode_to_keycode_map", None)
+    if not callable(orig_keycode_context) or not callable(orig_unicode_map):
+        return
+
+    cache_lock = threading.Lock()
+    cached: dict[str, object] = {"context": None, "map": None}
+
+    def _read_context():
+        with orig_keycode_context() as ctx:
+            return ctx
+
+    if threading.current_thread() is threading.main_thread():
+        try:
+            ctx = _read_context()
+            if ctx is not None:
+                cached["context"] = ctx
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                cached["map"] = dict(mapping)
+        except Exception:
+            pass
+
+    @contextlib.contextmanager
+    def safe_keycode_context():
+        if threading.current_thread() is threading.main_thread():
+            with orig_keycode_context() as ctx:
+                if ctx is not None:
+                    with cache_lock:
+                        cached["context"] = ctx
+                yield ctx
+            return
+        ok, ctx = _run_on_main_thread(_read_context)
+        if ok and ctx is not None:
+            with cache_lock:
+                cached["context"] = ctx
+            yield ctx
+            return
+        if _qt_app_instance() is None:
+            with orig_keycode_context() as ctx:
+                if ctx is not None:
+                    with cache_lock:
+                        cached["context"] = ctx
+                yield ctx
+            return
+        with cache_lock:
+            ctx = cached["context"]
+        yield ctx if ctx is not None else (None, None)
+
+    def safe_get_unicode_to_keycode_map():
+        preloaded = getattr(_layout_lookup_tls, "preloaded_map", None)
+        if isinstance(preloaded, dict):
+            return dict(preloaded)
+        if threading.current_thread() is threading.main_thread():
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                with cache_lock:
+                    cached["map"] = dict(mapping)
+                return dict(mapping)
+            return mapping
+        ok, mapping = _run_on_main_thread(orig_unicode_map)
+        if ok and isinstance(mapping, dict):
+            with cache_lock:
+                cached["map"] = dict(mapping)
+            return dict(mapping)
+        if _qt_app_instance() is None:
+            mapping = orig_unicode_map()
+            if isinstance(mapping, dict):
+                with cache_lock:
+                    cached["map"] = dict(mapping)
+                return dict(mapping)
+            return mapping
+        if getattr(_layout_lookup_tls, "require_fresh", False):
+            raise RuntimeError(
+                "Could not refresh macOS keyboard layout on main thread; "
+                "shortcut not sent."
+            )
+        with cache_lock:
+            mapping = cached["map"]
+            ctx = cached["context"]
+        if isinstance(mapping, dict):
+            return dict(mapping)
+        if isinstance(ctx, tuple) and len(ctx) == 2 and ctx[1] is not None:
+            keycode_to_string = getattr(darwin_util, "keycode_to_string", None)
+            if callable(keycode_to_string):
+                return {keycode_to_string(ctx, kc): kc for kc in range(128)}
+        return {}
+
+    darwin_util.keycode_context = safe_keycode_context
+    darwin_kb.keycode_context = safe_keycode_context
+    darwin_util.get_unicode_to_keycode_map = safe_get_unicode_to_keycode_map
+    darwin_kb.get_unicode_to_keycode_map = safe_get_unicode_to_keycode_map
+    darwin_util._odicto_main_thread_safe = True
+
+
+_install_pynput_main_thread_cache()
 
 KEY_DOWN = "down"
 KEY_UP = "up"
@@ -355,28 +576,45 @@ def wm_copy_foreground() -> bool:
     return False
 
 
-def copy_chord() -> None:
+def _fresh_controller(required_char: str | None = None):
+    """Instantiate a pynput Controller with a fresh active keyboard layout map."""
     pynput = _require_pynput()
-    controller = pynput.Controller()
+    mapping = None
+    try:
+        from pynput._util.darwin import get_unicode_to_keycode_map
+    except ImportError:
+        get_unicode_to_keycode_map = None
+    if callable(get_unicode_to_keycode_map):
+        with _require_fresh_layout():
+            mapping = get_unicode_to_keycode_map()
+        if not isinstance(mapping, dict) or not mapping:
+            raise RuntimeError("Could not obtain a fresh macOS keyboard layout map.")
+        if required_char is not None and required_char not in mapping:
+            raise RuntimeError(
+                f"Fresh macOS keyboard layout map is missing key {required_char!r}."
+            )
+    with _preloaded_layout_map(mapping):
+        return pynput.Controller()
+
+
+def _send_cmd_chord(char: str) -> None:
+    pynput = _require_pynput()
+    controller = _fresh_controller(char)
     cmd = pynput.Key.cmd
     controller.press(cmd)
     time.sleep(0.01)
-    controller.press("c")
-    controller.release("c")
+    controller.press(char)
+    controller.release(char)
     time.sleep(0.01)
     controller.release(cmd)
+
+
+def copy_chord() -> None:
+    _send_cmd_chord("c")
 
 
 def paste_chord() -> None:
-    pynput = _require_pynput()
-    controller = pynput.Controller()
-    cmd = pynput.Key.cmd
-    controller.press(cmd)
-    time.sleep(0.01)
-    controller.press("v")
-    controller.release("v")
-    time.sleep(0.01)
-    controller.release(cmd)
+    _send_cmd_chord("v")
 
 
 def send(chord: str) -> None:
@@ -387,20 +625,17 @@ def send(chord: str) -> None:
     if "v" in parts:
         return paste_chord()
     if parts:
-        pynput = _require_pynput()
-        controller = pynput.Controller()
+        key_char = parts[-1]
+        controller = _fresh_controller(key_char if len(key_char) == 1 else None)
         try:
-            controller.press(parts[-1])
-            controller.release(parts[-1])
+            controller.press(key_char)
+            controller.release(key_char)
         except Exception:
             pass
 
 
 def send_copy() -> None:
-    try:
-        copy_chord()
-    except Exception:
-        send("cmd+c")
+    copy_chord()
 
 
 def send_copy_terminal() -> None:
@@ -425,10 +660,7 @@ def foreground_is_ide_host(extra=()) -> bool:
 
 
 def send_paste() -> None:
-    try:
-        paste_chord()
-    except Exception:
-        send("cmd+v")
+    paste_chord()
 
 
 def send_backspaces(n: int) -> None:
@@ -450,8 +682,7 @@ def send_text(text: str) -> bool:
     if len(text) > 256:
         return False
     try:
-        pynput = _require_pynput()
-        pynput.Controller().type(text)
+        _fresh_controller().type(text)
         return True
     except Exception:
         return False
@@ -466,8 +697,7 @@ def send_text_bulk(text: str) -> bool:
     if not text:
         return True
     try:
-        pynput = _require_pynput()
-        pynput.Controller().type(text)
+        _fresh_controller().type(text)
         return True
     except Exception:
         return False
