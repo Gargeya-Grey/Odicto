@@ -1374,9 +1374,11 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             validate_hotkey_pair(hotkey, ai_hotkey)
             current = read_env()
+            live_hotkey = updates.get("LIVE_HOTKEY", current.get("LIVE_HOTKEY", Config.LIVE_HOTKEY))
+            Config.validate_live_hotkey(live_hotkey, hotkey, Config.RESET_CONTEXT_HOTKEY)
             polish = updates.get("POLISH_HOTKEY", current.get("POLISH_HOTKEY", ENV_DEFAULTS["POLISH_HOTKEY"]))
             resolved = Config.resolve_polish_hotkey(polish,
-                hotkey, updates.get("LIVE_HOTKEY", Config.LIVE_HOTKEY),
+                hotkey, live_hotkey,
                 Config.RESET_CONTEXT_HOTKEY, Config.CANCEL_HOTKEY,
                 *Config.CTRL_KEEP_CONTEXT_KEYS,
                 explicit="POLISH_HOTKEY" in updates or "POLISH_HOTKEY" in current)

@@ -1261,7 +1261,7 @@ textarea { height: auto; padding: 12px 14px; resize: vertical; font-family: var(
                 </div>
               </li>
             </ul>
-            <p class="sect-foot">Avoid Alt shortcuts: browsers move focus when Alt is released.</p>
+            <p class="sect-foot" id="hotkey_foot_note">Avoid Alt shortcuts: browsers move focus when Alt is released.</p>
           </section>
         </section>
 
@@ -2495,7 +2495,14 @@ function updateMeters() {
   setMeter('prompt', src === 'prompt.txt' ? 'Custom' : 'Shipped default', src || 'prompt.txt.example', src === 'prompt.txt' ? 'ok' : 'info');
   updateProviderCards();
 }
-var KEY_NAMES = { ctrl: 'Ctrl', control: 'Ctrl', shift: 'Shift', alt: 'Alt', cmd: 'Cmd', command: 'Cmd', windows: 'Win', win: 'Win', grave: '`', space: 'Space', esc: 'Esc', enter: 'Enter', tab: 'Tab', up: '↑', down: '↓', left: '←', right: '→' };
+var IS_MAC = typeof navigator !== 'undefined' && /mac/i.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
+var KEY_NAMES = { ctrl: 'Ctrl', control: 'Ctrl', shift: 'Shift', alt: IS_MAC ? 'Option' : 'Alt', option: 'Option', cmd: 'Cmd', command: 'Cmd', windows: 'Win', win: 'Win', grave: '`', space: 'Space', esc: 'Esc', enter: 'Enter', tab: 'Tab', page_up: 'PgUp', page_down: 'PgDn', caps_lock: 'Caps', up: '↑', down: '↓', left: '←', right: '→' };
+(function() {
+  var note = el('hotkey_foot_note');
+  if (note && IS_MAC) {
+    note.textContent = 'On macOS, avoid Cmd+Q / Cmd+W (browser shortcuts) and Ctrl+Space (input switch). Dictate and Ask AI share one main key; press Esc to cancel capture.';
+  }
+})();
 function keyName(part) {
   var k = (part || '').toLowerCase();
   if (KEY_NAMES[k]) return KEY_NAMES[k];
@@ -2675,22 +2682,104 @@ function syncPromptPanelHeight() {
 // ------------------------------------------------------------ hotkey capture
 var hotkeyRecorder = null;
 var MODIFIER_NAMES = { Control: 'ctrl', Shift: 'shift', Alt: 'alt', Meta: 'cmd' };
-function browserKeyToAppKey(key, code) {
-  var k = (key || '').toLowerCase();
+var CODE_TO_APP_KEY = {
+  Space: 'space',
+  Backquote: 'grave',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  PageUp: 'page_up',
+  PageDown: 'page_down',
+  CapsLock: 'caps_lock',
+  Escape: 'esc',
+  Enter: 'enter',
+  Tab: 'tab',
+  Backspace: 'backspace',
+  Delete: 'delete',
+  Home: 'home',
+  End: 'end',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right'
+};
+function codeToPhysicalKey(code) {
+  if (!code) return '';
+  if (CODE_TO_APP_KEY[code]) return CODE_TO_APP_KEY[code];
+  if (/^Key([A-Z])$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit([0-9])$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|20)$/.test(code)) return code.toLowerCase();
+  return '';
+}
+function browserKeyToAppKey(key, code, evt) {
+  var raw = key || '';
+  var k = raw.toLowerCase();
   if (k === 'control') return 'ctrl';
   if (k === 'shift') return 'shift';
   if (k === 'alt') return 'alt';
-  if (k === 'meta') return 'cmd';
-  if (k === ' ') return 'space';
+  if (k === 'meta' || k === 'os') return 'cmd';
+  if (k === ' ' || k === '\u00a0' || code === 'Space') return 'space';
   if (k === '`' || code === 'Backquote') return 'grave';
   if (k === 'escape') return 'esc';
   if (k === 'arrowup') return 'up';
   if (k === 'arrowdown') return 'down';
   if (k === 'arrowleft') return 'left';
   if (k === 'arrowright') return 'right';
-  if (k === 'pageup') return 'page up';
-  if (k === 'pagedown') return 'page down';
-  return k;
+  if (k === 'pageup' || code === 'PageUp') return 'page_up';
+  if (k === 'pagedown' || code === 'PageDown') return 'page_down';
+  if (k === 'capslock' || code === 'CapsLock') return 'caps_lock';
+  if (k === 'unidentified' || k === 'process' || k === 'fn') return '';
+  // macOS Ctrl+A..Z can surface ASCII control characters 0x01..0x1A in e.key.
+  if (raw.length === 1 && raw.charCodeAt(0) >= 1 && raw.charCodeAt(0) <= 26) {
+    return codeToPhysicalKey(code) || String.fromCharCode(raw.charCodeAt(0) + 96);
+  }
+  var physical = codeToPhysicalKey(code);
+  // macOS Option produces 'Dead' or non-ASCII accents (e.g. Option+Q -> 'œ');
+  // Shift turns digits/punctuation into shifted symbols (e.g. Shift+1 -> '!').
+  if (k === 'dead' || (raw.length === 1 && raw.charCodeAt(0) > 126)) {
+    return physical || k;
+  }
+  if (evt && (evt.altKey || evt.shiftKey) && physical) {
+    if (evt.altKey) return physical;
+    if (evt.shiftKey && !/^[a-z]$/.test(k)) return physical;
+  }
+  return k || physical;
+}
+function eventModifiers(e) {
+  var mods = [];
+  if (e.ctrlKey) mods.push('ctrl');
+  if (e.shiftKey) mods.push('shift');
+  if (e.altKey) mods.push('alt');
+  if (e.metaKey) mods.push('cmd');
+  return mods;
+}
+function syncAiHotkeyPrimary(newHotkey) {
+  var aiInput = el('AI_HOTKEY');
+  if (!aiInput || !aiInput.value) return;
+  var dictParts = (newHotkey || '').split('+').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  var aiParts = (aiInput.value || '').split('+').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  if (dictParts.length < 2 || aiParts.length < 2) return;
+  var newPrimary = dictParts[dictParts.length - 1];
+  var dictMods = dictParts.slice(0, -1);
+  var aiMods = aiParts.slice(0, -1);
+  var sameSet = dictMods.length === aiMods.length && dictMods.every(function(m) { return aiMods.indexOf(m) !== -1; });
+  if (sameSet) {
+    if (aiMods.indexOf('shift') === -1) aiMods.push('shift');
+    else if (aiMods.indexOf('alt') === -1) aiMods.push('alt');
+    else if (aiMods.indexOf('ctrl') === -1) aiMods.unshift('ctrl');
+    else aiMods = aiMods.filter(function(m) { return m !== 'shift'; });
+  }
+  var synced = aiMods.concat([newPrimary]).join('+');
+  if (synced !== aiInput.value) {
+    aiInput.value = synced;
+  }
 }
 function recordHotkey(btn) {
   if (hotkeyRecorder) {
@@ -2702,9 +2791,10 @@ function recordHotkey(btn) {
     previous: el(btn.getAttribute('data-record-for')).value,
     modifiers: [],
     primary: null,
-    pressed: new Set(),
     keydown: null,
-    keyup: null
+    keyup: null,
+    blur: null,
+    timer: null
   };
   btn.classList.add('recording');
   btn.textContent = 'Press keys...';
@@ -2714,33 +2804,49 @@ function recordHotkey(btn) {
   hotkeyRecorder.keydown = function(e) {
     e.preventDefault();
     e.stopPropagation();
-    var appKey = browserKeyToAppKey(e.key, e.code);
+    var rec = hotkeyRecorder;
+    if (!rec) return;
+    var appKey = browserKeyToAppKey(e.key, e.code, e);
+    if (!appKey) return;
+    var activeMods = eventModifiers(e);
     if (MODIFIER_NAMES[e.key]) {
-      appKey = MODIFIER_NAMES[e.key];
-      if (!hotkeyRecorder.pressed.has(appKey)) {
-        hotkeyRecorder.pressed.add(appKey);
-        hotkeyRecorder.modifiers.push(appKey);
-      }
-    } else if (!hotkeyRecorder.pressed.has(appKey) && !hotkeyRecorder.primary) {
-      hotkeyRecorder.pressed.add(appKey);
-      hotkeyRecorder.primary = appKey;
+      var modName = MODIFIER_NAMES[e.key];
+      if (activeMods.indexOf(modName) === -1) activeMods.push(modName);
+      rec.modifiers = activeMods;
+      renderHotkey();
+      return;
     }
+    // Bare Escape cancels capture instead of binding Esc.
+    if (appKey === 'esc' && activeMods.length === 0) {
+      stopHotkeyRecording(true);
+      return;
+    }
+    rec.modifiers = activeMods;
+    rec.primary = appKey;
     renderHotkey();
+    // Commit immediately on primary keydown so macOS Cmd (which suppresses keyup)
+    // and early Option/Shift releases never hang the recorder.
+    stopHotkeyRecording(false);
   };
   hotkeyRecorder.keyup = function(e) {
-    var appKey = MODIFIER_NAMES[e.key] || browserKeyToAppKey(e.key, e.code);
-    hotkeyRecorder.pressed.delete(appKey);
-    if (hotkeyRecorder.pressed.size === 0 && hotkeyRecorder.primary) {
-      stopHotkeyRecording(false);
-    }
+    var rec = hotkeyRecorder;
+    if (!rec || rec.primary) return;
+    rec.modifiers = eventModifiers(e);
+    renderHotkey();
+  };
+  hotkeyRecorder.blur = function() {
+    stopHotkeyRecording(true);
   };
   document.addEventListener('keydown', hotkeyRecorder.keydown, true);
   document.addEventListener('keyup', hotkeyRecorder.keyup, true);
-  setTimeout(function() {
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('blur', hotkeyRecorder.blur);
+  }
+  hotkeyRecorder.timer = setTimeout(function() {
     if (hotkeyRecorder && hotkeyRecorder.btn === btn) {
-      stopHotkeyRecording(false);
+      stopHotkeyRecording(true);
     }
-  }, 6000);
+  }, 8000);
 }
 function renderHotkey() {
   var rec = hotkeyRecorder;
@@ -2753,15 +2859,24 @@ function renderHotkey() {
 function stopHotkeyRecording(cancel) {
   var rec = hotkeyRecorder;
   if (!rec) return;
+  if (rec.timer) clearTimeout(rec.timer);
   document.removeEventListener('keydown', rec.keydown, true);
   document.removeEventListener('keyup', rec.keyup, true);
+  if (typeof window !== 'undefined' && window.removeEventListener && rec.blur) {
+    window.removeEventListener('blur', rec.blur);
+  }
   rec.btn.classList.remove('recording');
   rec.btn.textContent = 'Change';
   var input = el(rec.targetId);
   if (cancel || !rec.primary) {
     input.value = rec.previous;
-  } else if (input.value !== rec.previous) {
-    markDirty();
+  } else {
+    if (rec.targetId === 'HOTKEY') {
+      syncAiHotkeyPrimary(input.value);
+    }
+    if (input.value !== rec.previous) {
+      markDirty();
+    }
   }
   hotkeyRecorder = null;
   updateKeycaps();
