@@ -487,14 +487,22 @@ def validate_hotkey_pair(hotkey: str, ai_hotkey: str = "") -> None:
             f"HOTKEY '{hotkey}' needs at least one modifier. A bare primary "
             "would be globally suppressed (the key could never be typed in any app)."
         )
+    norm_dict_mods = {normalize_modifier_name(m) for m in dict_mods}
+    for m in norm_dict_mods:
+        if m.startswith("left ") and "right " + m[5:] in norm_dict_mods:
+            raise ValueError("HOTKEY cannot require both exclusive modifier sides")
     if ai_hotkey:
         ai_mods, ai_primary = parse_hold_hotkey(ai_hotkey)
+        norm_ai_mods = {normalize_modifier_name(m) for m in ai_mods}
+        for m in norm_ai_mods:
+            if m.startswith("left ") and "right " + m[5:] in norm_ai_mods:
+                raise ValueError("AI_HOTKEY cannot require both exclusive modifier sides")
         if ai_primary != dict_primary:
             raise ValueError(
                 f"AI_HOTKEY primary key '{ai_primary}' must match HOTKEY primary "
                 f"'{dict_primary}' (both chords share one hold key)"
             )
-        if set(ai_mods) == set(dict_mods):
+        if norm_ai_mods == norm_dict_mods:
             raise ValueError(
                 "AI_HOTKEY must differ from HOTKEY (add Shift or another modifier "
                 "so dictation and AI are distinguishable)"
@@ -998,6 +1006,24 @@ class Config:
         reserved_keys = [parse_hold_hotkey(key)[1] for key in reserved if key]
         if primary in reserved_keys:
             raise ValueError("Polish shortcut must use a different primary key from other shortcuts")
+
+    @staticmethod
+    def validate_live_hotkey(value, *reserved):
+        if not value:
+            return
+        modifiers, primary = parse_hold_hotkey(value)
+        normalized = {normalize_modifier_name(modifier) for modifier in modifiers}
+        for modifier in normalized:
+            if modifier.startswith("left ") and "right " + modifier[5:] in normalized:
+                raise ValueError("Live shortcut cannot require both exclusive modifier sides")
+        if not normalized and (len(primary) == 1 or primary == "grave"):
+            raise ValueError(
+                f"LIVE_HOTKEY '{value}' needs at least one modifier for a character key "
+                "(a bare character key would be blocked from normal typing)."
+            )
+        reserved_keys = [parse_hold_hotkey(key)[1] for key in reserved if key]
+        if primary in reserved_keys:
+            raise ValueError("Live shortcut must use a different primary key from other shortcuts")
 
     @staticmethod
     def resolve_polish_hotkey(value, *reserved, explicit=True):
@@ -1506,7 +1532,9 @@ class Config:
                     f"({cls.HOTKEY})"
                 )
         cls.effective_polish_hotkey()
-        live_key = (cls.LIVE_HOTKEY or "").split("+")[-1].strip()
+        if cls.LIVE_HOTKEY:
+            cls.validate_live_hotkey(cls.LIVE_HOTKEY)
+        live_key = parse_hold_hotkey(cls.LIVE_HOTKEY)[1] if (cls.LIVE_HOTKEY or "").strip() else ""
         if live_key:
             if live_key == dict_primary:
                 raise ValueError(

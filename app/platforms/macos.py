@@ -270,6 +270,15 @@ _KEY_ALIASES = {
     "back-tick": "grave",
     "back quote": "grave",
     "backquote": "grave",
+    "page up": "page_up",
+    "pageup": "page_up",
+    "page down": "page_down",
+    "pagedown": "page_down",
+    "caps lock": "caps_lock",
+    "capslock": "caps_lock",
+    "return": "enter",
+    "escape": "esc",
+    "del": "delete",
     "control": "ctrl",
     "left ctrl": "ctrl",
     "right ctrl": "ctrl",
@@ -310,9 +319,26 @@ class _Event:
 
 
 _listener = None
+_event_tap = None
 _listener_lock = threading.Lock()
 _hooks: dict = {}
 _pressed_tokens: set = set()
+_synthetic_lock = threading.Lock()
+_synthetic_depth = 0
+_EVENT_TAP_DISABLED_TYPES = (0xFFFFFFFE, 0xFFFFFFFF)
+
+
+@contextlib.contextmanager
+def _suppress_self_events():
+    """Ignore injected events emitted by Odicto's own synthetic keystrokes."""
+    global _synthetic_depth
+    with _synthetic_lock:
+        _synthetic_depth += 1
+    try:
+        yield
+    finally:
+        with _synthetic_lock:
+            _synthetic_depth = max(0, _synthetic_depth - 1)
 
 
 @dataclass
@@ -341,13 +367,30 @@ def _key_token(key) -> str:
         return ""
     if isinstance(key, _pynput.KeyCode):
         virtual_key = getattr(key, "vk", None)
-        if virtual_key is not None and not getattr(key, "_is_media", False):
+        ch = key.char
+        is_media = bool(getattr(key, "_is_media", False))
+        # Passively refresh a hooked character's virtual_key if the user switched
+        # keyboard layouts while Odicto is running (zero Carbon calls on tap thread).
+        if (
+            virtual_key is not None
+            and not is_media
+            and isinstance(ch, str)
+            and len(ch) == 1
+            and ch.isprintable()
+        ):
+            canonical_ch = _canonical_token(ch)
+            hook = _hooks.get(canonical_ch)
+            if hook is not None and hook.get("virtual_key") != virtual_key:
+                hook["virtual_key"] = virtual_key
+        if virtual_key is not None and not is_media:
             for token, hook in _hooks.copy().items():
                 if hook.get("virtual_key") == virtual_key:
                     return token
-        ch = key.char
         if not ch:
             return ""
+        # macOS Ctrl+A..Z emits ASCII control chars 0x01..0x1A when layout lookup missed.
+        if len(ch) == 1 and 1 <= ord(ch) <= 26:
+            return chr(ord(ch) + 96)
         return _canonical_token(ch)
     name = getattr(key, "name", "")
     return _canonical_token(name)
@@ -399,8 +442,11 @@ def _modifier_key_state(token):
         return None
 
 
-def _on_press(key) -> None:
+def _on_press(key, injected: bool = False) -> None:
     global _pending_suppress
+    if injected and _synthetic_depth > 0:
+        _pending_suppress = False
+        return
     identity = _key_identity(key)
     press = _pressed_keys.get(identity)
     if press is not None:
@@ -456,8 +502,11 @@ def _key_identity(key):
     return namespace, code
 
 
-def _on_release(key) -> None:
+def _on_release(key, injected: bool = False) -> None:
     global _pending_suppress
+    if injected and _synthetic_depth > 0:
+        _pending_suppress = False
+        return
     press = _pressed_keys.pop(_key_identity(key), None)
     token = press.token if press is not None else _key_token(key)
     side = _modifier_side(key)
@@ -478,6 +527,15 @@ def _on_release(key) -> None:
 
 def _intercept(event_type, event):
     global _pending_suppress
+    if event_type in _EVENT_TAP_DISABLED_TYPES:
+        _pending_suppress = False
+        if _event_tap is not None:
+            try:
+                from Quartz import CGEventTapEnable
+                CGEventTapEnable(_event_tap, True)
+            except Exception:
+                pass
+        return event
     if _pending_suppress:
         _pending_suppress = False
         return None
@@ -486,7 +544,7 @@ def _intercept(event_type, event):
 
 def hook_key(key: str, handler, suppress: bool, *, can_decline: bool = False) -> None:
     """Only opt in when True guarantees the handler performed no action."""
-    global _listener
+    global _listener, _event_tap
 
     pynput = _require_pynput()
     token = _canonical_token(key)
@@ -495,22 +553,32 @@ def hook_key(key: str, handler, suppress: bool, *, can_decline: bool = False) ->
         _hooks[token] = {"handler": handler, "suppress": bool(suppress),
                          "virtual_key": _primary_virtual_key(token), "can_decline": can_decline}
         if _listener is None:
-            _listener = pynput.Listener(
+            listener = pynput.Listener(
                 on_press=_on_press,
                 on_release=_on_release,
                 darwin_intercept=_intercept,
             )
+            orig_create_tap = getattr(listener, "_create_event_tap", None)
+            if callable(orig_create_tap):
+                def _tracked_create_tap():
+                    global _event_tap
+                    tap = orig_create_tap()
+                    _event_tap = tap
+                    return tap
+                listener._create_event_tap = _tracked_create_tap
+            _listener = listener
             _listener.daemon = True
             _listener.start()
 
 
 def unhook_all() -> None:
-    global _listener
+    global _listener, _event_tap
 
     with _listener_lock:
         _hooks.clear()
         _pressed_tokens.clear()
         _pressed_keys.clear()
+        _event_tap = None
         if _listener is not None:
             try:
                 _listener.stop()
@@ -560,15 +628,42 @@ def wait() -> None:
             pass
 
 
+_SIDE_RELEASE_KEYS = (
+    ("left ctrl", "ctrl", "ctrl_l"),
+    ("right ctrl", "ctrl", "ctrl_r"),
+    ("left shift", "shift", "shift_l"),
+    ("right shift", "shift", "shift_r"),
+    ("left alt", "alt", "alt_l"),
+    ("right alt", "alt", "alt_r"),
+    ("left windows", "cmd", "cmd_l"),
+    ("right windows", "cmd", "cmd_r"),
+)
+
+
 def force_release_modifiers() -> None:
     pynput = _require_pynput()
+    # Give a just-released shortcut finger up to ~450ms to physically lift so
+    # WindowServer does not merge Option/Ctrl/Shift into the upcoming Cmd+V.
+    for _ in range(45):
+        if not any(_modifier_key_state(side_token) for side_token, _, _ in _SIDE_RELEASE_KEYS):
+            break
+        time.sleep(0.01)
     controller = pynput.Controller()
-    for token in ("ctrl", "shift", "alt", "cmd"):
-        if token in _pressed_tokens:
-            try:
-                controller.release(getattr(pynput.Key, token))
-            except Exception:
-                pass
+    with _suppress_self_events():
+        for side_token, family, key_attr in _SIDE_RELEASE_KEYS:
+            native = _modifier_key_state(side_token)
+            should_release = (
+                bool(native)
+                if native is not None
+                else (side_token in _pressed_tokens or family in _pressed_tokens)
+            )
+            if should_release:
+                key_obj = getattr(pynput.Key, key_attr, None) or getattr(pynput.Key, family, None)
+                if key_obj is not None:
+                    try:
+                        controller.release(key_obj)
+                    except Exception:
+                        pass
     time.sleep(0.04)
 
 
@@ -597,16 +692,53 @@ def _fresh_controller(required_char: str | None = None):
         return pynput.Controller()
 
 
+def _quartz_cmd_chord(vk: int) -> bool:
+    """Post a clean Cmd+<vk> via a private CGEventSource on kCGSessionEventTap."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from Quartz import (
+            CGEventCreateKeyboardEvent,
+            CGEventPost,
+            CGEventSetFlags,
+            CGEventSourceCreate,
+            kCGEventFlagMaskCommand,
+            kCGEventSourceStatePrivate,
+            kCGSessionEventTap,
+        )
+    except Exception:
+        return False
+    source = CGEventSourceCreate(kCGEventSourceStatePrivate)
+    down = CGEventCreateKeyboardEvent(source, vk, True)
+    up = CGEventCreateKeyboardEvent(source, vk, False)
+    if down is None or up is None:
+        return False
+    CGEventSetFlags(down, kCGEventFlagMaskCommand)
+    CGEventSetFlags(up, kCGEventFlagMaskCommand)
+    with _suppress_self_events():
+        CGEventPost(kCGSessionEventTap, down)
+        time.sleep(0.02)
+        CGEventPost(kCGSessionEventTap, up)
+    return True
+
+
 def _send_cmd_chord(char: str) -> None:
     pynput = _require_pynput()
     controller = _fresh_controller(char)
+    mapping = getattr(controller, "_mapping", None)
+    vk = mapping.get(char) if isinstance(mapping, dict) else None
+    is_real_pynput = getattr(type(controller), "__module__", "").startswith("pynput.")
+    if is_real_pynput and isinstance(vk, int) and _quartz_cmd_chord(vk):
+        return
     cmd = pynput.Key.cmd
-    controller.press(cmd)
-    time.sleep(0.01)
-    controller.press(char)
-    controller.release(char)
-    time.sleep(0.01)
-    controller.release(cmd)
+    with _suppress_self_events():
+        controller.press(cmd)
+        time.sleep(0.01)
+        controller.press(char)
+        time.sleep(0.02)
+        controller.release(char)
+        time.sleep(0.01)
+        controller.release(cmd)
 
 
 def copy_chord() -> None:
@@ -628,8 +760,9 @@ def send(chord: str) -> None:
         key_char = parts[-1]
         controller = _fresh_controller(key_char if len(key_char) == 1 else None)
         try:
-            controller.press(key_char)
-            controller.release(key_char)
+            with _suppress_self_events():
+                controller.press(key_char)
+                controller.release(key_char)
         except Exception:
             pass
 
@@ -671,8 +804,9 @@ def send_backspaces(n: int) -> None:
     from pynput.keyboard import Key
 
     controller = pynput.Controller()
-    for _ in range(n):
-        controller.tap(Key.backspace)
+    with _suppress_self_events():
+        for _ in range(n):
+            controller.tap(Key.backspace)
 
 
 def send_text(text: str) -> bool:
@@ -682,7 +816,8 @@ def send_text(text: str) -> bool:
     if len(text) > 256:
         return False
     try:
-        _fresh_controller().type(text)
+        with _suppress_self_events():
+            _fresh_controller().type(text)
         return True
     except Exception:
         return False
@@ -697,7 +832,8 @@ def send_text_bulk(text: str) -> bool:
     if not text:
         return True
     try:
-        _fresh_controller().type(text)
+        with _suppress_self_events():
+            _fresh_controller().type(text)
         return True
     except Exception:
         return False
@@ -722,7 +858,34 @@ def foreground_is_terminal(extra=()) -> bool:
 
 
 def apply_window_exstyles(widget) -> None:
-    # Qt window flags already handle topmost/click-through on macOS.
+    """Configure the macOS HUD NSWindow as a transparent, non-activating floating overlay."""
+    if sys.platform != "darwin" or widget is None:
+        return None
+    try:
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.platformName() != "cocoa":
+            return None
+        import objc
+        from AppKit import NSColor
+        win_id = int(widget.winId())
+        if not win_id:
+            return None
+        view = objc.objc_object(c_void_p=win_id)
+        nswin = view.window() if view is not None else None
+        if nswin is None:
+            return None
+        # Keep the frameless backing completely transparent (do not mutate styleMask,
+        # which causes macOS to paint an opaque rectangular border around QNSPanel).
+        nswin.setOpaque_(False)
+        nswin.setBackgroundColor_(NSColor.clearColor())
+        nswin.setHasShadow_(False)
+        nswin.setHidesOnDeactivate_(False)
+        nswin.setIgnoresMouseEvents_(True)
+        nswin.setLevel_(25)  # NSStatusWindowLevel
+        nswin.setCollectionBehavior_((1 << 0) | (1 << 4) | (1 << 8))
+        nswin.orderFrontRegardless()
+    except Exception:
+        pass
     return None
 
 

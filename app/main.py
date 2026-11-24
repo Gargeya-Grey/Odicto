@@ -950,25 +950,65 @@ class DictationApp:
             target=play_beep, args=(frequency, CUE_SECONDS), daemon=True, name=name
         ).start()
 
+    @staticmethod
+    def _normalize_chord_mods(mods: tuple) -> tuple[str, ...]:
+        return tuple(normalize_modifier_name(m) for m in mods)
+
+    @staticmethod
+    def _modifier_families(mods: tuple) -> set[str]:
+        return {
+            normalize_modifier_name(m.removeprefix("left ").removeprefix("right "))
+            for m in mods
+        }
+
+    @staticmethod
+    def _side_modifiers_match(mods: tuple) -> bool:
+        for modifier in mods:
+            norm = normalize_modifier_name(modifier)
+            if norm.startswith(("left ", "right ")):
+                side, family = norm.split(" ", 1)
+                opposite = ("right " if side == "left" else "left ") + family
+                if (
+                    not platforms.is_pressed_exclusive(norm)
+                    or platforms.is_pressed_exclusive(opposite)
+                ):
+                    return False
+        return True
+
+    @classmethod
+    def _modifiers_match_exact(cls, required_mods: tuple) -> bool:
+        normalized = cls._normalize_chord_mods(required_mods)
+        required_families = cls._modifier_families(normalized)
+        actual_families = {
+            mod for mod in ("ctrl", "shift", "alt", "cmd") if platforms.is_pressed(mod)
+        }
+        if actual_families != required_families:
+            return False
+        return cls._side_modifiers_match(normalized)
+
     def _mods_in_snapshot(self, mods: tuple, snapshot=None) -> bool:
-        """True if every modifier was physically down at primary-key press time."""
+        """True if the active modifier families at press time exactly match ``mods``."""
+        snap = self._pressed_mods_at_press if snapshot is None else snapshot
+        snapshot_families = {m for m in snap if m in ("ctrl", "shift", "alt", "cmd")}
         if not mods:
-            return True
-        return all(m in (self._pressed_mods_at_press if snapshot is None else snapshot) for m in mods)
+            return not snapshot_families
+        normalized = self._normalize_chord_mods(mods)
+        if snapshot_families != self._modifier_families(normalized):
+            return False
+        return self._side_modifiers_match(normalized)
 
     def _match_active_chord(self, snapshot=None) -> Optional[bool]:
         """Which hold-to-talk chord is active at primary-key press time.
 
         Uses the modifiers that were physically held when the key went down, so a
-        mid-hold release can't flip the mode mid-capture.
+        mid-hold release can't flip the mode mid-capture. Matches exact modifier
+        families so unrelated shortcuts like Cmd+Ctrl+Q never trigger Ctrl+Q.
 
         Returns:
             True  → AI chord (AI_HOTKEY or HOTKEY+AI_MODIFIER)
             False → dictation chord (HOTKEY)
             None  → no chord; let the key through for normal typing
         """
-        # Prefer the more-specific AI chord when both could match
-        # (e.g. ctrl+shift+grave vs ctrl+grave — shift+ctrl also satisfies ctrl).
         if self._ai_hotkey_modifiers:
             if self._mods_in_snapshot(self._ai_hotkey_modifiers, snapshot):
                 return True
@@ -977,11 +1017,19 @@ class DictationApp:
             return None
 
         # Legacy: HOTKEY + optional AI_MODIFIER extra key
-        if not self._mods_in_snapshot(self._hotkey_modifiers, snapshot):
-            return None
         if Config.AI_MODIFIER and platforms.is_pressed_exclusive(Config.AI_MODIFIER):
-            return True
-        return False
+            try:
+                ai_mod_norm = normalize_modifier_name(Config.AI_MODIFIER)
+            except ValueError:
+                if self._mods_in_snapshot(self._hotkey_modifiers, snapshot):
+                    return True
+            else:
+                combined = (*self._hotkey_modifiers, ai_mod_norm)
+                if self._mods_in_snapshot(combined, snapshot):
+                    return True
+        if self._mods_in_snapshot(self._hotkey_modifiers, snapshot):
+            return False
+        return None
 
     def _bind_hotkeys(self) -> None:
         """Hook the primary key; mode is chosen by which modifier chord is held.
@@ -991,9 +1039,10 @@ class DictationApp:
         suppressed when a chord matches, so bare `` ` `` still types normally.
         """
         dict_mods, primary = parse_hold_hotkey(Config.HOTKEY)
-        self._hotkey_modifiers = dict_mods
+        self._hotkey_modifiers = self._normalize_chord_mods(dict_mods)
         self._hotkey_primary = primary
         self._hotkey_physically_held = False
+        self._live_key_held = False
 
         if Config.AI_HOTKEY:
             ai_mods, ai_primary = parse_hold_hotkey(Config.AI_HOTKEY)
@@ -1001,7 +1050,7 @@ class DictationApp:
                 raise ValueError(
                     f"AI_HOTKEY primary '{ai_primary}' != HOTKEY primary '{primary}'"
                 )
-            self._ai_hotkey_modifiers = ai_mods
+            self._ai_hotkey_modifiers = self._normalize_chord_mods(ai_mods)
         else:
             self._ai_hotkey_modifiers = ()
 
@@ -1062,27 +1111,16 @@ class DictationApp:
         polish_key = Config.effective_polish_hotkey()
         if polish_key:
             polish_mods, polish_primary = parse_hold_hotkey(polish_key)
-            polish_mods = tuple(normalize_modifier_name(modifier) for modifier in polish_mods)
-            polish_families = {normalize_modifier_name(modifier.removeprefix("left ").removeprefix("right "))
-                               for modifier in polish_mods}
+            polish_mods = self._normalize_chord_mods(polish_mods)
             held = [False]
             def polish_handler(event):
                 if getattr(event, "event_type", None) == platforms.KEY_DOWN:
                     if held[0]:
                         return False
-                    actual_mods = {mod for mod in ("ctrl", "shift", "alt", "cmd") if platforms.is_pressed(mod)}
-                    if actual_mods != polish_families:
+                    if not self._modifiers_match_exact(polish_mods):
                         return True
-                    for modifier in polish_mods:
-                        if modifier.startswith(("left ", "right ")):
-                            side, family = modifier.split(" ", 1)
-                            opposite = ("right " if side == "left" else "left ") + family
-                            if (not platforms.is_pressed_exclusive(modifier)
-                                    or platforms.is_pressed_exclusive(opposite)):
-                                return True
-                    if not held[0]:
-                        held[0] = True
-                        self._dispatch_hotkey("polish")
+                    held[0] = True
+                    self._dispatch_hotkey("polish")
                     return False
                 if getattr(event, "event_type", None) == platforms.KEY_UP and held[0]:
                     held[0] = False
@@ -1128,24 +1166,31 @@ class DictationApp:
                 flush=True,
             )
 
-        live_key: str = (Config.LIVE_HOTKEY or "").split("+")[-1].strip().lower()
-        if live_key:
+        live_raw = (Config.LIVE_HOTKEY or "").strip()
+        if live_raw:
+            live_mods, live_primary = parse_hold_hotkey(live_raw)
+            live_mods = self._normalize_chord_mods(live_mods)
+
             def live_handler(event: object) -> bool:
                 event_type = getattr(event, "event_type", None)
                 if event_type == platforms.KEY_DOWN:
                     if self._live_key_held:
                         return False  # key-repeat while held
+                    if not self._modifiers_match_exact(live_mods):
+                        return True  # modifiers do not match; let normal typing through
                     self._live_key_held = True
                     self._dispatch_hotkey("live")
-                    return False  # suppress so F7 does not leak into the focused app
+                    return False  # suppress so the shortcut does not leak into the focused app
                 if event_type == platforms.KEY_UP:
+                    if not self._live_key_held:
+                        return True
                     self._live_key_held = False
                     return False
                 return True
 
-            hook(live_key, live_handler, True)
+            hook(live_primary, live_handler, True, (live_mods,), can_decline=True)
             print(
-                f"Live tap-to-talk hotkey bound: '{live_key}' "
+                f"Live tap-to-talk hotkey bound: '{live_raw}' "
                 f"(press to start, press again to stop and paste)",
                 flush=True,
             )
