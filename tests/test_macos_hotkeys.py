@@ -342,6 +342,122 @@ class TestMacOSHotkeyBackend(unittest.TestCase):
         self.assertNotIn("shift_l", released)
         self.assertNotIn("shift_r", released)
 
+    def test_quartz_cmd_chord_posts_private_session_events(self):
+        posted = []
+        flags_set = []
+        fake_source = object()
+
+        def make_ev(src, vk, is_down):
+            return {"src": src, "vk": vk, "down": is_down}
+
+        fake_quartz = SimpleNamespace(
+            kCGEventSourceStatePrivate=99,
+            kCGSessionEventTap=1,
+            kCGEventFlagMaskCommand=0x100000,
+            CGEventSourceCreate=lambda state: (state, fake_source),
+            CGEventCreateKeyboardEvent=make_ev,
+            CGEventSetFlags=lambda ev, flag: flags_set.append((ev["vk"], ev["down"], flag)),
+            CGEventPost=lambda tap, ev: posted.append((tap, ev["vk"], ev["down"], ev["src"])),
+        )
+        with patch.object(self.mac.sys, "platform", "darwin"), \
+             patch.dict("sys.modules", {"Quartz": fake_quartz}), \
+             patch.object(self.mac.time, "sleep"):
+            ok = self.mac._quartz_cmd_chord(9)
+        self.assertTrue(ok)
+        self.assertEqual(flags_set, [(9, True, 0x100000), (9, False, 0x100000)])
+        self.assertEqual(posted, [
+            (1, 9, True, (99, fake_source)),
+            (1, 9, False, (99, fake_source)),
+        ])
+
+    def test_apply_window_exstyles_configures_transparent_nonactivating_overlay(self):
+        clear_color = object()
+        calls = []
+
+        class FakeNSWindow:
+            def setOpaque_(self, val): calls.append(("opaque", val))
+            def setBackgroundColor_(self, val): calls.append(("bg", val))
+            def setHasShadow_(self, val): calls.append(("shadow", val))
+            def setHidesOnDeactivate_(self, val): calls.append(("hides", val))
+            def setIgnoresMouseEvents_(self, val): calls.append(("mouse", val))
+            def setLevel_(self, val): calls.append(("level", val))
+            def setCollectionBehavior_(self, val): calls.append(("behavior", val))
+            def orderFrontRegardless(self): calls.append(("orderFront", True))
+            def setStyleMask_(self, val): raise AssertionError("must not mutate styleMask (causes black border)")
+
+        nswin = FakeNSWindow()
+        fake_objc = SimpleNamespace(objc_object=MagicMock(return_value=SimpleNamespace(window=lambda: nswin)))
+        fake_appkit = SimpleNamespace(NSColor=SimpleNamespace(clearColor=lambda: clear_color))
+        fake_qtgui = SimpleNamespace(QGuiApplication=SimpleNamespace(platformName=lambda: "cocoa"))
+        fake_widget = SimpleNamespace(winId=lambda: 12345)
+        with patch.object(self.mac.sys, "platform", "darwin"), \
+             patch.dict("sys.modules", {"objc": fake_objc, "AppKit": fake_appkit, "PySide6.QtGui": fake_qtgui}):
+            self.mac.apply_window_exstyles(fake_widget)
+        self.assertIn(("opaque", False), calls)
+        self.assertIn(("bg", clear_color), calls)
+        self.assertIn(("shadow", False), calls)
+        self.assertIn(("hides", False), calls)
+        self.assertIn(("mouse", True), calls)
+        self.assertIn(("level", 25), calls)
+        self.assertIn(("orderFront", True), calls)
+
+        # Offscreen QPA must never dereference winId() as an NSView*.
+        fake_objc.objc_object.reset_mock()
+        offscreen_qtgui = SimpleNamespace(QGuiApplication=SimpleNamespace(platformName=lambda: "offscreen"))
+        with patch.object(self.mac.sys, "platform", "darwin"), \
+             patch.dict("sys.modules", {"objc": fake_objc, "AppKit": fake_appkit, "PySide6.QtGui": offscreen_qtgui}):
+            self.mac.apply_window_exstyles(fake_widget)
+        fake_objc.objc_object.assert_not_called()
+
+    def test_hud_begin_show_skips_raise_on_macos(self):
+        import indicator
+        calls = []
+        fake_hud = SimpleNamespace(
+            _phase="hidden",
+            _phase_t0=0.0,
+            _enter_base=None,
+            _entry_offset=0.0,
+            _glyph_fade=1.0,
+            _droop_from=0.0,
+            _droop_goal=lambda: 0.0,
+            _w_tw=SimpleNamespace(snap=lambda _: None),
+            _h_tw=SimpleNamespace(snap=lambda _: None),
+            _label_target=90.0,
+            _pill_h=30.0,
+            _fit_canvas=lambda shrink=False: None,
+            _appear_target=0.0,
+            _reposition_bottom_center=lambda: None,
+            setWindowOpacity=lambda _: None,
+            show=lambda: calls.append("show"),
+            _apply_win32_exstyles=lambda: calls.append("exstyles"),
+            raise_=lambda: calls.append("raise"),
+        )
+        with patch.object(indicator.sys, "platform", "darwin"):
+            indicator.DictationIndicator._begin_show(fake_hud, 1.0)
+        self.assertEqual(calls, ["show", "exstyles"])
+
+        calls.clear()
+        fake_hud._phase = "hidden"
+        with patch.object(indicator.sys, "platform", "win32"):
+            indicator.DictationIndicator._begin_show(fake_hud, 2.0)
+        self.assertEqual(calls, ["show", "exstyles", "raise"])
+
+    def test_hud_live_notices_reflect_configured_live_hotkey(self):
+        import indicator
+        with patch.object(indicator.sys, "platform", "darwin"):
+            self.assertEqual(indicator._format_hotkey_label("alt+l"), "Option+L")
+            self.assertEqual(indicator._format_hotkey_label("f7"), "F7")
+            self.assertIn(
+                "when you tap Option+L.",
+                indicator.live_failure_message("live_unavailable", "groq", live_hotkey="alt+l"),
+            )
+            self.assertIn(
+                "through Groq when you tap Option+L.",
+                indicator.live_failure_message("live_key_rejected", "groq", live_hotkey="alt+l"),
+            )
+        with patch.object(indicator.sys, "platform", "win32"):
+            self.assertEqual(indicator._format_hotkey_label("alt+l"), "Alt+L")
+
 
 class TestSetupHotkeyRecorderJS(unittest.TestCase):
     def _run_js_scenario(self, scenario_js: str) -> dict:

@@ -331,13 +331,42 @@ LIVE_FAILURE_LABELS = {
 _SPEECH_SERVICE_NAMES = {"groq": "Groq", "openrouter": "OpenRouter", "whisper": "local Whisper"}
 
 
-def live_failure_message(status: Optional[str], provider: str) -> str:
+def _format_hotkey_label(chord: str, fallback: str = "F7") -> str:
+    """Format a configured hotkey string for HUD notices (e.g. 'alt+l' -> 'Option+L' on macOS)."""
+    raw = (chord or "").strip()
+    if not raw:
+        return fallback
+    is_mac = sys.platform == "darwin"
+    names = {
+        "ctrl": "Ctrl", "control": "Ctrl",
+        "shift": "Shift",
+        "alt": "Option" if is_mac else "Alt", "option": "Option",
+        "cmd": "Cmd", "command": "Cmd", "win": "Win", "windows": "Win", "super": "Cmd" if is_mac else "Super",
+        "grave": "`", "space": "Space", "esc": "Esc", "enter": "Enter", "tab": "Tab",
+        "page_up": "PgUp", "page_down": "PgDn", "caps_lock": "Caps",
+    }
+    parts = []
+    for tok in raw.split("+"):
+        t = tok.strip().lower()
+        if not t:
+            continue
+        if t in names:
+            parts.append(names[t])
+        elif len(t) == 1 or (t.startswith("f") and t[1:].isdigit()):
+            parts.append(t.upper())
+        else:
+            parts.append(t.replace("_", " ").title())
+    return "+".join(parts) if parts else fallback
+
+
+def live_failure_message(status: Optional[str], provider: str, live_hotkey: Optional[str] = None) -> str:
     """The caption card's text for a failed Live call; empty for any other status."""
+    key_label = _format_hotkey_label(Config.LIVE_HOTKEY if live_hotkey is None else live_hotkey)
     if status == "live_key_rejected":
         service = _SPEECH_SERVICE_NAMES.get(provider, _SPEECH_SERVICE_NAMES["whisper"])
-        return f"Gemini key rejected. Your text still goes through {service} when you tap F7."
+        return f"Gemini key rejected. Your text still goes through {service} when you tap {key_label}."
     if status == "live_unavailable":
-        return "Live captions failed. Your text still arrives when you tap F7."
+        return f"Live captions failed. Your text still arrives when you tap {key_label}."
     return ""
 # Short reasons for "init_error" / "preflight" (app.status_detail holds the code).
 INIT_REASON_LABELS = {
@@ -424,6 +453,14 @@ class DictationIndicator(QWidget):
             self._qt_app = QApplication(sys.argv if hasattr(sys, "argv") else [])
             self._qt_app.setApplicationName("Odicto")
             self._qt_app.setQuitOnLastWindowClosed(False)
+            if sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa":
+                try:
+                    from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+                    NSApplication.sharedApplication().setActivationPolicy_(
+                        NSApplicationActivationPolicyAccessory
+                    )
+                except Exception:
+                    pass
 
         super().__init__(None)
 
@@ -768,7 +805,8 @@ class DictationIndicator(QWidget):
         self.setWindowOpacity(1.0)
         self.show()
         self._apply_win32_exstyles()
-        self.raise_()
+        if sys.platform != "darwin":
+            self.raise_()
 
     def _begin_leave(self, now: float) -> None:
         """Play the exit from the opening on screen, so an exit in the entry never grows."""
@@ -1128,7 +1166,8 @@ class DictationIndicator(QWidget):
         One or two lines, wrapped to ``room``, centred as a block in the card's two caption rows.
         What does not fit on the second line is elided.
         """
-        text = self._live_failure_text() or "Speak, then tap F7 to insert"
+        key_label = _format_hotkey_label(getattr(Config, "LIVE_HOTKEY", "f7"))
+        text = self._live_failure_text() or f"Speak, then tap {key_label} to insert"
         words = text.split()
         spans = wrap_words([self._word_width(w) for w in words], self._word_width(" "), room)
         lines = [" ".join(words[a:b]) for a, b in spans[:_CAPTION_LINES]]

@@ -642,6 +642,12 @@ _SIDE_RELEASE_KEYS = (
 
 def force_release_modifiers() -> None:
     pynput = _require_pynput()
+    # Give a just-released shortcut finger up to ~450ms to physically lift so
+    # WindowServer does not merge Option/Ctrl/Shift into the upcoming Cmd+V.
+    for _ in range(45):
+        if not any(_modifier_key_state(side_token) for side_token, _, _ in _SIDE_RELEASE_KEYS):
+            break
+        time.sleep(0.01)
     controller = pynput.Controller()
     with _suppress_self_events():
         for side_token, family, key_attr in _SIDE_RELEASE_KEYS:
@@ -686,14 +692,50 @@ def _fresh_controller(required_char: str | None = None):
         return pynput.Controller()
 
 
+def _quartz_cmd_chord(vk: int) -> bool:
+    """Post a clean Cmd+<vk> via a private CGEventSource on kCGSessionEventTap."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from Quartz import (
+            CGEventCreateKeyboardEvent,
+            CGEventPost,
+            CGEventSetFlags,
+            CGEventSourceCreate,
+            kCGEventFlagMaskCommand,
+            kCGEventSourceStatePrivate,
+            kCGSessionEventTap,
+        )
+    except Exception:
+        return False
+    source = CGEventSourceCreate(kCGEventSourceStatePrivate)
+    down = CGEventCreateKeyboardEvent(source, vk, True)
+    up = CGEventCreateKeyboardEvent(source, vk, False)
+    if down is None or up is None:
+        return False
+    CGEventSetFlags(down, kCGEventFlagMaskCommand)
+    CGEventSetFlags(up, kCGEventFlagMaskCommand)
+    with _suppress_self_events():
+        CGEventPost(kCGSessionEventTap, down)
+        time.sleep(0.02)
+        CGEventPost(kCGSessionEventTap, up)
+    return True
+
+
 def _send_cmd_chord(char: str) -> None:
     pynput = _require_pynput()
     controller = _fresh_controller(char)
+    mapping = getattr(controller, "_mapping", None)
+    vk = mapping.get(char) if isinstance(mapping, dict) else None
+    is_real_pynput = getattr(type(controller), "__module__", "").startswith("pynput.")
+    if is_real_pynput and isinstance(vk, int) and _quartz_cmd_chord(vk):
+        return
     cmd = pynput.Key.cmd
     with _suppress_self_events():
         controller.press(cmd)
         time.sleep(0.01)
         controller.press(char)
+        time.sleep(0.02)
         controller.release(char)
         time.sleep(0.01)
         controller.release(cmd)
@@ -816,7 +858,34 @@ def foreground_is_terminal(extra=()) -> bool:
 
 
 def apply_window_exstyles(widget) -> None:
-    # Qt window flags already handle topmost/click-through on macOS.
+    """Configure the macOS HUD NSWindow as a transparent, non-activating floating overlay."""
+    if sys.platform != "darwin" or widget is None:
+        return None
+    try:
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.platformName() != "cocoa":
+            return None
+        import objc
+        from AppKit import NSColor
+        win_id = int(widget.winId())
+        if not win_id:
+            return None
+        view = objc.objc_object(c_void_p=win_id)
+        nswin = view.window() if view is not None else None
+        if nswin is None:
+            return None
+        # Keep the frameless backing completely transparent (do not mutate styleMask,
+        # which causes macOS to paint an opaque rectangular border around QNSPanel).
+        nswin.setOpaque_(False)
+        nswin.setBackgroundColor_(NSColor.clearColor())
+        nswin.setHasShadow_(False)
+        nswin.setHidesOnDeactivate_(False)
+        nswin.setIgnoresMouseEvents_(True)
+        nswin.setLevel_(25)  # NSStatusWindowLevel
+        nswin.setCollectionBehavior_((1 << 0) | (1 << 4) | (1 << 8))
+        nswin.orderFrontRegardless()
+    except Exception:
+        pass
     return None
 
 
