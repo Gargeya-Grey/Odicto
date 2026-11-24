@@ -97,24 +97,27 @@ _BASE_REEXPORTS = {"clipboard_read", "clipboard_write"}
 # that a review window opens. With only that sentence reverted, every state reproduced its old golden.
 # AI effort, answer limits and Polish instructions changed the form. The previous template
 # and token default reproduced every old hash before this rebaseline.
-_GOLDEN_PAGE_HASHES = {'fresh_empty_env': '7d12363191b04e9c3e66b0bafeebd2d6fda56ccfeda3cf3151d89f0a8889d16d',
- 'provider_meta': '92c70ae89b3c383d1b6ff7f0be211781d408ac878eeef11ddfbe6b3498c89344',
- 'provider_openrouter': '3562c820df15e88b0080a24f39637f9bda76b531e807e815142aca8a540c9e05',
- 'provider_gemini': '55e2aaf03bd0f1c3644edda5a7a46061ab046bee86185c3b48870067c94f0665',
- 'provider_ollama': 'f7579cd03a79ca4837e358599edce926b2154b14244c125fb3b534500e989616',
- 'provider_none': '7d12363191b04e9c3e66b0bafeebd2d6fda56ccfeda3cf3151d89f0a8889d16d',
- 'provider_groq': '6ae143c82553cd0a39151ef9d6dc8a16524cfa2dd5bdafd31287b9399501710d',
- 'polish_enabled': '7f3c9b7d204620efd20dd102187b822157e7a1c94497dd2d597252e87995106b',
- 'history_and_custom': '1dd1fb8141df79e0e09f61c4754c7d94d15a2c1620f7bb2ea4bb2eab5bd029eb',
- 'hotkey_short': '5c1fa78a584792675bfa5e53f718e481a2ae762eb6b9a6d483bdcc4d2d28fec9',
- 'stt_gemini': 'e6395077e006896e1a764fc67b08f4ea8046b0e30d0a84995580ac05c9e8db1e',
- 'prompt_from_file': '8ec624d1a3fd59ae1c1bf09a0f99b5f20825b7910c25208e339274da3dd4e23b',
- 'prompt_from_inline_env': '7e24621300eeff26bbe45e59fd78cff7b3487f2f2931418a5d1bf25cbbc94f24',
- 'msg_ok': 'd05a1c6392efed52f5671a6555c82499ffa9550526f1d556ba48521d6e49e803',
- 'msg_err': 'd95e0fa59eb8f023994b5f3e9aa1d8d0360070fd563c096f09f6f1e0869f9fca',
- 'msg_neutral': '2172995e85af8692038b02157fc31809f02e48f300bc69cd86b991617fe0fdf0',
- 'admin_on': 'f289152a8a1bcca6504ab38c30666804dcfba0041b449993f812f8f10bec0daa',
- 'admin_unavailable': 'd440bd23ea9624d4996ca4b77c8b3314f6dfdfb3956c060c28f1c9a9170fac9f'}
+# 2026-11-24, macOS hotkey recorder & keycaps (PR #50): updated hotkey capture script
+# (immediate commit on primary keydown, physical code fallback for Option/Shift/Ctrl,
+# Esc cancel, AI_HOTKEY primary sync) and Mac-aware Option label / Controls footnote.
+_GOLDEN_PAGE_HASHES = {'fresh_empty_env': 'e262850827092380f1a3820dc77f18a12697c3b02c0cde7f977b09781781910a',
+ 'provider_meta': '340f10414a3b73a7935a862f0f7da0a8c22cef07bab53e72e4899665f8ff883c',
+ 'provider_openrouter': 'caf771f5c3ee9588a1cc2ca69d4930f15b6646c3cb9a3e30a1899334478a337a',
+ 'provider_gemini': '32c9e46125ba09604e11eae46eb16d14e7497407f0594bfc7b94d2827fe830df',
+ 'provider_ollama': 'bdde7571e4745b807a3b5da42ec8b7193d15da0cb58efc43c006fd3c77083c29',
+ 'provider_none': 'e262850827092380f1a3820dc77f18a12697c3b02c0cde7f977b09781781910a',
+ 'provider_groq': 'a04aadf1581918fba719f25a19a46a197cbd0fa14d9bfbd404ed30c257f715a3',
+ 'polish_enabled': '3f2f177e2405ff68062fb9b9c8603729328566d68392feb554f76d0a90a84555',
+ 'history_and_custom': '2187b0119ebc174ac61585ce245131e99341d2c6c4dd7113ee9e45eac22f4794',
+ 'hotkey_short': 'b9ca28a993139121c2eff4dd72850dccfce5b20ab5ba32467292a60af3becb08',
+ 'stt_gemini': '4f2260870ba162df62bc8307f4cc9dbd6c33730a8e2297e16854c64a039efe73',
+ 'prompt_from_file': 'b560019dca0ec8ea13500ec62d8e88e9780cd320906e5694d6d8b5b49458695b',
+ 'prompt_from_inline_env': '1f552b1367dca337e751402b71dfb097acf06c401efc75eaeb32a4ddcef27696',
+ 'msg_ok': '994e5af4662dcf569971325b7d51e48eb979a2b1d11a5f3071c7682c40ee60a5',
+ 'msg_err': '921650cf03a9529751281b6aa7eef4fbabeb0894975291428b818fc2a43fd3c1',
+ 'msg_neutral': 'f42b1228a0087e16f51c7e9391a8066a171e57aa4e2ba8144894b80b92e0779e',
+ 'admin_on': 'd21cf60d0ded3425e801b90070f2be0694359d7194bf4f8d7546ae0252016ea2',
+ 'admin_unavailable': '78a8a61efd56969522e542181137da820ff0c7aeb080bb0776641a7521fba5d5'}
 
 # Captured from the pre-refactor tree with every machine-dependent input pinned.
 _GOLDEN_PURE_VALUES = {
